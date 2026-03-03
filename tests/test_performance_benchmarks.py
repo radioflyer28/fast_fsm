@@ -89,12 +89,13 @@ class TestPerformanceBenchmarks:
         iterations = 10000
         elapsed = self.benchmark_state_transitions(iterations)
 
-        # Should complete 10k transitions in less than 1 second
+        # Should complete 10k transitions quickly
         assert elapsed < 1.0
 
-        # Calculate transitions per second
+        # Regression guard — measured ~40k TPS on this 6-state cycle.
+        # 15k floor gives ~2.5× headroom for slow CI / debug builds.
         tps = iterations / elapsed
-        assert tps > 10000  # Should handle at least 10k transitions per second
+        assert tps > 15000, f"Transition throughput {tps:,.0f} TPS below 15k floor"
 
     def test_condition_evaluation_performance(self):
         """Test performance of condition evaluation"""
@@ -134,7 +135,13 @@ class TestPerformanceBenchmarks:
         assert condition.call_count == iterations
 
     def test_memory_usage_stability(self):
-        """Test that memory usage remains stable during many transitions"""
+        """Test that memory usage remains stable during many transitions.
+
+        Uses tracemalloc to measure actual heap growth.  A healthy FSM
+        should allocate near-zero net memory when toggling between two
+        states, because no new objects are retained per transition.
+        """
+        import tracemalloc
 
         # Create a simple FSM
         state1 = State("state1")
@@ -145,27 +152,42 @@ class TestPerformanceBenchmarks:
         fsm.add_transition("toggle", "state1", "state2")
         fsm.add_transition("toggle", "state2", "state1")
 
-        # Force garbage collection
+        # Suppress FSM transition logging so that captured log records
+        # don't inflate the heap measurement.
+        import logging as _logging
+
+        fsm_logger = _logging.getLogger(f"fast_fsm.{fsm.name}")
+        old_level = fsm_logger.level
+        fsm_logger.setLevel(_logging.CRITICAL)
+
+        # Warm up so any one-time allocations don't skew results
+        for _ in range(100):
+            fsm.trigger("toggle")
         gc.collect()
 
-        # Perform many transitions
-        iterations = 10000
-        start_time = time.perf_counter()
+        # Snapshot memory BEFORE the workload
+        tracemalloc.start()
+        snapshot_before = tracemalloc.take_snapshot()
 
-        for i in range(iterations):
+        iterations = 10_000
+        for _ in range(iterations):
             fsm.trigger("toggle")
 
-        elapsed = time.perf_counter() - start_time
-
-        # Should complete transitions quickly (memory stability test)
-        assert elapsed < 5.0
-
-        # Force garbage collection again
         gc.collect()
+        snapshot_after = tracemalloc.take_snapshot()
+        tracemalloc.stop()
 
-        # Memory should be stable (no major leaks)
-        # We can't easily test actual memory without external deps,
-        # but the timing gives us confidence about memory behavior
+        # Restore log level
+        fsm_logger.setLevel(old_level)
+
+        # Compare: net growth should be tiny.  Allow up to 50 KB headroom
+        # for interpreter bookkeeping; typical FSM growth is < 1 KB.
+        stats = snapshot_after.compare_to(snapshot_before, "lineno")
+        total_growth = sum(s.size_diff for s in stats if s.size_diff > 0)
+        assert total_growth < 50_000, (
+            f"Memory grew by {total_growth:,} bytes after {iterations:,} "
+            f"transitions — possible leak"
+        )
 
     def test_large_state_machine_creation(self):
         """Test creation of FSM with many states"""
@@ -341,12 +363,15 @@ class TestAdvancedPerformance:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should handle stress test within reasonable time
-        assert elapsed < 10.0  # Allow up to 10 seconds for 100k transitions
+        # 100k simple toggles should finish well under 10s
+        assert elapsed < 10.0
 
-        # Calculate performance metrics
+        # Regression guard — this loop also asserts result.success each iteration.
+        # Measured ~41k TPS with assertions. 25k floor gives headroom.
         transitions_per_second = iterations / elapsed
-        assert transitions_per_second > 10000  # At least 10k TPS
+        assert transitions_per_second > 25000, (
+            f"Stress throughput {transitions_per_second:,.0f} TPS below 25k floor"
+        )
 
 
 @pytest.mark.unit

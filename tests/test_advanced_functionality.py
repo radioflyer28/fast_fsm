@@ -329,13 +329,24 @@ class TestStateCallbacks:
         assert result.success
 
         # Check that callbacks received the arguments
-        # Note: The exact signature may vary based on the implementation
         assert "exit_args" in received_args
         assert "enter_args" in received_args
 
-        # Basic validation that some arguments were passed
-        assert len(received_args["exit_args"]) >= 0  # May or may not receive args
-        assert len(received_args["enter_args"]) >= 0  # May or may not receive args
+        # on_exit receives (to_state, trigger, *user_args)
+        exit_args = received_args["exit_args"]
+        assert exit_args[0].name == "state2"  # to_state
+        assert exit_args[1] == "transfer"  # trigger
+        assert exit_args[2:] == ("arg1", "arg2")
+
+        # on_enter receives (from_state, trigger, *user_args)
+        enter_args = received_args["enter_args"]
+        assert enter_args[0].name == "state1"  # from_state
+        assert enter_args[1] == "transfer"  # trigger
+        assert enter_args[2:] == ("arg1", "arg2")
+
+        # Both callbacks receive the kwargs
+        assert received_args["exit_kwargs"] == {"key1": "value1", "key2": "value2"}
+        assert received_args["enter_kwargs"] == {"key1": "value1", "key2": "value2"}
 
 
 class TestBatchOperations:
