@@ -13,7 +13,7 @@ intuitive API.
 - **~250,000 transitions/sec** — maintains parity with hand-tuned implementations
 - **Ultra-low memory footprint** — ~1,000× more efficient than popular libraries
 - **Zero-overhead design** — `__slots__` optimization, direct dictionary lookups
-- **Production ready** — 101 tests, optional validation, mypyc compilation
+- **Production ready** — 290 tests, optional validation, mypyc compilation
 
 | Library | Speed (ops/sec) | Memory | Ratio |
 |---------|----------------|--------|-------|
@@ -23,6 +23,34 @@ intuitive API.
 
 *100,000 transitions with realistic usage patterns.*
 *Run with* `uv run python benchmarks/benchmark_fast_fsm.py`
+
+## Requirements
+
+**Python ≥ 3.10** — requires `@dataclass(slots=True)` (PEP 681).
+
+**Runtime dependency:** `mypy-extensions ≥ 1.0` (provides the `@mypyc_attr` decorator).
+
+### Compatibility Matrices
+
+**User — Python × mypy-extensions** (runtime)
+
+| Python | mypy-extensions 1.0.0 (`requires_python ≥3.5`) | mypy-extensions 1.1.0 (`requires_python ≥3.8`) |
+|--------|------------------------------------------------|-------------------------------------------------|
+| 3.10 | ✅ | ✅ |
+| 3.11 | ✅ | ✅ |
+| 3.12 | ✅ | ✅ |
+| 3.13 | ✅ | ✅ |
+| 3.14 | ✅ | ✅ |
+
+**Dev — Python × mypy\[mypyc\]** (build/type-check)
+
+| Python | mypy 1.5–1.14 (`≥3.8`) | mypy 1.15–1.17 (`≥3.9`) | mypy 1.19+ (`≥3.9`) |
+|--------|------------------------|-------------------------|---------------------|
+| 3.10 | ✅ | ✅ | ✅ |
+| 3.11 | ✅ | ✅ | ✅ |
+| 3.12 | ✅ (1.8+) | ✅ | ✅ |
+| 3.13 | ✅ (1.14+) | ✅ | ✅ |
+| 3.14 | ❌ | ✅ (1.17+) | ✅ |
 
 ## Quick Start
 
@@ -192,7 +220,7 @@ uv run python examples/<script>.py
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -x -q     # full suite (101 tests)
+uv run pytest tests/ -x -q     # full suite (290 tests)
 ```
 
 ## Architecture

@@ -5,7 +5,7 @@ Fast FSM. For architecture details, see {doc}`architecture`.
 
 ## Prerequisites
 
-- Python ≥ 3.12
+- Python ≥ 3.10
 - [uv](https://docs.astral.sh/uv/) — the **only** supported package manager
 - [Task](https://taskfile.dev/) — task runner (optional but recommended)
 

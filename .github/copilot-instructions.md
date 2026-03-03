@@ -190,7 +190,7 @@ uv run ruff format $files; uv run ruff check --fix $files   # Phase 1
 uv run ruff check $files; uv run ty check $files            # Phase 2
 ```
 
-**Config:** Ruff settings in `pyproject.toml`, Python ≥ 3.12, line length 88.
+**Config:** Ruff settings in `pyproject.toml`, Python ≥ 3.10, line length 88.
 
 
 ## Test Suite

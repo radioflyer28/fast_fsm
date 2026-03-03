@@ -6,6 +6,8 @@ Fast FSM is a high-performance finite state machine library that's both blazingl
 
 ## 📦 Installation
 
+**Requires Python ≥ 3.10.** The only runtime dependency is `mypy-extensions ≥ 1.0`.
+
 ```bash
 # Clone the repository
 git clone <repository-url>
