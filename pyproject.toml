@@ -1,0 +1,51 @@
+[project]
+name = "fast_fsm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "hypothesis>=6.136.6",
+    "matplotlib>=3.10.3",
+    "mypy[mypyc]>=1.11.2",
+    "networkx>=3.5",
+    "python-statemachine>=2.5.0",
+    "transitions>=0.9.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.12.11",
+    "ty>=0.0.1a19",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["setuptools", "wheel", "mypy"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypyc]
+files = ["src/fast_fsm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]

@@ -1,0 +1,22 @@
+.DS_Store
+
+# Python-generated files
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+htmlcov/
+
+# Build binaries (mypyc)
+src/fast_fsm/*.so
+
+# Virtual environments
+.venv
+
+# Benchmark artifacts
+*.json
+benchmarks/*.json

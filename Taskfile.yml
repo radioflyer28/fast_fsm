@@ -1,0 +1,123 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  # Development workflow tasks
+  test:
+    desc: Run all tests with pytest
+    cmds:
+      - uv run pytest tests/ -v
+  
+  test-fast:
+    desc: Run tests without slow/integration tests
+    cmds:
+      - uv run pytest tests/ -v -m "not slow and not integration"
+  
+  test-coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - uv run pytest tests/ --cov=src/fast_fsm --cov-report=html --cov-report=term
+  
+  format:
+    desc: Format code with ruff
+    cmds:
+      - uv run ruff format .
+  
+  lint:
+    desc: Lint and fix code with ruff
+    cmds:
+      - uv run ruff check --fix .
+  
+  format-check:
+    desc: Check code formatting without making changes
+    cmds:
+      - uv run ruff format --check .
+  
+  lint-check:
+    desc: Check linting without making changes
+    cmds:
+      - uv run ruff check .
+  
+  typecheck:
+    desc: Type check with both ty and mypy
+    cmds:
+      - echo "🔍 Type checking with ty..."
+      - uv run ty check src/fast_fsm/
+      - echo "🔍 Type checking with mypy..."
+      - uv run mypy src/fast_fsm/
+  
+  typecheck-ty:
+    desc: Type check with ty only
+    cmds:
+      - uv run ty check src/fast_fsm/
+  
+  typecheck-mypy:
+    desc: Type check with mypy only
+    cmds:
+      - uv run mypy src/fast_fsm/
+  
+  # Combined workflow tasks
+  check:
+    desc: Run all pre-build checks (format, lint, typecheck)
+    deps: [format-check, lint-check, typecheck-ty]
+  
+  fix:
+    desc: Auto-fix formatting and linting issues
+    cmds:
+      - task: format
+      - task: lint
+  
+  pre-commit:
+    desc: Run all checks before committing
+    cmds:
+      - task: format
+      - task: lint
+      - task: typecheck
+      - task: test-fast
+  
+  # Build and maintenance tasks
+  clean:
+    desc: Clean build artifacts and cache
+    cmds:
+      - rm -rf build
+      - rm -rf dist
+      - rm -rf *.egg-info
+      - rm -rf .pytest_cache
+      - rm -rf htmlcov
+      - rm -rf .coverage
+      - rm -rf .mypy_cache
+      - rm -rf .ruff_cache
+      - find . -path "./.venv" -prune -o -name "*.so" -delete
+      - find . -path "./src" -prune -o -name "*.so" -delete
+      - find . -path "./.venv" -prune -o -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+  build:
+    desc: Build the package with mypyc compilation
+    deps: [typecheck-ty]
+    cmds:
+      - uv run python setup.py build_ext --inplace
+
+  benchmark:
+    desc: Run performance comparison benchmarks
+    cmds:
+      - task: clean
+      - task: build
+      - echo "🚀 Running performance comparison..."
+      - uv run python benchmark.py
+
+  # CI/CD workflow
+  ci:
+    desc: Full CI pipeline (formatting, linting, type checking, testing)
+    cmds:
+      - task: format-check
+      - task: lint-check
+      - task: typecheck-mypy
+      - task: test
+  
+  # Default task
+  default:
+    desc: Run tests and basic checks
+    cmds:
+      - task: test-fast
+      - task: lint-check
