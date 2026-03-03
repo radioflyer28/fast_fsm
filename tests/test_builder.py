@@ -314,12 +314,10 @@ class TestAsyncDeclarativeState:
         assert result.success
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        reason="GH#5 / fast_fsm-xfm: can_transition_async double-evaluates "
-        "condition — parent sync path rejects AsyncCondition",
-        strict=True,
-    )
     async def test_can_transition_async_with_async_condition(self):
+        """Regression test for GH#5 / fast_fsm-xfm: can_transition_async
+        previously double-evaluated the condition via the parent sync path,
+        which rejected AsyncCondition."""
         cond = SimpleAsyncCondition()
 
         class MyState(AsyncDeclarativeState):

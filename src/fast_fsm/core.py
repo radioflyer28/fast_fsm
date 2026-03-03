@@ -17,6 +17,7 @@ from abc import ABC
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple
 from dataclasses import dataclass
 import asyncio
+from mypy_extensions import mypyc_attr
 from .conditions import Condition, FuncCondition, AsyncCondition
 
 
@@ -31,6 +32,7 @@ class TransitionResult:
     error: Optional[str] = None
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class State(ABC):
     """
     Base state class for FSM states.
@@ -96,6 +98,7 @@ class State(ABC):
         return f"{self.__class__.__name__}('{self.name}')"
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class CallbackState(State):
     """
     State class that allows custom callbacks to be set.
@@ -831,6 +834,12 @@ class AsyncStateMachine(StateMachine):
                     return False
 
         to_state = transition["to_state"]
+
+        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
+        if hasattr(self._current_state, "can_transition_async"):
+            return await self._current_state.can_transition_async(
+                trigger, to_state, *args, **kwargs
+            )
         return self._current_state.can_transition(trigger, to_state, *args, **kwargs)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
@@ -918,7 +927,16 @@ class AsyncStateMachine(StateMachine):
             current_name,
             trigger,
         )
-        if not self._current_state.can_transition(trigger, to_state, *args, **kwargs):
+        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
+        if hasattr(self._current_state, "can_transition_async"):
+            can_proceed = await self._current_state.can_transition_async(
+                trigger, to_state, *args, **kwargs
+            )
+        else:
+            can_proceed = self._current_state.can_transition(
+                trigger, to_state, *args, **kwargs
+            )
+        if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.info("%s: FAILED - %s", self._name, error_msg)
             return TransitionResult(
@@ -996,6 +1014,7 @@ def transition(
     return decorator
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class DeclarativeState(State):
     """
     State that can handle events through decorated methods.
@@ -1169,6 +1188,7 @@ class DeclarativeState(State):
         return super().handle_event(event, *args, **kwargs)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDeclarativeState(DeclarativeState):
     """
     Async-aware version of DeclarativeState that can handle async decorated methods.
@@ -1220,8 +1240,10 @@ class AsyncDeclarativeState(DeclarativeState):
                     )
                     return False
 
-        # Call parent sync implementation for additional custom logic
-        return super().can_transition(trigger, to_state, *args, **kwargs)
+        # Skip DeclarativeState.can_transition (which would re-evaluate the
+        # same condition synchronously and reject AsyncCondition).  Go directly
+        # to State.can_transition for any additional custom logic.
+        return State.can_transition(self, trigger, to_state, *args, **kwargs)
 
     async def handle_event_async(self, event: str, *args, **kwargs) -> TransitionResult:
         """
@@ -1307,6 +1329,10 @@ class FSMBuilder:
         "_machine",
         "_auto_detect",
     )
+
+    # Explicit type annotation so mypyc doesn't narrow _machine to None
+    # from the __init__ assignment.  (GH#4)
+    _machine: Optional[StateMachine]
 
     def __init__(
         self,
@@ -1491,26 +1517,28 @@ class FSMBuilder:
 
         # Add all transitions
         for trigger, from_state, to_state, condition in self._transitions:
-            # Convert string names to state objects for the machine
-            if isinstance(from_state, list):
-                from_state_objs = [
-                    self._states[name] if name in self._states else name
-                    for name in from_state
-                ]
-            else:
-                from_state_objs = (
-                    self._states[from_state]
-                    if from_state in self._states
-                    else from_state
-                )
-
             to_state_obj = (
                 self._states[to_state] if to_state in self._states else to_state
             )
 
-            self._machine.add_transition(
-                trigger, from_state_objs, to_state_obj, condition
-            )
+            # Convert string names to state objects for the machine
+            if isinstance(from_state, list):
+                from_state_list = [
+                    self._states[name] if name in self._states else name
+                    for name in from_state
+                ]
+                self._machine.add_transition(
+                    trigger, from_state_list, to_state_obj, condition
+                )
+            else:
+                from_state_single = (
+                    self._states[from_state]
+                    if from_state in self._states
+                    else from_state
+                )
+                self._machine.add_transition(
+                    trigger, from_state_single, to_state_obj, condition
+                )
 
         # Log final machine type and stats
         machine_type_name = (

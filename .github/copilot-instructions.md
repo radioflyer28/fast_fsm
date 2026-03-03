@@ -47,7 +47,7 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 
 **Testing:**
 - **Full suite:** `uv run pytest tests/ -x -q` (or `task test`)
-- **Baseline (main branch):** 289 passed, 1 xfailed, 0 failures
+- **Baseline (main branch):** 290 passed, 0 failures
 - **No parallel execution:** tests run sequentially
 - **Incremental testing:** During development, run only targeted tests. Full suite once before push.
 
