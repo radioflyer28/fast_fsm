@@ -13,10 +13,15 @@ htmlcov/
 
 # Build binaries (mypyc)
 src/fast_fsm/*.so
+src/fast_fsm/*.pyd
+src/fast_fsm/*.dll
+
+# Sphinx docs build output
+docs/_build/
 
 # Virtual environments
 .venv
 
 # Benchmark artifacts
-*.json
 benchmarks/*.json
+benchmark_results.json
