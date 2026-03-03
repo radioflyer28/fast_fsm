@@ -1,123 +1,174 @@
 # https://taskfile.dev
+#
+# Aligned with:
+#   - .github/copilot-instructions.md (operational workflows)
+#   - .specify/memory/constitution.md  (quality gates, performance standards)
+#   - pyproject.toml                   (tool config, dependency groups)
 
 version: '3'
 
+# Task uses sh everywhere; on Windows it bundles Go-based core utilities
+# (rm, mkdir, cp, etc.) for compatibility.  pipefail is a POSIX sh option.
+set: [pipefail]
+
+vars:
+  SRC_DIR: src/fast_fsm
+  DOCS_DIR: docs
+  DOCS_BUILD: docs/_build/html
+
 tasks:
-  # Development workflow tasks
+  # ─────────────────────────────────────────────
+  # Testing (Constitution § Quality Gates > Testing)
+  # ─────────────────────────────────────────────
+
   test:
-    desc: Run all tests with pytest
+    desc: "Run full test suite — merge gate (62 tests, -x -q)"
     cmds:
-      - uv run pytest tests/ -v
-  
+      - uv run pytest tests/ -x -q
+
+  test-verbose:
+    desc: Run full test suite with verbose output
+    cmds:
+      - uv run pytest tests/ -v --tb=short
+
   test-fast:
-    desc: Run tests without slow/integration tests
+    desc: Run tests excluding slow/integration markers
     cmds:
-      - uv run pytest tests/ -v -m "not slow and not integration"
-  
+      - uv run pytest tests/ -x -q -m "not slow and not integration"
+
   test-coverage:
-    desc: Run tests with coverage report
+    desc: Run tests with HTML coverage report
     cmds:
-      - uv run pytest tests/ --cov=src/fast_fsm --cov-report=html --cov-report=term
-  
-  format:
-    desc: Format code with ruff
+      - uv run pytest tests/ --cov={{.SRC_DIR}} --cov-report=html --cov-report=term
+
+  # ─────────────────────────────────────────────
+  # Code Quality — Two-Phase Gate
+  # (Constitution § Quality Gates > Linting & Formatting)
+  # ─────────────────────────────────────────────
+
+  fix:
+    desc: "Phase 1: Auto-fix formatting and linting (never fails)"
     cmds:
       - uv run ruff format .
-  
-  lint:
-    desc: Lint and fix code with ruff
-    cmds:
       - uv run ruff check --fix .
-  
-  format-check:
-    desc: Check code formatting without making changes
+
+  check:
+    desc: "Phase 2: Validate formatting, linting, and types (blocks merge)"
     cmds:
       - uv run ruff format --check .
-  
-  lint-check:
-    desc: Check linting without making changes
-    cmds:
       - uv run ruff check .
-  
+      - uv run ty check {{.SRC_DIR}}/
+
+  quality:
+    desc: "Full quality gate: Phase 1 (auto-fix) → Phase 2 (validate)"
+    cmds:
+      - task: fix
+      - task: check
+
+  # ─────────────────────────────────────────────
+  # Type Checking
+  # ─────────────────────────────────────────────
+
   typecheck:
-    desc: Type check with both ty and mypy
+    desc: Type check with ty (primary type checker)
     cmds:
-      - echo "🔍 Type checking with ty..."
-      - uv run ty check src/fast_fsm/
-      - echo "🔍 Type checking with mypy..."
-      - uv run mypy src/fast_fsm/
-  
-  typecheck-ty:
-    desc: Type check with ty only
-    cmds:
-      - uv run ty check src/fast_fsm/
-  
+      - uv run ty check {{.SRC_DIR}}/
+
   typecheck-mypy:
-    desc: Type check with mypy only
+    desc: Type check with mypy (mypyc compatibility verification)
     cmds:
-      - uv run mypy src/fast_fsm/
-  
-  # Combined workflow tasks
-  check:
-    desc: Run all pre-build checks (format, lint, typecheck)
-    deps: [format-check, lint-check, typecheck-ty]
-  
-  fix:
-    desc: Auto-fix formatting and linting issues
-    cmds:
-      - task: format
-      - task: lint
-  
-  pre-commit:
-    desc: Run all checks before committing
-    cmds:
-      - task: format
-      - task: lint
-      - task: typecheck
-      - task: test-fast
-  
-  # Build and maintenance tasks
-  clean:
-    desc: Clean build artifacts and cache
-    cmds:
-      - rm -rf build
-      - rm -rf dist
-      - rm -rf *.egg-info
-      - rm -rf .pytest_cache
-      - rm -rf htmlcov
-      - rm -rf .coverage
-      - rm -rf .mypy_cache
-      - rm -rf .ruff_cache
-      - find . -path "./.venv" -prune -o -name "*.so" -delete
-      - find . -path "./src" -prune -o -name "*.so" -delete
-      - find . -path "./.venv" -prune -o -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+      - uv run mypy {{.SRC_DIR}}/
+
+  # ─────────────────────────────────────────────
+  # mypyc Build
+  # (Constitution § Architecture > Selective mypyc Compilation)
+  # ─────────────────────────────────────────────
 
   build:
-    desc: Build the package with mypyc compilation
-    deps: [typecheck-ty]
+    desc: "Build mypyc-compiled C extension (core.py only)"
+    deps: [typecheck]
     cmds:
       - uv run python setup.py build_ext --inplace
 
+  # ─────────────────────────────────────────────
+  # Benchmarks (Constitution § Performance Standards)
+  # ─────────────────────────────────────────────
+
   benchmark:
-    desc: Run performance comparison benchmarks
+    desc: Run Fast FSM performance benchmark
+    cmds:
+      - uv run python benchmarks/benchmark_fast_fsm.py
+
+  benchmark-compiled:
+    desc: "Benchmark with mypyc build (clean → build → benchmark)"
     cmds:
       - task: clean
       - task: build
-      - echo "🚀 Running performance comparison..."
-      - uv run python benchmark.py
+      - uv run python benchmarks/benchmark_fast_fsm.py
 
-  # CI/CD workflow
-  ci:
-    desc: Full CI pipeline (formatting, linting, type checking, testing)
+  benchmark-compare:
+    desc: Run comparison benchmarks against other FSM libraries
     cmds:
-      - task: format-check
-      - task: lint-check
-      - task: typecheck-mypy
-      - task: test
-  
-  # Default task
-  default:
-    desc: Run tests and basic checks
+      - uv run python benchmarks/benchmark.py
+
+  # ─────────────────────────────────────────────
+  # Documentation (Copilot-Instructions § Documentation)
+  # ─────────────────────────────────────────────
+
+  docs:
+    desc: Build Sphinx HTML documentation
     cmds:
+      - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}}
+
+  docs-check:
+    desc: "Build docs with warnings-as-errors (CI-ready)"
+    cmds:
+      - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}} -W --keep-going
+
+  docs-clean:
+    desc: Remove generated documentation
+    cmds:
+      - uv run python -c "import shutil;shutil.rmtree('docs/_build',ignore_errors=True);print('Cleaned docs/_build.')"
+
+  docs-serve:
+    desc: Build and serve docs locally on port 8765
+    cmds:
+      - task: docs
+      - uv run python -m http.server 8765 -d {{.DOCS_BUILD}}
+
+  # ─────────────────────────────────────────────
+  # Combined Workflows
+  # ─────────────────────────────────────────────
+
+  pre-commit:
+    desc: "Pre-commit: auto-fix → validate → fast tests"
+    cmds:
+      - task: fix
+      - task: check
       - task: test-fast
-      - task: lint-check
+
+  ci:
+    desc: "Full CI pipeline: validate → test → docs"
+    cmds:
+      - task: check
+      - task: test
+      - task: docs-check
+
+  # ─────────────────────────────────────────────
+  # Maintenance
+  # ─────────────────────────────────────────────
+
+  clean:
+    desc: Clean build artifacts and caches
+    cmds:
+      - uv run python -c "import shutil,glob,os;dirs=['build','dist','.pytest_cache','htmlcov','.mypy_cache','.ruff_cache','docs/_build']+glob.glob('*.egg-info');[shutil.rmtree(d,ignore_errors=True) for d in dirs];[os.remove(f) for f in glob.glob('.coverage*') if os.path.isfile(f)];print('Cleaned build artifacts.')"
+
+  # ─────────────────────────────────────────────
+  # Default
+  # ─────────────────────────────────────────────
+
+  default:
+    desc: "Quick check: validate + fast tests"
+    cmds:
+      - task: check
+      - task: test-fast
