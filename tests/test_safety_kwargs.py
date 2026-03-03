@@ -9,7 +9,7 @@ import pytest
 import logging
 from unittest.mock import Mock
 from fast_fsm.core import StateMachine, State
-from fast_fsm.conditions import Condition
+from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
 
 
 class MockCondition(Condition):
@@ -359,6 +359,68 @@ class TestRealWorldScenarios:
         # Complex objects should pass through (individual conditions validate)
         assert condition.received_kwargs["complex_data"] == complex_object
         assert condition.received_kwargs["simple_data"] == "string"
+
+
+# ---------------------------------------------------------------------------
+# Condition base class gap coverage
+# ---------------------------------------------------------------------------
+
+
+class SimpleAsyncCondition(AsyncCondition):
+    """Async condition with configurable result for sync-wrapper tests."""
+
+    def __init__(self, result: bool = True):
+        super().__init__("simple_async", "simple async")
+        self._result = result
+
+    async def check_async(self, **kwargs) -> bool:
+        return self._result
+
+
+class TestConditionBaseClassGaps:
+    """Cover __str__, __repr__, and AsyncCondition.check sync wrapper."""
+
+    def test_condition_str(self):
+        class MyCond(Condition):
+            def __init__(self):
+                super().__init__("my_cond", "my desc")
+
+            def check(self, **kwargs) -> bool:
+                return True
+
+        assert str(MyCond()) == "my_cond"
+
+    def test_condition_repr(self):
+        class MyCond(Condition):
+            def __init__(self):
+                super().__init__("my_cond", "my desc")
+
+            def check(self, **kwargs) -> bool:
+                return True
+
+        assert repr(MyCond()) == "MyCond('my_cond')"
+
+    def test_func_condition_check(self):
+        fc = FuncCondition(lambda **kw: kw.get("x", 0) > 5, name="gt5")
+        assert fc.check(x=10) is True
+        assert fc.check(x=1) is False
+
+    def test_func_condition_default_name(self):
+        def my_custom_check(**kw):
+            return True
+
+        fc = FuncCondition(my_custom_check)
+        assert fc.name == "my_custom_check"
+
+    def test_async_condition_sync_wrapper(self):
+        """AsyncCondition.check() runs check_async synchronously."""
+        cond = SimpleAsyncCondition(result=True)
+        result = cond.check()
+        assert result is True
+
+    def test_async_condition_sync_wrapper_false(self):
+        cond = SimpleAsyncCondition(result=False)
+        assert cond.check() is False
 
 
 if __name__ == "__main__":

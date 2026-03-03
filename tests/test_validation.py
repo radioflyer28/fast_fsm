@@ -78,7 +78,16 @@ def minimal_fsm():
 def complex_fsm():
     """An FSM with many states and many transitions."""
     fsm = StateMachine.from_states(
-        "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
         initial="s1",
         name="ComplexFSM",
     )
@@ -389,3 +398,98 @@ class TestEdgeCases:
             assert "severity" in issue_dict
             assert "category" in issue_dict
             assert "description" in issue_dict
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests for validation reports and exports
+# ---------------------------------------------------------------------------
+
+
+class TestValidationReportGaps:
+    """Cover print_validation_report, export_report, and enhanced report."""
+
+    @pytest.fixture
+    def gap_problematic_fsm(self):
+        idle = State("idle")
+        processing = State("processing")
+        error_state = State("error")
+        orphan = State("orphan")
+
+        fsm = StateMachine(idle, name="problematic")
+        fsm.add_state(processing)
+        fsm.add_state(error_state)
+        fsm.add_state(orphan)
+        fsm.add_transition("start", "idle", "processing")
+        fsm.add_transition("fail", "processing", "error")
+        return fsm
+
+    @pytest.fixture
+    def gap_well_designed_fsm(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = StateMachine(idle, name="good_fsm")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("stop", "running", "idle")
+        return fsm
+
+    def test_print_validation_report(self, gap_problematic_fsm, capsys):
+        """FSMValidator.print_validation_report() prints output."""
+        validator = FSMValidator(gap_problematic_fsm)
+        validator.print_validation_report()
+        captured = capsys.readouterr()
+        assert "Validation Report" in captured.out
+        assert "States:" in captured.out
+
+    def test_export_json(self, gap_problematic_fsm):
+        """EnhancedFSMValidator export_report as JSON."""
+        validator = enhanced_validate_fsm(gap_problematic_fsm)
+        json_str = validator.export_report(format="json")
+        data = json.loads(json_str)
+        assert "fsm_name" in data
+        assert "validation_score" in data
+
+    def test_export_markdown(self, gap_problematic_fsm):
+        """EnhancedFSMValidator export_report as Markdown."""
+        validator = enhanced_validate_fsm(gap_problematic_fsm)
+        md = validator.export_report(format="markdown")
+        assert "# FSM Validation Report" in md
+        assert "## Metrics" in md
+
+    def test_export_text(self, gap_problematic_fsm):
+        """EnhancedFSMValidator export_report as text."""
+        validator = enhanced_validate_fsm(gap_problematic_fsm)
+        text = validator.export_report(format="text")
+        assert "Enhanced FSM Validation Report" in text
+
+    def test_print_enhanced_report_returns_string(self, gap_problematic_fsm):
+        """print_enhanced_report with return_string=True."""
+        validator = enhanced_validate_fsm(gap_problematic_fsm)
+        result = validator.print_enhanced_report(return_string=True)
+        assert result is not None
+        assert isinstance(result, str)
+
+    def test_print_enhanced_report_prints(self, gap_problematic_fsm, capsys):
+        """print_enhanced_report with return_string=False prints to stdout."""
+        validator = enhanced_validate_fsm(gap_problematic_fsm)
+        result = validator.print_enhanced_report(return_string=False)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "Enhanced FSM Validation Report" in captured.out
+
+    def test_batch_validate(self, gap_well_designed_fsm, gap_problematic_fsm):
+        """batch_validate runs on multiple FSMs."""
+        results = batch_validate(
+            gap_well_designed_fsm, gap_problematic_fsm, show_summary=False
+        )
+        assert len(results) == 2
+        assert "good_fsm" in results
+        assert "problematic" in results
+
+    def test_validation_score(self, gap_well_designed_fsm):
+        """get_validation_score returns expected structure."""
+        validator = enhanced_validate_fsm(gap_well_designed_fsm)
+        score = validator.get_validation_score()
+        assert "overall_score" in score
+        assert "grade" in score
+        assert score["grade"] in ("A", "B", "C", "D")

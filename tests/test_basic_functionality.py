@@ -409,5 +409,33 @@ class TestPerformance:
         assert elapsed < 1.0
 
 
+# ---------------------------------------------------------------------------
+# quick_build gap coverage
+# ---------------------------------------------------------------------------
+
+
+class TestQuickBuildGaps:
+    """Cover uncovered paths in StateMachine.quick_build()."""
+
+    def test_extra_states_param_strings(self):
+        """quick_build with extra state names via the states parameter."""
+        fsm = StateMachine.quick_build(
+            "idle",
+            [("start", "idle", "running")],
+            states=["orphan"],
+        )
+        assert "orphan" in fsm.states
+
+    def test_extra_states_param_objects(self):
+        """quick_build with State objects in the states parameter."""
+        orphan = State("orphan")
+        fsm = StateMachine.quick_build(
+            "idle",
+            [("start", "idle", "running")],
+            states=[orphan],
+        )
+        assert "orphan" in fsm.states
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

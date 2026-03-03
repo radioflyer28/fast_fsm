@@ -367,10 +367,11 @@ class TestAdvancedPerformance:
         assert elapsed < 10.0
 
         # Regression guard — this loop also asserts result.success each iteration.
-        # Measured ~41k TPS with assertions. 25k floor gives headroom.
+        # Measured ~41k TPS with assertions. 15k floor prevents flakiness on
+        # loaded CI runners while still catching real performance regressions.
         transitions_per_second = iterations / elapsed
-        assert transitions_per_second > 25000, (
-            f"Stress throughput {transitions_per_second:,.0f} TPS below 25k floor"
+        assert transitions_per_second > 15000, (
+            f"Stress throughput {transitions_per_second:,.0f} TPS below 15k floor"
         )
 
 

@@ -5,7 +5,6 @@ Covers trigger_async, can_trigger_async, AsyncCondition.check_async,
 FSMBuilder async auto-detection, and AsyncDeclarativeState.
 """
 
-
 import pytest
 
 from fast_fsm.conditions import AsyncCondition, Condition
@@ -14,6 +13,28 @@ from fast_fsm.core import (
     State,
     StateMachine,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class AlwaysTrueCondition(Condition):
+    """Sync condition that always passes."""
+
+    def __init__(self):
+        super().__init__("always_true", "always true")
+
+    def check(self, **kwargs) -> bool:
+        return True
+
+
+class RejectingState(State):
+    """State that rejects all transitions via can_transition."""
+
+    def can_transition(self, trigger, to_state, *args, **kwargs):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +289,97 @@ class TestAsyncCallbacks:
         result = await fsm.trigger_async("go")
         assert result.success
         assert fsm.current_state.name == "running"
+
+
+# ---------------------------------------------------------------------------
+# Additional async trigger / can_trigger_async gap coverage
+# ---------------------------------------------------------------------------
+
+
+class ConfigurableAsyncCondition(AsyncCondition):
+    """Async condition with configurable result."""
+
+    def __init__(self, result: bool = True):
+        super().__init__("configurable_async", "configurable async")
+        self._result = result
+
+    async def check_async(self, **kwargs) -> bool:
+        return self._result
+
+
+class TestAsyncTriggerGaps:
+    """Cover async condition exception handling and state rejection."""
+
+    @pytest.mark.asyncio
+    async def test_async_condition_exception_in_trigger(self):
+        """Exception in async condition check during trigger_async."""
+        s1 = State("s1")
+        s2 = State("s2")
+        fsm = AsyncStateMachine(s1, name="async_exc")
+        fsm.add_state(s2)
+        fsm.add_transition("go", "s1", "s2", ExplodingAsyncCondition())
+
+        result = await fsm.trigger_async("go")
+        assert not result.success
+        assert result.error is not None
+        assert "async boom" in result.error
+
+    @pytest.mark.asyncio
+    async def test_async_trigger_state_rejection(self):
+        """When state.can_transition returns False in trigger_async."""
+        rejecting = RejectingState("reject")
+        target = State("target")
+        fsm = AsyncStateMachine(rejecting, name="async_reject")
+        fsm.add_state(target)
+        fsm.add_transition("go", "reject", "target")
+
+        result = await fsm.trigger_async("go")
+        assert not result.success
+        assert result.error is not None
+        assert "rejected" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_can_trigger_async_with_failing_condition(self):
+        """can_trigger_async should return False if condition fails."""
+        s1 = State("s1")
+        s2 = State("s2")
+        fsm = AsyncStateMachine(s1, name="async_ct")
+        fsm.add_state(s2)
+        fsm.add_transition("go", "s1", "s2", ConfigurableAsyncCondition(result=False))
+
+        assert not await fsm.can_trigger_async("go")
+
+    @pytest.mark.asyncio
+    async def test_can_trigger_async_with_sync_condition(self):
+        """can_trigger_async dispatches to sync condition.check() correctly."""
+        s1 = State("s1")
+        s2 = State("s2")
+        fsm = AsyncStateMachine(s1, name="async_ct_sync")
+        fsm.add_state(s2)
+        fsm.add_transition("go", "s1", "s2", AlwaysTrueCondition())
+
+        assert await fsm.can_trigger_async("go")
+
+    @pytest.mark.asyncio
+    async def test_can_trigger_async_state_rejection(self):
+        """can_trigger_async should return False when state rejects transition."""
+        rejecting = RejectingState("reject")
+        target = State("target")
+        fsm = AsyncStateMachine(rejecting, name="async_ct_reject")
+        fsm.add_state(target)
+        fsm.add_transition("go", "reject", "target")
+
+        assert not await fsm.can_trigger_async("go")
+
+    @pytest.mark.asyncio
+    async def test_async_trigger_with_sync_condition(self):
+        """trigger_async handles sync Condition objects correctly."""
+        s1 = State("s1")
+        s2 = State("s2")
+        fsm = AsyncStateMachine(s1, name="async_sync_cond")
+        fsm.add_state(s2)
+        fsm.add_transition("go", "s1", "s2", AlwaysTrueCondition())
+
+        result = await fsm.trigger_async("go")
+        assert result.success
+        assert fsm.current_state.name == "s2"

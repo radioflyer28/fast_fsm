@@ -58,6 +58,37 @@ class SimpleAsyncCondition(AsyncCondition):
         return True
 
 
+class ConfigurableAsyncCondition(AsyncCondition):
+    """Async condition with configurable result for gap tests."""
+
+    def __init__(self, result: bool = True):
+        super().__init__("configurable_async", "configurable async")
+        self._result = result
+
+    async def check_async(self, **kwargs) -> bool:
+        return self._result
+
+
+class ExplodingCondition(Condition):
+    """Condition that raises an exception on check."""
+
+    def __init__(self):
+        super().__init__("exploding", "always explodes")
+
+    def check(self, **kwargs) -> bool:
+        raise RuntimeError("condition exploded")
+
+
+class ExplodingAsyncCondition(AsyncCondition):
+    """Async condition that raises an exception."""
+
+    def __init__(self):
+        super().__init__("exploding_async", "explodes asynchronously")
+
+    async def check_async(self, **kwargs) -> bool:
+        raise RuntimeError("async boom")
+
+
 # ---------------------------------------------------------------------------
 # FSMBuilder basics
 # ---------------------------------------------------------------------------
@@ -444,3 +475,300 @@ class TestConvenienceFunctions:
         fsm = quick_fsm("s1", [("go", "s1", "s2"), ("back", "s2", "s1")])
         assert "s1" in fsm.states
         assert "s2" in fsm.states
+
+
+# ---------------------------------------------------------------------------
+# DeclarativeState gap coverage
+# ---------------------------------------------------------------------------
+
+
+class TestDeclarativeStateGaps:
+    """Cover uncovered paths in DeclarativeState."""
+
+    def test_can_transition_async_condition_in_sync_context(self):
+        """AsyncCondition on a sync DeclarativeState — should warn and return False."""
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=SimpleAsyncCondition())
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert not s.can_transition("go", State("target"))
+
+    def test_can_transition_callable_condition(self):
+        """Callable condition (not Condition subclass) works in can_transition."""
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=lambda *a, **kw: True)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert s.can_transition("go", State("target"))
+
+    def test_can_transition_truthy_non_callable_condition(self):
+        """A truthy non-callable condition evaluates via bool()."""
+
+        class MyState(DeclarativeState):
+            @transition("go", condition="truthy_string")
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert s.can_transition("go", State("target"))
+
+    def test_can_transition_condition_exception(self):
+        """Exception during condition evaluation returns False."""
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=ExplodingCondition())
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert not s.can_transition("go", State("target"))
+
+    def test_handle_event_async_handler_in_sync_context(self):
+        """Async handler in sync DeclarativeState — should fail with error."""
+
+        class MyState(DeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                return TransitionResult(True)
+
+        s = MyState("s1")
+        result = s.handle_event("go")
+        assert not result.success
+        assert result.error is not None
+        assert "sync context" in result.error.lower() or "Async" in result.error
+
+    def test_handle_event_invalid_return_type(self):
+        """Handler returning non-bool, non-TransitionResult, non-None gets wrapped."""
+
+        class MyState(DeclarativeState):
+            @transition("go")
+            def handle_go(self, *args, **kwargs):
+                return "unexpected_string"
+
+        s = MyState("s1")
+        result = s.handle_event("go")
+        assert result.success
+        assert "Invalid return type" in (result.error or "")
+
+    def test_handle_event_failure_result(self):
+        """Handler returning TransitionResult(False) logs as failure."""
+
+        class MyState(DeclarativeState):
+            @transition("go")
+            def handle_go(self, *args, **kwargs):
+                return TransitionResult(False, error="intentional failure")
+
+        s = MyState("s1")
+        result = s.handle_event("go")
+        assert not result.success
+        assert result.error is not None
+        assert "intentional failure" in result.error
+
+
+# ---------------------------------------------------------------------------
+# AsyncDeclarativeState gap coverage
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncDeclarativeStateGaps:
+    """Cover uncovered paths in AsyncDeclarativeState."""
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_with_async_condition_pass(self):
+        cond = ConfigurableAsyncCondition(result=True)
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=cond)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_with_async_condition_fail(self):
+        cond = ConfigurableAsyncCondition(result=False)
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=cond)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert not await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_with_sync_condition(self):
+        cond = AlwaysTrue()
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=cond)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_callable_condition(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=lambda *a, **kw: True)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_truthy_non_callable(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition="truthy")
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_can_transition_async_condition_exception(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=ExplodingAsyncCondition())
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        s = MyState("s1")
+        assert not await s.can_transition_async("go", State("target"))
+
+    @pytest.mark.asyncio
+    async def test_handle_event_async_returns_none(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                pass
+
+        s = MyState("s1")
+        result = await s.handle_event_async("go")
+        assert result.success
+
+    @pytest.mark.asyncio
+    async def test_handle_event_async_returns_bool(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                return False
+
+        s = MyState("s1")
+        result = await s.handle_event_async("go")
+        assert not result.success
+
+    @pytest.mark.asyncio
+    async def test_handle_event_async_exception(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                raise ValueError("async handler boom")
+
+        s = MyState("s1")
+        result = await s.handle_event_async("go")
+        assert not result.success
+        assert result.error is not None
+        assert "async handler boom" in result.error
+
+    @pytest.mark.asyncio
+    async def test_handle_event_async_failure_result(self):
+        class MyState(AsyncDeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                return TransitionResult(False, error="async fail")
+
+        s = MyState("s1")
+        result = await s.handle_event_async("go")
+        assert not result.success
+        assert result.error is not None
+        assert "async fail" in result.error
+
+    @pytest.mark.asyncio
+    async def test_handle_event_async_unknown_falls_through(self):
+        class MyState(AsyncDeclarativeState):
+            pass
+
+        s = MyState("s1")
+        result = await s.handle_event_async("unknown")
+        assert isinstance(result, TransitionResult)
+
+
+# ---------------------------------------------------------------------------
+# FSMBuilder gap coverage
+# ---------------------------------------------------------------------------
+
+
+class TestFSMBuilderGaps:
+    """Cover uncovered FSMBuilder paths."""
+
+    def test_force_sync_with_async_state_warns(self):
+        builder = FSMBuilder(AsyncDeclarativeState("async_s"))
+        builder.force_sync()
+        fsm = builder.build()
+        assert isinstance(fsm, StateMachine)
+        assert not isinstance(fsm, AsyncStateMachine)
+
+    def test_force_sync_with_async_condition_warns(self):
+        builder = FSMBuilder(State("a"))
+        builder.add_state(State("b"))
+        builder.add_transition("go", "a", "b", SimpleAsyncCondition())
+        builder.force_sync()
+        fsm = builder.build()
+        assert isinstance(fsm, StateMachine)
+
+    def test_add_state_explicit_sync_warns_async_state(self):
+        builder = FSMBuilder(State("a"), async_mode=False)
+        builder.add_state(AsyncDeclarativeState("async_s"))
+        assert not builder.is_async
+
+    def test_add_transition_explicit_sync_warns_async_condition(self):
+        builder = FSMBuilder(State("a"), async_mode=False)
+        builder.add_state(State("b"))
+        builder.add_transition("go", "a", "b", SimpleAsyncCondition())
+        assert not builder.is_async
+
+    def test_build_with_list_from_state(self):
+        a = State("a")
+        b = State("b")
+        c = State("c")
+        builder = FSMBuilder(a)
+        builder.add_state(b)
+        builder.add_state(c)
+        builder.add_transition("go", ["a", "b"], "c")
+        fsm = builder.build()
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "c"
+
+    def test_build_returns_cached_machine(self):
+        builder = FSMBuilder(State("a"))
+        fsm1 = builder.build()
+        fsm2 = builder.build()
+        assert fsm1 is fsm2
+
+    def test_auto_detect_async_from_declarative_handlers(self):
+        class MyState(DeclarativeState):
+            @transition("go", condition=SimpleAsyncCondition())
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(MyState("s"))
+        assert builder.is_async
+
+    def test_auto_detect_async_from_async_handlers(self):
+        class MyState(DeclarativeState):
+            @transition("go")
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(MyState("s"))
+        assert builder.is_async

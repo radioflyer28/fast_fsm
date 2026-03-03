@@ -14,6 +14,28 @@ from fast_fsm.conditions import Condition
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class RejectingState(State):
+    """State that rejects all transitions via can_transition."""
+
+    def can_transition(self, trigger, to_state, *args, **kwargs):
+        return False
+
+
+class ExplodingCondition(Condition):
+    """Condition that raises an exception on check."""
+
+    def __init__(self):
+        super().__init__("exploding", "always explodes")
+
+    def check(self, **kwargs) -> bool:
+        raise RuntimeError("condition exploded")
+
+
+# ---------------------------------------------------------------------------
 # State edge cases
 # ---------------------------------------------------------------------------
 
@@ -243,3 +265,113 @@ class TestCanTrigger:
         fsm.add_state(State("b"))
         fsm.add_transition("go", "a", "b", No())
         assert not fsm.can_trigger("go")
+
+
+# ---------------------------------------------------------------------------
+# add_transition edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestAddTransitionGaps:
+    """Cover callable condition wrapping and TypeError."""
+
+    def test_callable_condition_wrapped_in_func_condition(self):
+        """A plain callable passed as condition should be wrapped in FuncCondition."""
+        fsm = StateMachine(State("a"), name="wrap_test")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", condition=lambda **kw: True)
+
+        result = fsm.trigger("go")
+        assert result.success
+
+    def test_bad_condition_type_raises_type_error(self):
+        """Passing a non-callable non-Condition as condition raises TypeError."""
+        fsm = StateMachine(State("a"), name="type_error_test")
+        fsm.add_state(State("b"))
+
+        with pytest.raises(TypeError, match="Condition must be"):
+            fsm.add_transition("go", "a", "b", condition=42)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# can_trigger with conditions
+# ---------------------------------------------------------------------------
+
+
+class TestCanTriggerCondition:
+    def test_can_trigger_false_when_condition_fails(self):
+        class AlwaysFalse(Condition):
+            def __init__(self):
+                super().__init__("always_false", "always false")
+
+            def check(self, **kwargs) -> bool:
+                return False
+
+        fsm = StateMachine(State("a"), name="ct_cond")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", AlwaysFalse())
+        assert not fsm.can_trigger("go")
+
+    def test_can_trigger_true_when_condition_passes(self):
+        class AlwaysTrue(Condition):
+            def __init__(self):
+                super().__init__("always_true", "always true")
+
+            def check(self, **kwargs) -> bool:
+                return True
+
+        fsm = StateMachine(State("a"), name="ct_cond2")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", AlwaysTrue())
+        assert fsm.can_trigger("go")
+
+
+# ---------------------------------------------------------------------------
+# State rejection in trigger()
+# ---------------------------------------------------------------------------
+
+
+class TestStateRejection:
+    """Cover the path where can_transition returns False."""
+
+    def test_trigger_rejected_by_state(self):
+        """When state.can_transition() returns False, trigger should fail."""
+        rejecting = RejectingState("reject")
+        target = State("target")
+
+        fsm = StateMachine(rejecting, name="reject_test")
+        fsm.add_state(target)
+        fsm.add_transition("go", "reject", "target")
+
+        result = fsm.trigger("go")
+        assert not result.success
+        assert result.error is not None
+        assert "rejected" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# safe_trigger additional edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestSafeTriggerEdgeCases:
+    """Additional safe_trigger coverage."""
+
+    def test_safe_trigger_invalid_trigger_returns_error(self):
+        """safe_trigger with a nonexistent trigger returns a failed result."""
+        fsm = StateMachine(State("a"), name="safe_inv")
+        result = fsm.safe_trigger("nonexistent")
+        assert not result.success
+        assert result.error is not None
+        assert "No transition" in result.error
+
+    def test_safe_trigger_with_failing_condition(self):
+        """safe_trigger with a condition that raises — caught by trigger internals."""
+        fsm = StateMachine(State("a"), name="safe_cond")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", ExplodingCondition())
+
+        result = fsm.safe_trigger("go")
+        assert not result.success
+        assert result.error is not None
+        assert "exploded" in result.error
