@@ -75,9 +75,9 @@ class FuncCondition(Condition):
         Initialize with a callable.
 
         Args:
-            func: Callable that takes **kwargs and returns bool
-            name: Name for this condition (defaults to function name)
-            description: Description of what this condition does
+            func: Callable that takes ``**kwargs`` and returns bool.
+            name: Name for this condition (defaults to function name).
+            description: Description of what this condition does.
         """
         if name is None:
             name = getattr(func, "__name__", "custom_function")

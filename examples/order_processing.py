@@ -8,11 +8,6 @@ Demonstrates an e-commerce order processing workflow with:
 - FSM validation and analysis
 """
 
-import sys
-import os
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from fast_fsm import State, FSMBuilder, validate_fsm
 
 

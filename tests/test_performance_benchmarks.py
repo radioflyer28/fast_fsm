@@ -8,13 +8,8 @@ while being compatible with mypyc compilation.
 import pytest
 import time
 import gc
-import sys
-import os
 import contextlib
 import io
-
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fast_fsm.core import StateMachine, State
 from fast_fsm.conditions import Condition

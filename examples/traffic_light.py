@@ -8,11 +8,6 @@ Demonstrates a complete traffic light state machine with:
 - Emergency override functionality
 """
 
-import sys
-import os
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from fast_fsm import State, FSMBuilder
 
 

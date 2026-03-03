@@ -8,12 +8,8 @@ that can check real-time sensor data in a Fast FSM state machine.
 
 import asyncio
 import random
-import sys
-import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from fast_fsm import State, AsyncStateMachine, AsyncCondition, SensorCondition
+from fast_fsm import State, AsyncStateMachine, AsyncCondition
 
 
 # Example: Simulated sensor readers
@@ -210,44 +206,10 @@ async def demo_async_sensor_conditions():
     print("\n🎯 Demo completed!")
 
 
-# Example using the built-in SensorCondition class
-async def demo_builtin_sensor_condition():
-    """Demonstrate the built-in SensorCondition class"""
-
-    print("\n" + "=" * 50)
-    print("🔧 Built-in SensorCondition Demo")
-    print("=" * 50)
-
-    # Create a simple sensor reader
-    async def read_vibration_sensor() -> float:
-        """Simulate a vibration sensor"""
-        await asyncio.sleep(0.1)  # Simulate sensor delay
-        return random.uniform(0, 10)  # Vibration level 0-10
-
-    # Create condition using built-in SensorCondition
-    vibration_alarm = SensorCondition(
-        sensor_reader=read_vibration_sensor,
-        threshold=7.0,
-        name="vibration_alarm",
-        description="High vibration detected",
-        timeout=0.5,
-    )
-
-    # Test the condition several times
-    for i in range(5):
-        print(f"\nVibration check {i + 1}:")
-        try:
-            result = await vibration_alarm.check_async()
-            print(f"  Condition result: {'✅ ALARM' if result else '✅ Normal'}")
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
-
-
 if __name__ == "__main__":
 
     async def main():
         await demo_async_sensor_conditions()
-        await demo_builtin_sensor_condition()
 
         print("\n" + "=" * 50)
         print("📋 Key Features Demonstrated:")
@@ -256,7 +218,7 @@ if __name__ == "__main__":
         print("• Concurrent sensor reading")
         print("• Error handling and timeouts")
         print("• Integration with Fast FSM state machines")
-        print("• Both custom and built-in async condition classes")
+        print("• Custom async condition classes")
 
     # Run the demo
     asyncio.run(main())
