@@ -47,7 +47,7 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 
 **Testing:**
 - **Full suite:** `uv run pytest tests/ -x -q` (or `task test`)
-- **Baseline (main branch):** 101 passed, 0 failures
+- **Baseline (main branch):** 289 passed, 1 xfailed, 0 failures
 - **No parallel execution:** tests run sequentially
 - **Incremental testing:** During development, run only targeted tests. Full suite once before push.
 
@@ -210,12 +210,16 @@ uv run ruff check $files; uv run ty check $files            # Phase 2
 
 | Source file changed | Primary test files |
 |---------------------|-------------------|
-| `core.py` | `test_basic_functionality.py`, `test_advanced_functionality.py` |
+| `core.py` (StateMachine, State) | `test_basic_functionality.py`, `test_advanced_functionality.py`, `test_boundary_negative.py`, `test_state_machine_utils.py` |
+| `core.py` (FSMBuilder, Declarative) | `test_builder.py` |
+| `core.py` (AsyncStateMachine) | `test_async.py` |
+| `core.py` (logging helpers) | `test_logging_config.py` |
 | `validation.py` | `test_validation.py` |
-| `conditions.py` | `test_safety_kwargs.py` |
-| `condition_templates.py` | `test_safety_kwargs.py` |
+| `conditions.py` | `test_safety_kwargs.py`, `test_async.py` |
+| `condition_templates.py` | `test_condition_templates.py`, `test_safety_kwargs.py` |
 | README / examples | `test_readme_examples.py` |
 | Performance-sensitive | `test_performance_benchmarks.py` |
+| Cross-cutting invariants | `test_hypothesis.py` |
 
 
 ## Documentation
