@@ -54,46 +54,129 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 **Branch model:**
 - Default branch: `main`
 - Feature branches: `feat/<desc>`, `fix/<desc>`, `docs/<desc>`
-- No remote is currently configured — push setup TBD
+- Remote: `origin` → `https://github.com/radioflyer28/fast_fsm.git`
+- All feature work is tracked in **beads** (`bd`) — see [Issue Tracking](#issue-tracking)
 
 
 ## Development Workflow
 
 ### Workflow A: Feature/Fix Work (branch-based)
 
-1. **Create branch:**
+1. **Claim work in beads:**
+   ```bash
+   bd ready                              # Find unblocked work
+   bd update <id> --status in_progress   # Claim the issue
+   ```
+2. **Create branch:**
    ```bash
    git checkout main
-   git checkout -b feat/<desc>
+   git checkout -b feat/<desc>           # e.g., feat/async-guards
    ```
-2. **Do the work** — code, tests, docs updates
-3. **Quality gates** (if .py files changed):
+3. **Do the work** — code, tests, docs updates
+4. **Quality gates** (if .py files changed):
    ```powershell
    # PowerShell (Windows)
    $files = git diff --name-only --diff-filter=ACMR HEAD -- '*.py'
    uv run ruff format $files; uv run ruff check --fix $files   # Phase 1: auto-fix
    uv run ruff check $files; uv run ty check $files            # Phase 2: validate
    ```
-4. **Incremental tests** (after each code change):
+5. **Incremental tests** (after each code change):
    ```bash
    uv run pytest tests/test_<relevant>.py -x -q
    ```
-5. **Full test suite** (once, right before merge):
+6. **Full test suite** (once, right before merge):
    `uv run pytest tests/ -x -q`
-6. **Update docs** if changing public API (see [Documentation](#documentation) section)
-7. **Merge to main:**
+7. **Update docs** if changing public API (see [Documentation](#documentation) section)
+8. **Merge to main and close:**
    ```bash
    git checkout main
    git merge feat/<desc>
    git branch -d feat/<desc>
+   bd close <id> --reason "Merged feat/<desc>"
+   git push
    ```
 
 ### Workflow B: Direct-to-main (no feature branch)
 
 Use for docs-only changes, config tweaks, or trivial fixes.
+Beads tracking is optional for Workflow B — use your judgment.
 
 1. Ensure you're on `main`: `git checkout main`
-2. Make changes, commit directly
+2. Make changes, commit directly, push
+
+
+## Issue Tracking
+
+**Primary tracker:** beads (`bd`) — all work items live here.
+**Mirror:** GitHub Issues — for visibility and long-term records.
+
+### Beads (bd) — Day-to-Day Tracking
+
+All work is tracked in beads. Use `bd` for ALL task tracking — do NOT use
+markdown TODOs, task lists, or other tracking methods.
+
+```bash
+bd ready                              # Find unblocked work
+bd create "Title" -t task -p 2        # Create a task
+bd create "Epic title" -t epic -p 1   # Create an epic (groups related work)
+bd update <id> --status in_progress   # Claim work
+bd close <id> --reason "Done"         # Complete work
+```
+
+**Issue types:**
+
+| Type | Use for |
+|------|---------|
+| `bug` | Something broken |
+| `feature` | New functionality |
+| `task` | Work item (tests, docs, refactoring) |
+| `epic` | Large feature with subtasks |
+| `chore` | Maintenance (dependencies, tooling) |
+
+**Priorities:**
+
+| Priority | Meaning |
+|----------|---------|
+| `0` | Critical (security, data loss, broken builds) |
+| `1` | High (major features, important bugs) |
+| `2` | Medium (default, nice-to-have) |
+| `3` | Low (polish, optimization) |
+| `4` | Backlog (future ideas) |
+
+**Discovered work:** When you find new issues while working, link them:
+```bash
+bd create "Found bug" -p 1 --deps discovered-from:<parent-id>
+```
+
+**Granularity:** Create fine-grained beads issues freely — individual bug fixes, small refactors,
+test additions. Group related items under **epics** when they form a coherent feature or initiative.
+
+### GitHub Issues — Coarse-Grained Mirror
+
+GitHub Issues mirror beads **at the epic level** (or bundled related tasks).
+The goal is clean project history without noise from trivial items.
+
+**When to create a GitHub Issue:**
+- A beads epic is created (feature, major refactor, milestone)
+- A cluster of related beads tasks warrants external visibility
+- A bug is user-facing or significant enough to track publicly
+
+**When NOT to create a GitHub Issue:**
+- Individual small tasks within an epic (tracked only in beads)
+- Docs typo fixes, config tweaks, trivial chores
+- Discovered sub-tasks that roll up into an existing GitHub Issue
+
+**Convention:** Reference the GitHub Issue in beads epic descriptions and vice versa:
+```bash
+# In beads epic description, reference the GH issue
+bd create "Async guard conditions" -t epic -p 1 --description="GH #12"
+
+# In GitHub Issue body, reference the beads epic
+# "Tracked in beads as bd-a1b2"
+```
+
+**Closing:** When all child beads tasks under an epic are closed, close the corresponding
+GitHub Issue with a summary of what was delivered.
 
 
 ## Code Quality & Formatting
@@ -194,6 +277,26 @@ uv run sphinx-build -b html docs docs/_build/html -W --keep-going
 7. **Dependencies:** `hypothesis`, `matplotlib`, `mypy[mypyc]`, `networkx`, `python-statemachine`, and `transitions` are in the main dependency group. The latter two are only for benchmarking comparisons — they are NOT used by the library itself.
 
 8. **mypyc selective compilation.** Only `core.py` is compiled via mypyc (configured in `setup.py`). `conditions.py` and `condition_templates.py` MUST stay uncompiled — users subclass `Condition` from interpreted Python, and mypyc-compiled classes cannot be subclassed from interpreted code. Build with: `uv run python setup.py build_ext --inplace`. The library MUST work correctly both compiled and uncompiled.
+
+
+## Landing the Plane (Session Completion)
+
+**When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+1. **File issues for remaining work** — `bd create` for anything that needs follow-up
+2. **Run quality gates** (if .py files changed) — tests, linters, docs build
+3. **Update issue status** — `bd close` finished work, update in-progress items
+4. **Push to remote** — this is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd sync
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Verify** — all changes committed AND pushed
+6. **Hand off** — provide context for next session
+
+**Critical:** Work is NOT complete until `git push` succeeds. Never stop before pushing.
 
 
 ## Maintaining This Document
