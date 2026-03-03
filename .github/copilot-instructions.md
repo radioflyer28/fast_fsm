@@ -278,7 +278,7 @@ uv run sphinx-build -b html docs docs/_build/html -W --keep-going
 
 6. **PowerShell `2>&1` is broken:** Do NOT use `2>&1` in PowerShell. Many programs write informational messages to stderr, and `2>&1` causes PowerShell to wrap them as `ErrorRecord` objects, producing false failures. Just run commands normally.
 
-7. **Dependencies:** `hypothesis`, `matplotlib`, `mypy[mypyc]`, `networkx`, `python-statemachine`, and `transitions` are in the main dependency group. The latter two are only for benchmarking comparisons — they are NOT used by the library itself.
+7. **Dependencies:** The library has a single runtime dependency: `mypy-extensions` (for `@mypyc_attr`). Everything else is in dependency groups: `dev` (pytest, hypothesis, mypy, ruff, ty), `benchmarks` (matplotlib, networkx, python-statemachine, transitions), `docs` (sphinx, furo, myst-parser). Use `uv sync --all-groups` to install everything.
 
 8. **mypyc selective compilation.** Only `core.py` is compiled via mypyc (configured in `setup.py`). `conditions.py` and `condition_templates.py` MUST stay uncompiled — users subclass `Condition` from interpreted Python, and mypyc-compiled classes cannot be subclassed from interpreted code. Build with: `uv run python setup.py build_ext --inplace`. The library MUST work correctly both compiled and uncompiled.
 
