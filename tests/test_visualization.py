@@ -1,12 +1,15 @@
 """
-Tests for the visualization module (to_mermaid).
+Tests for the visualization module (to_mermaid, to_mermaid_fenced,
+to_mermaid_document).
 
-All tests verify the generated Mermaid string structure without rendering it.
+All tests verify the generated Mermaid/Markdown string structure without
+rendering it.
 """
 
 import pytest
 
 from fast_fsm import StateMachine, State, FuncCondition, to_mermaid
+from fast_fsm import to_mermaid_fenced, to_mermaid_document
 from fast_fsm.visualization import _mermaid_id
 
 
@@ -209,3 +212,116 @@ class TestToMermaidEdgeCases:
         out = to_mermaid(fsm)
         assert "[*] --> wait" in out
         assert "wait --> done : go" in out
+
+
+# ---------------------------------------------------------------------------
+# to_mermaid_fenced
+# ---------------------------------------------------------------------------
+
+
+class TestToMermaidFenced:
+    def test_wrapped_in_mermaid_fences(self, simple_fsm):
+        out = to_mermaid_fenced(simple_fsm)
+        assert out.startswith("```mermaid\n")
+        assert out.endswith("\n```")
+
+    def test_diagram_content_preserved(self, simple_fsm):
+        out = to_mermaid_fenced(simple_fsm)
+        assert "stateDiagram-v2" in out
+        assert "[*] --> idle" in out
+        assert "idle --> running : start" in out
+
+    def test_title_forwarded(self, simple_fsm):
+        out = to_mermaid_fenced(simple_fsm, title="My Title")
+        assert "%% My Title" in out
+
+    def test_conditions_forwarded(self, conditional_fsm):
+        with_cond = to_mermaid_fenced(conditional_fsm, show_conditions=True)
+        without_cond = to_mermaid_fenced(conditional_fsm, show_conditions=False)
+        assert "[positive]" in with_cond
+        assert "[positive]" not in without_cond
+
+    def test_returns_string(self, simple_fsm):
+        assert isinstance(to_mermaid_fenced(simple_fsm), str)
+
+
+# ---------------------------------------------------------------------------
+# to_mermaid_document — without adjacency matrix
+# ---------------------------------------------------------------------------
+
+
+class TestToMermaidDocumentBasic:
+    def test_starts_with_heading(self, simple_fsm):
+        doc = to_mermaid_document(simple_fsm)
+        assert doc.startswith("# Simple")
+
+    def test_diagram_section_present(self, simple_fsm):
+        doc = to_mermaid_document(simple_fsm)
+        assert "## State Diagram" in doc
+        assert "```mermaid" in doc
+        assert "stateDiagram-v2" in doc
+
+    def test_custom_title(self, simple_fsm):
+        doc = to_mermaid_document(simple_fsm, title="Custom Heading")
+        assert doc.startswith("# Custom Heading")
+
+    def test_no_adjacency_sections_without_matrix(self, simple_fsm):
+        doc = to_mermaid_document(simple_fsm)
+        assert "## State Adjacency Matrix" not in doc
+        assert "## Transitions" not in doc
+
+    def test_returns_string(self, simple_fsm):
+        assert isinstance(to_mermaid_document(simple_fsm), str)
+
+
+# ---------------------------------------------------------------------------
+# to_mermaid_document — with adjacency matrix
+# ---------------------------------------------------------------------------
+
+
+class TestToMermaidDocumentWithMatrix:
+    @pytest.fixture
+    def fsm_and_matrix(self, simple_fsm):
+        from fast_fsm.validation import FSMValidator
+
+        adj = FSMValidator(simple_fsm).get_adjacency_matrix()
+        return simple_fsm, adj
+
+    def test_adjacency_section_present(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        assert "## State Adjacency Matrix" in doc
+
+    def test_transitions_section_present(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        assert "## Transitions" in doc
+
+    def test_state_names_in_adjacency_table(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        for state in adj["states"]:
+            assert state in doc
+
+    def test_event_names_in_transitions_table(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        for t in adj["transitions"]:
+            assert t["event"] in doc
+
+    def test_em_dash_for_missing_transitions(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        # linear FSM has no self-transitions, so some cells must show —
+        assert "—" in doc
+
+    def test_diagram_still_present_with_matrix(self, fsm_and_matrix):
+        fsm, adj = fsm_and_matrix
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+        assert "stateDiagram-v2" in doc
+
+    def test_empty_adjacency_dict_does_not_crash(self, simple_fsm):
+        """Passing an empty dict should not raise."""
+        doc = to_mermaid_document(simple_fsm, adjacency_matrix={})
+        assert isinstance(doc, str)
+        assert "## State Diagram" in doc

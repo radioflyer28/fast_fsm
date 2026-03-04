@@ -25,7 +25,7 @@ from .core import (
     quick_fsm,
     condition_builder,
 )
-from .visualization import to_mermaid
+from .visualization import to_mermaid, to_mermaid_fenced, to_mermaid_document
 from .validation import (
     FSMValidator,
     EnhancedFSMValidator,
@@ -68,6 +68,8 @@ __all__ = [
     "condition_builder",
     # Visualization
     "to_mermaid",
+    "to_mermaid_fenced",
+    "to_mermaid_document",
     # Validation components (enhanced)
     "FSMValidator",
     "EnhancedFSMValidator",

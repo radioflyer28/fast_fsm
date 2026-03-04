@@ -102,3 +102,124 @@ def to_mermaid(
             lines.append(f"    {from_id} --> {to_id} : {label}")
 
     return "\n".join(lines)
+
+
+def to_mermaid_fenced(
+    fsm: "StateMachine",
+    *,
+    title: str | None = None,
+    show_conditions: bool = True,
+) -> str:
+    """
+    Like :func:`to_mermaid` but wraps the output in ````mermaid`` fences for
+    direct embedding in Markdown documents.
+
+    Args:
+        fsm: The state machine to visualize.
+        title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
+        show_conditions: When ``True``, condition names are appended to
+            transition labels.  Defaults to ``True``.
+
+    Returns:
+        A Markdown fenced code block string::
+
+            ```mermaid
+            stateDiagram-v2
+                ...
+            ```
+
+    Example::
+
+        >>> from fast_fsm import StateMachine, to_mermaid_fenced
+        >>> fsm = StateMachine.quick_build(
+        ...     "idle",
+        ...     [("start", "idle", "running"), ("stop", "running", "idle")],
+        ... )
+        >>> print(to_mermaid_fenced(fsm))
+        ```mermaid
+        stateDiagram-v2
+            [*] --> idle
+            idle --> running : start
+            running --> idle : stop
+        ```
+    """
+    diagram = to_mermaid(fsm, title=title, show_conditions=show_conditions)
+    return f"```mermaid\n{diagram}\n```"
+
+
+def to_mermaid_document(
+    fsm: "StateMachine",
+    *,
+    title: str | None = None,
+    show_conditions: bool = True,
+    adjacency_matrix: "dict | None" = None,
+) -> str:
+    """
+    Generate a self-contained Markdown document for a StateMachine.
+
+    The document always contains the Mermaid state diagram wrapped in a fenced
+    code block.  When *adjacency_matrix* is supplied, a full N×N adjacency table
+    and a numbered transitions table are appended below the diagram.
+
+    The adjacency data is accepted as a plain ``dict`` so that
+    ``visualization.py`` has no import dependency on ``validation.py``.  Obtain
+    it with::
+
+        from fast_fsm.validation import FSMValidator
+
+        adj = FSMValidator(fsm).get_adjacency_matrix()
+        doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+
+    Args:
+        fsm: The state machine to document.
+        title: Document heading; defaults to ``fsm.name``.
+        show_conditions: Passed through to :func:`to_mermaid`.
+        adjacency_matrix: Optional dict returned by
+            ``FSMValidator.get_adjacency_matrix()``.  When provided, the
+            document includes a full adjacency table and a numbered transition
+            list below the diagram.
+
+    Returns:
+        A Markdown string suitable for saving as ``.md`` or rendering in any
+        Markdown viewer.
+    """
+    heading = title or getattr(fsm, "name", "FSM")
+    lines: list[str] = [f"# {heading}", ""]
+
+    lines.extend(["## State Diagram", ""])
+    lines.append(to_mermaid_fenced(fsm, show_conditions=show_conditions))
+
+    if adjacency_matrix is not None:
+        sorted_states: list[str] = adjacency_matrix.get("states", [])
+        transitions_list: list[dict] = adjacency_matrix.get("transitions", [])
+        matrix: list[list[list[int]]] = adjacency_matrix.get("matrix", [])
+
+        if sorted_states:
+            lines.extend(["", "## State Adjacency Matrix", ""])
+            header = "| → | " + " | ".join(sorted_states) + " |"
+            separator = "|---|" + "|".join(["---"] * len(sorted_states)) + "|"
+            lines.append(header)
+            lines.append(separator)
+            for i, from_state in enumerate(sorted_states):
+                row_cells: list[str] = []
+                for j in range(len(sorted_states)):
+                    t_indices = matrix[i][j]
+                    if t_indices:
+                        events_in_cell = [
+                            transitions_list[idx]["event"] for idx in t_indices
+                        ]
+                        row_cells.append(", ".join(f"`{e}`" for e in events_in_cell))
+                    else:
+                        row_cells.append("—")
+                lines.append(f"| **{from_state}** | " + " | ".join(row_cells) + " |")
+
+        if transitions_list:
+            lines.extend(["", "## Transitions", ""])
+            lines.append("| # | From | Event | To |")
+            lines.append("|---|------|-------|----|")
+            for t in transitions_list:
+                lines.append(
+                    f"| {t['idx']} | {t['from_state']} | `{t['event']}` | {t['to_state']} |"
+                )
+
+    return "\n".join(lines)
