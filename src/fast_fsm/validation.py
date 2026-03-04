@@ -51,8 +51,8 @@ class FSMValidator:
 
         # Extract transitions from the FSM's internal structure
         for from_state, transitions in self.fsm._transitions.items():
-            for trigger, transition_info in transitions.items():
-                to_state = transition_info["to_state"].name
+            for trigger, entry in transitions.items():
+                to_state = entry.to_state.name
                 self.states.add(from_state)
                 self.states.add(to_state)
                 self.transitions[from_state][trigger].add(to_state)

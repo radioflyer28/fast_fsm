@@ -179,7 +179,7 @@ class TestTransitionResult:
         assert r.from_state == "a"
         assert r.to_state == "b"
         assert r.trigger == "go"
-        assert r.error is None
+        assert r.error == ""
 
     def test_failure_fields(self):
         r = TransitionResult(False, from_state="a", trigger="go", error="oops")

@@ -119,20 +119,11 @@ class AsyncCondition(Condition):
         """
         Synchronous wrapper that runs the async check.
 
-        Note: This will create a new event loop if none exists.
-        For better performance, use check_async() directly in async contexts.
+        Creates a new event loop via :func:`asyncio.run`.  For better
+        performance in async contexts, call :meth:`check_async` directly.
+
+        Raises:
+            RuntimeError: If called from within a running event loop
+                (use ``await condition.check_async()`` instead).
         """
-        try:
-            # Try to get the current event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're already in an async context, we can't use run()
-                raise RuntimeError(
-                    "Cannot run async condition from within async context. "
-                    "Use AsyncStateMachine or ensure FSM runs in sync context."
-                )
-            else:
-                return loop.run_until_complete(self.check_async(**kwargs))
-        except RuntimeError:
-            # No event loop exists, create one
-            return asyncio.run(self.check_async(**kwargs))
+        return asyncio.run(self.check_async(**kwargs))

@@ -14,7 +14,7 @@ Key design principles:
 
 import logging
 from abc import ABC
-from typing import Optional, Dict, Any, Callable, List, Union, Tuple
+from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
@@ -23,13 +23,29 @@ from .conditions import Condition, FuncCondition, AsyncCondition
 
 @dataclass(slots=True)
 class TransitionResult:
-    """Result of a state transition"""
+    """Result of a state transition."""
 
     success: bool
     from_state: Optional[str] = None
     to_state: Optional[str] = None
     trigger: Optional[str] = None
-    error: Optional[str] = None
+    error: str = ""
+
+
+class TransitionEntry:
+    """Internal typed container for a single transition's target and guard.
+
+    Uses ``__slots__`` for the same memory/speed profile as the raw ``dict``
+    it replaces, while giving attribute access and type safety.
+    """
+
+    __slots__ = ("to_state", "condition")
+
+    def __init__(
+        self, to_state: "State", condition: Optional[Condition] = None
+    ) -> None:
+        self.to_state: "State" = to_state
+        self.condition: Optional[Condition] = condition
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -158,7 +174,7 @@ class StateMachine:
         self._name = name
         self._current_state = initial_state
         self._states: Dict[str, State] = {initial_state.name: initial_state}
-        self._transitions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._transitions: Dict[str, Dict[str, TransitionEntry]] = {}
 
         # Use name-based logger if not specified
         if logger_name is None:
@@ -346,10 +362,9 @@ class StateMachine:
             if from_state_name not in self._transitions:
                 self._transitions[from_state_name] = {}
 
-            self._transitions[from_state_name][trigger] = {
-                "to_state": to_state_obj,
-                "condition": normalized_condition,
-            }
+            self._transitions[from_state_name][trigger] = TransitionEntry(
+                to_state_obj, normalized_condition
+            )
 
     def add_transitions(
         self,
@@ -473,8 +488,8 @@ class StateMachine:
         state_name = from_state or self.current_state_name
         reachable = set()
 
-        for transition in self._transitions.get(state_name, {}).values():
-            reachable.add(transition["to_state"].name)
+        for entry in self._transitions.get(state_name, {}).values():
+            reachable.add(entry.to_state.name)
 
         return list(reachable)
 
@@ -504,8 +519,8 @@ class StateMachine:
             return False
 
         if to_state is not None:
-            transition = self._transitions[state_name][trigger]
-            return transition["to_state"].name == to_state
+            entry = self._transitions[state_name][trigger]
+            return entry.to_state.name == to_state
 
         return True
 
@@ -524,16 +539,16 @@ class StateMachine:
         if trigger not in self._transitions[current_name]:
             return False
 
-        transition = self._transitions[current_name][trigger]
-        condition = transition.get("condition")
+        entry = self._transitions[current_name][trigger]
 
-        if condition:
+        if entry.condition:
             safe_kwargs = self._sanitize_condition_kwargs(kwargs)
-            if not condition.check(*args, **safe_kwargs):
+            if not entry.condition.check(*args, **safe_kwargs):
                 return False
 
-        to_state = transition["to_state"]
-        return self._current_state.can_transition(trigger, to_state, *args, **kwargs)
+        return self._current_state.can_transition(
+            trigger, entry.to_state, *args, **kwargs
+        )
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -582,20 +597,17 @@ class StateMachine:
 
         return safe_kwargs
 
-    def trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
-        """
-        Trigger a state transition.
+    def _resolve_trigger(
+        self, trigger: str, *args: Any, **kwargs: Any
+    ) -> Union[Tuple[TransitionEntry, str], TransitionResult]:
+        """Look up a transition entry for the given trigger.
 
-        Performance: O(1) - Direct dictionary lookup + condition evaluation
-        Throughput: ~250,000 transitions/sec on modern hardware
-
-        Args:
-            trigger: The trigger/event name
-            *args: Positional arguments for the transition
-            **kwargs: Keyword arguments for the transition
+        Logs the trigger attempt (ultra-verbose) and validates that a
+        transition exists from the current state.
 
         Returns:
-            TransitionResult indicating success or failure
+            ``(entry, current_state_name)`` on success, or a failure
+            :class:`TransitionResult` if no transition exists.
         """
         current_name = self._current_state.name
 
@@ -626,9 +638,81 @@ class StateMachine:
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
 
-        transition = self._transitions[current_name][trigger]
-        to_state = transition["to_state"]
-        condition = transition.get("condition")
+        return self._transitions[current_name][trigger], current_name
+
+    def _execute_transition(
+        self, to_state: State, trigger: str, *args: Any, **kwargs: Any
+    ) -> TransitionResult:
+        """Perform exit/enter callbacks and state change.
+
+        Assumes all pre-checks (condition, permission) have already passed.
+        """
+        old_state = self._current_state
+
+        # Log transition start
+        self._logger.debug(
+            "%s: Executing transition %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        # Call exit handler
+        try:
+            old_state.on_exit(to_state, trigger, *args, **kwargs)
+        except Exception as e:
+            self._logger.warning(
+                "%s: Exception in on_exit for state '%s': %s",
+                self._name,
+                old_state.name,
+                e,
+            )
+
+        # Change state
+        self._current_state = to_state
+
+        # Call enter handler
+        try:
+            to_state.on_enter(old_state, trigger, *args, **kwargs)
+        except Exception as e:
+            self._logger.warning(
+                "%s: Exception in on_enter for state '%s': %s",
+                self._name,
+                to_state.name,
+                e,
+            )
+
+        # Log successful transition (main transition log)
+        self._logger.info(
+            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
+        )
+
+        return TransitionResult(
+            True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
+        )
+
+    def trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
+        """
+        Trigger a state transition.
+
+        Performance: O(1) - Direct dictionary lookup + condition evaluation
+        Throughput: ~250,000 transitions/sec on modern hardware
+
+        Args:
+            trigger: The trigger/event name
+            *args: Positional arguments for the transition
+            **kwargs: Keyword arguments for the transition
+
+        Returns:
+            TransitionResult indicating success or failure
+        """
+        resolved = self._resolve_trigger(trigger, *args, **kwargs)
+        if isinstance(resolved, TransitionResult):
+            return resolved
+        entry, current_name = resolved
+        to_state = entry.to_state
+        condition = entry.condition
 
         # Check condition with logging
         if condition:
@@ -677,51 +761,7 @@ class StateMachine:
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
 
-        # Perform transition
-        old_state = self._current_state
-
-        # Log transition start
-        self._logger.debug(
-            "%s: Executing transition %s --[%s]--> %s",
-            self._name,
-            old_state.name,
-            trigger,
-            to_state.name,
-        )
-
-        # Call exit handler
-        try:
-            old_state.on_exit(to_state, trigger, *args, **kwargs)
-        except Exception as e:
-            self._logger.warning(
-                "%s: Exception in on_exit for state '%s': %s",
-                self._name,
-                old_state.name,
-                e,
-            )
-
-        # Change state
-        self._current_state = to_state
-
-        # Call enter handler
-        try:
-            to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as e:
-            self._logger.warning(
-                "%s: Exception in on_enter for state '%s': %s",
-                self._name,
-                to_state.name,
-                e,
-            )
-
-        # Log successful transition (main transition log)
-        self._logger.info(
-            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
-        )
-
-        return TransitionResult(
-            True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
-        )
+        return self._execute_transition(to_state, trigger, *args, **kwargs)
 
     def safe_trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -797,8 +837,8 @@ class StateMachine:
         # Find unreachable states (simple version)
         reachable = {self.current_state_name}
         for state_name in self.states:
-            for transition in self._transitions.get(state_name, {}).values():
-                reachable.add(transition["to_state"].name)
+            for entry in self._transitions.get(state_name, {}).values():
+                reachable.add(entry.to_state.name)
 
         for state_name in self.states:
             if state_name not in reachable:
@@ -822,8 +862,8 @@ class AsyncStateMachine(StateMachine):
         if trigger not in self._transitions[current_name]:
             return False
 
-        transition = self._transitions[current_name][trigger]
-        condition = transition.get("condition")
+        entry = self._transitions[current_name][trigger]
+        condition = entry.condition
 
         if condition:
             if isinstance(condition, AsyncCondition):
@@ -833,14 +873,14 @@ class AsyncStateMachine(StateMachine):
                 if not condition.check(*args, **kwargs):
                     return False
 
-        to_state = transition["to_state"]
-
         # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
         if hasattr(self._current_state, "can_transition_async"):
             return await self._current_state.can_transition_async(
-                trigger, to_state, *args, **kwargs
+                trigger, entry.to_state, *args, **kwargs
             )
-        return self._current_state.can_transition(trigger, to_state, *args, **kwargs)
+        return self._current_state.can_transition(
+            trigger, entry.to_state, *args, **kwargs
+        )
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -854,36 +894,12 @@ class AsyncStateMachine(StateMachine):
         Returns:
             TransitionResult indicating success or failure
         """
-        current_name = self._current_state.name
-
-        # Log trigger attempt (most verbose level)
-        if self._logger.isEnabledFor(logging.DEBUG - 5):
-            args_str = f"args={args}, kwargs={kwargs}" if args or kwargs else "no args"
-            self._logger.log(
-                logging.DEBUG - 5,
-                "%s: Attempting trigger '%s' from state '%s' with %s",
-                self._name,
-                trigger,
-                current_name,
-                args_str,
-            )
-
-        # Check if transition exists
-        if (
-            current_name not in self._transitions
-            or trigger not in self._transitions[current_name]
-        ):
-            error_msg = (
-                f"No transition for trigger '{trigger}' from state '{current_name}'"
-            )
-            self._logger.info("%s: FAILED - %s", self._name, error_msg)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
-            )
-
-        transition = self._transitions[current_name][trigger]
-        to_state = transition["to_state"]
-        condition = transition.get("condition")
+        resolved = self._resolve_trigger(trigger, *args, **kwargs)
+        if isinstance(resolved, TransitionResult):
+            return resolved
+        entry, current_name = resolved
+        to_state = entry.to_state
+        condition = entry.condition
 
         # Check condition with async support
         if condition:
@@ -943,51 +959,7 @@ class AsyncStateMachine(StateMachine):
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
 
-        # Perform transition
-        old_state = self._current_state
-
-        # Log transition start
-        self._logger.debug(
-            "%s: Executing transition %s --[%s]--> %s",
-            self._name,
-            old_state.name,
-            trigger,
-            to_state.name,
-        )
-
-        # Call exit handler
-        try:
-            old_state.on_exit(to_state, trigger, *args, **kwargs)
-        except Exception as e:
-            self._logger.warning(
-                "%s: Exception in on_exit for state '%s': %s",
-                self._name,
-                old_state.name,
-                e,
-            )
-
-        # Change state
-        self._current_state = to_state
-
-        # Call enter handler
-        try:
-            to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as e:
-            self._logger.warning(
-                "%s: Exception in on_enter for state '%s': %s",
-                self._name,
-                to_state.name,
-                e,
-            )
-
-        # Log successful transition (main transition log)
-        self._logger.info(
-            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
-        )
-
-        return TransitionResult(
-            True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
-        )
+        return self._execute_transition(to_state, trigger, *args, **kwargs)
 
 
 # Convenience functions and classes
@@ -997,11 +969,18 @@ def transition(
     trigger: str,
     from_state: Optional[Union[str, List[str]]] = None,
     to_state: Optional[str] = None,
-    condition: Optional[Callable] = None,
+    condition: Optional[Any] = None,
 ):
     """
     Decorator to mark methods as transition handlers.
     Can be used to build FSMs declaratively.
+
+    Args:
+        trigger: Event name that this handler responds to
+        from_state: Optional source state(s) constraint
+        to_state: Optional target state name
+        condition: Optional guard — can be a :class:`Condition`, a callable,
+            or any truthy object evaluated via ``bool()``
     """
 
     def decorator(func):
@@ -1710,27 +1689,44 @@ def quick_fsm(
     return StateMachine.quick_build(initial_state, transitions, name=name)
 
 
+@overload
+def condition_builder(func: Callable[..., bool]) -> FuncCondition: ...
+
+
+@overload
 def condition_builder(
-    func: Optional[Callable] = None, *, name: str = "", description: str = ""
-) -> Union[FuncCondition, Callable]:
+    func: None = None, *, name: str = "", description: str = ""
+) -> Callable[[Callable[..., bool]], FuncCondition]: ...
+
+
+def condition_builder(
+    func: Optional[Callable[..., bool]] = None,
+    *,
+    name: str = "",
+    description: str = "",
+) -> Union[FuncCondition, Callable[[Callable[..., bool]], FuncCondition]]:
     """
     Decorator to create condition functions with metadata.
 
+    Can be used bare (``@condition_builder``) or with arguments
+    (``@condition_builder(name="fuel_check")``).
+
     Args:
-        func: Function to wrap (when used as decorator)
-        name: Condition name
+        func: Function to wrap (when used as bare decorator)
+        name: Condition name (defaults to function ``__name__``)
         description: Condition description
 
     Returns:
-        FuncCondition instance or decorator
+        ``FuncCondition`` when used as bare decorator, or a decorator
+        callable when used with arguments.
 
     Example:
         @condition_builder(name="fuel_check", description="Check fuel level")
-        def has_fuel(level, **kwargs):
+        def has_fuel(level=0, **kwargs):
             return level > 0
     """
 
-    def decorator(f: Callable) -> FuncCondition:
+    def decorator(f: Callable[..., bool]) -> FuncCondition:
         func_name = getattr(f, "__name__", "anonymous_condition")
         return FuncCondition(f, name or func_name, description)
 

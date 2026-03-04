@@ -11,6 +11,7 @@ from .core import (
     AsyncStateMachine,
     FSMBuilder,
     TransitionResult,
+    TransitionEntry,
     Condition,
     FuncCondition,
     AsyncCondition,
@@ -46,6 +47,7 @@ __all__ = [
     "AsyncStateMachine",
     "FSMBuilder",
     "TransitionResult",
+    "TransitionEntry",
     # Condition system
     "Condition",
     "FuncCondition",
