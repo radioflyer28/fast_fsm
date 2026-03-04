@@ -125,6 +125,11 @@ tasks:
     cmds:
       - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}} -W --keep-going
 
+  docs-test:
+    desc: "Test code examples in docs ({testcode}/{testoutput} blocks)"
+    cmds:
+      - uv run sphinx-build -b doctest {{.DOCS_DIR}} {{.DOCS_DIR}}/_build/doctest
+
   docs-clean:
     desc: Remove generated documentation
     cmds:
@@ -153,6 +158,7 @@ tasks:
       - task: check
       - task: test
       - task: docs-check
+      - task: docs-test
 
   # ─────────────────────────────────────────────
   # Maintenance

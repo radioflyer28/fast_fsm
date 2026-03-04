@@ -94,15 +94,14 @@ fsm.add_state(processing)
 # Add conditional transition
 fsm.add_transition('process', 'pending', 'processing', condition=has_inventory)
 
-# This will succeed
-result = fsm.trigger('process', item_count=5)
-print(f"Success: {result.success}")  # True
-
-# This will fail
-fsm._current_state = pending  # Reset for demo
+# Not enough inventory — transition fails, FSM stays in 'pending'
 result = fsm.trigger('process', item_count=0)
 print(f"Success: {result.success}")  # False
-print(f"Error: {result.error}")     # Condition not met
+print(f"Error: {result.error}")
+
+# With stock — transition succeeds
+result = fsm.trigger('process', item_count=5)
+print(f"Success: {result.success}")  # True
 ```
 
 ### Pattern 3: State Callbacks
@@ -208,6 +207,52 @@ Each listener can implement any combination of:
 Listener exceptions are logged and **never crash the FSM**. Zero overhead when no
 listeners are registered.
 
+### Pattern 6: Typed Constants with StrEnum *(Python 3.11+)*
+
+Avoid scattered magic strings by defining states and triggers as `StrEnum`
+members. Because `StrEnum` *is* a `str`, every fast_fsm API that accepts a
+string accepts a `StrEnum` value directly — no conversion needed.
+On Python 3.10, use `class MyState(str, Enum)` instead.
+
+```{testcode}
+from enum import StrEnum
+from fast_fsm import StateMachine
+
+class OrderState(StrEnum):
+    PENDING = "pending"
+    PAID    = "paid"
+    SHIPPED = "shipped"
+
+class OrderTrigger(StrEnum):
+    PAY  = "pay"
+    SHIP = "ship"
+
+order_fsm = StateMachine.quick_build(
+    OrderState.PENDING,
+    [
+        (OrderTrigger.PAY,  OrderState.PENDING, OrderState.PAID),
+        (OrderTrigger.SHIP, OrderState.PAID,    OrderState.SHIPPED),
+    ],
+    name="OrderFSM",
+)
+
+order_fsm.trigger(OrderTrigger.PAY)
+print(order_fsm.current_state_name)
+
+assert order_fsm.is_in(OrderState.PAID)  # StrEnum == str
+
+match order_fsm.current_state_name:
+    case OrderState.PAID:
+        print("Payment confirmed")
+    case OrderState.SHIPPED:
+        print("Order shipped")
+```
+
+```{testoutput}
+paid
+Payment confirmed
+```
+
 ## 🎓 Next Steps (Choose Your Path)
 
 ### 🚀 **I want to build something NOW** → [Real-World Examples](#real-world-examples)
@@ -226,22 +271,21 @@ class OrderState(State):
     def on_enter(self, from_state, trigger, order_id=None, **kwargs):
         print(f"📦 Order {order_id}: {self.name}")
 
-# Build the FSM
-order_fsm = StateMachine.quick_build(
-    initial_state='pending',
-    transitions=[
-        ('payment_received', 'pending', 'paid'),
-        ('start_processing', 'paid', 'processing'),
-        ('ship_order', 'processing', 'shipped'),
-        ('deliver_order', 'shipped', 'delivered'),
-        ('cancel_order', ['pending', 'paid'], 'cancelled')
-    ],
-    name='OrderProcessor'
-)
-
-# Add custom states
-for state_name in ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled']:
-    order_fsm._states[state_name] = OrderState(state_name)
+# Build the FSM with typed states from the start
+from fast_fsm import FSMBuilder
+_ost = {n: OrderState(n) for n in ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled']}
+order_fsm = (FSMBuilder(_ost['pending'], name='OrderProcessor')
+    .add_state(_ost['paid'])
+    .add_state(_ost['processing'])
+    .add_state(_ost['shipped'])
+    .add_state(_ost['delivered'])
+    .add_state(_ost['cancelled'])
+    .add_transition('payment_received', 'pending', 'paid')
+    .add_transition('start_processing', 'paid', 'processing')
+    .add_transition('ship_order', 'processing', 'shipped')
+    .add_transition('deliver_order', 'shipped', 'delivered')
+    .add_transition('cancel_order', ['pending', 'paid'], 'cancelled')
+    .build())
 
 # Process an order
 order_fsm.trigger('payment_received', order_id="ORD-001")
@@ -399,10 +443,9 @@ quick_validation_report(fsm)
 
 # Detailed analysis
 validator = validate_fsm(fsm)
-issues = validator.validate()
-
-for issue in issues:
-    print(f"{issue.severity}: {issue.message}")
+completeness = validator.validate_completeness()
+print(f"Complete: {completeness['is_complete']}")
+print(f"Unreachable states: {completeness['unreachable_states']}")
 
 # Generate test scenarios
 test_paths = validator.generate_test_paths(max_length=5)

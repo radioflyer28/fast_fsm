@@ -163,8 +163,8 @@ if auth.can_trigger('logout'):
 # Emergency transitions from multiple states
 auth.add_transition('emergency_reset', ['logged_in', 'locked'], 'logged_out')
 
-# This works from any source state
-auth._current_state = locked  # Simulate being locked
+# Demonstrate from locked state — move there via the defined 'lock' transition
+auth.trigger('lock')
 auth.trigger('emergency_reset')
 print(f"After reset: {auth.current_state}")  # logged_out
 ```
@@ -297,7 +297,7 @@ bulk_fsm = StateMachine.quick_build(
     name='BulkDemo'
 )
 
-print(f"States: {list(bulk_fsm._states.keys())}")
+print(f"States: {bulk_fsm.states}")
 print(f"Can trigger 'event1': {bulk_fsm.can_trigger('event1')}")
 ```
 
@@ -514,12 +514,12 @@ for i, path in enumerate(test_paths[:3]):
     scenario = " -> ".join([f"{s}[{e}]" for s, e, _ in path])
     print(f"Scenario {i+1}: {scenario}")
 
-# Validate determinism
-determinism = validator.validate_determinism()
+# Check determinism
+determinism = validator.check_determinism()
 print(f"\nDeterministic: {determinism['is_deterministic']}")
 if not determinism['is_deterministic']:
-    for conflict in determinism['conflicts']:
-        print(f"Conflict: {conflict}")
+    for pair in determinism['non_deterministic_transitions']:
+        print(f"Conflict: {pair}")
 ```
 
 **🎯 Key Concept:** Validation helps catch design issues before deployment. Use it for complex systems.

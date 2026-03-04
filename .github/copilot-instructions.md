@@ -242,6 +242,15 @@ Or on Windows: `docs\make.bat html` (after `uv sync --group docs`).
 uv run sphinx-build -b html docs docs/_build/html -W --keep-going
 ```
 
+**Test code examples** (`sphinx.ext.doctest` — runs `{testcode}` blocks):
+```bash
+uv run sphinx-build -b doctest docs docs/_build/doctest
+```
+Or: `task docs-test`
+
+New testable examples should use `{testcode}` + `{testoutput}` directives rather
+than plain fenced code blocks so they are verified on every CI run.
+
 **Where things live:**
 - `docs/conf.py` — Sphinx configuration (extensions, theme, intersphinx)
 - `docs/index.rst` — root toctree connecting all sections

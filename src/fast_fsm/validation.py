@@ -127,6 +127,63 @@ class FSMValidator:
                 matrix[state][event] = list(self.transitions[state][event])
         return matrix
 
+    def get_adjacency_matrix(self) -> Dict[str, Any]:
+        """
+        Generate a full N×N adjacency matrix with stable state/event ordering.
+
+        States and events are sorted alphabetically so that indices are stable
+        across repeated calls and across different FSM instances with the same
+        topology.
+
+        Returns:
+            Dict with keys:
+
+            - ``states``: sorted list of state names (index = row/col in matrix)
+            - ``events``: sorted list of event names (index = event_idx in transitions)
+            - ``transitions``: flat list of dicts, each with ``idx``,
+              ``from_state_idx``, ``from_state``, ``to_state_idx``, ``to_state``,
+              ``event_idx``, ``event``
+            - ``matrix``: N×N list-of-lists where ``matrix[i][j]`` is a list of
+              transition indices (into ``transitions``) from state ``i`` to
+              state ``j``; an empty list means no direct transition
+        """
+        sorted_states: List[str] = sorted(self.states)
+        sorted_events: List[str] = sorted(self.events)
+        state_idx: Dict[str, int] = {s: i for i, s in enumerate(sorted_states)}
+        event_idx: Dict[str, int] = {e: i for i, e in enumerate(sorted_events)}
+
+        # Flat transitions list — deterministic order: from_state × event × to_state
+        transitions_list: List[Dict[str, Any]] = []
+        t_idx = 0
+        for from_state in sorted_states:
+            for event in sorted_events:
+                for to_state in sorted(self.transitions[from_state].get(event, set())):
+                    transitions_list.append(
+                        {
+                            "idx": t_idx,
+                            "from_state_idx": state_idx[from_state],
+                            "from_state": from_state,
+                            "to_state_idx": state_idx[to_state],
+                            "to_state": to_state,
+                            "event_idx": event_idx[event],
+                            "event": event,
+                        }
+                    )
+                    t_idx += 1
+
+        # N×N adjacency matrix: matrix[i][j] = [transition_idx, ...]
+        n = len(sorted_states)
+        matrix: List[List[List[int]]] = [[[] for _ in range(n)] for _ in range(n)]
+        for t in transitions_list:
+            matrix[t["from_state_idx"]][t["to_state_idx"]].append(t["idx"])
+
+        return {
+            "states": sorted_states,
+            "events": sorted_events,
+            "transitions": transitions_list,
+            "matrix": matrix,
+        }
+
     def validate_completeness(self) -> Dict[str, Any]:
         """
         Perform comprehensive FSM validation analysis.
@@ -659,7 +716,8 @@ class EnhancedFSMValidator(FSMValidator):
             return self._export_text()
 
     def _export_json(self) -> str:
-        """Export as JSON"""
+        """Export as JSON with full adjacency matrix and stable transition indices."""
+        adj = self.get_adjacency_matrix()
         return json.dumps(
             {
                 "fsm_name": self.fsm.name,
@@ -676,32 +734,78 @@ class EnhancedFSMValidator(FSMValidator):
                     for issue in self.issues
                 ],
                 "recommendations": self.recommendations,
+                "states": adj["states"],
+                "events": adj["events"],
+                "transitions": adj["transitions"],
+                "adjacency_matrix": adj["matrix"],
             },
             indent=2,
         )
 
     def _export_markdown(self) -> str:
-        """Export as Markdown"""
+        """Export as Markdown with full adjacency table and numbered transitions."""
         score = self.get_validation_score()
+        adj = self.get_adjacency_matrix()
+        sorted_states = adj["states"]
+        transitions_list = adj["transitions"]
+        matrix = adj["matrix"]
+
         lines = [
             f"# FSM Validation Report: {self.fsm.name}",
             "",
             f"**Overall Score:** {score['overall_score']}/100 (Grade: {score['grade']})",
-            f"**Total Issues:** {score['total_issues']} (Errors: {score['error_count']}, Warnings: {score['warning_count']}, Info: {score['info_count']})",
+            f"**Total Issues:** {score['total_issues']} "
+            f"(Errors: {score['error_count']}, Warnings: {score['warning_count']}, "
+            f"Info: {score['info_count']})",
             "",
             "## Metrics",
             f"- States: {self.metrics['total_states']}",
             f"- Events: {self.metrics['total_events']}",
             f"- Transitions: {self.metrics['actual_transitions']}/{self.metrics['possible_transitions']}",
             f"- Density: {self.metrics['density']:.1%}",
-            "",
-            "## Issues",
         ]
 
-        for issue in self.issues:
-            lines.append(f"- {issue}")
-            if issue.recommendation:
-                lines.append(f"  - **Fix:** {issue.recommendation}")
+        # Full adjacency matrix table
+        if sorted_states:
+            lines.extend(["", "## State Adjacency Matrix", ""])
+            header = "| → | " + " | ".join(sorted_states) + " |"
+            separator = "|---|" + "|".join(["---"] * len(sorted_states)) + "|"
+            lines.append(header)
+            lines.append(separator)
+            for i, from_state in enumerate(sorted_states):
+                row_cells = []
+                for j in range(len(sorted_states)):
+                    t_indices = matrix[i][j]
+                    if t_indices:
+                        events_in_cell = [
+                            transitions_list[idx]["event"] for idx in t_indices
+                        ]
+                        row_cells.append(", ".join(f"`{e}`" for e in events_in_cell))
+                    else:
+                        row_cells.append("—")
+                lines.append(
+                    f"| **{from_state}** | " + " | ".join(row_cells) + " |"
+                )
+
+        # Numbered transitions table
+        if transitions_list:
+            lines.extend(["", "## Transitions", ""])
+            lines.append("| # | From | Event | To |")
+            lines.append("|---|------|-------|----|")
+            for t in transitions_list:
+                lines.append(
+                    f"| {t['idx']} | {t['from_state']} | `{t['event']}` | {t['to_state']} |"
+                )
+
+        # Issues
+        lines.extend(["", "## Issues"])
+        if self.issues:
+            for issue in self.issues:
+                lines.append(f"- {issue}")
+                if issue.recommendation:
+                    lines.append(f"  - **Fix:** {issue.recommendation}")
+        else:
+            lines.append("- No issues found.")
 
         if self.recommendations:
             lines.extend(["", "## Recommendations"])

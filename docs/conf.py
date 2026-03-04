@@ -23,6 +23,8 @@ extensions = [
     "sphinx.ext.intersphinx",
     # Markdown support — keeps existing .md docs working as-is
     "myst_parser",
+    # Doctest builder — tests {testcode}/{testoutput} directive blocks in docs
+    "sphinx.ext.doctest",
 ]
 
 # File types Sphinx should process
@@ -43,12 +45,27 @@ exclude_patterns = [
 
 # -- MyST (Markdown) settings ------------------------------------------
 myst_enable_extensions = [
-    "colon_fence",       # ::: directives in markdown
-    "fieldlist",         # :field: syntax
-    "deflist",           # definition lists
-    "tasklist",          # - [x] checkboxes
+    "colon_fence",  # ::: directives in markdown
+    "fieldlist",  # :field: syntax
+    "deflist",  # definition lists
+    "tasklist",  # - [x] checkboxes
 ]
 myst_heading_anchors = 3  # auto-generate anchors for h1-h3
+
+# -- Doctest settings --------------------------------------------------
+# Common imports available in every {testcode} block in the docs.
+# Individual examples may add extra imports as needed.
+doctest_global_setup = """
+from fast_fsm import (
+    StateMachine,
+    AsyncStateMachine,
+    State,
+    CallbackState,
+    FSMBuilder,
+    simple_fsm,
+)
+from fast_fsm.validation import validate_fsm, quick_validation_report
+"""
 
 # Suppress warnings for cross-references to files outside the docs tree
 # (README.md, examples/, src/ etc. are valid in-repo links but not Sphinx docs)
