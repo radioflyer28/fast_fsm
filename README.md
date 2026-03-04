@@ -171,6 +171,47 @@ idle.set_on_enter(lambda from_state, trigger, **kw: print("Now idle"))
 idle.set_on_exit(lambda to_state, trigger, **kw: print("Leaving idle"))
 ```
 
+### Listeners (Observer Pattern)
+
+Attach observers without touching FSM code. Each listener is a plain object that
+implements any subset of the duck-typed protocol:
+
+```python
+class TransitionLogger:
+    def on_exit_state(self, source, target, trigger, **kwargs):
+        print(f"Leaving {source.name}")
+
+    def on_enter_state(self, target, source, trigger, **kwargs):
+        print(f"Entering {target.name}")
+
+    def after_transition(self, source, target, trigger, **kwargs):
+        print(f"{source.name} --[{trigger}]--> {target.name}")
+
+fsm.add_listener(TransitionLogger())
+```
+
+All three methods are optional — omit any you don't need. Multiple listeners can
+be registered; they are called in registration order. Listener exceptions are
+caught and logged without crashing the FSM. The empty-list guard
+(`if self._on_exit_listeners:`) means **zero overhead** when no listeners are
+attached.
+
+**Common pattern — transition history:**
+
+```python
+class History:
+    def __init__(self): self.log = []
+    def after_transition(self, source, target, trigger, **kwargs):
+        self.log.append((source.name, trigger, target.name))
+
+hist = History()
+fsm.add_listener(hist)
+# hist.log → [("idle", "start", "running"), ...]
+```
+
+Listeners work identically on `AsyncStateMachine` (same `_execute_transition`
+hook, called from `trigger_async`).
+
 ### Async Support
 
 ```python

@@ -210,7 +210,7 @@ uv run ruff check $files; uv run ty check $files            # Phase 2
 
 | Source file changed | Primary test files |
 |---------------------|-------------------|
-| `core.py` (StateMachine, State) | `test_basic_functionality.py`, `test_advanced_functionality.py`, `test_boundary_negative.py`, `test_state_machine_utils.py` |
+| `core.py` (StateMachine, State) | `test_basic_functionality.py`, `test_advanced_functionality.py`, `test_boundary_negative.py`, `test_state_machine_utils.py`, `test_listeners.py` |
 | `core.py` (FSMBuilder, Declarative) | `test_builder.py` |
 | `core.py` (AsyncStateMachine) | `test_async.py` |
 | `core.py` (logging helpers) | `test_logging_config.py` |

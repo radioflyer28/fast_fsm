@@ -151,7 +151,16 @@ class StateMachine:
     Optimized for speed and memory efficiency using slots.
     """
 
-    __slots__ = ("_name", "_current_state", "_states", "_transitions", "_logger")
+    __slots__ = (
+        "_name",
+        "_current_state",
+        "_states",
+        "_transitions",
+        "_logger",
+        "_on_exit_listeners",
+        "_on_enter_listeners",
+        "_after_listeners",
+    )
 
     def __init__(
         self,
@@ -180,6 +189,12 @@ class StateMachine:
         if logger_name is None:
             logger_name = f"fast_fsm.{name}"
         self._logger = logging.getLogger(logger_name)
+
+        # Listener lists — pre-extracted bound method references for zero-overhead
+        # empty checks.  Populated by add_listener().
+        self._on_exit_listeners: List[Any] = []
+        self._on_enter_listeners: List[Any] = []
+        self._after_listeners: List[Any] = []
 
         # Register the initial state
         self._register_state(initial_state)
@@ -501,6 +516,53 @@ class StateMachine:
             return self._current_state.name == state
         return self._current_state is state
 
+    def add_listener(self, *listeners: Any) -> None:
+        """Register one or more observer objects.
+
+        Each listener is a plain Python object that may implement any subset
+        of the following duck-typed protocol (all optional):
+
+        .. code-block:: python
+
+            class MyListener:
+                def on_exit_state(self, source, target, trigger, **kwargs): ...
+                def on_enter_state(self, target, source, trigger, **kwargs): ...
+                def after_transition(self, source, target, trigger, **kwargs): ...
+
+        **Argument semantics:**
+
+        - *source* / *target* — :class:`State` objects (access ``.name`` for the string)
+        - *trigger* — the trigger name string
+        - ``**kwargs`` — forwarded from the original :meth:`trigger` call
+
+        Bound method references are extracted at registration time so the
+        hot path pays zero per-call overhead when listeners are attached and
+        *no* overhead at all when the list is empty (guarded by
+        ``if self._on_exit_listeners``).
+
+        Methods that are absent on a listener are silently skipped.
+
+        Args:
+            *listeners: One or more observer objects.
+
+        Example:
+            class TransitionLogger:
+                def after_transition(self, source, target, trigger, **kwargs):
+                    print(f"{source.name} --[{trigger}]--> {target.name}")
+
+            fsm.add_listener(TransitionLogger())
+        """
+        for listener in listeners:
+            fn = getattr(listener, "on_exit_state", None)
+            if callable(fn):
+                self._on_exit_listeners.append(fn)
+            fn = getattr(listener, "on_enter_state", None)
+            if callable(fn):
+                self._on_enter_listeners.append(fn)
+            fn = getattr(listener, "after_transition", None)
+            if callable(fn):
+                self._after_listeners.append(fn)
+
     @property
     def states(self) -> List[str]:
         """Get all state names"""
@@ -721,6 +783,18 @@ class StateMachine:
                 e,
             )
 
+        # Notify on_exit_state listeners (after state's own on_exit)
+        if self._on_exit_listeners:
+            for fn in self._on_exit_listeners:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_exit_state listener: %s",
+                        self._name,
+                        e,
+                    )
+
         # Change state
         self._current_state = to_state
 
@@ -735,10 +809,34 @@ class StateMachine:
                 e,
             )
 
+        # Notify on_enter_state listeners (after state's own on_enter)
+        if self._on_enter_listeners:
+            for fn in self._on_enter_listeners:
+                try:
+                    fn(to_state, old_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_enter_state listener: %s",
+                        self._name,
+                        e,
+                    )
+
         # Log successful transition (main transition log)
         self._logger.info(
             "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
         )
+
+        # Notify after_transition listeners
+        if self._after_listeners:
+            for fn in self._after_listeners:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in after_transition listener: %s",
+                        self._name,
+                        e,
+                    )
 
         return TransitionResult(
             True, from_state=old_state.name, to_state=to_state.name, trigger=trigger

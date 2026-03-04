@@ -166,6 +166,48 @@ assert not fsm.is_in(idle)
 
 Both forms are O(1).
 
+### Pattern 5: Listeners (Observer Pattern)
+Watch transitions without touching FSM logic:
+
+```python
+from fast_fsm import StateMachine
+
+class TransitionLogger:
+    """Log every successful transition."""
+    def after_transition(self, source, target, trigger, **kwargs):
+        print(f"  {source.name} --[{trigger}]--> {target.name}")
+
+class History:
+    """Record full transition history."""
+    def __init__(self):
+        self.log = []
+
+    def after_transition(self, source, target, trigger, **kwargs):
+        self.log.append((source.name, trigger, target.name))
+
+fsm = StateMachine.quick_build(
+    "idle",
+    [("start", "idle", "running"), ("stop", "running", "idle")],
+    name="Demo",
+)
+
+hist = History()
+fsm.add_listener(TransitionLogger(), hist)
+
+fsm.trigger("start")  # prints: idle --[start]--> running
+fsm.trigger("stop")   # prints: running --[stop]--> idle
+
+print(hist.log)  # [('idle', 'start', 'running'), ('running', 'stop', 'idle')]
+```
+
+Each listener can implement any combination of:
+- `on_exit_state(source, target, trigger, **kwargs)` — called after the state's own `on_exit`
+- `on_enter_state(target, source, trigger, **kwargs)` — called after the state's own `on_enter`
+- `after_transition(source, target, trigger, **kwargs)` — called last, once per successful trigger
+
+Listener exceptions are logged and **never crash the FSM**. Zero overhead when no
+listeners are registered.
+
 ## 🎓 Next Steps (Choose Your Path)
 
 ### 🚀 **I want to build something NOW** → [Real-World Examples](#real-world-examples)
