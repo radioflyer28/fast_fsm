@@ -493,3 +493,203 @@ class TestValidationReportGaps:
         assert "overall_score" in score
         assert "grade" in score
         assert score["grade"] in ("A", "B", "C", "D")
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage-gap tests (coverage target ≥ 95 %)
+# ---------------------------------------------------------------------------
+
+
+class TestCoverageGaps:
+    """Cover remaining uncovered branches in validation.py."""
+
+    # ------------------------------------------------------------------
+    # Helpers / fixtures
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cyclic_fsm():
+        """Simple 2-state cycle: a → b → a."""
+        fsm = StateMachine.quick_build("a", [("go", "a", "b"), ("back", "b", "a")])
+        return fsm
+
+    @staticmethod
+    def _clean_fsm():
+        """Fully-covered 2-state FSM with zero issues.
+
+        A --go→ B, A --back→ A, B --go→ B, B --back→ A.
+        Defines all 4 (state, event) pairs so completeness, reachability,
+        determinism, and complexity checks all pass cleanly.
+        """
+        fsm = StateMachine.quick_build(
+            "A",
+            [
+                ("go", "A", "B"),
+                ("back", "A", "A"),
+                ("go", "B", "B"),
+                ("back", "B", "A"),
+            ],
+            name="CleanFSM",
+        )
+        return fsm
+
+    @staticmethod
+    def _critical_fsm():
+        """Single-state, zero-event FSM → triggers error-level issue."""
+        return StateMachine.from_states("only", name="CriticalFSM")
+
+    # ------------------------------------------------------------------
+    # find_cycles – explicit cycle coverage (line 235)
+    # ------------------------------------------------------------------
+
+    def test_find_cycles_detects_cycle(self):
+        """find_cycles appends cycles for a simple a→b→a ring."""
+        v = FSMValidator(self._cyclic_fsm())
+        cycles = v.find_cycles()
+        assert len(cycles) > 0
+        # Every cycle must start and end at the same state
+        for cycle in cycles:
+            assert cycle[0] == cycle[-1]
+
+    # ------------------------------------------------------------------
+    # print_validation_report – ">10 more" branch (line 292)
+    # and cycles branch (lines 301-303)
+    # ------------------------------------------------------------------
+
+    def test_print_validation_report_many_missing(self, capsys):
+        """'>10 more' banner appears when missing transitions exceed 10."""
+        # 4 states × 4 events = 16 possible; define only 4 → 12 missing > 10
+        s0 = State("s0")
+        fsm = StateMachine(s0, name="ManyMissing")
+        for label in ("s1", "s2", "s3"):
+            fsm.add_state(State(label))
+        # Use 4 distinct events so event-set size = 4
+        fsm.add_transition("e0", "s0", "s1")
+        fsm.add_transition("e1", "s0", "s2")
+        fsm.add_transition("e2", "s0", "s3")
+        fsm.add_transition("e3", "s0", "s1")
+        # states s1/s2/s3 have no transitions for any event → 12 missing entries
+        v = FSMValidator(fsm)
+        v.print_validation_report()
+        captured = capsys.readouterr()
+        assert "more" in captured.out
+
+    def test_print_validation_report_shows_cycles(self, capsys):
+        """Cycles section appears in print_validation_report output."""
+        v = FSMValidator(self._cyclic_fsm())
+        v.print_validation_report()
+        captured = capsys.readouterr()
+        assert "Cycles Found" in captured.out
+
+    # ------------------------------------------------------------------
+    # EnhancedFSMValidator._analyze_complexity
+    # ------------------------------------------------------------------
+
+    def test_high_branching_factor_flagged(self):
+        """FSM with >10 outgoing triggers from one state gets complexity issue."""
+        # hub → s1 … s11 via 11 distinct triggers
+        transitions = [(f"t{i}", "hub", f"s{i}") for i in range(1, 12)]
+        fsm = StateMachine.quick_build("hub", transitions, name="HighBranch")
+        v = EnhancedFSMValidator(fsm)
+        categories = [i.category for i in v.issues]
+        assert "complexity" in categories
+
+    def test_deep_path_flagged(self):
+        """Linear chain of 22 states (longest path 21 > 20) is flagged."""
+        transitions = [("step", f"s{i}", f"s{i + 1}") for i in range(22)]
+        fsm = StateMachine.quick_build("s0", transitions, name="DeepFSM")
+        v = EnhancedFSMValidator(fsm)
+        complexity_issues = [i for i in v.issues if i.category == "complexity"]
+        descriptions = " ".join(i.description for i in complexity_issues)
+        assert "deep" in descriptions.lower() or "path" in descriptions.lower()
+
+    def test_sparse_fsm_flagged(self):
+        """Sparse FSM (>5 states, density<0.1) triggers complexity info issue."""
+        # 11 states, only 1 transition → density ≈ 1/11 ≈ 9 % < 10 %
+        fsm = StateMachine.from_states(
+            "hub",
+            *[f"leaf{i}" for i in range(10)],
+            initial="hub",
+            name="SparseFSM",
+        )
+        fsm.add_transition("go", "hub", "leaf0")
+        v = EnhancedFSMValidator(fsm)
+        complexity_issues = [i for i in v.issues if i.category == "complexity"]
+        descriptions = " ".join(i.description for i in complexity_issues)
+        assert "sparse" in descriptions.lower()
+
+    def test_dense_fsm_recommendation(self):
+        """Fully-connected FSM (density>0.8) triggers the dense recommendation."""
+        # 3 states × 3 events, all 9 pairs defined (100 % density)
+        pairs = [
+            ("t1", "A", "B"),
+            ("t2", "A", "C"),
+            ("t3", "A", "A"),
+            ("t1", "B", "A"),
+            ("t2", "B", "C"),
+            ("t3", "B", "B"),
+            ("t1", "C", "A"),
+            ("t2", "C", "B"),
+            ("t3", "C", "C"),
+        ]
+        fsm = StateMachine.quick_build("A", pairs, name="DenseFSM")
+        v = EnhancedFSMValidator(fsm)
+        dense_rec = any("dense" in r.lower() for r in v.recommendations)
+        assert dense_rec, f"Expected dense recommendation, got: {v.recommendations}"
+
+    # ------------------------------------------------------------------
+    # quick_health_check – "critical" return path (line 842)
+    # ------------------------------------------------------------------
+
+    def test_quick_health_check_critical(self):
+        """quick_health_check returns 'critical' for an error-level FSM."""
+        result = quick_health_check(self._critical_fsm())
+        assert result == "critical"
+
+    def test_quick_health_check_healthy(self):
+        """quick_health_check returns 'healthy' for a zero-issue FSM."""
+        result = quick_health_check(self._clean_fsm())
+        assert result == "healthy"
+
+    # ------------------------------------------------------------------
+    # fsm_lint – critical branch, no-issues branch, fix_mode branch
+    # ------------------------------------------------------------------
+
+    def test_fsm_lint_critical(self, capsys):
+        """fsm_lint prints critical-issues banner for an error-level FSM."""
+        fsm_lint(self._critical_fsm())
+        captured = capsys.readouterr()
+        assert "Critical issues found" in captured.out
+
+    def test_fsm_lint_no_issues(self, capsys):
+        """fsm_lint prints '✅ No issues found!' for a clean FSM."""
+        fsm_lint(self._clean_fsm())
+        captured = capsys.readouterr()
+        assert "No issues found" in captured.out
+
+    def test_fsm_lint_warnings_only(self, capsys):
+        """fsm_lint prints warnings-count banner when FSM has warnings but no errors."""
+        # C is unreachable (warning) but has all outgoing transitions (no error)
+        fsm = StateMachine.quick_build(
+            "A",
+            [
+                ("e1", "A", "B"),
+                ("e2", "A", "A"),
+                ("e1", "B", "A"),
+                ("e2", "B", "B"),
+                ("e1", "C", "A"),
+                ("e2", "C", "A"),
+            ],
+            name="WarningsFSM",
+        )
+        fsm_lint(fsm)
+        captured = capsys.readouterr()
+        assert "issues found" in captured.out
+
+    def test_fsm_lint_fix_mode(self, capsys):
+        """fsm_lint with fix_mode=True invokes the wizard (which exits cleanly for clean FSM)."""
+        # Using clean FSM so interactive_fix_wizard() returns immediately (no issues)
+        fsm_lint(self._clean_fsm(), fix_mode=True)
+        captured = capsys.readouterr()
+        # Wizard prints "No issues found" and returns without blocking on input()
+        assert "No issues" in captured.out

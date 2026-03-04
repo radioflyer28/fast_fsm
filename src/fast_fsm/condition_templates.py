@@ -159,7 +159,7 @@ class NotCondition(Condition):
 
 
 # Demo function
-def main():
+def main():  # pragma: no cover
     print("📚 Common TransitionCondition Patterns")
     print("=" * 40)
 
@@ -228,5 +228,5 @@ def main():
     print("fsm.add_transition('access', 'user', 'premium', condition=not_banned)")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

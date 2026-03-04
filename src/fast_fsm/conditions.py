@@ -44,7 +44,7 @@ class Condition(ABC):
         Returns:
             True if condition is satisfied, False otherwise
         """
-        pass
+        pass  # pragma: no cover
 
     def __str__(self) -> str:
         """String representation showing condition name"""
@@ -141,7 +141,7 @@ class AsyncCondition(Condition):
         Returns:
             True if condition is satisfied, False otherwise
         """
-        pass
+        pass  # pragma: no cover
 
     def check(self, **kwargs: Any) -> bool:
         """
