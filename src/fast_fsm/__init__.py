@@ -24,6 +24,7 @@ from .core import (
     quick_fsm,
     condition_builder,
 )
+from .visualization import to_mermaid
 from .validation import (
     FSMValidator,
     EnhancedFSMValidator,
@@ -63,6 +64,8 @@ __all__ = [
     "simple_fsm",
     "quick_fsm",
     "condition_builder",
+    # Visualization
+    "to_mermaid",
     # Validation components (enhanced)
     "FSMValidator",
     "EnhancedFSMValidator",
