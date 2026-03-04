@@ -35,7 +35,7 @@ docs = [
 package = true
 
 [build-system]
-requires = ["setuptools", "wheel", "mypy"]
+requires = ["setuptools", "wheel", "mypy[mypyc]"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
