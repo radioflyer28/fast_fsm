@@ -340,9 +340,15 @@ class StateMachine:
                 from_names.append(state)
 
         to_name = to_state.name if isinstance(to_state, State) else to_state
-        to_state_obj = (
-            self._states.get(to_name) if isinstance(to_state, str) else to_state
-        )
+        if isinstance(to_state, str):
+            to_state_obj = self._states.get(to_name)
+            if to_state_obj is None:
+                raise ValueError(
+                    f"Target state '{to_name}' not found. "
+                    "Add it with add_state() before adding transitions."
+                )
+        else:
+            to_state_obj = to_state
 
         # Normalize condition - wrap functions in FuncCondition for consistency
         normalized_condition = None
