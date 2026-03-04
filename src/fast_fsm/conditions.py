@@ -92,6 +92,34 @@ class FuncCondition(Condition):
         return self.func(**kwargs)
 
 
+class NegatedCondition(Condition):
+    """Wraps another condition and inverts its result.
+
+    Used internally by the ``unless=`` shorthand on
+    :meth:`~fast_fsm.StateMachine.add_transition`.  Can also be used
+    directly when you want to store a negated condition explicitly.
+
+    Args:
+        inner: The condition whose result will be inverted.
+
+    Example:
+        locked = FuncCondition(lambda **kw: kw.get('locked', False))
+        fsm.add_transition('open', 'closed', 'open', unless=locked)
+        # equivalent to:
+        fsm.add_transition('open', 'closed', 'open', condition=NegatedCondition(locked))
+    """
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: Condition) -> None:
+        super().__init__(f"not({inner})", f"Negation of: {inner.description}")
+        self._inner = inner
+
+    def check(self, **kwargs: Any) -> bool:
+        """Return the inverse of the wrapped condition's result."""
+        return not self._inner.check(**kwargs)
+
+
 class AsyncCondition(Condition):
     """
     Abstract base class for asynchronous transition conditions.

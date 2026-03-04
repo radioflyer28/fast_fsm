@@ -3,6 +3,8 @@ Tests for all condition template classes in condition_templates.py.
 
 Covers AlwaysCondition, NeverCondition, KeyExistsCondition, ValueInSetCondition,
 RegexCondition, ComparisonCondition, AndCondition, OrCondition, NotCondition.
+Also covers NegatedCondition (conditions.py) and the unless= shorthand on
+StateMachine.add_transition() and FSMBuilder.add_transition().
 
 All tests use real condition objects — no mocking.
 """
@@ -20,7 +22,8 @@ from fast_fsm.condition_templates import (
     RegexCondition,
     ValueInSetCondition,
 )
-from fast_fsm.core import State, StateMachine
+from fast_fsm.conditions import FuncCondition, NegatedCondition
+from fast_fsm.core import State, StateMachine, FSMBuilder
 
 
 # ---------------------------------------------------------------------------
@@ -403,3 +406,147 @@ class TestConditionTemplateGaps:
         # No-keys not really valid but ensure our real conditions handle it
         cond = ComparisonCondition("x", "==", "admin")
         assert cond.check(x="admin") is True
+
+# ---------------------------------------------------------------------------
+# NegatedCondition
+# ---------------------------------------------------------------------------
+
+
+class TestNegatedCondition:
+    def test_inverts_always(self):
+        neg = NegatedCondition(AlwaysCondition())
+        assert neg.check() is False
+
+    def test_inverts_never(self):
+        neg = NegatedCondition(NeverCondition())
+        assert neg.check() is True
+
+    def test_inverts_func_condition(self):
+        cond = FuncCondition(lambda **kw: kw.get("locked", False))
+        neg = NegatedCondition(cond)
+        assert neg.check(locked=True) is False
+        assert neg.check(locked=False) is True
+
+    def test_name_reflects_inner(self):
+        neg = NegatedCondition(AlwaysCondition())
+        assert "always" in neg.name
+
+    def test_str(self):
+        neg = NegatedCondition(AlwaysCondition())
+        assert "not(" in str(neg)
+
+    def test_description(self):
+        neg = NegatedCondition(AlwaysCondition())
+        assert neg.description  # non-empty
+
+    def test_double_negation(self):
+        double_neg = NegatedCondition(NegatedCondition(AlwaysCondition()))
+        assert double_neg.check() is True
+
+
+# ---------------------------------------------------------------------------
+# unless= shorthand on StateMachine.add_transition
+# ---------------------------------------------------------------------------
+
+
+class TestUnlessShorthand:
+    def _make_fsm(self):
+        fsm = StateMachine(State("a"), name="unless_test")
+        fsm.add_state(State("b"))
+        return fsm
+
+    def test_unless_condition_false_allows_transition(self):
+        """Transition fires when unless= condition is False."""
+        cond = FuncCondition(lambda **kw: kw.get("blocked", False))
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=cond)
+        assert fsm.trigger("go", blocked=False).success
+
+    def test_unless_condition_true_blocks_transition(self):
+        """Transition is blocked when unless= condition is True."""
+        cond = FuncCondition(lambda **kw: kw.get("blocked", False))
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=cond)
+        result = fsm.trigger("go", blocked=True)
+        assert not result.success
+
+    def test_unless_with_callable(self):
+        """unless= accepts a plain callable."""
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=lambda **kw: kw.get("locked", False))
+        assert fsm.trigger("go", locked=False).success
+        assert not fsm.trigger("go", locked=True).success  # still on 'a' after failure
+
+    def test_unless_with_never_condition(self):
+        """unless=NeverCondition always allows (not False == True)."""
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=NeverCondition())
+        assert fsm.trigger("go").success
+
+    def test_unless_with_always_condition(self):
+        """unless=AlwaysCondition always blocks (not True == False)."""
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=AlwaysCondition())
+        assert not fsm.trigger("go").success
+
+    def test_condition_and_unless_mutually_exclusive(self):
+        """Providing both condition= and unless= raises ValueError."""
+        fsm = self._make_fsm()
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            fsm.add_transition(
+                "go", "a", "b",
+                condition=AlwaysCondition(),
+                unless=NeverCondition(),
+            )
+
+    def test_unless_with_invalid_type_raises(self):
+        fsm = self._make_fsm()
+        with pytest.raises(TypeError):
+            fsm.add_transition("go", "a", "b", unless="not_a_condition")
+
+    def test_unless_stored_as_negated_condition(self):
+        """The stored condition is a NegatedCondition wrapping the original."""
+        cond = AlwaysCondition()
+        fsm = self._make_fsm()
+        fsm.add_transition("go", "a", "b", unless=cond)
+        entry = fsm._transitions["a"]["go"]
+        assert isinstance(entry.condition, NegatedCondition)
+
+
+# ---------------------------------------------------------------------------
+# unless= shorthand on FSMBuilder.add_transition
+# ---------------------------------------------------------------------------
+
+
+class TestUnlessShorthandBuilder:
+    def test_builder_unless_allows_when_false(self):
+        cond = FuncCondition(lambda **kw: kw.get("locked", False))
+        fsm = (
+            FSMBuilder(State("a"), name="builder_unless")
+            .add_state(State("b"))
+            .add_transition("go", "a", "b", unless=cond)
+            .build()
+        )
+        assert fsm.trigger("go", locked=False).success
+
+    def test_builder_unless_blocks_when_true(self):
+        cond = FuncCondition(lambda **kw: kw.get("locked", False))
+        fsm = (
+            FSMBuilder(State("a"), name="builder_unless_block")
+            .add_state(State("b"))
+            .add_transition("go", "a", "b", unless=cond)
+            .build()
+        )
+        assert not fsm.trigger("go", locked=True).success
+
+    def test_builder_condition_and_unless_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            (
+                FSMBuilder(State("a"), name="builder_exclusive")
+                .add_state(State("b"))
+                .add_transition(
+                    "go", "a", "b",
+                    condition=AlwaysCondition(),
+                    unless=NeverCondition(),
+                )
+            )

@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
-from .conditions import Condition, FuncCondition, AsyncCondition
+from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
 
 
 @dataclass(slots=True)
@@ -313,6 +313,8 @@ class StateMachine:
         from_state: Union[str, State, List[Union[str, State]]],
         to_state: Union[str, State],
         condition: Optional[Union[Condition, Callable[..., bool]]] = None,
+        *,
+        unless: Optional[Union[Condition, Callable[..., bool]]] = None,
     ) -> None:
         """
         Add a transition to the state machine.
@@ -324,8 +326,10 @@ class StateMachine:
             trigger: Event that triggers the transition
             from_state: Source state(s) - can be string, state object, or list
             to_state: Target state - can be string or state object
-            condition: Optional condition - can be Condition or callable function
-                      Callable functions receive (*args, **kwargs) from trigger calls
+            condition: Optional condition - can be Condition or callable function.
+                      Callable functions receive (*args, **kwargs) from trigger calls.
+            unless: Negation shorthand — the transition is allowed when this
+                    condition is **False**.  Mutually exclusive with ``condition``.
         """
         # Normalize inputs
         if not isinstance(from_state, list):
@@ -349,6 +353,23 @@ class StateMachine:
                 )
         else:
             to_state_obj = to_state
+
+        # unless= and condition= are mutually exclusive
+        if condition is not None and unless is not None:
+            raise ValueError(
+                "'condition' and 'unless' are mutually exclusive — use one or the other."
+            )
+
+        # Resolve unless= into a NegatedCondition
+        if unless is not None:
+            if isinstance(unless, Condition):
+                condition = NegatedCondition(unless)
+            elif callable(unless):
+                condition = NegatedCondition(FuncCondition(unless))
+            else:
+                raise TypeError(
+                    f"'unless' must be a Condition or callable, got {type(unless)}"
+                )
 
         # Normalize condition - wrap functions in FuncCondition for consistency
         normalized_condition = None
@@ -1423,8 +1444,32 @@ class FSMBuilder:
         from_state: Union[str, List[str]],
         to_state: str,
         condition: Optional[Union[Condition, Callable]] = None,
+        *,
+        unless: Optional[Union[Condition, Callable]] = None,
     ) -> "FSMBuilder":
-        """Add a transition to the builder with async detection"""
+        """Add a transition to the builder with async detection.
+
+        Args:
+            trigger: Event that triggers the transition.
+            from_state: Source state name or list of source state names.
+            to_state: Target state name.
+            condition: Optional guard condition.
+            unless: Negation shorthand — allowed when this condition is False.
+                    Mutually exclusive with ``condition``.
+        """
+        if condition is not None and unless is not None:
+            raise ValueError(
+                "'condition' and 'unless' are mutually exclusive — use one or the other."
+            )
+        if unless is not None:
+            if isinstance(unless, Condition):
+                condition = NegatedCondition(unless)
+            elif callable(unless):
+                condition = NegatedCondition(FuncCondition(unless))
+            else:
+                raise TypeError(
+                    f"'unless' must be a Condition or callable, got {type(unless)}"
+                )
         self._transitions.append((trigger, from_state, to_state, condition))
 
         # Only upgrade if in auto-detect mode

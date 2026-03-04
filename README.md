@@ -120,6 +120,19 @@ fsm.trigger("proceed", energy=10)  # succeeds
 fsm.trigger("proceed", energy=3)   # blocked by condition
 ```
 
+Use `unless=` as a readable negation shorthand — the transition fires when the
+condition is **False**:
+
+```python
+is_locked = FuncCondition("locked", lambda **kw: kw.get("locked", False))
+fsm.add_transition("open", "closed", "open", unless=is_locked)
+
+fsm.trigger("open", locked=False)  # succeeds — not locked
+fsm.trigger("open", locked=True)   # blocked — is locked
+```
+
+`condition=` and `unless=` are mutually exclusive.
+
 ### Multi-Source Transitions
 
 ```python
