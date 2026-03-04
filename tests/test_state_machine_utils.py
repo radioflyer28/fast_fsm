@@ -77,6 +77,66 @@ class TestProperties:
 
 
 # ---------------------------------------------------------------------------
+# is_in
+# ---------------------------------------------------------------------------
+
+
+class TestIsIn:
+    def test_is_in_current_state_string(self, traffic_light_fsm):
+        assert traffic_light_fsm.is_in("red")
+
+    def test_is_in_wrong_state_string(self, traffic_light_fsm):
+        assert not traffic_light_fsm.is_in("green")
+
+    def test_is_in_after_transition(self, traffic_light_fsm):
+        traffic_light_fsm.trigger("timer")
+        assert traffic_light_fsm.is_in("green")
+        assert not traffic_light_fsm.is_in("red")
+
+    def test_is_in_with_state_object(self):
+        """Identity check: is_in(state_object) uses 'is'."""
+        idle = State("idle")
+        running = State("running")
+        fsm = StateMachine(idle, name="test")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+        assert fsm.is_in(idle)
+        assert not fsm.is_in(running)
+
+    def test_is_in_state_object_after_transition(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = StateMachine(idle, name="test")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+        fsm.trigger("start")
+        assert fsm.is_in(running)
+        assert not fsm.is_in(idle)
+
+    def test_is_in_identity_not_equality(self):
+        """Two State objects with the same name are NOT the same."""
+        real = State("shared")
+        impostor = State("shared")
+        fsm = StateMachine(real, name="identity_test")
+        assert fsm.is_in("shared")  # string match → True
+        assert fsm.is_in(real)  # identity → True
+        assert not fsm.is_in(impostor)  # different object, same name → False
+
+    def test_is_in_nonexistent_name(self, traffic_light_fsm):
+        assert not traffic_light_fsm.is_in("purple")
+
+    def test_is_in_async_inherited(self):
+        """AsyncStateMachine inherits is_in() from StateMachine."""
+        from fast_fsm.core import AsyncStateMachine
+
+        idle = State("idle")
+        fsm = AsyncStateMachine(idle, name="async_test")
+        assert fsm.is_in("idle")
+        assert fsm.is_in(idle)
+        assert not fsm.is_in("other")
+
+
+# ---------------------------------------------------------------------------
 # get_available_triggers
 # ---------------------------------------------------------------------------
 

@@ -139,6 +139,28 @@ fsm.trigger("open", locked=True)   # blocked — is locked
 fsm.add_transition("emergency_reset", ["error", "processing", "waiting"], "idle")
 ```
 
+### Checking Active State
+
+Use `is_in()` to check whether the machine is currently in a given state.
+Accepts a state name string or a `State` object:
+
+```python
+idle = State("idle")
+fsm = StateMachine(idle)
+fsm.add_state(State("running"))
+fsm.add_transition("start", "idle", "running")
+
+fsm.is_in("idle")    # True
+fsm.is_in(idle)      # True — identity comparison
+fsm.is_in("running") # False
+
+fsm.trigger("start")
+fsm.is_in("running") # True
+fsm.is_in("idle")    # False
+```
+
+`is_in()` is O(1) and works on both `StateMachine` and `AsyncStateMachine`.
+
 ### State Lifecycle Hooks
 
 ```python

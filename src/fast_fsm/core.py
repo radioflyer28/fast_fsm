@@ -476,6 +476,31 @@ class StateMachine:
         """Get the current state name"""
         return self._current_state.name
 
+    def is_in(self, state: Union[str, State]) -> bool:
+        """Return ``True`` if the machine is currently in *state*.
+
+        Accepts either a state name string or a :class:`State` object.
+        Identity comparison (``is``) is used for objects; name comparison
+        is used for strings.
+
+        Performance: O(1) — single attribute access plus one comparison.
+
+        Args:
+            state: The state to check — either its name or the object itself.
+
+        Returns:
+            ``True`` if *state* is the current active state, ``False`` otherwise.
+
+        Example:
+            idle = State("idle")
+            fsm = StateMachine(idle)
+            assert fsm.is_in("idle")
+            assert fsm.is_in(idle)
+        """
+        if isinstance(state, str):
+            return self._current_state.name == state
+        return self._current_state is state
+
     @property
     def states(self) -> List[str]:
         """Get all state names"""

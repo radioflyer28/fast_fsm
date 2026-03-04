@@ -137,6 +137,35 @@ fsm.trigger('start')   # Prints: 🔄 Started processing...
 fsm.trigger('finish')  # Prints: ✅ Processing complete!
 ```
 
+### Pattern 4: Checking Active State
+Use `is_in()` to query the current state by name or object:
+
+```python
+from fast_fsm import StateMachine, State
+
+idle = State('idle')
+running = State('running')
+
+fsm = StateMachine(idle, name='Check')
+fsm.add_state(running)
+fsm.add_transition('start', 'idle', 'running')
+fsm.add_transition('stop', 'running', 'idle')
+
+# String check — convenient for most cases
+assert fsm.is_in('idle')       # True
+assert not fsm.is_in('running')
+
+# Object-identity check — useful when you hold a reference
+assert fsm.is_in(idle)         # True — identity comparison
+
+fsm.trigger('start')
+assert fsm.is_in('running')
+assert fsm.is_in(running)      # True
+assert not fsm.is_in(idle)
+```
+
+Both forms are O(1).
+
 ## 🎓 Next Steps (Choose Your Path)
 
 ### 🚀 **I want to build something NOW** → [Real-World Examples](#real-world-examples)
