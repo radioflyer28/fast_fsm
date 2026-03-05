@@ -250,6 +250,53 @@ class TestEnhancedFSMValidator:
         assert "grade" in score
         assert 0 <= score["overall_score"] <= 100
         assert score["grade"] in ("A", "B", "C", "D")
+        # New split-score fields
+        assert "structural_score" in score
+        assert "completeness_score" in score
+        assert "design_style" in score
+        assert score["design_style"] in ("sparse", "dense")
+        assert 0 <= score["structural_score"] <= 100
+        assert 0 <= score["completeness_score"] <= 100
+        # overall_score mirrors structural_score
+        assert score["overall_score"] == score["structural_score"]
+
+    def test_sparse_fsm_structural_score_not_penalised(self):
+        """A sparse but structurally sound FSM should score A on structural."""
+        fsm = StateMachine.quick_build(
+            "idle",
+            [
+                ("start", "idle", "running"),
+                ("pause", "running", "paused"),
+                ("resume", "paused", "running"),
+                ("stop", "running", "idle"),
+                ("error", "running", "error"),
+                ("reset", "error", "idle"),
+            ],
+            name="SparseButSound",
+        )
+        v = EnhancedFSMValidator(fsm)
+        score = v.get_validation_score()
+        assert score["design_style"] == "sparse"
+        # Structural score should be A/B; completeness score will be lower
+        assert score["structural_score"] >= 70, (
+            f"Expected structural_score >= 70, got {score['structural_score']}"
+        )
+        assert score["completeness_score"] < score["structural_score"], (
+            "Completeness score should be lower than structural for sparse FSM"
+        )
+
+    def test_dense_fsm_both_scores_present(self):
+        """A small fully-connected FSM should be classified dense."""
+        pairs = [
+            ("t1", "A", "B"),
+            ("t2", "A", "A"),
+            ("t1", "B", "A"),
+            ("t2", "B", "B"),
+        ]
+        fsm = StateMachine.quick_build("A", pairs, name="DenseFSM2")
+        v = EnhancedFSMValidator(fsm)
+        score = v.get_validation_score()
+        assert score["design_style"] == "dense"
 
     def test_good_fsm_scores_higher_than_problematic(
         self, well_designed_fsm, problematic_fsm
@@ -604,8 +651,10 @@ class TestCoverageGaps:
         assert "deep" in descriptions.lower() or "path" in descriptions.lower()
 
     def test_sparse_fsm_flagged(self):
-        """Sparse FSM (>5 states, density<0.1) triggers complexity info issue."""
-        # 11 states, only 1 transition → density ≈ 1/11 ≈ 9 % < 10 %
+        """Sparse FSM (density<0.4, >6 possible transitions) is classified as
+        sparse in metrics and design_style, and missing-transition completeness
+        issues are downgraded to info rather than warning."""
+        # 11 states, only 1 event + 1 transition → density ≈ 9 % → sparse
         fsm = StateMachine.from_states(
             "hub",
             *[f"leaf{i}" for i in range(10)],
@@ -614,9 +663,22 @@ class TestCoverageGaps:
         )
         fsm.add_transition("go", "hub", "leaf0")
         v = EnhancedFSMValidator(fsm)
-        complexity_issues = [i for i in v.issues if i.category == "complexity"]
-        descriptions = " ".join(i.description for i in complexity_issues)
-        assert "sparse" in descriptions.lower()
+        assert v.metrics["design_style"] == "sparse"
+        score = v.get_validation_score()
+        assert score["design_style"] == "sparse"
+        assert "structural_score" in score
+        assert "completeness_score" in score
+        # Missing-transition issues should be info, not warning, for sparse FSMs
+        completeness_warnings = [
+            i
+            for i in v.issues
+            if i.category == "completeness"
+            and "missing transitions" in i.description
+            and i.severity == "warning"
+        ]
+        assert completeness_warnings == [], (
+            "Missing-transition issues should be info-level for sparse FSMs"
+        )
 
     def test_dense_fsm_recommendation(self):
         """Fully-connected FSM (density>0.8) triggers the dense recommendation."""

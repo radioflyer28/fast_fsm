@@ -458,15 +458,23 @@ class EnhancedFSMValidator(FSMValidator):
             if event in self.transitions[state]
         )
 
+        density = actual_transitions / max(total_possible_transitions, 1)
+        # Classify design style: sparse when density < 0.4 and the FSM has
+        # enough states/events to be meaningfully non-trivial.
+        design_style = (
+            "sparse" if density < 0.4 and total_possible_transitions > 6 else "dense"
+        )
+
         self.metrics.update(
             {
                 "total_states": len(self.states),
                 "total_events": len(self.events),
                 "actual_transitions": actual_transitions,
                 "possible_transitions": total_possible_transitions,
-                "density": actual_transitions / max(total_possible_transitions, 1),
+                "density": density,
                 "avg_transitions_per_state": actual_transitions
                 / max(len(self.states), 1),
+                "design_style": design_style,
             }
         )
 
@@ -528,8 +536,12 @@ class EnhancedFSMValidator(FSMValidator):
         for state, event in missing_transitions:
             missing_by_state[state].append(event)
 
+        is_sparse = self.metrics.get("design_style") == "sparse"
+
         for state, events in missing_by_state.items():
             if len(events) == len(self.events):
+                # A state with zero transitions is always a defect regardless
+                # of design style — it can never exit.
                 self.issues.append(
                     ValidationIssue(
                         "error",
@@ -540,9 +552,12 @@ class EnhancedFSMValidator(FSMValidator):
                     )
                 )
             elif len(events) > len(self.events) * 0.5:
+                # For sparse FSMs, missing transitions are expected by design;
+                # downgrade to info so they don't inflate the structural score.
+                severity = "info" if is_sparse else "warning"
                 self.issues.append(
                     ValidationIssue(
-                        "warning",
+                        severity,
                         "completeness",
                         f'State "{state}" missing transitions for {len(events)} events: {events[:3]}...',
                         location=state,
@@ -602,17 +617,6 @@ class EnhancedFSMValidator(FSMValidator):
                 )
             )
 
-        # Very sparse FSM
-        if self.metrics["density"] < 0.1 and len(self.states) > 5:
-            self.issues.append(
-                ValidationIssue(
-                    "info",
-                    "complexity",
-                    f"Sparse FSM (only {self.metrics['density']:.1%} of possible transitions defined)",
-                    recommendation="Consider consolidating states or adding more transitions",
-                )
-            )
-
     def _find_longest_path(self) -> int:
         """Find the longest acyclic path in the FSM"""
 
@@ -659,9 +663,11 @@ class EnhancedFSMValidator(FSMValidator):
             self.recommendations.append(
                 "⚡ Very dense FSM - all states are highly connected. Consider if this complexity is necessary"
             )
-        elif self.metrics["density"] < 0.2:
+        elif self.metrics["design_style"] == "sparse":
             self.recommendations.append(
-                "🔗 Sparse FSM - consider adding more transitions for better state connectivity"
+                "📐 Sparse FSM detected - completeness warnings are downgraded to info "
+                "and excluded from the structural score. If this FSM is intentionally sparse, "
+                "the structural grade is the meaningful one."
             )
 
     def get_issues_by_severity(self, severity: str) -> List[ValidationIssue]:
@@ -677,32 +683,67 @@ class EnhancedFSMValidator(FSMValidator):
         return any(issue.severity == "error" for issue in self.issues)
 
     def get_validation_score(self) -> Dict[str, Any]:
-        """Calculate an overall validation score"""
+        """
+        Calculate validation scores split into structural and completeness dimensions.
+
+        ``overall_score`` and ``grade`` are based on **structural issues only**
+        (reachability, determinism, structure, complexity, and dead-state
+        completeness errors).  This means intentionally sparse FSMs are not
+        penalised for missing transitions.
+
+        ``completeness_score`` measures transition coverage and is reported
+        separately with an explanatory note for sparse designs.
+        """
+        max_possible_weight = max(len(self.states) * 3, 1)
+
+        # Structural issues: everything except completeness-category
+        # missing-transition info/warnings (dead-state errors stay structural).
+        structural_issues = [
+            i
+            for i in self.issues
+            if not (
+                i.category == "completeness"
+                and i.severity in ("warning", "info")
+                and "missing transitions" in i.description
+            )
+        ]
+        s_error = sum(3 for i in structural_issues if i.severity == "error")
+        s_warn = sum(2 for i in structural_issues if i.severity == "warning")
+        s_info = sum(1 for i in structural_issues if i.severity == "info")
+        structural_score = max(
+            0, 100 - ((s_error + s_warn + s_info) / max_possible_weight) * 100
+        )
+
+        # Completeness issues: completeness-category missing-transition entries.
+        completeness_issues = [
+            i
+            for i in self.issues
+            if i.category == "completeness" and "missing transitions" in i.description
+        ]
+        c_error = sum(3 for i in completeness_issues if i.severity == "error")
+        c_warn = sum(2 for i in completeness_issues if i.severity == "warning")
+        c_info = sum(1 for i in completeness_issues if i.severity == "info")
+        completeness_score = max(
+            0, 100 - ((c_error + c_warn + c_info) / max_possible_weight) * 100
+        )
+
         total_issues = len(self.issues)
-        error_weight = sum(3 for issue in self.issues if issue.severity == "error")
-        warning_weight = sum(2 for issue in self.issues if issue.severity == "warning")
-        info_weight = sum(1 for issue in self.issues if issue.severity == "info")
-
-        total_weight = error_weight + warning_weight + info_weight
-
-        # Score from 0-100 (higher is better)
-        max_possible_weight = len(self.states) * 3  # Assume worst case
-        score = max(0, 100 - (total_weight / max(max_possible_weight, 1)) * 100)
 
         return {
-            "overall_score": round(score, 1),
+            "overall_score": round(structural_score, 1),
+            "structural_score": round(structural_score, 1),
+            "completeness_score": round(completeness_score, 1),
+            "design_style": self.metrics.get("design_style", "dense"),
             "total_issues": total_issues,
-            "error_count": sum(1 for issue in self.issues if issue.severity == "error"),
-            "warning_count": sum(
-                1 for issue in self.issues if issue.severity == "warning"
-            ),
-            "info_count": sum(1 for issue in self.issues if issue.severity == "info"),
+            "error_count": sum(1 for i in self.issues if i.severity == "error"),
+            "warning_count": sum(1 for i in self.issues if i.severity == "warning"),
+            "info_count": sum(1 for i in self.issues if i.severity == "info"),
             "grade": "A"
-            if score >= 90
+            if structural_score >= 90
             else "B"
-            if score >= 70
+            if structural_score >= 70
             else "C"
-            if score >= 50
+            if structural_score >= 50
             else "D",
         }
 
@@ -718,10 +759,12 @@ class EnhancedFSMValidator(FSMValidator):
     def _export_json(self) -> str:
         """Export as JSON with full adjacency matrix and stable transition indices."""
         adj = self.get_adjacency_matrix()
+        score = self.get_validation_score()
         return json.dumps(
             {
                 "fsm_name": self.fsm.name,
-                "validation_score": self.get_validation_score(),
+                "design_style": score["design_style"],
+                "validation_score": score,
                 "metrics": self.metrics,
                 "issues": [
                     {
@@ -750,10 +793,17 @@ class EnhancedFSMValidator(FSMValidator):
         transitions_list = adj["transitions"]
         matrix = adj["matrix"]
 
+        is_sparse = score["design_style"] == "sparse"
+        completeness_note = (
+            " *(sparse design — missing transitions expected)*" if is_sparse else ""
+        )
+
         lines = [
             f"# FSM Validation Report: {self.fsm.name}",
             "",
-            f"**Overall Score:** {score['overall_score']}/100 (Grade: {score['grade']})",
+            f"**Design Style:** {score['design_style'].capitalize()}",
+            f"**Structural Score:** {score['structural_score']}/100 (Grade: {score['grade']}) — reachability, determinism, dead states",
+            f"**Completeness Score:** {score['completeness_score']}/100{completeness_note} — transition coverage vs. all state×event pairs",
             f"**Total Issues:** {score['total_issues']} "
             f"(Errors: {score['error_count']}, Warnings: {score['warning_count']}, "
             f"Info: {score['info_count']})",
@@ -783,9 +833,7 @@ class EnhancedFSMValidator(FSMValidator):
                         row_cells.append(", ".join(f"`{e}`" for e in events_in_cell))
                     else:
                         row_cells.append("—")
-                lines.append(
-                    f"| **{from_state}** | " + " | ".join(row_cells) + " |"
-                )
+                lines.append(f"| **{from_state}** | " + " | ".join(row_cells) + " |")
 
         # Numbered transitions table
         if transitions_list:
@@ -828,11 +876,23 @@ class EnhancedFSMValidator(FSMValidator):
         lines.append(f"🔍 Enhanced FSM Validation Report: {self.fsm.name}")
         lines.append("=" * 60)
 
-        # Overall score
+        # Scores
         grade_colors = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}
         grade_icon = grade_colors.get(score["grade"], "⚪")
+        style_icon = "📐" if score["design_style"] == "sparse" else "⬛"
+        lines.append(f"{style_icon} Design Style: {score['design_style'].capitalize()}")
         lines.append(
-            f"{grade_icon} Overall Score: {score['overall_score']}/100 (Grade: {score['grade']})"
+            f"{grade_icon} Structural Score: {score['structural_score']}/100 "
+            f"(Grade: {score['grade']}) — reachability, determinism, dead states"
+        )
+        completeness_note = (
+            " (missing transitions expected for sparse design)"
+            if score["design_style"] == "sparse"
+            else ""
+        )
+        lines.append(
+            f"📋 Completeness Score: {score['completeness_score']}/100"
+            f"{completeness_note} — transition coverage"
         )
 
         # Quick stats
