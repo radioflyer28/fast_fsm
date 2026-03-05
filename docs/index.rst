@@ -26,6 +26,7 @@ than popular alternatives, while maintaining a clean, intuitive API.
    api/core
    api/conditions
    api/validation
+   api/visualization
 
 .. toctree::
    :maxdepth: 2

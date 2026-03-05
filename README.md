@@ -243,6 +243,26 @@ async def main():
 asyncio.run(main())
 ```
 
+### Visualization
+
+Generate Mermaid state diagrams and self-contained Markdown documents:
+
+```python
+from fast_fsm import to_mermaid, to_mermaid_fenced, to_mermaid_document
+from fast_fsm.validation import FSMValidator
+
+# Raw Mermaid diagram string
+print(to_mermaid(fsm))
+
+# Fenced block for embedding in .md files
+print(to_mermaid_fenced(fsm))
+
+# Full document: diagram + adjacency matrix + transitions table
+adj = FSMValidator(fsm).get_adjacency_matrix()
+doc = to_mermaid_document(fsm, adjacency_matrix=adj)
+print(doc)   # or save to a .md file
+```
+
 ### Validation (Design-Time)
 
 Comprehensive analysis with zero runtime overhead:
@@ -259,9 +279,19 @@ report = validator.validate_completeness()
 print(f"Complete: {report['is_complete']}")
 print(f"Unreachable states: {report['unreachable_states']}")
 
-# Scored report
-score = validate_and_score(fsm)
-print(f"Score: {score['overall_score']}/100 (Grade: {score['grade']})")
+# Scored report — structural vs. completeness split
+# Intentionally sparse FSMs score against structural health only;
+# missing-transition info is reported separately in completeness_score.
+from fast_fsm import EnhancedFSMValidator
+v = EnhancedFSMValidator(fsm)
+score = v.get_validation_score()
+print(f"Design style: {score['design_style']}")
+print(f"Structural:   {score['structural_score']}/100 (Grade: {score['grade']})")
+print(f"Completeness: {score['completeness_score']}/100")
+
+# Export reports
+print(v.export_report('markdown'))
+print(v.export_report('json'))
 ```
 
 ## Key Capabilities
@@ -273,7 +303,8 @@ print(f"Score: {score['overall_score']}/100 (Grade: {score['grade']})")
 - **Conditional Transitions** — guard conditions with `*args, **kwargs`
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`
 - **Declarative States** — `@transition` decorator for inline state definitions
-- **Optional Validation** — scoring, batch comparison, lint, export (JSON/Markdown)
+- **Optional Validation** — scoring (structural + completeness), batch comparison, lint, export (JSON/Markdown)
+- **Visualization** — Mermaid diagrams, fenced blocks, full Markdown documents with adjacency matrix
 - **mypyc Compiled** — `core.py` optionally compiled for extra speed
 
 ## Examples

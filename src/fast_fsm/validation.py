@@ -24,16 +24,27 @@ class FSMValidator:
     Analyzes FSM structure without modifying the original FSM.
     """
 
-    __slots__ = ("fsm", "states", "transitions", "events", "initial_state")
+    __slots__ = (
+        "fsm",
+        "states",
+        "transitions",
+        "events",
+        "initial_state",
+        "_report_name",
+    )
 
-    def __init__(self, fsm: StateMachine):
+    def __init__(self, fsm: StateMachine, *, name: Optional[str] = None):
         """
         Initialize validator with a fast_fsm StateMachine instance.
 
         Args:
             fsm: The StateMachine to validate
+            name: Optional display name used in reports.  Defaults to
+                ``fsm.name``.  Useful when validating anonymous FSMs or
+                producing reports with a custom title.
         """
         self.fsm = fsm
+        self._report_name: str = name if name is not None else fsm.name
         self.states: Set[str] = set()
         self.transitions: Dict[str, Dict[str, Set[str]]] = defaultdict(
             lambda: defaultdict(set)
@@ -203,7 +214,7 @@ class FSMValidator:
         missing = self.find_missing_transitions()
 
         return {
-            "fsm_name": f"{self.fsm.__class__.__name__}",
+            "fsm_name": self._report_name,
             "total_states": len(self.states),
             "total_events": len(self.events),
             "total_transitions": total_transitions,
@@ -405,8 +416,8 @@ class EnhancedFSMValidator(FSMValidator):
 
     __slots__ = ("issues", "recommendations", "metrics")
 
-    def __init__(self, fsm: StateMachine):
-        super().__init__(fsm)
+    def __init__(self, fsm: StateMachine, *, name: Optional[str] = None):
+        super().__init__(fsm, name=name)
         self.issues: List[ValidationIssue] = []
         self.recommendations: List[str] = []
         self.metrics: Dict[str, Any] = {}
@@ -762,7 +773,7 @@ class EnhancedFSMValidator(FSMValidator):
         score = self.get_validation_score()
         return json.dumps(
             {
-                "fsm_name": self.fsm.name,
+                "fsm_name": self._report_name,
                 "design_style": score["design_style"],
                 "validation_score": score,
                 "metrics": self.metrics,
@@ -799,7 +810,7 @@ class EnhancedFSMValidator(FSMValidator):
         )
 
         lines = [
-            f"# FSM Validation Report: {self.fsm.name}",
+            f"# FSM Validation Report: {self._report_name}",
             "",
             f"**Design Style:** {score['design_style'].capitalize()}",
             f"**Structural Score:** {score['structural_score']}/100 (Grade: {score['grade']}) — reachability, determinism, dead states",
@@ -873,7 +884,7 @@ class EnhancedFSMValidator(FSMValidator):
         score = self.get_validation_score()
 
         lines = []
-        lines.append(f"🔍 Enhanced FSM Validation Report: {self.fsm.name}")
+        lines.append(f"🔍 Enhanced FSM Validation Report: {self._report_name}")
         lines.append("=" * 60)
 
         # Scores

@@ -153,6 +153,18 @@ class TestFSMValidator:
         assert result["initial_state"] == "idle"
         assert result["is_reachable"] is True
 
+    def test_name_override_uses_custom_name(self, well_designed_fsm):
+        v = FSMValidator(well_designed_fsm, name="MyMachine")
+        assert v._report_name == "MyMachine"
+        result = v.validate_completeness()
+        assert result["fsm_name"] == "MyMachine"
+
+    def test_name_default_uses_fsm_name(self, well_designed_fsm):
+        v = FSMValidator(well_designed_fsm)
+        assert v._report_name == well_designed_fsm.name
+        result = v.validate_completeness()
+        assert result["fsm_name"] == well_designed_fsm.name
+
     def test_determinism_check(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
         d = v.check_determinism()
@@ -209,6 +221,10 @@ class TestValidationIssue:
 
 class TestEnhancedFSMValidator:
     """Tests for the EnhancedFSMValidator."""
+
+    def test_name_override_propagates(self, well_designed_fsm):
+        v = EnhancedFSMValidator(well_designed_fsm, name="CustomName")
+        assert v._report_name == "CustomName"
 
     def test_issues_populated_for_problematic_fsm(self, problematic_fsm):
         v = EnhancedFSMValidator(problematic_fsm)
