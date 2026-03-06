@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "CHANGELOG.md"
+      - ".github/copilot-instructions.md"
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev deps
+        run: uv sync --group dev
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+      - name: ruff format check
+        run: uv run ruff format --check src/ tests/
+
+      - name: ruff lint
+        run: uv run ruff check src/ tests/
+
+      - name: ty type check
+        run: uv run ty check src/fast_fsm/
+
+  # ── Tests (pure Python, all platforms × Python versions) ────────────────────
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install deps
+        run: uv sync --group dev
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+      - name: Run test suite
+        run: uv run pytest tests/ -x -q
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+  # ── Verify mypyc compilation still works (Ubuntu + latest Python) ────────────
+  build-check:
+    name: Verify mypyc build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: uv sync --group dev
+
+      - name: Build mypyc extension
+        run: uv run python setup.py build_ext --inplace -q
+
+      - name: Smoke test compiled module
+        run: |
+          uv run python -c "
+          from fast_fsm import StateMachine
+          sm = StateMachine('smoke')
+          sm.add_state('a'); sm.add_state('b')
+          sm.add_transition('go', 'a', 'b')
+          result = sm.trigger('go')
+          assert result.success, 'trigger failed'
+          print('Compiled smoke test: OK')
+          "

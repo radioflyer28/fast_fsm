@@ -1,0 +1,75 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "docs/**"
+      - "README.md"
+  # Also rebuild docs when a GitHub Release is published (after a version tag)
+  release:
+    types: [published]
+  # Allow manual triggering from the Actions tab
+  workflow_dispatch:
+
+# Required for GitHub Pages deployment via Actions.
+# In your repository go to: Settings → Pages → Source → GitHub Actions
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment can run at a time; cancel an in-progress run when a new
+# push arrives so stale docs are never served.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build_docs:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: uv sync --group docs
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+      - name: Build HTML
+        run: uv run sphinx-build -b html docs docs/_build/html -W --keep-going
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+      - name: Verify doctest examples
+        run: uv run sphinx-build -b doctest docs docs/_build/doctest
+        env:
+          FAST_FSM_PURE_PYTHON: "1"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy_docs:
+    name: Deploy to GitHub Pages
+    needs: build_docs
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
