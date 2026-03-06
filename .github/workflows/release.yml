@@ -50,8 +50,8 @@ jobs:
           CIBW_ARCHS_WINDOWS: ${{ matrix.cibw_archs }}
           CIBW_ARCHS_MACOS: ${{ matrix.cibw_archs }}
 
-          # Drop musllinux aarch64 — too niche; keep musllinux x86_64
-          CIBW_SKIP: "cp*-musllinux_aarch64"
+          # Skip all musllinux (Alpine/musl libc) — manylinux covers all mainstream distros
+          CIBW_SKIP: "*musllinux*"
 
           # Install test dependencies inside each wheel build environment
           CIBW_TEST_REQUIRES: "pytest pytest-asyncio hypothesis"
