@@ -164,6 +164,11 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   Forgetting this will silently work in pure Python mode and crash only
   when the compiled extension is loaded (fast_fsm-ldp).
   **`tests/test_mypyc_guard.py` enforces this automatically via AST analysis.**
+- Any class in `core.py` that inherits from a Python built-in type (e.g., `RuntimeError`,
+  `ValueError`, `Exception`) MUST be decorated with `@mypyc_attr(native_class=False)`;
+  mypyc cannot natively compile built-in subclasses and will error at compile time without
+  this annotation. `TransitionError` (added with `raise_if_failed()`) is the first example
+  of this pattern in the codebase.
 
 **Follow-up work:**
 - If a future profiling pass shows condition evaluation is a bottleneck,

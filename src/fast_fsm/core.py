@@ -21,6 +21,22 @@ from mypy_extensions import mypyc_attr
 from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
 
 
+@mypyc_attr(native_class=False)
+class TransitionError(RuntimeError):
+    """Raised by :meth:`TransitionResult.raise_if_failed` when a transition did not succeed.
+
+    The originating :class:`TransitionResult` is available as the ``result`` attribute
+    for callers that need to inspect trigger, from_state, or error details after catching.
+    """
+
+    def __init__(self, result: "TransitionResult") -> None:
+        self.result: "TransitionResult" = result
+        trigger_part = f" (trigger={result.trigger!r})" if result.trigger else ""
+        from_part = f" from {result.from_state!r}" if result.from_state else ""
+        error_part = f": {result.error}" if result.error else ""
+        super().__init__(f"Transition failed{from_part}{trigger_part}{error_part}")
+
+
 @dataclass(slots=True)
 class TransitionResult:
     """Result of a state transition."""
@@ -30,6 +46,20 @@ class TransitionResult:
     to_state: Optional[str] = None
     trigger: Optional[str] = None
     error: str = ""
+
+    def raise_if_failed(self) -> "TransitionResult":
+        """Raise :class:`TransitionError` if the transition did not succeed.
+
+        Returns ``self`` unchanged on success, enabling one-liner chaining::
+
+            to = fsm.trigger('start').raise_if_failed().to_state
+
+        Raises:
+            TransitionError: when ``self.success`` is ``False``.
+        """
+        if not self.success:
+            raise TransitionError(self)
+        return self
 
 
 class TransitionEntry:

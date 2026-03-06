@@ -6,7 +6,8 @@ Tests for advanced StateMachine features that weren't covered in basic tests.
 Focuses on Priority 1 gaps identified in coverage analysis.
 """
 
-from fast_fsm import State, StateMachine, Condition
+from fast_fsm import State, StateMachine, Condition, TransitionResult, TransitionError
+import pytest
 
 
 class TestAdvancedTransitions:
@@ -1292,3 +1293,145 @@ class TestFromDict:
         fsm = StateMachine.from_dict(json.loads(json_str))
         fsm.trigger("activate")
         assert fsm.snapshot()["state"] == "active"
+
+
+class TestTransitionResultRaiseIfFailed:
+    """Tests for TransitionResult.raise_if_failed() and TransitionError."""
+
+    # ------------------------------------------------------------------ helpers
+
+    def _make_fsm(self):
+        fsm = StateMachine.quick_build(
+            "idle",
+            [("start", "idle", "running"), ("stop", "running", "idle")],
+        )
+        return fsm
+
+    # ------------------------------------------------------------------ success path
+
+    def test_raise_if_failed_returns_self_on_success(self):
+        """raise_if_failed() returns the same TransitionResult on success."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("start")
+        assert result.success is True
+        returned = result.raise_if_failed()
+        assert returned is result
+
+    def test_raise_if_failed_chaining_to_state(self):
+        """Return value supports chaining .to_state after raise_if_failed()."""
+        fsm = self._make_fsm()
+        to = fsm.trigger("start").raise_if_failed().to_state
+        assert to == "running"
+
+    def test_raise_if_failed_chaining_from_state(self):
+        """Return value supports chaining .from_state after raise_if_failed()."""
+        fsm = self._make_fsm()
+        frm = fsm.trigger("start").raise_if_failed().from_state
+        assert frm == "idle"
+
+    def test_raise_if_failed_multiple_successive_triggers(self):
+        """raise_if_failed() does not raise for multiple successful triggers."""
+        fsm = self._make_fsm()
+        fsm.trigger("start").raise_if_failed()
+        fsm.trigger("stop").raise_if_failed()
+        assert fsm.current_state.name == "idle"
+
+    # ------------------------------------------------------------------ failure path
+
+    def test_raise_if_failed_raises_on_bad_trigger(self):
+        """raise_if_failed() raises TransitionError when trigger is unknown."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("nonexistent")
+        assert result.success is False
+        with pytest.raises(TransitionError):
+            result.raise_if_failed()
+
+    def test_raise_if_failed_raises_on_wrong_state(self):
+        """raise_if_failed() raises TransitionError when trigger is invalid in current state."""
+        fsm = self._make_fsm()
+        # 'stop' is only valid from 'running', not 'idle'
+        result = fsm.trigger("stop")
+        assert result.success is False
+        with pytest.raises(TransitionError):
+            result.raise_if_failed()
+
+    def test_transition_error_is_runtime_error(self):
+        """TransitionError is a RuntimeError subclass."""
+        assert issubclass(TransitionError, RuntimeError)
+
+    def test_transition_error_can_be_caught_as_runtime_error(self):
+        """TransitionError can be caught as RuntimeError."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("nonexistent")
+        with pytest.raises(RuntimeError):
+            result.raise_if_failed()
+
+    # ------------------------------------------------------------------ TransitionError attributes
+
+    def test_transition_error_carries_result(self):
+        """TransitionError.result holds the originating TransitionResult."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("nonexistent")
+        try:
+            result.raise_if_failed()
+        except TransitionError as exc:
+            assert exc.result is result
+        else:
+            pytest.fail("TransitionError was not raised")
+
+    def test_transition_error_message_includes_trigger(self):
+        """Error message includes the trigger name."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("stop")
+        try:
+            result.raise_if_failed()
+        except TransitionError as exc:
+            assert "stop" in str(exc)
+        else:
+            pytest.fail("TransitionError was not raised")
+
+    def test_transition_error_message_includes_from_state(self):
+        """Error message includes from_state when available."""
+        fsm = self._make_fsm()
+        result = fsm.trigger("stop")  # fails in 'idle'
+        try:
+            result.raise_if_failed()
+        except TransitionError as exc:
+            assert "idle" in str(exc)
+        else:
+            pytest.fail("TransitionError was not raised")
+
+    def test_raise_if_failed_with_condition_guard_failure(self):
+        """raise_if_failed() raises when a guard condition blocks the transition."""
+        from fast_fsm import FuncCondition
+
+        blocked = FuncCondition(lambda: False)
+        fsm = StateMachine(State("ready"))
+        fsm.add_state(State("done"))
+        fsm.add_transition("go", "ready", "done", condition=blocked)
+        result = fsm.trigger("go")
+        assert result.success is False
+        with pytest.raises(TransitionError):
+            result.raise_if_failed()
+
+    # ------------------------------------------------------------------ TransitionResult direct construction
+
+    def test_raise_if_failed_on_manually_constructed_failure(self):
+        """raise_if_failed() works on a manually constructed failing result."""
+        result = TransitionResult(
+            success=False,
+            from_state="a",
+            to_state=None,
+            trigger="blah",
+            error="guard blocked",
+        )
+        with pytest.raises(TransitionError) as exc_info:
+            result.raise_if_failed()
+        assert "guard blocked" in str(exc_info.value)
+
+    def test_raise_if_failed_on_manually_constructed_success(self):
+        """raise_if_failed() does not raise on a manually constructed success."""
+        result = TransitionResult(
+            success=True, from_state="a", to_state="b", trigger="go"
+        )
+        assert result.raise_if_failed() is result
