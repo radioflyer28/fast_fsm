@@ -341,6 +341,39 @@ cd .specify/scripts/powershell
 - [ADR-001](../.specify/decisions/ADR-001-sparse-dense-scoring.md) — Sparse vs. Dense FSM scoring split
 
 
+## SPR Memory (Sparse Priming Representations)
+
+Compact, AI-optimised knowledge files live in `.specify/memory/spr-*.md` — one file per topic.
+They activate latent understanding quickly without requiring a full code read.
+Unlike ADRs, **SPRs are living documents** — edit in place as the codebase evolves.
+
+**When to create/update an SPR:**
+- After implementing a significant new module or API surface
+- When a module's behaviour is subtle enough that it can't be inferred from code alone
+- When starting a new session and memory context is stale
+
+**Creating a new SPR:**
+```bash
+cd .specify/scripts/powershell
+./create-spr.ps1 -Category <category> "Topic description"
+# Creates .specify/memory/spr-<slug>.md — fill in the bullet statements
+```
+
+**Categories:** `core-api`, `validation`, `visualization`, `testing`, `tooling`, `architecture`
+
+**Aggregating into a single index (for context loading):**
+```bash
+cd .specify/scripts/powershell
+./aggregate-spr.ps1              # writes .specify/memory/spr-index.md
+./aggregate-spr.ps1 -InjectAgents  # also injects into AGENTS.md
+```
+
+**Existing SPR files:**
+- [spr-core-api.md](../.specify/memory/spr-core-api.md) — StateMachine, slots, transitions, builder
+- [spr-validation.md](../.specify/memory/spr-validation.md) — EnhancedFSMValidator, sparse/dense scoring, adjacency matrix
+- [spr-visualization.md](../.specify/memory/spr-visualization.md) — to_mermaid, fenced, document helpers
+
+
 ## Maintaining This Document
 
 **When to update:** workflows change, test baselines shift, new patterns emerge, instructions cause confusion.
