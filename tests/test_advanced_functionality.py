@@ -904,3 +904,240 @@ class TestClone:
         fsm = self._make_fsm()
         clone = fsm.clone()
         assert clone.name == fsm.name
+
+
+class TestMachineCallbacks:
+    """Tests for on_enter() and on_exit() per-state callback registration."""
+
+    def _make_fsm(self):
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = StateMachine(idle, name="cb_fsm")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+        fsm.add_transition("reset_t", "done", "idle")
+        return fsm
+
+    # ------------------------------------------------------------------
+    # on_enter() — basic firing
+    # ------------------------------------------------------------------
+
+    def test_on_enter_fires_when_entering_state(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_enter("running", lambda from_s, t, **kw: calls.append((from_s.name, t)))
+
+        fsm.trigger("start")
+        assert calls == [("idle", "start")]
+
+    def test_on_enter_receives_correct_args(self):
+        fsm = self._make_fsm()
+        args_seen = []
+        fsm.on_enter(
+            "running", lambda from_s, t, **kw: args_seen.append((from_s.name, t, kw))
+        )
+
+        fsm.trigger("start", extra="hello")
+        assert args_seen == [("idle", "start", {"extra": "hello"})]
+
+    def test_on_enter_does_not_fire_for_other_states(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_enter("done", lambda from_s, t, **kw: calls.append(t))
+
+        fsm.trigger("start")  # enters running — should NOT fire
+        assert calls == []
+
+        fsm.trigger("finish")  # enters done — should fire
+        assert calls == ["finish"]
+
+    def test_on_enter_multiple_callbacks_same_state(self):
+        fsm = self._make_fsm()
+        order = []
+        fsm.on_enter("running", lambda *a, **kw: order.append(1))
+        fsm.on_enter("running", lambda *a, **kw: order.append(2))
+        fsm.on_enter("running", lambda *a, **kw: order.append(3))
+
+        fsm.trigger("start")
+        assert order == [1, 2, 3]
+
+    def test_on_enter_multiple_callbacks_different_states(self):
+        fsm = self._make_fsm()
+        log = []
+        fsm.on_enter("running", lambda *a, **kw: log.append("running"))
+        fsm.on_enter("done", lambda *a, **kw: log.append("done"))
+
+        fsm.trigger("start")
+        fsm.trigger("finish")
+        assert log == ["running", "done"]
+
+    def test_on_enter_fires_on_force_state(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_enter("done", lambda from_s, t, **kw: calls.append(t))
+
+        fsm.force_state("done")
+        assert calls == ["__force__"]
+
+    # ------------------------------------------------------------------
+    # on_exit() — basic firing
+    # ------------------------------------------------------------------
+
+    def test_on_exit_fires_when_leaving_state(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_exit("idle", lambda to_s, t, **kw: calls.append((to_s.name, t)))
+
+        fsm.trigger("start")
+        assert calls == [("running", "start")]
+
+    def test_on_exit_receives_correct_args(self):
+        fsm = self._make_fsm()
+        args_seen = []
+        fsm.on_exit("idle", lambda to_s, t, **kw: args_seen.append((to_s.name, t, kw)))
+
+        fsm.trigger("start", tag="x")
+        assert args_seen == [("running", "start", {"tag": "x"})]
+
+    def test_on_exit_does_not_fire_for_other_states(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_exit("running", lambda *a, **kw: calls.append("running"))
+
+        fsm.trigger("start")  # exits idle — should NOT fire
+        assert calls == []
+
+        fsm.trigger("finish")  # exits running — should fire
+        assert calls == ["running"]
+
+    def test_on_exit_fires_on_force_state(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_exit("idle", lambda to_s, t, **kw: calls.append(t))
+
+        fsm.force_state("running")
+        assert calls == ["__force__"]
+
+    # ------------------------------------------------------------------
+    # Callback ordering relative to other hooks
+    # ------------------------------------------------------------------
+
+    def test_callback_order_relative_to_state_method_and_listener(self):
+        """Order within a full transition:
+        1. State.on_exit
+        2. machine on_exit callback   ← new
+        3. on_exit_state listener
+        4. [state change]
+        5. State.on_enter
+        6. machine on_enter callback  ← new
+        7. on_enter_state listener
+        8. after_transition listener
+        """
+        from fast_fsm import CallbackState
+
+        order = []
+        idle = CallbackState(
+            "idle",
+            on_exit=lambda to, t, **kw: order.append("state.on_exit"),
+        )
+        running = CallbackState(
+            "running",
+            on_enter=lambda frm, t, **kw: order.append("state.on_enter"),
+        )
+        fsm = StateMachine(idle, name="order_test")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        fsm.on_exit("idle", lambda *a, **kw: order.append("machine.on_exit"))
+        fsm.on_enter("running", lambda *a, **kw: order.append("machine.on_enter"))
+
+        class L:
+            def on_exit_state(self, *a, **kw):
+                order.append("listener.on_exit")
+
+            def on_enter_state(self, *a, **kw):
+                order.append("listener.on_enter")
+
+            def after_transition(self, *a, **kw):
+                order.append("listener.after")
+
+        fsm.add_listener(L())
+        fsm.trigger("start")
+
+        assert order == [
+            "state.on_exit",
+            "machine.on_exit",
+            "listener.on_exit",
+            "state.on_enter",
+            "machine.on_enter",
+            "listener.on_enter",
+            "listener.after",
+        ]
+
+    # ------------------------------------------------------------------
+    # Exception safety
+    # ------------------------------------------------------------------
+
+    def test_on_enter_exception_does_not_abort_transition(self):
+        """A raising on_enter callback must not stop the transition."""
+        fsm = self._make_fsm()
+
+        def boom(*a, **kw):
+            raise RuntimeError("on_enter boom")
+
+        fsm.on_enter("running", boom)
+
+        result = fsm.trigger("start")
+        assert result.success
+        assert fsm.current_state_name == "running"
+
+    def test_on_exit_exception_does_not_abort_transition(self):
+        """A raising on_exit callback must not stop the transition."""
+        fsm = self._make_fsm()
+
+        def boom(*a, **kw):
+            raise RuntimeError("on_exit boom")
+
+        fsm.on_exit("idle", boom)
+
+        result = fsm.trigger("start")
+        assert result.success
+        assert fsm.current_state_name == "running"
+
+    # ------------------------------------------------------------------
+    # clone() copies callbacks
+    # ------------------------------------------------------------------
+
+    def test_clone_copies_on_enter_callbacks(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_enter("running", lambda *a, **kw: calls.append("enter"))
+
+        clone = fsm.clone()
+        clone.trigger("start")
+        assert calls == ["enter"]
+
+    def test_clone_copies_on_exit_callbacks(self):
+        fsm = self._make_fsm()
+        calls = []
+        fsm.on_exit("idle", lambda *a, **kw: calls.append("exit"))
+
+        clone = fsm.clone()
+        clone.trigger("start")
+        assert calls == ["exit"]
+
+    def test_clone_callback_independence(self):
+        """Adding a callback to origin after clone does not affect clone."""
+        fsm = self._make_fsm()
+        fsm.on_enter("running", lambda *a, **kw: None)  # pre-existing
+
+        clone = fsm.clone()
+
+        extra_calls = []
+        fsm.on_enter("running", lambda *a, **kw: extra_calls.append(1))
+
+        clone.trigger("start")
+        assert extra_calls == []  # extra callback not on clone

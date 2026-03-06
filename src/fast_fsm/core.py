@@ -161,6 +161,8 @@ class StateMachine:
         "_on_exit_listeners",
         "_on_enter_listeners",
         "_after_listeners",
+        "_state_exit_callbacks",
+        "_state_enter_callbacks",
     )
 
     def __init__(
@@ -197,6 +199,12 @@ class StateMachine:
         self._on_exit_listeners: List[Any] = []
         self._on_enter_listeners: List[Any] = []
         self._after_listeners: List[Any] = []
+
+        # Per-state callbacks registered via on_enter() / on_exit().
+        # Keyed by state name; values are lists of callables (appended in
+        # registration order, all called on transition).
+        self._state_exit_callbacks: Dict[str, List[Any]] = {}
+        self._state_enter_callbacks: Dict[str, List[Any]] = {}
 
         # Register the initial state
         self._register_state(initial_state)
@@ -570,6 +578,53 @@ class StateMachine:
             if callable(fn):
                 self._after_listeners.append(fn)
 
+    def on_enter(self, state_name: str, callback: Any) -> None:
+        """Register a callback to fire whenever the machine enters *state_name*.
+
+        The callback fires **after** the state's own ``on_enter`` method and
+        before the machine-level ``on_enter_state`` listeners.
+
+        Signature: ``callback(from_state: State, trigger: str, **kwargs)``
+
+        Multiple callbacks for the same state are called in registration order.
+
+        Args:
+            state_name: Name of the state to watch.  Does not need to be
+                registered yet — the callback is stored and fires once the
+                state is visited.
+            callback: Callable matching the signature above.
+
+        Example::
+
+            fsm.on_enter("running", lambda from_s, t, **kw: print("entered running"))
+        """
+        if state_name not in self._state_enter_callbacks:
+            self._state_enter_callbacks[state_name] = []
+        self._state_enter_callbacks[state_name].append(callback)
+
+    def on_exit(self, state_name: str, callback: Any) -> None:
+        """Register a callback to fire whenever the machine exits *state_name*.
+
+        The callback fires **after** the state's own ``on_exit`` method and
+        before the machine-level ``on_exit_state`` listeners.
+
+        Signature: ``callback(to_state: State, trigger: str, **kwargs)``
+
+        Multiple callbacks for the same state are called in registration order.
+
+        Args:
+            state_name: Name of the state to watch.  Does not need to be
+                registered yet.
+            callback: Callable matching the signature above.
+
+        Example::
+
+            fsm.on_exit("running", lambda to_s, t, **kw: print("left running"))
+        """
+        if state_name not in self._state_exit_callbacks:
+            self._state_exit_callbacks[state_name] = []
+        self._state_exit_callbacks[state_name].append(callback)
+
     @property
     def states(self) -> List[str]:
         """Get all state names"""
@@ -831,6 +886,13 @@ class StateMachine:
         }
         # current_state is already _initial_state from __init__ — correct.
         # Listener lists stay empty — intentional.
+        # Per-state callbacks are copied (shallow copy of each list).
+        new_fsm._state_exit_callbacks = {
+            k: list(v) for k, v in self._state_exit_callbacks.items()
+        }
+        new_fsm._state_enter_callbacks = {
+            k: list(v) for k, v in self._state_enter_callbacks.items()
+        }
         return new_fsm
 
     def _resolve_trigger(
@@ -905,6 +967,20 @@ class StateMachine:
                 e,
             )
 
+        # Fire per-state exit callbacks registered via on_exit(state, fn)
+        _exit_cbs = self._state_exit_callbacks.get(old_state.name)
+        if _exit_cbs:
+            for fn in _exit_cbs:
+                try:
+                    fn(to_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_exit callback for state '%s': %s",
+                        self._name,
+                        old_state.name,
+                        e,
+                    )
+
         # Notify on_exit_state listeners (after state's own on_exit)
         if self._on_exit_listeners:
             for fn in self._on_exit_listeners:
@@ -930,6 +1006,20 @@ class StateMachine:
                 to_state.name,
                 e,
             )
+
+        # Fire per-state enter callbacks registered via on_enter(state, fn)
+        _enter_cbs = self._state_enter_callbacks.get(to_state.name)
+        if _enter_cbs:
+            for fn in _enter_cbs:
+                try:
+                    fn(old_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_enter callback for state '%s': %s",
+                        self._name,
+                        to_state.name,
+                        e,
+                    )
 
         # Notify on_enter_state listeners (after state's own on_enter)
         if self._on_enter_listeners:

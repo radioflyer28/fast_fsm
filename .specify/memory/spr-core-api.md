@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone)
+**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit)
 
 - `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
@@ -29,4 +29,7 @@
 - `initial_state_name` read-only property returns the name of the state passed to `__init__`; stored in `_initial_state` slot.
 - `snapshot()` returns `{"state": current_state_name, "version": 1}`; JSON-serialisable, safe to pickle.
 - `restore(snapshot)` validates version/type then calls `force_state(snapshot["state"])`; raises `ValueError` for bad version or non-string state, `KeyError` for unregistered state.
-- `clone()` returns a new instance of the same class with identical topology (shared `State` and `TransitionEntry` objects, independent inner transition dicts), current state at initial, empty listener lists.
+- `clone()` returns a new instance of the same class with identical topology (shared `State` and `TransitionEntry` objects, independent inner transition dicts), current state at initial, empty listener lists; per-state callbacks are shallow-copied.
+- `on_enter(state_name, fn)` registers a per-state callback fired after `State.on_enter` and before `on_enter_state` listeners. Signature: `fn(from_state, trigger, **kwargs)`. Multiple callbacks fire in registration order.
+- `on_exit(state_name, fn)` registers a per-state callback fired after `State.on_exit` and before `on_exit_state` listeners. Signature: `fn(to_state, trigger, **kwargs)`. Both are stored in `_state_enter_callbacks` / `_state_exit_callbacks` slots (`Dict[str, List]`).
+- Callback exception safety: exceptions in per-state callbacks are caught and logged as warnings, not re-raised; the transition still completes.
