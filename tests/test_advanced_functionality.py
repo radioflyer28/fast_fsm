@@ -423,3 +423,247 @@ class TestBatchOperations:
 
         assert fsm.trigger("deactivate").success
         assert fsm.current_state.name == "idle"
+
+
+class TestForceStateAndReset:
+    """Tests for force_state(), reset(), and initial_state_name."""
+
+    # ------------------------------------------------------------------
+    # Setup helpers
+    # ------------------------------------------------------------------
+
+    def _make_fsm(self):
+        """idle -> running -> done, no guards."""
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = StateMachine(idle, name="test_fsm")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+        return fsm
+
+    # ------------------------------------------------------------------
+    # initial_state_name property
+    # ------------------------------------------------------------------
+
+    def test_initial_state_name(self):
+        """initial_state_name always reflects the constructor argument."""
+        fsm = self._make_fsm()
+        assert fsm.initial_state_name == "idle"
+
+    def test_initial_state_name_unchanged_after_transitions(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        fsm.trigger("finish")
+        assert fsm.initial_state_name == "idle"
+
+    # ------------------------------------------------------------------
+    # force_state() — basic behaviour
+    # ------------------------------------------------------------------
+
+    def test_force_state_changes_current_state(self):
+        fsm = self._make_fsm()
+        fsm.force_state("done")
+        assert fsm.current_state_name == "done"
+
+    def test_force_state_bypasses_guard(self):
+        """force_state sets state even when no transition path exists."""
+        from fast_fsm import Condition
+
+        class AlwaysFail(Condition):
+            def __init__(self):
+                super().__init__("never", "always blocks")
+
+            def check(self, **kwargs):
+                return False
+
+        idle = State("idle")
+        locked = State("locked")
+        fsm = StateMachine(idle, name="guarded")
+        fsm.add_state(locked)
+        fsm.add_transition("go", "idle", "locked", condition=AlwaysFail())
+
+        # Normal trigger fails due to guard
+        assert not fsm.trigger("go").success
+        assert fsm.current_state_name == "idle"
+
+        # force_state bypasses the guard entirely
+        fsm.force_state("locked")
+        assert fsm.current_state_name == "locked"
+
+    def test_force_state_self(self):
+        """Forcing into the current state is a no-op for state but still
+        fires callbacks."""
+        fsm = self._make_fsm()
+        exits = []
+        enters = []
+
+        class L:
+            def on_exit_state(self, old, new, t, **kw):
+                exits.append(old.name)
+
+            def on_enter_state(self, new, old, t, **kw):
+                enters.append(new.name)
+
+        fsm.add_listener(L())
+        fsm.force_state("idle")  # already in idle
+        assert fsm.current_state_name == "idle"
+        assert exits == ["idle"]
+        assert enters == ["idle"]
+
+    def test_force_state_unknown_raises_key_error(self):
+        import pytest
+
+        fsm = self._make_fsm()
+        with pytest.raises(KeyError, match="nonexistent"):
+            fsm.force_state("nonexistent")
+
+    # ------------------------------------------------------------------
+    # force_state() — listener / callback firing
+    # ------------------------------------------------------------------
+
+    def test_force_state_fires_on_exit_listener(self):
+        fsm = self._make_fsm()
+        events = []
+
+        class L:
+            def on_exit_state(self, old, new, t, **kw):
+                events.append(("exit", old.name, new.name, t))
+
+        fsm.add_listener(L())
+        fsm.force_state("running")
+        assert events == [("exit", "idle", "running", "__force__")]
+
+    def test_force_state_fires_on_enter_listener(self):
+        fsm = self._make_fsm()
+        events = []
+
+        class L:
+            def on_enter_state(self, new, old, t, **kw):
+                events.append(("enter", new.name, old.name, t))
+
+        fsm.add_listener(L())
+        fsm.force_state("running")
+        assert events == [("enter", "running", "idle", "__force__")]
+
+    def test_force_state_fires_after_transition_listener(self):
+        fsm = self._make_fsm()
+        events = []
+
+        class L:
+            def after_transition(self, old, new, t, **kw):
+                events.append(("after", old.name, new.name, t))
+
+        fsm.add_listener(L())
+        fsm.force_state("done")
+        assert events == [("after", "idle", "done", "__force__")]
+
+    def test_force_state_fires_callback_state_callbacks(self):
+        """CallbackState on_exit / on_enter fire via _execute_transition."""
+        from fast_fsm import CallbackState
+
+        exits = []
+        enters = []
+        idle = CallbackState("idle", on_exit=lambda to, t, **kw: exits.append(to.name))
+        running = CallbackState(
+            "running", on_enter=lambda frm, t, **kw: enters.append(frm.name)
+        )
+
+        fsm = StateMachine(idle, name="cb_test")
+        fsm.add_state(running)
+
+        fsm.force_state("running")
+        assert exits == ["running"]
+        assert enters == ["idle"]
+
+    def test_force_state_all_listeners_order(self):
+        """on_exit fires before on_enter, after_transition fires last."""
+        from fast_fsm import CallbackState
+
+        order = []
+        idle = CallbackState(
+            "idle",
+            on_exit=lambda to, t, **kw: order.append("state.on_exit"),
+        )
+        done = CallbackState(
+            "done",
+            on_enter=lambda frm, t, **kw: order.append("state.on_enter"),
+        )
+        fsm = StateMachine(idle, name="order_test")
+        fsm.add_state(done)
+
+        class L:
+            def on_exit_state(self, *a, **kw):
+                order.append("listener.on_exit")
+
+            def on_enter_state(self, *a, **kw):
+                order.append("listener.on_enter")
+
+            def after_transition(self, *a, **kw):
+                order.append("listener.after")
+
+        fsm.add_listener(L())
+
+        fsm.force_state("done")
+        assert order == [
+            "state.on_exit",
+            "listener.on_exit",
+            "state.on_enter",
+            "listener.on_enter",
+            "listener.after",
+        ]
+
+    # ------------------------------------------------------------------
+    # reset()
+    # ------------------------------------------------------------------
+
+    def test_reset_returns_to_initial(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        fsm.trigger("finish")
+        assert fsm.current_state_name == "done"
+
+        fsm.reset()
+        assert fsm.current_state_name == "idle"
+
+    def test_reset_fires_callbacks(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+
+        events = []
+
+        class L:
+            def on_enter_state(self, new, old, t, **kw):
+                events.append(new.name)
+
+        fsm.add_listener(L())
+        fsm.reset()
+
+        assert events == ["idle"]
+
+    def test_reset_when_already_initial(self):
+        """reset() is safe when already in the initial state."""
+        fsm = self._make_fsm()
+        enters = []
+
+        class L:
+            def on_enter_state(self, new, old, t, **kw):
+                enters.append(new.name)
+
+        fsm.add_listener(L())
+        fsm.reset()  # already at idle
+        assert fsm.current_state_name == "idle"
+        assert enters == ["idle"]  # callbacks still fire
+
+    def test_reset_then_transition_works(self):
+        """After reset(), normal transition path is usable again."""
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        fsm.trigger("finish")
+        fsm.reset()
+
+        result = fsm.trigger("start")
+        assert result.success
+        assert fsm.current_state_name == "running"

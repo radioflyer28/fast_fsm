@@ -153,6 +153,7 @@ class StateMachine:
 
     __slots__ = (
         "_name",
+        "_initial_state",
         "_current_state",
         "_states",
         "_transitions",
@@ -181,6 +182,7 @@ class StateMachine:
             logger_name: Name of the logger to use (defaults to 'fast_fsm.{name}')
         """
         self._name = name
+        self._initial_state = initial_state
         self._current_state = initial_state
         self._states: Dict[str, State] = {initial_state.name: initial_state}
         self._transitions: Dict[str, Dict[str, TransitionEntry]] = {}
@@ -491,6 +493,11 @@ class StateMachine:
         """Get the current state name"""
         return self._current_state.name
 
+    @property
+    def initial_state_name(self) -> str:
+        """Get the name of the state the machine was initialised with."""
+        return self._initial_state.name
+
     def is_in(self, state: Union[str, State]) -> bool:
         """Return ``True`` if the machine is currently in *state*.
 
@@ -710,6 +717,42 @@ class StateMachine:
             safe_kwargs[key] = value
 
         return safe_kwargs
+
+    def force_state(self, state_name: str) -> None:
+        """Force the machine into a named state, bypassing guard conditions.
+
+        Fires the full on_exit / on_enter / after_transition callback chain so
+        that listeners stay consistent.  The synthetic trigger name
+        ``"__force__"`` is passed to every callback.
+
+        Use this for testing, error recovery, or programmatic state injection.
+        Prefer normal ``trigger()`` calls in production flow.
+
+        Args:
+            state_name: Name of the target state.  Must already be registered.
+
+        Raises:
+            KeyError: If ``state_name`` is not a registered state.
+        """
+        if state_name not in self._states:
+            raise KeyError(
+                f"State '{state_name}' is not registered in '{self._name}'. "
+                f"Registered states: {list(self._states)}"
+            )
+        to_state = self._states[state_name]
+        self._execute_transition(to_state, "__force__")
+
+    def reset(self) -> None:
+        """Return the machine to its initial state, bypassing guard conditions.
+
+        Equivalent to ``force_state(initial_state_name)``.  Fires the full
+        callback chain (on_exit, on_enter, after_transition) with the
+        synthetic trigger ``"__force__"``.
+
+        Safe to call when the machine is already in its initial state
+        (callbacks still fire).
+        """
+        self.force_state(self._initial_state.name)
 
     def _resolve_trigger(
         self, trigger: str, *args: Any, **kwargs: Any

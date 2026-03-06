@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06
+**Updated**: 2026-03-06 (added force_state / reset / initial_state_name)
 
 - `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
@@ -24,3 +24,6 @@
 - `DeclarativeState` enables `@transition`-decorated methods on state classes; auto-discovers via `_discover_handlers()`.
 - mypyc compiles `core.py` only; `conditions.py` and `condition_templates.py` must stay interpreted (users subclass `Condition` from Python).
 - `_sanitize_condition_kwargs` strips private kwargs (leading `_`) and caps at 50 items before passing to conditions.
+- `force_state(name)` sets `_current_state` directly without guard checks; fires full on_exit / on_enter / after_transition callback chain with synthetic trigger `"__force__"`; raises `KeyError` for unregistered state names.
+- `reset()` calls `force_state(initial_state_name)`; fires callbacks even when already in initial state.
+- `initial_state_name` read-only property returns the name of the state passed to `__init__`; stored in `_initial_state` slot.
