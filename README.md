@@ -194,9 +194,11 @@ Attach enter/exit callbacks at construction time using `CallbackState` or
 from fast_fsm import CallbackState
 
 # Option A — CallbackState (constructed before the machine)
-idle = CallbackState("idle")
-idle.set_on_enter(lambda from_state, trigger, **kw: print("Now idle"))
-idle.set_on_exit(lambda to_state, trigger, **kw: print("Leaving idle"))
+idle = CallbackState(
+    "idle",
+    on_enter=lambda from_state, trigger, **kw: print("Now idle"),
+    on_exit=lambda to_state, trigger, **kw: print("Leaving idle"),
+)
 
 # Option B — attach after construction (works on any StateMachine)
 fsm.on_enter("running", lambda from_s, t, **kw: print("→ running"))
@@ -229,7 +231,9 @@ config = {
     ],
 }
 fsm = StateMachine.from_dict(config, name="MyFSM")
-# Add guard conditions via add_transition() after construction.
+# Add guard conditions at construction time with conditions=:
+# from fast_fsm import FuncCondition
+# fsm = StateMachine.from_dict(config, conditions={"start": FuncCondition(guard_fn)})
 ```
 
 ### Listeners (Observer Pattern)
@@ -302,6 +306,15 @@ async def main():
     print(f"State: {fsm.current_state.name}")
 
 asyncio.run(main())
+```
+
+Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()` — they fire after all synchronous callbacks, within the same `trigger_async()` call:
+
+```python
+async def log_alert(from_s, trigger, **kw):
+    await db.record(f"{from_s.name} → alert")
+
+fsm.on_enter_async("alert", log_alert)
 ```
 
 ### Visualization

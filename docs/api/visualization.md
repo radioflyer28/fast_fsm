@@ -1,4 +1,3 @@
-````markdown
 # Visualization API
 
 Utilities for generating diagram output from a `StateMachine`.  Import
@@ -62,4 +61,3 @@ adj = FSMValidator(fsm).get_adjacency_matrix()
 doc = to_mermaid_document(fsm, adjacency_matrix=adj)
 print(doc)
 ```
-````

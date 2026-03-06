@@ -1435,3 +1435,104 @@ class TestTransitionResultRaiseIfFailed:
             success=True, from_state="a", to_state="b", trigger="go"
         )
         assert result.raise_if_failed() is result
+
+
+class TestFromDictConditions:
+    """Tests for from_dict() conditions= kwarg added in fast_fsm-pwa."""
+
+    def _simple_config(self):
+        return {
+            "initial": "idle",
+            "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+                {"trigger": "stop", "from": "running", "to": "idle"},
+            ],
+        }
+
+    def test_no_conditions_kwarg_still_works(self):
+        """Omitting conditions= is backward-compatible."""
+        fsm = StateMachine.from_dict(self._simple_config())
+        result = fsm.trigger("start")
+        assert result.success
+        assert fsm.current_state_name == "running"
+
+    def test_condition_blocks_transition(self):
+        """A FuncCondition in conditions= can block a trigger."""
+        from fast_fsm import FuncCondition
+
+        blocked = FuncCondition(lambda **kw: False, name="blocked")
+        fsm = StateMachine.from_dict(
+            self._simple_config(),
+            conditions={"start": blocked},
+        )
+        result = fsm.trigger("start")
+        assert not result.success
+        assert fsm.current_state_name == "idle"
+
+    def test_condition_allows_transition(self):
+        """A passing condition lets the trigger through."""
+        from fast_fsm import FuncCondition
+
+        guard = FuncCondition(lambda **kw: kw.get("ready", False), name="ready")
+        fsm = StateMachine.from_dict(
+            self._simple_config(),
+            conditions={"start": guard},
+        )
+        # Fail without kwarg
+        assert not fsm.trigger("start").success
+        # Pass with kwarg
+        assert fsm.trigger("start", ready=True).success
+
+    def test_condition_applied_to_all_from_states_for_trigger(self):
+        """Same condition applies when the same trigger has multiple from-states."""
+        from fast_fsm import FuncCondition
+
+        call_log: list = []
+
+        def guard(**kw):
+            call_log.append(kw.get("state"))
+            return True
+
+        fsm = StateMachine.from_dict(
+            {
+                "initial": "a",
+                "transitions": [
+                    {"trigger": "go", "from": "a", "to": "c"},
+                    {"trigger": "go", "from": "b", "to": "c"},
+                ],
+            },
+            conditions={"go": FuncCondition(guard, name="g")},
+        )
+        fsm.trigger("go", state="from_a")
+        assert call_log == ["from_a"]
+
+    def test_unknown_trigger_in_conditions_is_ignored(self):
+        """Keys in conditions= that don't match any trigger are silently ignored."""
+        from fast_fsm import FuncCondition
+
+        fsm = StateMachine.from_dict(
+            self._simple_config(),
+            conditions={"nonexistent": FuncCondition(lambda **kw: False, name="x")},
+        )
+        assert fsm.trigger("start").success
+
+    def test_callable_accepted_as_condition(self):
+        """A plain callable is accepted via add_transition's wrapping logic."""
+        fsm = StateMachine.from_dict(
+            self._simple_config(),
+            conditions={"start": lambda **kw: kw.get("ok", False)},
+        )
+        assert not fsm.trigger("start").success
+        assert fsm.trigger("start", ok=True).success
+
+    def test_conditions_independent_across_instances(self):
+        """Two from_dict() calls with the same config/conditions are independent."""
+        from fast_fsm import FuncCondition
+
+        guard = FuncCondition(lambda **kw: True, name="g")
+        config = self._simple_config()
+        fsm1 = StateMachine.from_dict(config, conditions={"start": guard})
+        fsm2 = StateMachine.from_dict(config, conditions={"start": guard})
+        fsm1.trigger("start")
+        assert fsm1.current_state_name == "running"
+        assert fsm2.current_state_name == "idle"  # independent

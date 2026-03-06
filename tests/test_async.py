@@ -383,3 +383,186 @@ class TestAsyncTriggerGaps:
         result = await fsm.trigger_async("go")
         assert result.success
         assert fsm.current_state.name == "s2"
+
+
+class TestAsyncPerStateCallbacks:
+    """Tests for on_enter_async / on_exit_async (fast_fsm-61j)."""
+
+    @pytest.mark.asyncio
+    async def test_on_enter_async_fires_on_successful_transition(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="enter_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        log: list = []
+
+        async def on_enter(from_s, t, **kw):
+            log.append(("enter", from_s.name, t))
+
+        fsm.on_enter_async("running", on_enter)
+        result = await fsm.trigger_async("start")
+        assert result.success
+        assert log == [("enter", "idle", "start")]
+
+    @pytest.mark.asyncio
+    async def test_on_exit_async_fires_on_successful_transition(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="exit_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        log: list = []
+
+        async def on_exit(to_s, t, **kw):
+            log.append(("exit", to_s.name, t))
+
+        fsm.on_exit_async("idle", on_exit)
+        result = await fsm.trigger_async("start")
+        assert result.success
+        assert log == [("exit", "running", "start")]
+
+    @pytest.mark.asyncio
+    async def test_async_callbacks_do_not_fire_on_failed_transition(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="no_fire")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running", condition=NeverAsyncCondition())
+
+        log: list = []
+        fsm.on_enter_async("running", lambda from_s, t, **kw: log.append("enter"))
+        fsm.on_exit_async("idle", lambda to_s, t, **kw: log.append("exit"))
+
+        result = await fsm.trigger_async("start")
+        assert not result.success
+        assert log == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_async_callbacks_called_in_order(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="multi_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        log: list = []
+
+        async def cb1(from_s, t, **kw):
+            log.append(1)
+
+        async def cb2(from_s, t, **kw):
+            log.append(2)
+
+        fsm.on_enter_async("running", cb1)
+        fsm.on_enter_async("running", cb2)
+        await fsm.trigger_async("start")
+        assert log == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_async_callback_exception_is_caught_not_raised(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="exc_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        async def bad_cb(from_s, t, **kw):
+            raise RuntimeError("boom")
+
+        fsm.on_enter_async("running", bad_cb)
+        result = await fsm.trigger_async("start")
+        # Transition still succeeds; exception is caught and logged
+        assert result.success
+        assert fsm.current_state.name == "running"
+
+    @pytest.mark.asyncio
+    async def test_async_callbacks_receive_kwargs(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="kw_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        received: list = []
+
+        async def on_enter(from_s, t, **kw):
+            received.append(kw.get("payload"))
+
+        fsm.on_enter_async("running", on_enter)
+        await fsm.trigger_async("start", payload="hello")
+        assert received == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_on_enter_exit_async_order_relative_to_sync(self):
+        """Async callbacks fire AFTER all sync callbacks."""
+        from fast_fsm import CallbackState
+
+        log: list = []
+
+        idle = CallbackState(
+            "idle", on_exit=lambda to_s, t, **kw: log.append("sync_exit")
+        )
+        running = CallbackState(
+            "running", on_enter=lambda from_s, t, **kw: log.append("sync_enter")
+        )
+
+        fsm = AsyncStateMachine(idle, name="order_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        async def async_exit(to_s, t, **kw):
+            log.append("async_exit")
+
+        async def async_enter(from_s, t, **kw):
+            log.append("async_enter")
+
+        fsm.on_exit_async("idle", async_exit)
+        fsm.on_enter_async("running", async_enter)
+        await fsm.trigger_async("start")
+        # sync callbacks fire first (inside _execute_transition),
+        # then async callbacks fire in exit→enter order
+        assert log == ["sync_exit", "sync_enter", "async_exit", "async_enter"]
+
+    @pytest.mark.asyncio
+    async def test_clone_copies_async_callbacks(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="clone_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        log: list = []
+
+        async def on_enter(from_s, t, **kw):
+            log.append("enter")
+
+        fsm.on_enter_async("running", on_enter)
+
+        cloned = fsm.clone()
+        assert isinstance(cloned, AsyncStateMachine)
+        await cloned.trigger_async("start")
+        assert log == ["enter"]
+
+    @pytest.mark.asyncio
+    async def test_clone_async_callbacks_independent(self):
+        """Registering callbacks on clone doesn't affect original."""
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="indep_async")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+
+        cloned = fsm.clone()
+        log: list = []
+
+        async def extra(from_s, t, **kw):
+            log.append("extra")
+
+        cloned.on_enter_async("running", extra)
+
+        # Original has no async enter callback for running
+        await fsm.trigger_async("start")
+        assert log == []  # not fired on original

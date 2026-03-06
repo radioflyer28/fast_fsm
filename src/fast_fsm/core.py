@@ -409,7 +409,11 @@ class StateMachine:
 
     @classmethod
     def from_dict(
-        cls, config: Dict[str, Any], *, name: Optional[str] = None
+        cls,
+        config: Dict[str, Any],
+        *,
+        name: Optional[str] = None,
+        conditions: Optional[Dict[str, Union[Condition, Callable[..., bool]]]] = None,
     ) -> "StateMachine":
         """Build a :class:`StateMachine` from a plain dictionary description.
 
@@ -435,14 +439,31 @@ class StateMachine:
         ``"from"`` may be a string or a list of strings (fan-out shorthand,
         same as :meth:`add_transition`).
 
-        Guard conditions are not supported in dict form because callables are
-        not serialisable.  Use :meth:`add_transition` after construction to
-        attach conditions.
+        Guard conditions can be attached at construction time via the
+        ``conditions`` keyword argument.  Because callables are not
+        serialisable, they cannot live inside *config*; pass them separately::
+
+            config = {"initial": "idle", "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+            ]}
+            fsm = StateMachine.from_dict(
+                config,
+                conditions={"start": FuncCondition("ready", lambda **kw: kw.get("ready"))},
+            )
+
+        If the same trigger name appears in multiple transition entries, the
+        *same* condition object is applied to all of them — consistent with
+        how a named guard normally applies to a trigger regardless of source
+        state.  To apply different conditions per source state, call
+        :meth:`add_transition` after construction.
 
         Args:
             config: Dictionary describing the machine topology.
             name: Override the machine name.  Takes precedence over
                 ``config["name"]`` if both are provided.
+            conditions: Optional mapping of ``trigger_name → Condition``
+                (or any ``(**kwargs) -> bool`` callable).  Keys that do not
+                match any trigger in *config* are silently ignored.
 
         Returns:
             Configured :class:`StateMachine` instance.
@@ -491,8 +512,12 @@ class StateMachine:
         fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
 
         # Add transitions — add_transition natively supports str-or-list from_state
+        _conditions: Dict[str, Union[Condition, Callable[..., bool]]] = conditions or {}
         for entry in raw_transitions:
-            fsm.add_transition(entry["trigger"], entry["from"], entry["to"])
+            cond = _conditions.get(entry["trigger"])
+            fsm.add_transition(
+                entry["trigger"], entry["from"], entry["to"], condition=cond
+            )
 
         return fsm
 
@@ -1053,6 +1078,11 @@ class StateMachine:
             ``CallbackState`` on_enter / on_exit function references *are* shared
             (shallow copy), which is correct since they are typically pure
             functions or methods.
+
+            Per-state callbacks registered via :meth:`on_enter` / :meth:`on_exit`
+            (the ``_state_enter_callbacks`` / ``_state_exit_callbacks`` dicts) **are**
+            shallow-copied into the clone. Listener objects registered via
+            :meth:`add_listener` are **not** copied.
         """
         new_fsm: "StateMachine" = self.__class__(self._initial_state, name=self._name)
         # Replace the minimal state/transition tables __init__ created with
@@ -1391,7 +1421,93 @@ class StateMachine:
 class AsyncStateMachine(StateMachine):
     """
     Async-aware state machine that can handle AsyncCondition instances properly.
+
+    Extends :class:`StateMachine` with:
+
+    - :meth:`trigger_async` / :meth:`can_trigger_async` — await-safe transition
+      methods that evaluate :class:`AsyncCondition` guards.
+    - :meth:`on_enter_async` / :meth:`on_exit_async` — register ``async``
+      callbacks for specific states, fired after all synchronous callbacks.
     """
+
+    __slots__ = ("_state_enter_async_callbacks", "_state_exit_async_callbacks")
+
+    def __init__(
+        self,
+        initial_state: State,
+        *,
+        name: str = "FSM",
+        logger_name: Optional[str] = None,
+    ) -> None:
+        super().__init__(initial_state, name=name, logger_name=logger_name)
+        self._state_enter_async_callbacks: Dict[str, List[Any]] = {}
+        self._state_exit_async_callbacks: Dict[str, List[Any]] = {}
+
+    def on_enter_async(self, state_name: str, callback: Any) -> None:
+        """Register an ``async`` callback fired when the machine enters *state_name*.
+
+        Fires **after** the synchronous :meth:`~StateMachine.on_enter` callbacks,
+        still within the same ``trigger_async`` call.
+
+        Signature: ``async callback(from_state: State, trigger: str, **kwargs)``
+
+        Multiple callbacks for the same state are called in registration order.
+
+        Args:
+            state_name: Name of the state to watch.  Does not need to be
+                registered yet.
+            callback: Async callable matching the signature above.
+
+        Example::
+
+            async def log_entry(from_s, t, **kw):
+                await db.log(f"entered running from {from_s.name}")
+
+            fsm.on_enter_async("running", log_entry)
+        """
+        if state_name not in self._state_enter_async_callbacks:
+            self._state_enter_async_callbacks[state_name] = []
+        self._state_enter_async_callbacks[state_name].append(callback)
+
+    def on_exit_async(self, state_name: str, callback: Any) -> None:
+        """Register an ``async`` callback fired when the machine exits *state_name*.
+
+        Fires **after** the synchronous :meth:`~StateMachine.on_exit` callbacks,
+        still within the same ``trigger_async`` call.
+
+        Signature: ``async callback(to_state: State, trigger: str, **kwargs)``
+
+        Multiple callbacks for the same state are called in registration order.
+
+        Args:
+            state_name: Name of the state to watch.  Does not need to be
+                registered yet.
+            callback: Async callable matching the signature above.
+
+        Example::
+
+            async def log_exit(to_s, t, **kw):
+                await db.log(f"left running -> {to_s.name}")
+
+            fsm.on_exit_async("running", log_exit)
+        """
+        if state_name not in self._state_exit_async_callbacks:
+            self._state_exit_async_callbacks[state_name] = []
+        self._state_exit_async_callbacks[state_name].append(callback)
+
+    def clone(self) -> "AsyncStateMachine":
+        """Create a structural clone; also copies async per-state callbacks."""
+        base = super().clone()
+        # super().clone() calls self.__class__(...) which creates an AsyncStateMachine
+        # with empty async callback dicts.  Copy them over now.
+        assert isinstance(base, AsyncStateMachine)
+        base._state_enter_async_callbacks = {
+            k: list(v) for k, v in self._state_enter_async_callbacks.items()
+        }
+        base._state_exit_async_callbacks = {
+            k: list(v) for k, v in self._state_exit_async_callbacks.items()
+        }
+        return base
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
@@ -1500,7 +1616,38 @@ class AsyncStateMachine(StateMachine):
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
 
-        return self._execute_transition(to_state, trigger, *args, **kwargs)
+        old_state = self._current_state
+        result = self._execute_transition(to_state, trigger, *args, **kwargs)
+
+        # Fire async per-state exit callbacks (after all sync callbacks)
+        _async_exit = self._state_exit_async_callbacks.get(old_state.name)
+        if _async_exit:
+            for fn in _async_exit:
+                try:
+                    await fn(to_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_exit_async callback for state '%s': %s",
+                        self._name,
+                        old_state.name,
+                        e,
+                    )
+
+        # Fire async per-state enter callbacks
+        _async_enter = self._state_enter_async_callbacks.get(to_state.name)
+        if _async_enter:
+            for fn in _async_enter:
+                try:
+                    await fn(old_state, trigger, **kwargs)
+                except Exception as e:
+                    self._logger.warning(
+                        "%s: Exception in on_enter_async callback for state '%s': %s",
+                        self._name,
+                        to_state.name,
+                        e,
+                    )
+
+        return result
 
 
 # Convenience functions and classes

@@ -310,6 +310,8 @@ config = {
     ],
 }
 fsm2 = StateMachine.from_dict(config, name="FromConfig")
+# Attach guards at construction with conditions={trigger_name: condition}:
+# fsm2 = StateMachine.from_dict(config, conditions={"start": FuncCondition(guard_fn)})
 ```
 
 ## 🎓 Next Steps (Choose Your Path)
