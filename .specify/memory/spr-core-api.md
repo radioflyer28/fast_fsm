@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit)
+**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit / from_dict)
 
 - `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
@@ -33,3 +33,4 @@
 - `on_enter(state_name, fn)` registers a per-state callback fired after `State.on_enter` and before `on_enter_state` listeners. Signature: `fn(from_state, trigger, **kwargs)`. Multiple callbacks fire in registration order.
 - `on_exit(state_name, fn)` registers a per-state callback fired after `State.on_exit` and before `on_exit_state` listeners. Signature: `fn(to_state, trigger, **kwargs)`. Both are stored in `_state_enter_callbacks` / `_state_exit_callbacks` slots (`Dict[str, List]`).
 - Callback exception safety: exceptions in per-state callbacks are caught and logged as warnings, not re-raised; the transition still completes.
+- `from_dict(config, *, name=None)` classmethod builds a machine from a plain dict; required keys: `"initial"` (str), `"transitions"` (list of `{"trigger", "from", "to"}`); optional keys: `"name"` (str), `"states"` (list of extra state names for isolated/terminal states). `"from"` may be a string or a list of strings (fan-out). Internally uses `from_states` + `add_transition`, bypassing `quick_build`'s typed tuple constraint.

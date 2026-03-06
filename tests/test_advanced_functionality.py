@@ -1141,3 +1141,154 @@ class TestMachineCallbacks:
 
         clone.trigger("start")
         assert extra_calls == []  # extra callback not on clone
+
+
+class TestFromDict:
+    """Tests for StateMachine.from_dict()."""
+
+    # ------------------------------------------------------------------
+    # Basic construction
+    # ------------------------------------------------------------------
+
+    def test_basic_construction(self):
+        config = {
+            "initial": "idle",
+            "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+                {"trigger": "finish", "from": "running", "to": "done"},
+            ],
+        }
+        fsm = StateMachine.from_dict(config)
+        assert fsm.current_state_name == "idle"
+        assert set(fsm.states) == {"idle", "running", "done"}
+
+    def test_transitions_work(self):
+        config = {
+            "initial": "idle",
+            "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+                {"trigger": "finish", "from": "running", "to": "done"},
+            ],
+        }
+        fsm = StateMachine.from_dict(config)
+        assert fsm.trigger("start").success
+        assert fsm.current_state_name == "running"
+        assert fsm.trigger("finish").success
+        assert fsm.current_state_name == "done"
+
+    # ------------------------------------------------------------------
+    # Name resolution
+    # ------------------------------------------------------------------
+
+    def test_default_name(self):
+        fsm = StateMachine.from_dict({"initial": "a", "transitions": []})
+        assert fsm.name == "FSM"
+
+    def test_name_from_config(self):
+        config = {"name": "TrafficLight", "initial": "red", "transitions": []}
+        fsm = StateMachine.from_dict(config)
+        assert fsm.name == "TrafficLight"
+
+    def test_name_kwarg_overrides_config(self):
+        config = {"name": "TrafficLight", "initial": "red", "transitions": []}
+        fsm = StateMachine.from_dict(config, name="Override")
+        assert fsm.name == "Override"
+
+    # ------------------------------------------------------------------
+    # Fan-out ("from" as list)
+    # ------------------------------------------------------------------
+
+    def test_fanout_from_as_list(self):
+        config = {
+            "initial": "idle",
+            "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+                {"trigger": "error", "from": ["idle", "running"], "to": "failed"},
+            ],
+        }
+        fsm = StateMachine.from_dict(config)
+        # error trigger should work from both states
+        fsm2 = StateMachine.from_dict(config)
+        fsm2.trigger("start")
+        assert fsm2.trigger("error").success
+        assert fsm2.current_state_name == "failed"
+
+        assert fsm.trigger("error").success
+        assert fsm.current_state_name == "failed"
+
+    # ------------------------------------------------------------------
+    # Explicit states list
+    # ------------------------------------------------------------------
+
+    def test_explicit_states_includes_isolated_state(self):
+        """States listed in 'states' but not in transitions are still registered."""
+        config = {
+            "initial": "idle",
+            "states": ["idle", "running", "terminal"],
+            "transitions": [
+                {"trigger": "start", "from": "idle", "to": "running"},
+            ],
+        }
+        fsm = StateMachine.from_dict(config)
+        assert "terminal" in fsm.states
+
+    # ------------------------------------------------------------------
+    # Error handling
+    # ------------------------------------------------------------------
+
+    def test_missing_initial_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="initial"):
+            StateMachine.from_dict({"transitions": []})
+
+    def test_transition_missing_trigger_raises(self):
+        import pytest
+
+        config = {
+            "initial": "a",
+            "transitions": [{"from": "a", "to": "b"}],
+        }
+        with pytest.raises(ValueError, match="trigger"):
+            StateMachine.from_dict(config)
+
+    def test_transition_missing_from_raises(self):
+        import pytest
+
+        config = {
+            "initial": "a",
+            "transitions": [{"trigger": "go", "to": "b"}],
+        }
+        with pytest.raises(ValueError, match="from"):
+            StateMachine.from_dict(config)
+
+    def test_transition_missing_to_raises(self):
+        import pytest
+
+        config = {
+            "initial": "a",
+            "transitions": [{"trigger": "go", "from": "a"}],
+        }
+        with pytest.raises(ValueError, match="to"):
+            StateMachine.from_dict(config)
+
+    # ------------------------------------------------------------------
+    # Round-trip: JSON -> FSM -> snapshot -> dict comparison
+    # ------------------------------------------------------------------
+
+    def test_json_roundtrip(self):
+        import json
+
+        config = {
+            "name": "Lifecycle",
+            "initial": "pending",
+            "transitions": [
+                {"trigger": "activate", "from": "pending", "to": "active"},
+                {"trigger": "deactivate", "from": "active", "to": "inactive"},
+                {"trigger": "reactivate", "from": "inactive", "to": "active"},
+            ],
+        }
+        json_str = json.dumps(config)
+        fsm = StateMachine.from_dict(json.loads(json_str))
+        fsm.trigger("activate")
+        assert fsm.snapshot()["state"] == "active"

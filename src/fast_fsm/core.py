@@ -317,6 +317,95 @@ class StateMachine:
 
         return fsm
 
+    @classmethod
+    def from_dict(
+        cls, config: Dict[str, Any], *, name: Optional[str] = None
+    ) -> "StateMachine":
+        """Build a :class:`StateMachine` from a plain dictionary description.
+
+        This is the inverse of the mental model behind :meth:`snapshot` /
+        :meth:`restore`: it reconstructs *topology* (states + transitions)
+        from a serialisable dict, making it easy to define machines in JSON,
+        YAML, or TOML config files.
+
+        Shape of *config*::
+
+            {
+                "name":    "MyFSM",          # optional — overridden by kwarg
+                "initial": "idle",           # required
+                "states":  ["idle", "running", "done"],  # optional — auto-
+                                             # discovered from transitions
+                "transitions": [
+                    {"trigger": "start",  "from": "idle",    "to": "running"},
+                    {"trigger": "finish", "from": "running", "to": "done"},
+                    {"trigger": "fail",   "from": ["running", "done"], "to": "error"},
+                ]
+            }
+
+        ``"from"`` may be a string or a list of strings (fan-out shorthand,
+        same as :meth:`add_transition`).
+
+        Guard conditions are not supported in dict form because callables are
+        not serialisable.  Use :meth:`add_transition` after construction to
+        attach conditions.
+
+        Args:
+            config: Dictionary describing the machine topology.
+            name: Override the machine name.  Takes precedence over
+                ``config["name"]`` if both are provided.
+
+        Returns:
+            Configured :class:`StateMachine` instance.
+
+        Raises:
+            ValueError: If ``"initial"`` is missing, or any transition entry
+                is missing ``"trigger"`` / ``"from"`` / ``"to"``.
+
+        Example::
+
+            import json
+            config = json.loads(open("traffic_light.json").read())
+            fsm = StateMachine.from_dict(config)
+        """
+        # Resolve machine name
+        fsm_name: str = name or config.get("name", "FSM")
+
+        # Validate required field
+        if "initial" not in config:
+            raise ValueError("from_dict: config must contain an 'initial' key.")
+
+        initial: str = config["initial"]
+
+        # Parse and validate the transition list
+        raw_transitions = config.get("transitions", [])
+        for i, entry in enumerate(raw_transitions):
+            for required in ("trigger", "from", "to"):
+                if required not in entry:
+                    raise ValueError(
+                        f"from_dict: transition[{i}] is missing required key '{required}'."
+                    )
+
+        # Collect all state names (initial + explicit list + transition endpoints)
+        all_state_names: set[str] = {initial}
+        explicit: List[str] = config.get("states") or []
+        all_state_names.update(explicit)
+        for entry in raw_transitions:
+            frm = entry["from"]
+            if isinstance(frm, list):
+                all_state_names.update(frm)
+            else:
+                all_state_names.add(frm)
+            all_state_names.add(entry["to"])
+
+        # Build the machine with all discovered states
+        fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
+
+        # Add transitions — add_transition natively supports str-or-list from_state
+        for entry in raw_transitions:
+            fsm.add_transition(entry["trigger"], entry["from"], entry["to"])
+
+        return fsm
+
     def _register_state(self, state: State) -> None:
         """Register a state and initialize its transition table"""
         self._states[state.name] = state
