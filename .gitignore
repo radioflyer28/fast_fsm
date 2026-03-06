@@ -27,3 +27,6 @@ docs/_build/
 # Benchmark artifacts
 benchmarks/*.json
 benchmark_results.json
+
+# SPR index — build artifact, regenerate with aggregate-spr.ps1
+.specify/memory/spr-index.md

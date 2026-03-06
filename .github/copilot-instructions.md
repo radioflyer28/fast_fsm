@@ -298,7 +298,8 @@ than plain fenced code blocks so they are verified on every CI run.
 
 1. **File issues for remaining work** — `bd create` for anything that needs follow-up
 2. **Run quality gates** (if .py files changed) — tests, linters, docs build
-3. **Update issue status** — `bd close` finished work, update in-progress items
+3. **Update SPR files** (if public API or significant behaviour changed) — edit the relevant `.specify/memory/spr-*.md` in the same commit as the code change; if a decision was reversed, write a new ADR and update the old one's status to `Superseded by ADR-NNN`
+4. **Update issue status** — `bd close` finished work, update in-progress items
 4. **Push to remote** — this is MANDATORY:
    ```bash
    git pull --rebase
@@ -367,6 +368,11 @@ cd .specify/scripts/powershell
 ./aggregate-spr.ps1              # writes .specify/memory/spr-index.md
 ./aggregate-spr.ps1 -InjectAgents  # also injects into AGENTS.md
 ```
+
+**Anti-poisoning rules:**
+- `spr-index.md` is a **build artifact** — it is gitignored and must be regenerated fresh each session; never treat a cached copy as authoritative.
+- SPR source files (`spr-*.md`) MUST be updated in the same commit as the code change that makes them stale, not as a follow-up.
+- Do NOT load SPR content from a previous session without regenerating the index first.
 
 **Existing SPR files:**
 - [spr-core-api.md](../.specify/memory/spr-core-api.md) — StateMachine, slots, transitions, builder
