@@ -163,6 +163,7 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   `Hook` or `Middleware` ABC) must use `@mypyc_attr(allow_interpreted_subclasses=True)`.
   Forgetting this will silently work in pure Python mode and crash only
   when the compiled extension is loaded (fast_fsm-ldp).
+  **`tests/test_mypyc_guard.py` enforces this automatically via AST analysis.**
 
 **Follow-up work:**
 - If a future profiling pass shows condition evaluation is a bottleneck,

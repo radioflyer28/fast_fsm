@@ -220,6 +220,7 @@ uv run ruff check $files; uv run ty check $files            # Phase 2
 | README / examples | `test_readme_examples.py` |
 | Performance-sensitive | `test_performance_benchmarks.py` |
 | Cross-cutting invariants | `test_hypothesis.py` |
+| `core.py` (mypyc subclassing safety) | `test_mypyc_guard.py` |
 
 
 ## Documentation
