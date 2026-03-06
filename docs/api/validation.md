@@ -43,6 +43,47 @@ print(score["completeness_score"])  # reflects transition coverage
 print(score["grade"])               # based on structural_score only
 ```
 
+## Tuning the Validator
+
+`EnhancedFSMValidator` exposes three keyword-only constructor parameters that
+let you adapt the sparse/dense classification and scoring to your FSM's design.
+
+### Sparse/dense classification thresholds
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `design_style_threshold` | `0.4` | Density ratio below which an FSM is classified as *sparse*. Set to `0.0` to force *sparse*; `1.1` to force *dense*. |
+| `min_transitions_for_style` | `6` | Minimum possible transitions (`states × events`) before the heuristic applies. Small FSMs below this are always treated as *dense*. |
+
+```python
+# Force dense classification regardless of density
+v = EnhancedFSMValidator(fsm, design_style_threshold=1.1)
+score = v.get_validation_score()
+print(score["design_style"])  # "dense"
+```
+
+### Blending completeness into the overall score
+
+By default `overall_score` and `grade` use only the **structural score** for
+all FSMs. For dense FSMs where transition coverage matters, you can blend in
+`completeness_score` with `completeness_weight`:
+
+```python
+# overall_score = 0.8 * structural + 0.2 * completeness
+v = EnhancedFSMValidator(fsm, completeness_weight=0.2)
+score = v.get_validation_score()
+print(score["overall_score"])       # blended
+print(score["structural_score"])    # always raw
+print(score["completeness_score"])  # always raw
+print(score["grade"])               # derived from blended overall_score
+```
+
+Sparse FSMs ignore `completeness_weight` — missing transitions are expected in
+sparse designs and are never penalised in the final grade.
+
+`completeness_weight` must be in `[0.0, 1.0]`; a `ValueError` is raised
+otherwise.
+
 ## Adjacency Matrix
 
 Use `FSMValidator.get_adjacency_matrix()` to get a stable, index-ordered
