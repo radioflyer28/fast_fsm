@@ -24,15 +24,10 @@ jobs:
             cibw_archs: "AMD64"
             artifact_name: windows
 
-          # macOS — Intel runner builds x86_64 wheels
-          - os: macos-13
-            cibw_archs: "x86_64"
-            artifact_name: macos-intel
-
-          # macOS — Apple Silicon runner builds arm64 wheels
+          # macOS — arm64 runner can cross-compile x86_64 and produce universal2
           - os: macos-14
-            cibw_archs: "arm64"
-            artifact_name: macos-arm
+            cibw_archs: "x86_64 arm64 universal2"
+            artifact_name: macos
 
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +40,7 @@ jobs:
           platforms: linux/arm64
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v2.22.0
         env:
           # CPython 3.10–3.13 on all selected arches; skip PyPy
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
@@ -60,8 +55,9 @@ jobs:
 
           # Install test dependencies inside each wheel build environment
           CIBW_TEST_REQUIRES: "pytest pytest-asyncio hypothesis"
-          # Quick smoke test — skip QEMU (aarch64) builds to avoid very slow emulation
-          CIBW_TEST_SKIP: "cp*-*linux_aarch64"
+          # Skip QEMU (Linux aarch64) builds to avoid very slow emulation;
+          # skip macOS x86_64 cross-compiled on arm64 runner (no Rosetta in CI)
+          CIBW_TEST_SKIP: "cp*-*linux_aarch64 cp*-macosx_x86_64"
           CIBW_TEST_COMMAND: >-
             python -m pytest {project}/tests/test_basic_functionality.py
             {project}/tests/test_async.py -x -q
