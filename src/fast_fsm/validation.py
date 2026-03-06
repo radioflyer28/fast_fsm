@@ -420,6 +420,7 @@ class EnhancedFSMValidator(FSMValidator):
         "metrics",
         "_design_style_threshold",
         "_min_transitions_for_style",
+        "_completeness_weight",
     )
 
     #: Default density threshold below which an FSM is classified as *sparse*.
@@ -427,6 +428,9 @@ class EnhancedFSMValidator(FSMValidator):
     #: Default minimum number of possible transitions required before the
     #: sparse/dense heuristic kicks in.
     DEFAULT_MIN_TRANSITIONS_FOR_STYLE: int = 6
+    #: Default weight given to completeness_score when computing overall_score.
+    #: ``0.0`` means grade = pure structural score (backward-compatible default).
+    DEFAULT_COMPLETENESS_WEIGHT: float = 0.0
 
     def __init__(
         self,
@@ -435,6 +439,7 @@ class EnhancedFSMValidator(FSMValidator):
         name: Optional[str] = None,
         design_style_threshold: float = DEFAULT_DESIGN_STYLE_THRESHOLD,
         min_transitions_for_style: int = DEFAULT_MIN_TRANSITIONS_FOR_STYLE,
+        completeness_weight: float = DEFAULT_COMPLETENESS_WEIGHT,
     ):
         """
         Args:
@@ -447,9 +452,25 @@ class EnhancedFSMValidator(FSMValidator):
                 (``states × events``) required before the sparse/dense
                 heuristic applies.  Small FSMs with ``possible_transitions <=``
                 this value are always classified as *dense* (default ``6``).
+            completeness_weight: Weight in ``[0.0, 1.0]`` given to
+                ``completeness_score`` when computing ``overall_score`` and
+                ``grade`` for **dense** FSMs.  ``structural_score`` receives
+                weight ``(1 - completeness_weight)``.  Sparse FSMs always use
+                the pure structural score regardless of this value, because
+                missing transitions are expected in sparse designs.
+
+                Example: ``completeness_weight=0.2`` gives
+                ``overall_score = 0.8 * structural + 0.2 * completeness``.
+
+                Raises ``ValueError`` if outside ``[0.0, 1.0]``.
         """
+        if not 0.0 <= completeness_weight <= 1.0:
+            raise ValueError(
+                f"completeness_weight must be in [0.0, 1.0], got {completeness_weight!r}"
+            )
         self._design_style_threshold: float = design_style_threshold
         self._min_transitions_for_style: int = min_transitions_for_style
+        self._completeness_weight: float = completeness_weight
         super().__init__(fsm, name=name)
         self.issues: List[ValidationIssue] = []
         self.recommendations: List[str] = []
@@ -776,21 +797,30 @@ class EnhancedFSMValidator(FSMValidator):
 
         total_issues = len(self.issues)
 
+        # Blend completeness into overall_score for dense FSMs when weight > 0.
+        # Sparse FSMs are never penalised for missing transitions.
+        design_style = self.metrics.get("design_style", "dense")
+        if self._completeness_weight > 0.0 and design_style == "dense":
+            w = self._completeness_weight
+            blended = (1.0 - w) * structural_score + w * completeness_score
+        else:
+            blended = structural_score
+
         return {
-            "overall_score": round(structural_score, 1),
+            "overall_score": round(blended, 1),
             "structural_score": round(structural_score, 1),
             "completeness_score": round(completeness_score, 1),
-            "design_style": self.metrics.get("design_style", "dense"),
+            "design_style": design_style,
             "total_issues": total_issues,
             "error_count": sum(1 for i in self.issues if i.severity == "error"),
             "warning_count": sum(1 for i in self.issues if i.severity == "warning"),
             "info_count": sum(1 for i in self.issues if i.severity == "info"),
             "grade": "A"
-            if structural_score >= 90
+            if blended >= 90
             else "B"
-            if structural_score >= 70
+            if blended >= 70
             else "C"
-            if structural_score >= 50
+            if blended >= 50
             else "D",
         }
 

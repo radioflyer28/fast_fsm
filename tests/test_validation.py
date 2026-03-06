@@ -900,3 +900,142 @@ class TestDesignStyleThreshold:
         """DEFAULT_* class constants equal the default kwarg values."""
         assert EnhancedFSMValidator.DEFAULT_DESIGN_STYLE_THRESHOLD == 0.4
         assert EnhancedFSMValidator.DEFAULT_MIN_TRANSITIONS_FOR_STYLE == 6
+        assert EnhancedFSMValidator.DEFAULT_COMPLETENESS_WEIGHT == 0.0
+
+
+# ---------------------------------------------------------------------------
+# TestCompletenessWeight
+# ---------------------------------------------------------------------------
+
+
+class TestCompletenessWeight:
+    """Tests for the completeness_weight kwarg on EnhancedFSMValidator."""
+
+    # ------------------------------------------------------------------ helpers
+
+    def _dense_incomplete_fsm(self):
+        """Dense FSM with many missing transitions so completeness_score < structural_score."""
+        # 3 states, 3 events → possible = 9
+        # Only 3 transitions defined → density = 3/9 = 0.33, but we'll make it dense
+        # by keeping min_transitions_for_style low so it classifies as dense.
+        # Actually let's build a truly dense FSM by classifying it differently.
+        # 3 states, 2 events → possible = 6 (≤ 6 → always dense)
+        # 2 of 6 transitions defined → completeness will be less than perfect.
+        fsm = StateMachine(State("a"))
+        fsm.add_state(State("b"))
+        fsm.add_state(State("c"))
+        fsm.add_transition("go", "a", "b")
+        fsm.add_transition("go", "b", "c")
+        # Missing: go from c, back from b/c/a, back → low completeness
+        return fsm
+
+    def _perfect_dense_fsm(self):
+        """A fully-connected dense FSM with 100% completeness."""
+        return StateMachine.quick_build(
+            "x",
+            [
+                ("t1", "x", "y"),
+                ("t2", "x", "z"),
+                ("t1", "y", "x"),
+                ("t2", "y", "z"),
+                ("t1", "z", "x"),
+                ("t2", "z", "y"),
+            ],
+            name="PerfectDense",
+        )
+
+    # ------------------------------------------------------------------ default behaviour
+
+    def test_default_weight_zero_preserves_backward_compat(self):
+        """With default weight=0, overall_score equals structural_score."""
+        v = EnhancedFSMValidator(self._dense_incomplete_fsm())
+        score = v.get_validation_score()
+        assert score["overall_score"] == score["structural_score"]
+
+    def test_weight_zero_explicit_same_as_default(self):
+        """Explicit completeness_weight=0.0 produces same result as default."""
+        fsm = self._dense_incomplete_fsm()
+        v1 = EnhancedFSMValidator(fsm)
+        v2 = EnhancedFSMValidator(fsm, completeness_weight=0.0)
+        assert v1.get_validation_score() == v2.get_validation_score()
+
+    # ------------------------------------------------------------------ blending maths
+
+    def test_weight_1_overall_equals_completeness(self):
+        """completeness_weight=1.0: overall_score = completeness_score."""
+        v = EnhancedFSMValidator(self._dense_incomplete_fsm(), completeness_weight=1.0)
+        score = v.get_validation_score()
+        assert score["overall_score"] == score["completeness_score"]
+
+    def test_weight_blend_formula(self):
+        """overall_score = (1-w)*structural + w*completeness for 0 < w < 1."""
+        fsm = self._dense_incomplete_fsm()
+        w = 0.3
+        v = EnhancedFSMValidator(fsm, completeness_weight=w)
+        score = v.get_validation_score()
+        expected = round(
+            (1.0 - w) * score["structural_score"] + w * score["completeness_score"], 1
+        )
+        assert score["overall_score"] == pytest.approx(expected, abs=0.15)
+
+    def test_grade_reflects_blended_score(self):
+        """Grade is derived from the blended overall_score, not raw structural."""
+        # Perfect FSM → structural=100, completeness=100, both grades = A
+        v_full = EnhancedFSMValidator(
+            self._perfect_dense_fsm(), completeness_weight=0.5
+        )
+        assert v_full.get_validation_score()["grade"] == "A"
+
+    def test_structural_and_completeness_scores_unchanged(self):
+        """structural_score and completeness_score in the dict are always raw values."""
+        fsm = self._dense_incomplete_fsm()
+        v0 = EnhancedFSMValidator(fsm, completeness_weight=0.0)
+        v5 = EnhancedFSMValidator(fsm, completeness_weight=0.5)
+        s0 = v0.get_validation_score()
+        s5 = v5.get_validation_score()
+        assert s0["structural_score"] == s5["structural_score"]
+        assert s0["completeness_score"] == s5["completeness_score"]
+
+    # ------------------------------------------------------------------ sparse FSMs ignore weight
+
+    def test_sparse_fsm_ignores_completeness_weight(self):
+        """For sparse FSMs, completeness_weight has no effect on overall_score."""
+        # Build a definitively sparse FSM (high threshold + enough transitions)
+        fsm = StateMachine.quick_build(
+            "a",
+            [("go", "a", "b"), ("go", "b", "c")],
+            states=["d", "e", "f", "g", "h"],
+            name="SparseFSM",
+        )
+        v0 = EnhancedFSMValidator(fsm, completeness_weight=0.0)
+        v8 = EnhancedFSMValidator(fsm, completeness_weight=0.8)
+        assert v0.get_validation_score()["design_style"] == "sparse"
+        assert v8.get_validation_score()["design_style"] == "sparse"
+        assert (
+            v0.get_validation_score()["overall_score"]
+            == v8.get_validation_score()["overall_score"]
+        )
+
+    # ------------------------------------------------------------------ validation
+
+    def test_weight_above_1_raises(self):
+        """completeness_weight > 1.0 raises ValueError."""
+        with pytest.raises(ValueError, match="completeness_weight"):
+            EnhancedFSMValidator(self._dense_incomplete_fsm(), completeness_weight=1.1)
+
+    def test_weight_below_0_raises(self):
+        """completeness_weight < 0.0 raises ValueError."""
+        with pytest.raises(ValueError, match="completeness_weight"):
+            EnhancedFSMValidator(self._dense_incomplete_fsm(), completeness_weight=-0.1)
+
+    def test_weight_exactly_0_and_1_are_valid(self):
+        """Boundary values 0.0 and 1.0 are accepted without error."""
+        fsm = self._dense_incomplete_fsm()
+        EnhancedFSMValidator(fsm, completeness_weight=0.0)
+        EnhancedFSMValidator(fsm, completeness_weight=1.0)
+
+    # ------------------------------------------------------------------ class constant
+
+    def test_default_completeness_weight_constant(self):
+        """DEFAULT_COMPLETENESS_WEIGHT class constant equals 0.0."""
+        assert EnhancedFSMValidator.DEFAULT_COMPLETENESS_WEIGHT == 0.0
