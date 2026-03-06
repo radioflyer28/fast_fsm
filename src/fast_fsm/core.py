@@ -692,6 +692,9 @@ class StateMachine:
         state2: Union[str, State],
         condition1: Optional[Union[Condition, Callable]] = None,
         condition2: Optional[Union[Condition, Callable]] = None,
+        *,
+        unless1: Optional[Union[Condition, Callable]] = None,
+        unless2: Optional[Union[Condition, Callable]] = None,
     ) -> None:
         """
         Add transitions in both directions between two states.
@@ -703,18 +706,29 @@ class StateMachine:
             state2: Second state
             condition1: Optional condition for trigger1
             condition2: Optional condition for trigger2
+            unless1: Negation shorthand for trigger1 — mutually exclusive with
+                ``condition1``.  The transition fires when this condition is **False**.
+            unless2: Negation shorthand for trigger2 — mutually exclusive with
+                ``condition2``.
 
-        Example:
+        Example::
+
             fsm.add_bidirectional_transition('pause', 'resume', 'running', 'paused')
+            # With negation shorthand:
+            is_locked = FuncCondition("locked", lambda **kw: kw.get("locked", False))
+            fsm.add_bidirectional_transition('open', 'close', 'closed', 'open',
+                                             unless1=is_locked)
         """
-        self.add_transition(trigger1, state1, state2, condition1)
-        self.add_transition(trigger2, state2, state1, condition2)
+        self.add_transition(trigger1, state1, state2, condition1, unless=unless1)
+        self.add_transition(trigger2, state2, state1, condition2, unless=unless2)
 
     def add_emergency_transition(
         self,
         trigger: str,
         to_state: Union[str, State],
         condition: Optional[Union[Condition, Callable]] = None,
+        *,
+        unless: Optional[Union[Condition, Callable]] = None,
     ) -> None:
         """
         Add an emergency transition from all states to a specific state.
@@ -723,12 +737,20 @@ class StateMachine:
             trigger: Emergency trigger name
             to_state: Target state for emergency
             condition: Optional condition for the emergency
+            unless: Negation shorthand — mutually exclusive with ``condition``.
+                The transition fires when this condition is **False**.
 
-        Example:
+        Example::
+
             fsm.add_emergency_transition('emergency_stop', 'error')
+            # Gated on a condition:
+            fsm.add_emergency_transition('fallback', 'safe',
+                                         condition=FuncCondition("critical", is_critical))
+            # With negation shorthand:
+            fsm.add_emergency_transition('fallback', 'safe', unless=is_safe)
         """
         all_states: List[Union[str, State]] = list(self._states.keys())
-        self.add_transition(trigger, all_states, to_state, condition)
+        self.add_transition(trigger, all_states, to_state, condition, unless=unless)
 
     @property
     def name(self) -> str:

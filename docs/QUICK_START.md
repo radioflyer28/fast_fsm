@@ -417,6 +417,10 @@ warehouse_fsm = (FSMBuilder(State('receiving'), name='Warehouse')
     .add_transition('stock_out', 'storing', 'out_of_stock')
     .add_transition('emergency_restock', 'out_of_stock', 'receiving')
     
+    # Per-state callbacks registered in the same fluent chain:
+    .on_enter('picking', lambda from_s, t, **kw: print(f"Picking order (from {from_s.name})"))
+    .on_exit('shipping', lambda to_s, t, **kw: print(f"Shipment dispatched → {to_s.name}"))
+    
     .build())
 
 # Use the warehouse FSM
@@ -545,9 +549,10 @@ def check_health(*args, **kwargs):
 
 ### 3. **Async/Sync Mismatch**
 ```python
-# ❌ Wrong: Using AsyncCondition with regular StateMachine
+# ❌ Wrong: Using AsyncCondition with regular StateMachine — now raises TypeError
 async_condition = MyAsyncCondition()
-fsm = StateMachine(state)  # Won't work with async conditions
+fsm = StateMachine(state)
+fsm.add_transition('go', 'a', 'b', condition=async_condition)  # TypeError!
 
 # ✅ Right: Use AsyncStateMachine for async conditions
 fsm = AsyncStateMachine(state)  # Now async conditions work

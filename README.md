@@ -89,6 +89,9 @@ fsm = (
     .add_state(State("processing"))
     .add_transition("start", "idle", "processing")
     .add_transition("complete", "processing", "idle")
+    # Register per-state callbacks in the same fluent chain:
+    .on_enter("processing", lambda from_s, t, **kw: print("→ processing"))
+    .on_exit("processing",  lambda to_s,   t, **kw: print("← processing"))
     .build()
 )
 ```
@@ -100,9 +103,11 @@ from fast_fsm import simple_fsm
 
 fsm = simple_fsm("idle", "running", "error", initial="idle", name="QuickFSM")
 fsm.add_transitions([
-    ("start", "idle", "running"),
+    ("start", "idle",    "running"),
     ("fail",  "running", "error"),
-    ("reset", "error", "idle"),
+    ("reset", "error",   "idle"),
+    # Optional 4th element attaches a guard condition:
+    # ("start", "idle", "running", FuncCondition("ready", lambda **kw: kw.get("ready"))),
 ])
 ```
 
@@ -377,8 +382,8 @@ print(v.export_report('json'))
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
 - **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
 - **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`
-- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, listeners
-- **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`
+- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners
+- **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
 - **Visualization** — Mermaid diagrams, fenced blocks, full Markdown documents with adjacency matrix
@@ -404,7 +409,7 @@ uv run python examples/<script>.py
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -x -q     # full suite (290 tests)
+uv run pytest tests/ -x -q     # full suite (~340 tests)
 ```
 
 ## Architecture

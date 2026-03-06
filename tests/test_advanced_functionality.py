@@ -154,6 +154,66 @@ class TestAdvancedTransitions:
         assert result.success
         assert fsm.current_state.name == "emergency"
 
+    def test_add_bidirectional_unless1_blocks(self):
+        """unless1= blocks trigger1 when condition is True."""
+        from fast_fsm.conditions import FuncCondition
+
+        running, paused = State("running"), State("paused")
+        fsm = StateMachine(running)
+        fsm.add_state(paused)
+        is_locked = FuncCondition(lambda **kw: kw.get("locked", False), name="locked")
+        fsm.add_bidirectional_transition(
+            "pause", "resume", "running", "paused", unless1=is_locked
+        )
+        # Blocked when locked=True
+        assert not fsm.trigger("pause", locked=True).success
+        assert fsm.current_state.name == "running"
+        # Allowed when locked=False
+        assert fsm.trigger("pause", locked=False).success
+        assert fsm.current_state.name == "paused"
+        # Reverse (no guard) always works
+        assert fsm.trigger("resume").success
+        assert fsm.current_state.name == "running"
+
+    def test_add_bidirectional_unless2_blocks(self):
+        """unless2= blocks trigger2 when condition is True."""
+        from fast_fsm.conditions import FuncCondition
+
+        running, paused = State("running"), State("paused")
+        fsm = StateMachine(running)
+        fsm.add_state(paused)
+        no_energy = FuncCondition(
+            lambda **kw: kw.get("energy", 10) < 5, name="no_energy"
+        )
+        fsm.add_bidirectional_transition(
+            "pause", "resume", "running", "paused", unless2=no_energy
+        )
+        fsm.trigger("pause")  # running -> paused (no guard)
+        # Can't resume when energy < 5 (i.e., no_energy is True)
+        assert not fsm.trigger("resume", energy=2).success
+        assert fsm.current_state.name == "paused"
+        # Can resume when energy >= 5
+        assert fsm.trigger("resume", energy=10).success
+        assert fsm.current_state.name == "running"
+
+    def test_add_emergency_unless_blocks(self):
+        """unless= on add_emergency_transition blocks when condition is True."""
+        from fast_fsm.conditions import FuncCondition
+
+        idle, safe = State("idle"), State("safe")
+        fsm = StateMachine(idle)
+        fsm.add_state(safe)
+        already_safe = FuncCondition(
+            lambda **kw: kw.get("safe", False), name="already_safe"
+        )
+        fsm.add_emergency_transition("fallback", "safe", unless=already_safe)
+        # Blocked when already safe
+        assert not fsm.trigger("fallback", safe=True).success
+        assert fsm.current_state.name == "idle"
+        # Allowed when not safe
+        assert fsm.trigger("fallback", safe=False).success
+        assert fsm.current_state.name == "safe"
+
 
 class TestStateTriggerMethods:
     """Test different trigger methods and their behavior"""
