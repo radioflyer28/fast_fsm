@@ -425,6 +425,109 @@ class TestBatchOperations:
         assert fsm.trigger("deactivate").success
         assert fsm.current_state.name == "idle"
 
+    def test_add_transitions_4tuple_condition_blocks(self):
+        """4-tuple with a blocking condition prevents the transition."""
+        from fast_fsm.conditions import FuncCondition
+
+        idle, running = State("idle"), State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        fsm.add_transitions(
+            [
+                (
+                    "go",
+                    "idle",
+                    "running",
+                    FuncCondition(lambda **kw: False, name="never"),
+                ),
+            ]
+        )
+        result = fsm.trigger("go")
+        assert not result.success
+        assert fsm.current_state.name == "idle"
+
+    def test_add_transitions_4tuple_condition_allows(self):
+        """4-tuple with a passing condition allows the transition."""
+        from fast_fsm.conditions import FuncCondition
+
+        idle, running = State("idle"), State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        fsm.add_transitions(
+            [
+                (
+                    "go",
+                    "idle",
+                    "running",
+                    FuncCondition(lambda **kw: kw.get("ok", False), name="ok"),
+                ),
+            ]
+        )
+        assert not fsm.trigger("go").success
+        assert fsm.trigger("go", ok=True).success
+
+    def test_add_transitions_4tuple_none_condition_is_unconditional(self):
+        """Explicit None as 4th element means no guard (backward compat)."""
+        idle, running = State("idle"), State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        fsm.add_transitions([("go", "idle", "running", None)])
+        assert fsm.trigger("go").success
+
+    def test_add_transitions_mixed_3tuple_and_4tuple(self):
+        """Mix of 3- and 4-tuples in the same call works correctly."""
+        from fast_fsm.conditions import FuncCondition
+
+        idle, running, done = State("idle"), State("running"), State("done")
+        fsm = StateMachine(idle)
+        for s in (running, done):
+            fsm.add_state(s)
+        fsm.add_transitions(
+            [
+                ("start", "idle", "running"),  # 3-tuple
+                (
+                    "finish",
+                    "running",
+                    "done",
+                    FuncCondition(lambda **k: True, name="y"),
+                ),  # 4-tuple
+            ]
+        )
+        assert fsm.trigger("start").success
+        assert fsm.trigger("finish").success
+        assert fsm.current_state.name == "done"
+
+    def test_add_transitions_4tuple_callable_condition(self):
+        """Plain callable accepted as 4th element (wrapped in FuncCondition)."""
+        idle, running = State("idle"), State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        fsm.add_transitions(
+            [
+                ("go", "idle", "running", lambda **kw: kw.get("ready", False)),
+            ]
+        )
+        assert not fsm.trigger("go").success
+        assert fsm.trigger("go", ready=True).success
+
+    def test_add_transitions_4tuple_async_condition_raises_on_sync(self):
+        """AsyncCondition as 4th element raises TypeError on sync machine."""
+        import pytest
+        from fast_fsm.conditions import AsyncCondition
+
+        class AC(AsyncCondition):
+            def __init__(self):
+                super().__init__("ac", "desc")
+
+            async def check_async(self, **kw) -> bool:
+                return True
+
+        idle, running = State("idle"), State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            fsm.add_transitions([("go", "idle", "running", AC())])
+
 
 class TestForceStateAndReset:
     """Tests for force_state(), reset(), and initial_state_name."""

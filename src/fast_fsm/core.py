@@ -643,24 +643,46 @@ class StateMachine:
     def add_transitions(
         self,
         transitions: List[
-            Tuple[str, Union[str, State, List[Union[str, State]]], Union[str, State]]
+            Union[
+                Tuple[
+                    str, Union[str, State, List[Union[str, State]]], Union[str, State]
+                ],
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, Callable[..., bool]]],
+                ],
+            ]
         ],
     ) -> None:
         """
         Add multiple transitions at once.
 
-        Args:
-            transitions: List of (trigger, from_state(s), to_state) tuples
+        Each entry is either a 3-tuple ``(trigger, from_state, to_state)`` or a
+        4-tuple ``(trigger, from_state, to_state, condition)`` where *condition*
+        follows the same rules as :meth:`add_transition` — a
+        :class:`~fast_fsm.Condition` instance, a plain ``(**kwargs) -> bool``
+        callable, or ``None`` / omitted for an unconditional transition.
 
-        Example:
+        Args:
+            transitions: List of 3- or 4-tuples describing each transition.
+
+        Example::
+
             fsm.add_transitions([
                 ('start', 'idle', 'running'),
-                ('stop', 'running', 'idle'),
-                ('error', ['running', 'idle'], 'error')
+                ('pause', 'running', 'paused',  lambda **kw: kw.get('pausable', True)),
+                ('stop',  ['running', 'paused'], 'stopped'),
+                ('reset', 'stopped', 'idle',    None),   # explicit None == no guard
             ])
         """
-        for trigger, from_state, to_state in transitions:
-            self.add_transition(trigger, from_state, to_state)
+        for entry in transitions:
+            trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
+            condition: Optional[Union[Condition, Callable[..., bool]]] = (
+                rest[0] if rest else None
+            )
+            self.add_transition(trigger, from_state, to_state, condition)
 
     def add_bidirectional_transition(
         self,
