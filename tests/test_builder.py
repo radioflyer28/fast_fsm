@@ -772,3 +772,205 @@ class TestFSMBuilderGaps:
 
         builder = FSMBuilder(MyState("s"))
         assert builder.is_async
+
+
+# ---------------------------------------------------------------------------
+# FSMBuilder fluent callback registration  (fast_fsm-ker)
+# ---------------------------------------------------------------------------
+
+
+class TestFSMBuilderCallbacks:
+    """Tests for FSMBuilder.on_enter / on_exit / on_enter_async / on_exit_async."""
+
+    def _two_state_builder(self, **builder_kwargs) -> FSMBuilder:
+        a = State("a")
+        b = State("b")
+        builder = FSMBuilder(a, **builder_kwargs)
+        builder.add_state(b)
+        builder.add_transition("go", "a", "b")
+        builder.add_transition("back", "b", "a")
+        return builder
+
+    # ---- return-self / chaining ------------------------------------------------
+
+    def test_on_enter_returns_self(self):
+        builder = self._two_state_builder()
+        result = builder.on_enter("b", lambda *a, **k: None)
+        assert result is builder
+
+    def test_on_exit_returns_self(self):
+        builder = self._two_state_builder()
+        result = builder.on_exit("a", lambda *a, **k: None)
+        assert result is builder
+
+    def test_on_enter_async_returns_self(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder()
+        result = builder.on_enter_async("b", cb)
+        assert result is builder
+
+    def test_on_exit_async_returns_self(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder()
+        result = builder.on_exit_async("a", cb)
+        assert result is builder
+
+    def test_fluent_chaining(self):
+        a = State("a")
+        b = State("b")
+        calls = []
+        fsm = (
+            FSMBuilder(a)
+            .add_state(b)
+            .add_transition("go", "a", "b")
+            .on_enter("b", lambda *a, **k: calls.append("enter_b"))
+            .on_exit("a", lambda *a, **k: calls.append("exit_a"))
+            .build()
+        )
+        fsm.trigger("go")
+        assert "enter_b" in calls
+        assert "exit_a" in calls
+
+    # ---- sync callbacks fire ---------------------------------------------------
+
+    def test_on_enter_fires(self):
+        calls = []
+        builder = self._two_state_builder()
+        builder.on_enter(
+            "b", lambda from_s, trigger, **k: calls.append((from_s.name, trigger))
+        )
+        fsm = builder.build()
+        fsm.trigger("go")
+        assert calls == [("a", "go")]
+
+    def test_on_exit_fires(self):
+        calls = []
+        builder = self._two_state_builder()
+        builder.on_exit(
+            "a", lambda to_s, trigger, **k: calls.append((to_s.name, trigger))
+        )
+        fsm = builder.build()
+        fsm.trigger("go")
+        assert calls == [("b", "go")]
+
+    def test_on_enter_not_visited_does_not_fire(self):
+        calls = []
+        builder = self._two_state_builder()
+        builder.on_enter("b", lambda *a, **k: calls.append(1))
+        builder.build()  # never trigger
+        assert calls == []
+
+    def test_multiple_on_enter_callbacks_fire_in_order(self):
+        calls = []
+        builder = self._two_state_builder()
+        builder.on_enter("b", lambda *a, **k: calls.append(1))
+        builder.on_enter("b", lambda *a, **k: calls.append(2))
+        builder.on_enter("b", lambda *a, **k: calls.append(3))
+        fsm = builder.build()
+        fsm.trigger("go")
+        assert calls == [1, 2, 3]
+
+    def test_on_enter_and_on_exit_each_fire_once_per_transition(self):
+        enter_calls = []
+        exit_calls = []
+        builder = self._two_state_builder()
+        builder.on_enter("b", lambda *a, **k: enter_calls.append(1))
+        builder.on_exit("a", lambda *a, **k: exit_calls.append(1))
+        fsm = builder.build()
+        fsm.trigger("go")
+        fsm.trigger("back")
+        fsm.trigger("go")
+        assert len(enter_calls) == 2  # fired on each entry to b
+        assert len(exit_calls) == 2  # fired on each exit from a
+
+    # ---- async auto-upgrade ----------------------------------------------------
+
+    def test_on_enter_async_upgrades_to_async_machine(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder()
+        assert not builder.is_async
+        builder.on_enter_async("b", cb)
+        assert builder.is_async
+
+    def test_on_exit_async_upgrades_to_async_machine(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder()
+        assert not builder.is_async
+        builder.on_exit_async("a", cb)
+        assert builder.is_async
+
+    def test_on_enter_async_does_not_downgrade_explicit_async(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder(async_mode=True)
+        builder.on_enter_async("b", cb)
+        assert isinstance(builder.build(), AsyncStateMachine)
+
+    # ---- async callbacks fire --------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_on_enter_async_fires(self):
+        calls = []
+
+        async def cb(from_s, trigger, **k):
+            calls.append((from_s.name, trigger))
+
+        builder = self._two_state_builder()
+        builder.on_enter_async("b", cb)
+        fsm = builder.build()
+        assert isinstance(fsm, AsyncStateMachine)
+        await fsm.trigger_async("go")
+        assert calls == [("a", "go")]
+
+    @pytest.mark.asyncio
+    async def test_on_exit_async_fires(self):
+        calls = []
+
+        async def cb(to_s, trigger, **k):
+            calls.append((to_s.name, trigger))
+
+        builder = self._two_state_builder()
+        builder.on_exit_async("a", cb)
+        fsm = builder.build()
+        assert isinstance(fsm, AsyncStateMachine)
+        await fsm.trigger_async("go")
+        assert calls == [("b", "go")]
+
+    @pytest.mark.asyncio
+    async def test_async_and_sync_callbacks_both_fire(self):
+        sync_calls = []
+        async_calls = []
+
+        async def async_cb(*a, **k):
+            async_calls.append(1)
+
+        builder = self._two_state_builder()
+        builder.on_enter("b", lambda *a, **k: sync_calls.append(1))
+        builder.on_enter_async("b", async_cb)
+        fsm = builder.build()
+        await fsm.trigger_async("go")
+        assert sync_calls == [1]
+        assert async_calls == [1]
+
+    # ---- async callbacks ignored on explicit sync machine ----------------------
+
+    def test_async_callbacks_ignored_on_explicit_sync_no_raise(self):
+        async def cb(*a, **k):
+            pass
+
+        builder = self._two_state_builder(async_mode=False)
+        builder.on_enter_async("b", cb)
+        fsm = builder.build()
+        assert isinstance(fsm, StateMachine)
+        assert not isinstance(fsm, AsyncStateMachine)
+        # Sync transition still works fine
+        assert fsm.trigger("go").success

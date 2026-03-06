@@ -1984,6 +1984,7 @@ class FSMBuilder:
     - Support for both StateMachine and AsyncStateMachine
     - Enhanced logging and validation
     - Backwards compatibility with existing code
+    - Fluent per-state callback registration (on_enter, on_exit, on_enter_async, on_exit_async)
     """
 
     __slots__ = (
@@ -1995,6 +1996,10 @@ class FSMBuilder:
         "_logger",
         "_machine",
         "_auto_detect",
+        "_enter_callbacks",
+        "_exit_callbacks",
+        "_enter_async_callbacks",
+        "_exit_async_callbacks",
     )
 
     # Explicit type annotation so mypyc doesn't narrow _machine to None
@@ -2040,6 +2045,12 @@ class FSMBuilder:
             self._logger.debug(
                 "Builder: Explicitly set to %s mode", "async" if async_mode else "sync"
             )
+
+        # Per-state callback queues — applied in build()
+        self._enter_callbacks: List[tuple] = []
+        self._exit_callbacks: List[tuple] = []
+        self._enter_async_callbacks: List[tuple] = []
+        self._exit_async_callbacks: List[tuple] = []
 
         # We'll create the machine in build() to allow for re-evaluation
         self._machine = None
@@ -2155,6 +2166,93 @@ class FSMBuilder:
 
         return self
 
+    def on_enter(self, state_name: str, callback: Any) -> "FSMBuilder":
+        """Register a synchronous on_enter callback for a state.
+
+        The callback is wired to the machine in :meth:`build`. Multiple
+        callbacks for the same state are registered in order.
+
+        Args:
+            state_name: Name of the state to watch.
+            callback: Callable invoked when the FSM enters *state_name*.
+                      Signature: ``callback(from_state, trigger, **kwargs)``.
+
+        Returns:
+            self, for method chaining.
+        """
+        self._enter_callbacks.append((state_name, callback))
+        return self
+
+    def on_exit(self, state_name: str, callback: Any) -> "FSMBuilder":
+        """Register a synchronous on_exit callback for a state.
+
+        Args:
+            state_name: Name of the state to watch.
+            callback: Callable invoked when the FSM exits *state_name*.
+                      Signature: ``callback(to_state, trigger, **kwargs)``.
+
+        Returns:
+            self, for method chaining.
+        """
+        self._exit_callbacks.append((state_name, callback))
+        return self
+
+    def on_enter_async(self, state_name: str, callback: Any) -> "FSMBuilder":
+        """Register an async on_enter callback for a state.
+
+        Registering at least one async callback auto-upgrades the builder to
+        :class:`AsyncStateMachine` when *async_mode* is ``None`` (auto-detect).
+        Has no effect if the machine is forced to sync mode via *async_mode=False*
+        or :meth:`force_sync` — a warning is logged instead.
+
+        Args:
+            state_name: Name of the state to watch.
+            callback: Async callable invoked when the FSM enters *state_name*.
+                      Signature: ``async callback(from_state, trigger, **kwargs)``.
+
+        Returns:
+            self, for method chaining.
+        """
+        self._enter_async_callbacks.append((state_name, callback))
+        if (
+            self._machine is None
+            and self._auto_detect
+            and self._machine_type == StateMachine
+        ):
+            self._machine_type = AsyncStateMachine
+            self._logger.debug(
+                "Builder: Upgraded to async mode due to on_enter_async callback for '%s'",
+                state_name,
+            )
+        return self
+
+    def on_exit_async(self, state_name: str, callback: Any) -> "FSMBuilder":
+        """Register an async on_exit callback for a state.
+
+        Registering at least one async callback auto-upgrades the builder to
+        :class:`AsyncStateMachine` when *async_mode* is ``None`` (auto-detect).
+
+        Args:
+            state_name: Name of the state to watch.
+            callback: Async callable invoked when the FSM exits *state_name*.
+                      Signature: ``async callback(to_state, trigger, **kwargs)``.
+
+        Returns:
+            self, for method chaining.
+        """
+        self._exit_async_callbacks.append((state_name, callback))
+        if (
+            self._machine is None
+            and self._auto_detect
+            and self._machine_type == StateMachine
+        ):
+            self._machine_type = AsyncStateMachine
+            self._logger.debug(
+                "Builder: Upgraded to async mode due to on_exit_async callback for '%s'",
+                state_name,
+            )
+        return self
+
     def force_async(self) -> "FSMBuilder":
         """Force the builder to create an AsyncStateMachine"""
         if self._machine is not None:
@@ -2230,6 +2328,24 @@ class FSMBuilder:
                 self._machine.add_transition(
                     trigger, from_state_single, to_state_obj, condition
                 )
+
+        # Wire per-state sync callbacks
+        for state_name, cb in self._enter_callbacks:
+            self._machine.on_enter(state_name, cb)
+        for state_name, cb in self._exit_callbacks:
+            self._machine.on_exit(state_name, cb)
+
+        # Wire per-state async callbacks (AsyncStateMachine only)
+        if isinstance(self._machine, AsyncStateMachine):
+            for state_name, cb in self._enter_async_callbacks:
+                self._machine.on_enter_async(state_name, cb)
+            for state_name, cb in self._exit_async_callbacks:
+                self._machine.on_exit_async(state_name, cb)
+        elif self._enter_async_callbacks or self._exit_async_callbacks:
+            self._logger.warning(
+                "Builder: %d async callback(s) registered but building sync machine — they will be ignored",
+                len(self._enter_async_callbacks) + len(self._exit_async_callbacks),
+            )
 
         # Log final machine type and stats
         machine_type_name = (
