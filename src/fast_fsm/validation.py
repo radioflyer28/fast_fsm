@@ -414,9 +414,42 @@ class ValidationIssue:
 class EnhancedFSMValidator(FSMValidator):
     """Enhanced validator with usability improvements and smart recommendations"""
 
-    __slots__ = ("issues", "recommendations", "metrics")
+    __slots__ = (
+        "issues",
+        "recommendations",
+        "metrics",
+        "_design_style_threshold",
+        "_min_transitions_for_style",
+    )
 
-    def __init__(self, fsm: StateMachine, *, name: Optional[str] = None):
+    #: Default density threshold below which an FSM is classified as *sparse*.
+    DEFAULT_DESIGN_STYLE_THRESHOLD: float = 0.4
+    #: Default minimum number of possible transitions required before the
+    #: sparse/dense heuristic kicks in.
+    DEFAULT_MIN_TRANSITIONS_FOR_STYLE: int = 6
+
+    def __init__(
+        self,
+        fsm: StateMachine,
+        *,
+        name: Optional[str] = None,
+        design_style_threshold: float = DEFAULT_DESIGN_STYLE_THRESHOLD,
+        min_transitions_for_style: int = DEFAULT_MIN_TRANSITIONS_FOR_STYLE,
+    ):
+        """
+        Args:
+            fsm: The StateMachine to validate.
+            name: Optional display name used in reports.
+            design_style_threshold: Density ratio below which the FSM is
+                classified as *sparse* (default ``0.4``).  A value of ``0.0``
+                forces *sparse*; a value of ``1.1`` forces *dense*.
+            min_transitions_for_style: Minimum number of *possible* transitions
+                (``states × events``) required before the sparse/dense
+                heuristic applies.  Small FSMs with ``possible_transitions <=``
+                this value are always classified as *dense* (default ``6``).
+        """
+        self._design_style_threshold: float = design_style_threshold
+        self._min_transitions_for_style: int = min_transitions_for_style
         super().__init__(fsm, name=name)
         self.issues: List[ValidationIssue] = []
         self.recommendations: List[str] = []
@@ -470,10 +503,13 @@ class EnhancedFSMValidator(FSMValidator):
         )
 
         density = actual_transitions / max(total_possible_transitions, 1)
-        # Classify design style: sparse when density < 0.4 and the FSM has
-        # enough states/events to be meaningfully non-trivial.
+        # Classify design style using the configurable threshold and minimum
+        # transitions guard so callers can tune the heuristic.
         design_style = (
-            "sparse" if density < 0.4 and total_possible_transitions > 6 else "dense"
+            "sparse"
+            if density < self._design_style_threshold
+            and total_possible_transitions > self._min_transitions_for_style
+            else "dense"
         )
 
         self.metrics.update(

@@ -771,3 +771,132 @@ class TestCoverageGaps:
         captured = capsys.readouterr()
         # Wizard prints "No issues found" and returns without blocking on input()
         assert "No issues" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# TestDesignStyleThreshold
+# ---------------------------------------------------------------------------
+
+
+class TestDesignStyleThreshold:
+    """Tests for the design_style_threshold and min_transitions_for_style kwargs."""
+
+    # ------------------------------------------------------------------ helpers
+
+    def _sparse_candidate(self):
+        """A low-density FSM that is sparse under defaults (10 states, 3 transitions)."""
+        fsm = StateMachine.quick_build(
+            "a",
+            [("go", "a", "b"), ("go", "b", "c"), ("go", "c", "d")],
+            states=["e", "f", "g", "h", "i", "j"],
+            name="SparseFSM",
+        )
+        return fsm
+
+    def _dense_candidate(self):
+        """A high-density FSM with most transitions filled."""
+        return StateMachine.quick_build(
+            "x",
+            [
+                ("t1", "x", "y"),
+                ("t2", "x", "z"),
+                ("t1", "y", "x"),
+                ("t2", "y", "z"),
+                ("t1", "z", "x"),
+                ("t2", "z", "y"),
+            ],
+            name="DenseFSM",
+        )
+
+    # ------------------------------------------------------------------ default behaviour
+
+    def test_defaults_preserved(self):
+        """Default kwargs yield same design_style as the original hardcoded values."""
+        v1 = EnhancedFSMValidator(self._sparse_candidate())
+        v2 = EnhancedFSMValidator(
+            self._sparse_candidate(),
+            design_style_threshold=0.4,
+            min_transitions_for_style=6,
+        )
+        assert v1.metrics["design_style"] == v2.metrics["design_style"]
+
+    def test_sparse_candidate_is_sparse_by_default(self):
+        """The sparse candidate FSM classifies as sparse with default thresholds."""
+        v = EnhancedFSMValidator(self._sparse_candidate())
+        assert v.metrics["design_style"] == "sparse"
+
+    def test_dense_candidate_is_dense_by_default(self):
+        """The dense candidate FSM classifies as dense with default thresholds."""
+        v = EnhancedFSMValidator(self._dense_candidate())
+        assert v.metrics["design_style"] == "dense"
+
+    # ------------------------------------------------------------------ design_style_threshold tuning
+
+    def test_threshold_0_forces_dense(self):
+        """threshold=0.0: density is always >= 0, so design_style is always dense."""
+        v = EnhancedFSMValidator(self._sparse_candidate(), design_style_threshold=0.0)
+        assert v.metrics["design_style"] == "dense"
+
+    def test_threshold_1_1_forces_sparse_if_above_min(self):
+        """threshold=1.1: density always < 1.1 (max density is 1.0), so always sparse."""
+        v = EnhancedFSMValidator(self._sparse_candidate(), design_style_threshold=1.1)
+        assert v.metrics["design_style"] == "sparse"
+
+    def test_threshold_reclassifies_borderline_fsm(self):
+        """Adjusting threshold flips classification of a borderline FSM."""
+        # 4 states (a, b, c, d), 2 events (e1, e2) → possible=8, actual=2, density=0.25
+        # sparse under default 0.4, dense if threshold is lowered to 0.2 (0.25 >= 0.2)
+        fsm = StateMachine.quick_build(
+            "a",
+            [("e1", "a", "b"), ("e2", "a", "c")],
+            states=["d"],
+            name="BorderlineFSM",
+        )
+        v_default = EnhancedFSMValidator(fsm)
+        v_low = EnhancedFSMValidator(fsm, design_style_threshold=0.2)
+        assert v_default.metrics["density"] == pytest.approx(0.25)
+        assert v_default.metrics["design_style"] == "sparse"
+        assert v_low.metrics["design_style"] == "dense"
+
+    # ------------------------------------------------------------------ min_transitions_for_style tuning
+
+    def test_min_transitions_0_allows_tiny_sparse_fsm(self):
+        """min_transitions_for_style=0: even a tiny FSM can be sparse."""
+        # tiny FSM: 2 states, 1 event → possible=2, actual=1, density=0.5
+        # With default min=6, possible (2) <= 6 → always dense.
+        # With min=0, density < 0.4 check applies: 0.5 >= 0.4 → still dense.
+        # Use an even sparser tiny FSM to verify the guard is off:
+        fsm = StateMachine.from_states("a", "b", "c", "d", initial="a", name="T")
+        fsm.add_transition("go", "a", "b")  # 1/12 transitions → very sparse
+        v = EnhancedFSMValidator(fsm, min_transitions_for_style=0)
+        # density ~= 1/12 < 0.4, possible=12 > 0 → sparse
+        assert v.metrics["design_style"] == "sparse"
+
+    def test_min_transitions_large_forces_dense_for_small_fsm(self):
+        """min_transitions_for_style=9999: small FSMs always classify as dense."""
+        v = EnhancedFSMValidator(
+            self._sparse_candidate(), min_transitions_for_style=9999
+        )
+        assert v.metrics["design_style"] == "dense"
+
+    # ------------------------------------------------------------------ metrics propagation
+
+    def test_threshold_stored_does_not_affect_other_metrics(self):
+        """Changing threshold/min_transitions does not affect density or counts."""
+        fsm = self._sparse_candidate()
+        v1 = EnhancedFSMValidator(fsm)
+        v2 = EnhancedFSMValidator(
+            fsm, design_style_threshold=0.9, min_transitions_for_style=2
+        )
+        for key in (
+            "density",
+            "actual_transitions",
+            "possible_transitions",
+            "total_states",
+        ):
+            assert v1.metrics[key] == v2.metrics[key]
+
+    def test_class_constants_match_defaults(self):
+        """DEFAULT_* class constants equal the default kwarg values."""
+        assert EnhancedFSMValidator.DEFAULT_DESIGN_STYLE_THRESHOLD == 0.4
+        assert EnhancedFSMValidator.DEFAULT_MIN_TRANSITIONS_FOR_STYLE == 6
