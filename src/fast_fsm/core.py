@@ -557,8 +557,11 @@ class StateMachine:
             to_state: Target state - can be string or state object
             condition: Optional condition - can be Condition or callable function.
                       Callable functions receive (*args, **kwargs) from trigger calls.
+                      :class:`~fast_fsm.AsyncCondition` instances are **not** allowed
+                      on a sync ``StateMachine`` — use :class:`AsyncStateMachine` instead.
             unless: Negation shorthand — the transition is allowed when this
                     condition is **False**.  Mutually exclusive with ``condition``.
+                    Same :class:`~fast_fsm.AsyncCondition` restriction applies.
         """
         # Normalize inputs
         if not isinstance(from_state, list):
@@ -588,6 +591,21 @@ class StateMachine:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
             )
+
+        # AsyncCondition requires AsyncStateMachine — check before any wrapping
+        if not isinstance(self, AsyncStateMachine):
+            if isinstance(condition, AsyncCondition):
+                raise TypeError(
+                    f"AsyncCondition '{getattr(condition, 'name', condition)}' "
+                    "cannot be used with a sync StateMachine. "
+                    "Use AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
+                )
+            if isinstance(unless, AsyncCondition):
+                raise TypeError(
+                    f"AsyncCondition '{getattr(unless, 'name', unless)}' "
+                    "cannot be used with a sync StateMachine via 'unless='. "
+                    "Use AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
+                )
 
         # Resolve unless= into a NegatedCondition
         if unless is not None:

@@ -718,13 +718,14 @@ class TestFSMBuilderGaps:
         assert isinstance(fsm, StateMachine)
         assert not isinstance(fsm, AsyncStateMachine)
 
-    def test_force_sync_with_async_condition_warns(self):
+    def test_force_sync_with_async_condition_raises_at_build(self):
+        """After force_sync(), build() must raise TypeError for AsyncCondition."""
         builder = FSMBuilder(State("a"))
         builder.add_state(State("b"))
         builder.add_transition("go", "a", "b", SimpleAsyncCondition())
         builder.force_sync()
-        fsm = builder.build()
-        assert isinstance(fsm, StateMachine)
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            builder.build()
 
     def test_add_state_explicit_sync_warns_async_state(self):
         builder = FSMBuilder(State("a"), async_mode=False)

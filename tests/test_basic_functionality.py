@@ -7,8 +7,8 @@ and other basic functionality work correctly.
 
 import pytest
 
-from fast_fsm.core import StateMachine, State
-from fast_fsm.conditions import Condition
+from fast_fsm.core import AsyncStateMachine, StateMachine, State
+from fast_fsm.conditions import AsyncCondition, Condition
 
 
 class TestBasicFunctionality:
@@ -435,6 +435,66 @@ class TestQuickBuildGaps:
             states=[orphan],
         )
         assert "orphan" in fsm.states
+
+
+# ---------------------------------------------------------------------------
+# AsyncCondition guard on sync StateMachine  (fast_fsm-2z6)
+# ---------------------------------------------------------------------------
+
+
+class SimpleAsync(AsyncCondition):
+    def __init__(self):
+        super().__init__("simple_async", "always true async")
+
+    async def check_async(self, **kwargs) -> bool:
+        return True
+
+
+class TestAsyncConditionGuard:
+    """AsyncCondition must be rejected by sync StateMachine.add_transition."""
+
+    def _sync_fsm(self):
+        a, b = State("a"), State("b")
+        fsm = StateMachine(a)
+        fsm.add_state(b)
+        return fsm
+
+    def test_add_transition_condition_raises(self):
+        fsm = self._sync_fsm()
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            fsm.add_transition("go", "a", "b", condition=SimpleAsync())
+
+    def test_add_transition_unless_raises(self):
+        fsm = self._sync_fsm()
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            fsm.add_transition("go", "a", "b", unless=SimpleAsync())
+
+    def test_error_message_contains_condition_name(self):
+        class NamedAsync(AsyncCondition):
+            def __init__(self):
+                super().__init__("my_guard", "desc")
+
+            async def check_async(self, **kwargs) -> bool:
+                return True
+
+        fsm = self._sync_fsm()
+        with pytest.raises(TypeError, match="my_guard"):
+            fsm.add_transition("go", "a", "b", condition=NamedAsync())
+
+    def test_async_condition_allowed_on_async_machine(self):
+        """AsyncCondition must NOT raise on AsyncStateMachine."""
+        a, b = State("a"), State("b")
+        fsm = AsyncStateMachine(a)
+        fsm.add_state(b)
+        # Should not raise
+        fsm.add_transition("go", "a", "b", condition=SimpleAsync())
+
+    def test_sync_condition_still_works_on_sync_machine(self):
+        from fast_fsm.conditions import FuncCondition
+
+        fsm = self._sync_fsm()
+        fsm.add_transition("go", "a", "b", condition=FuncCondition(lambda **k: True))
+        assert fsm.trigger("go").success
 
 
 if __name__ == "__main__":

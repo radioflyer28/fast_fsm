@@ -1536,3 +1536,38 @@ class TestFromDictConditions:
         fsm1.trigger("start")
         assert fsm1.current_state_name == "running"
         assert fsm2.current_state_name == "idle"  # independent
+
+    def test_async_condition_in_conditions_raises_on_sync_machine(self):
+        """Passing AsyncCondition via conditions= to a sync machine must raise TypeError."""
+        import pytest
+        from fast_fsm.conditions import AsyncCondition
+
+        class TrivialAsync(AsyncCondition):
+            def __init__(self):
+                super().__init__("trivial_async", "trivial")
+
+            async def check_async(self, **kw) -> bool:
+                return True
+
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            StateMachine.from_dict(
+                self._simple_config(), conditions={"start": TrivialAsync()}
+            )
+
+    def test_async_condition_in_conditions_allowed_on_async_machine(self):
+        """Passing AsyncCondition via conditions= to an AsyncStateMachine is fine."""
+        from fast_fsm.conditions import AsyncCondition
+        from fast_fsm.core import AsyncStateMachine
+
+        class TrivialAsync(AsyncCondition):
+            def __init__(self):
+                super().__init__("trivial_async", "trivial")
+
+            async def check_async(self, **kw) -> bool:
+                return True
+
+        # Should not raise
+        fsm = AsyncStateMachine.from_dict(
+            self._simple_config(), conditions={"start": TrivialAsync()}
+        )
+        assert isinstance(fsm, AsyncStateMachine)
