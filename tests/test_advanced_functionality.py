@@ -667,3 +667,240 @@ class TestForceStateAndReset:
         result = fsm.trigger("start")
         assert result.success
         assert fsm.current_state_name == "running"
+
+
+class TestSnapshot:
+    """Tests for snapshot() and restore()."""
+
+    def _make_fsm(self):
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = StateMachine(idle, name="snap_fsm")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+        return fsm
+
+    # ------------------------------------------------------------------
+    # snapshot()
+    # ------------------------------------------------------------------
+
+    def test_snapshot_initial_state(self):
+        fsm = self._make_fsm()
+        snap = fsm.snapshot()
+        assert snap == {"state": "idle", "version": 1}
+
+    def test_snapshot_after_transition(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        snap = fsm.snapshot()
+        assert snap["state"] == "running"
+        assert snap["version"] == 1
+
+    def test_snapshot_returns_new_dict_each_call(self):
+        fsm = self._make_fsm()
+        s1 = fsm.snapshot()
+        s2 = fsm.snapshot()
+        assert s1 is not s2
+
+    def test_snapshot_is_json_serialisable(self):
+        import json
+
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        assert json.dumps(fsm.snapshot())  # must not raise
+
+    # ------------------------------------------------------------------
+    # restore()
+    # ------------------------------------------------------------------
+
+    def test_restore_sets_state(self):
+        fsm = self._make_fsm()
+        snap = fsm.snapshot()  # idle
+        fsm.trigger("start")
+        fsm.restore(snap)
+        assert fsm.current_state_name == "idle"
+
+    def test_restore_fires_callbacks(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        snap = fsm.snapshot()  # running
+
+        enters = []
+
+        class L:
+            def on_enter_state(self, new, old, t, **kw):
+                enters.append(new.name)
+
+        fsm.trigger("finish")  # now at done
+        fsm.add_listener(L())
+        fsm.restore(snap)  # back to running
+        assert enters == ["running"]
+
+    def test_restore_unknown_state_raises_key_error(self):
+        import pytest
+
+        fsm = self._make_fsm()
+        with pytest.raises(KeyError):
+            fsm.restore({"state": "nonexistent", "version": 1})
+
+    def test_restore_bad_version_raises_value_error(self):
+        import pytest
+
+        fsm = self._make_fsm()
+        with pytest.raises(ValueError, match="Unsupported snapshot version"):
+            fsm.restore({"state": "idle", "version": 99})
+
+    def test_restore_bad_state_type_raises_value_error(self):
+        import pytest
+
+        fsm = self._make_fsm()
+        with pytest.raises(ValueError, match="must be a string"):
+            fsm.restore({"state": 42, "version": 1})
+
+    def test_snapshot_restore_roundtrip(self):
+        """Full round-trip: advance, snapshot, advance more, restore."""
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        snap = fsm.snapshot()
+
+        fsm.trigger("finish")
+        assert fsm.current_state_name == "done"
+
+        fsm.restore(snap)
+        assert fsm.current_state_name == "running"
+
+        # machine is functional after restore
+        assert fsm.trigger("finish").success
+        assert fsm.current_state_name == "done"
+
+
+class TestClone:
+    """Tests for clone()."""
+
+    def _make_fsm(self):
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = StateMachine(idle, name="template")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+        fsm.add_transition("reset_t", "done", "idle")
+        return fsm
+
+    # ------------------------------------------------------------------
+    # Topology fidelity
+    # ------------------------------------------------------------------
+
+    def test_clone_starts_at_initial_state(self):
+        fsm = self._make_fsm()
+        fsm.trigger("start")
+        clone = fsm.clone()
+        assert clone.current_state_name == "idle"
+
+    def test_clone_has_same_states(self):
+        fsm = self._make_fsm()
+        clone = fsm.clone()
+        assert set(clone.states) == set(fsm.states)
+
+    def test_clone_has_same_transitions(self):
+        fsm = self._make_fsm()
+        clone = fsm.clone()
+        assert clone.trigger("start").success
+        assert clone.trigger("finish").success
+        assert clone.trigger("reset_t").success
+        assert clone.current_state_name == "idle"
+
+    def test_clone_preserves_guard_conditions(self):
+        from fast_fsm import Condition
+
+        allow = True
+
+        class Toggle(Condition):
+            def __init__(self):
+                super().__init__("toggle", "toggleable guard")
+
+            def check(self, **kwargs):
+                return allow
+
+        idle = State("idle")
+        active = State("active")
+        fsm = StateMachine(idle, name="guarded")
+        fsm.add_state(active)
+        fsm.add_transition("go", "idle", "active", condition=Toggle())
+
+        clone = fsm.clone()
+
+        # Guard passes
+        assert clone.trigger("go").success
+
+        # Disable guard — both FSMs share the same Condition object
+        allow = False
+        clone2 = fsm.clone()
+        result = clone2.trigger("go")
+        assert not result.success
+
+    # ------------------------------------------------------------------
+    # Independence
+    # ------------------------------------------------------------------
+
+    def test_clone_state_is_independent(self):
+        """Advancing original does not affect clone and vice versa."""
+        fsm = self._make_fsm()
+        clone = fsm.clone()
+
+        fsm.trigger("start")
+        assert clone.current_state_name == "idle"
+
+        clone.trigger("start")
+        clone.trigger("finish")
+        assert fsm.current_state_name == "running"
+
+    def test_clone_adding_transition_does_not_affect_original(self):
+        """Adding a transition to the clone doesn't appear in the original."""
+        fsm = self._make_fsm()
+        clone = fsm.clone()
+
+        extra = State("extra")
+        clone.add_state(extra)
+        clone.add_transition("side", "idle", "extra")
+
+        assert "extra" not in fsm.states
+        assert not fsm.transition_exists("side", "idle", "extra")
+
+    def test_clone_listeners_are_empty(self):
+        """Listeners attached to the original are NOT copied to the clone."""
+        fsm = self._make_fsm()
+        events = []
+
+        class L:
+            def after_transition(self, old, new, t, **kw):
+                events.append("original")
+
+        fsm.add_listener(L())
+
+        clone = fsm.clone()
+        clone.trigger("start")  # should not fire original's listener
+        assert events == []
+
+    # ------------------------------------------------------------------
+    # Multiple clones
+    # ------------------------------------------------------------------
+
+    def test_multiple_clones_are_independent(self):
+        fsm = self._make_fsm()
+        c1 = fsm.clone()
+        c2 = fsm.clone()
+
+        c1.trigger("start")
+        assert c2.current_state_name == "idle"
+        assert fsm.current_state_name == "idle"
+
+    def test_clone_name_preserved(self):
+        fsm = self._make_fsm()
+        clone = fsm.clone()
+        assert clone.name == fsm.name

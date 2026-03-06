@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06 (added force_state / reset / initial_state_name)
+**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone)
 
 - `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
@@ -27,3 +27,6 @@
 - `force_state(name)` sets `_current_state` directly without guard checks; fires full on_exit / on_enter / after_transition callback chain with synthetic trigger `"__force__"`; raises `KeyError` for unregistered state names.
 - `reset()` calls `force_state(initial_state_name)`; fires callbacks even when already in initial state.
 - `initial_state_name` read-only property returns the name of the state passed to `__init__`; stored in `_initial_state` slot.
+- `snapshot()` returns `{"state": current_state_name, "version": 1}`; JSON-serialisable, safe to pickle.
+- `restore(snapshot)` validates version/type then calls `force_state(snapshot["state"])`; raises `ValueError` for bad version or non-string state, `KeyError` for unregistered state.
+- `clone()` returns a new instance of the same class with identical topology (shared `State` and `TransitionEntry` objects, independent inner transition dicts), current state at initial, empty listener lists.

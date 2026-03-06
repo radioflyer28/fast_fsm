@@ -754,6 +754,85 @@ class StateMachine:
         """
         self.force_state(self._initial_state.name)
 
+    def snapshot(self) -> Dict[str, Any]:
+        """Capture a lightweight, serialisable snapshot of the current state.
+
+        The returned dict is safe to pickle, JSON-serialise, or store in any
+        external store.  Restore it later with :meth:`restore`.
+
+        Returns:
+            ``{"state": <current_state_name>, "version": 1}``
+
+        Example::
+
+            snap = fsm.snapshot()        # {"state": "running", "version": 1}
+            # ... time passes / process restarts ...
+            fsm.restore(snap)
+        """
+        return {"state": self._current_state.name, "version": 1}
+
+    def restore(self, snapshot: Dict[str, Any]) -> None:
+        """Restore the machine to a previously captured snapshot.
+
+        Calls :meth:`force_state` under the hood, so the full callback chain
+        fires and guards are bypassed.
+
+        Args:
+            snapshot: A dict previously returned by :meth:`snapshot`.
+
+        Raises:
+            ValueError: If the snapshot dict is malformed or has an
+                unsupported version number.
+            KeyError: If the state named in the snapshot is no longer
+                registered (e.g. machine topology changed since capture).
+        """
+        version = snapshot.get("version", 1)
+        if version != 1:
+            raise ValueError(
+                f"Unsupported snapshot version: {version!r}. "
+                "Only version 1 is currently supported."
+            )
+        state_name = snapshot.get("state")
+        if not isinstance(state_name, str):
+            raise ValueError(
+                f"Snapshot 'state' must be a string, got {type(state_name).__name__!r}."
+            )
+        self.force_state(state_name)
+
+    def clone(self) -> "StateMachine":
+        """Create a structural clone of this machine reset to its initial state.
+
+        The clone shares the same **topology** (states and transitions, including
+        any guard conditions) but starts with:
+
+        - Current state set to the initial state (via :meth:`reset` semantics,
+          but no callbacks fire during construction).
+        - Empty listener lists — listeners are per-instance and are not copied.
+
+        This is useful for running independent simulations from the same
+        configured template, or for per-request/per-session FSM instances.
+
+        Returns:
+            A new :class:`StateMachine` (or subclass) instance.
+
+        Note:
+            ``CallbackState`` on_enter / on_exit function references *are* shared
+            (shallow copy), which is correct since they are typically pure
+            functions or methods.
+        """
+        new_fsm: "StateMachine" = self.__class__(self._initial_state, name=self._name)
+        # Replace the minimal state/transition tables __init__ created with
+        # full shallow copies of our own tables (same State objects, independent
+        # inner transition dicts so additions to one don't bleed into the other).
+        new_fsm._states = dict(self._states)
+        new_fsm._transitions = {
+            state_name: dict(triggers)
+            for state_name, triggers in self._transitions.items()
+        }
+        # current_state is already _initial_state from __init__ — correct.
+        # Listener lists stay empty — intentional.
+        return new_fsm
+
     def _resolve_trigger(
         self, trigger: str, *args: Any, **kwargs: Any
     ) -> Union[Tuple[TransitionEntry, str], TransitionResult]:
