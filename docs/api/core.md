@@ -57,6 +57,14 @@ The core module provides the primary FSM classes and utilities.
    :undoc-members:
 ```
 
+## Exceptions
+
+```{eval-rst}
+.. autoclass:: fast_fsm.TransitionError
+   :members:
+   :show-inheritance:
+```
+
 ## Convenience Functions
 
 ```{eval-rst}

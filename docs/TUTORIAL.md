@@ -154,9 +154,19 @@ print(f"Error: {result.error}")          # Helpful error message
 if auth.can_trigger('logout'):
     auth.trigger('logout')
     print("Logged out successfully")
+
+# Exception-based alternative — raise_if_failed() raises TransitionError on failure
+from fast_fsm import TransitionError
+try:
+    auth.trigger('logout').raise_if_failed()
+except TransitionError as exc:
+    print(f"Transition failed: {exc.result.error}")
+
+# Chain directly when you need the destination
+target = auth.trigger('login', user='alice').raise_if_failed().to_state
 ```
 
-**🎯 Key Concept:** Use `safe_trigger()` and `can_trigger()` for robust error handling.
+**🎯 Key Concept:** Use `safe_trigger()` / `can_trigger()` for result-based flow, or `raise_if_failed()` + `TransitionError` for exception-based flow.
 
 ### Step 2.4: Multiple Source States
 ```python

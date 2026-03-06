@@ -102,7 +102,8 @@ class NegatedCondition(Condition):
     Args:
         inner: The condition whose result will be inverted.
 
-    Example:
+    Example::
+
         locked = FuncCondition(lambda **kw: kw.get('locked', False))
         fsm.add_transition('open', 'closed', 'open', unless=locked)
         # equivalent to:

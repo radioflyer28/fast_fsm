@@ -19,6 +19,16 @@ The condition system provides guard logic for transitions.
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. autoclass:: fast_fsm.CompiledFuncCondition
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: fast_fsm.NegatedCondition
+   :members:
+   :undoc-members:
+   :show-inheritance:
 ```
 
 ## Condition Templates

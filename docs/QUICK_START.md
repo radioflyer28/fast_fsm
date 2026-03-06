@@ -253,6 +253,65 @@ paid
 Payment confirmed
 ```
 
+### Pattern 7: Error-handling with `raise_if_failed()`
+
+By default `trigger()` returns a `TransitionResult` and never raises. Use
+`raise_if_failed()` when you prefer exception-based control flow:
+
+```python
+from fast_fsm import StateMachine, TransitionError
+
+fsm = StateMachine.quick_build(
+    "idle",
+    [("start", "idle", "running"), ("stop", "running", "idle")],
+    name="Demo",
+)
+
+# Chaining — raises TransitionError if the trigger failed
+try:
+    fsm.trigger("start").raise_if_failed()
+except TransitionError as exc:
+    print(f"Failed: {exc.result.error}")
+
+# One-liner when you also need the destination state
+target = fsm.trigger("stop").raise_if_failed().to_state
+print(target)  # "idle"
+```
+
+### Pattern 8: Runtime State Control
+
+`snapshot()`/`restore()` persist current state across sessions. `clone()` spins
+up an independent copy from the same topology. `force_state()`/`reset()` bypass
+guards — useful in tests.
+
+```python
+# Snapshot & restore (JSON/pickle safe)
+snap = fsm.snapshot()        # {"state": "idle", "version": 1}
+# ... time passes ...
+fsm.restore(snap)            # teleports back; callbacks fire
+
+# Clone — same topology, fresh start, empty listeners
+worker = fsm.clone()
+
+# Force & reset — bypass guards
+fsm.force_state("running")   # useful in tests / error recovery
+fsm.reset()                  # returns to initial_state_name
+
+# Programmatic callbacks (attach after construction)
+fsm.on_enter("running", lambda from_s, t, **kw: print("→ running"))
+fsm.on_exit("running",  lambda to_s,   t, **kw: print("← running"))
+
+# Build from a dict / JSON / YAML config
+config = {
+    "initial": "idle",
+    "transitions": [
+        {"trigger": "start",  "from": "idle",    "to": "running"},
+        {"trigger": "stop",   "from": "running", "to": "idle"},
+    ],
+}
+fsm2 = StateMachine.from_dict(config, name="FromConfig")
+```
+
 ## 🎓 Next Steps (Choose Your Path)
 
 ### 🚀 **I want to build something NOW** → [Real-World Examples](#real-world-examples)
@@ -465,6 +524,9 @@ state = State.create('processing', on_enter=my_callback)
 # OR
 from fast_fsm import CallbackState
 state = CallbackState('processing', on_enter=my_callback)
+# OR: attach callbacks directly to the machine after construction
+fsm.on_enter('processing', my_callback)   # fires after the state's own on_enter
+fsm.on_exit('processing',  my_other_cb)
 ```
 
 ### 2. **Condition Not Working**
