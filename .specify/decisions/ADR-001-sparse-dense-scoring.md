@@ -131,8 +131,8 @@ misrepresents these edges. A full N×N adjacency matrix was used instead.
 
 **Follow-up work:**
 - Consider exposing `design_style_threshold` as an optional constructor kwarg
-  for users who want to tune the boundary (tracked separately).
+  for users who want to tune the boundary (fast_fsm-dmf).
 - `completeness_score` is currently not factored into `grade` at all. If user
   feedback suggests completeness should have *some* weight for dense FSMs,
   a weighted blend (`0.8 * structural + 0.2 * completeness`) is the natural
-  next step.
+  next step (fast_fsm-a1h).

@@ -162,10 +162,10 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
 - Any new user-subclassable base class added to `core.py` (e.g., a future
   `Hook` or `Middleware` ABC) must use `@mypyc_attr(allow_interpreted_subclasses=True)`.
   Forgetting this will silently work in pure Python mode and crash only
-  when the compiled extension is loaded.
+  when the compiled extension is loaded (fast_fsm-ldp).
 
 **Follow-up work:**
 - If a future profiling pass shows condition evaluation is a bottleneck,
   consider providing a compiled `FuncCondition`-equivalent in `core.py`
   (as a non-subclassable helper, not a base class) as an opt-in
-  acceleration path.
+  acceleration path (fast_fsm-spf).

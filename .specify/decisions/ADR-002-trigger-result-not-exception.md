@@ -153,5 +153,5 @@ unprotected `trigger()`.
 
 **Follow-up work:**
 - Consider adding a `result.raise_if_failed()` convenience method so
-  callers that prefer exceptions can write one-liners without wrapping.
-  (Not yet implemented — file as a feature if demand arises.)
+  callers that prefer exceptions can write one-liners without wrapping
+  (fast_fsm-5y3).
