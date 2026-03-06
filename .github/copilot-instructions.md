@@ -312,6 +312,35 @@ than plain fenced code blocks so they are verified on every CI run.
 **Critical:** Work is NOT complete until `git push` succeeds. Never stop before pushing.
 
 
+## Architecture Decision Records (ADRs)
+
+Significant design decisions with non-obvious tradeoffs are recorded as ADRs in
+`.specify/decisions/`. These are **append-only historical records** — never edit
+a merged ADR; supersede it with a new one.
+
+**When to write an ADR:**
+- A rejected alternative needs to be preserved (so future contributors don't re-litigate it)
+- A constraint has a non-obvious rationale (e.g., why upper-triangular matrix was rejected)
+- A design choice affects multiple modules or the public API in a lasting way
+
+**When NOT to write an ADR:**
+- Routine feature work that follows existing patterns
+- Bug fixes
+- Changes fully explained by a beads issue + commit message
+
+**Creating a new ADR:**
+```bash
+cd .specify/scripts/powershell
+./create-adr.ps1 "Title of the decision"
+# Opens .specify/decisions/ADR-NNN-title.md — fill in the template
+```
+
+**ADR status values:** `Proposed` → `Accepted` → `Superseded by ADR-NNN`
+
+**Existing ADRs:**
+- [ADR-001](../.specify/decisions/ADR-001-sparse-dense-scoring.md) — Sparse vs. Dense FSM scoring split
+
+
 ## Maintaining This Document
 
 **When to update:** workflows change, test baselines shift, new patterns emerge, instructions cause confusion.
