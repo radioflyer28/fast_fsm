@@ -8,6 +8,7 @@ on:
       - "*.md"
       - "CHANGELOG.md"
       - ".github/copilot-instructions.md"
+      - "uv.lock"
   pull_request:
     branches: [main]
 
