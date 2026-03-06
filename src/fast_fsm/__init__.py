@@ -15,6 +15,7 @@ from .core import (
     TransitionEntry,
     Condition,
     FuncCondition,
+    CompiledFuncCondition,
     AsyncCondition,
     NegatedCondition,
     DeclarativeState,
@@ -55,6 +56,7 @@ __all__ = [
     # Condition system
     "Condition",
     "FuncCondition",
+    "CompiledFuncCondition",
     "AsyncCondition",
     "NegatedCondition",
     # Advanced state handling

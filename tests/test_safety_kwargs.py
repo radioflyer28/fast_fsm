@@ -8,7 +8,7 @@ problematic context data passed through **kwargs in trigger() calls.
 import pytest
 import logging
 from unittest.mock import Mock
-from fast_fsm.core import StateMachine, State
+from fast_fsm.core import StateMachine, State, CompiledFuncCondition
 from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
 
 
@@ -425,3 +425,155 @@ class TestConditionBaseClassGaps:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# ---------------------------------------------------------------------------
+# TestCompiledFuncCondition
+# ---------------------------------------------------------------------------
+
+
+class TestCompiledFuncCondition:
+    """Tests for CompiledFuncCondition — the mypyc-compiled opt-in fast path."""
+
+    # ------------------------------------------------------------------ construction
+
+    def test_basic_construction(self):
+        """CompiledFuncCondition wraps a callable and stores it."""
+        fn = lambda **kw: True  # noqa: E731
+        c = CompiledFuncCondition(fn)
+        assert c.func is fn
+
+    def test_name_defaults_to_func_name(self):
+        """name defaults to func.__name__ when not supplied."""
+
+        def my_guard(**kw):
+            return True
+
+        c = CompiledFuncCondition(my_guard)
+        assert c.name == "my_guard"
+
+    def test_name_defaults_for_lambda(self):
+        """name is '<lambda>' for anonymous lambdas."""
+        c = CompiledFuncCondition(lambda **kw: True)
+        assert c.name == "<lambda>"
+
+    def test_name_fallback_for_callable_without_dunder_name(self):
+        """Falls back to 'compiled_func' for callables lacking __name__."""
+
+        class _Callable:
+            def __call__(self, **kw):
+                return True
+
+        c = CompiledFuncCondition(_Callable())
+        assert c.name == "compiled_func"
+
+    def test_explicit_name_overrides(self):
+        """Explicit name= argument takes precedence over func.__name__."""
+        c = CompiledFuncCondition(lambda **kw: True, name="my_label")
+        assert c.name == "my_label"
+
+    def test_description_stored(self):
+        """description= is stored on the condition."""
+        c = CompiledFuncCondition(lambda **kw: True, description="checks readiness")
+        assert c.description == "checks readiness"
+
+    def test_description_defaults_to_name(self):
+        """When description is omitted, it mirrors the name (from Condition base)."""
+
+        def guard(**kw):
+            return False
+
+        c = CompiledFuncCondition(guard)
+        assert c.description == c.name
+
+    # ------------------------------------------------------------------ check()
+
+    def test_check_true(self):
+        """check() returns True when the wrapped function returns True."""
+        c = CompiledFuncCondition(lambda **kw: True)
+        assert c.check() is True
+
+    def test_check_false(self):
+        """check() returns False when the wrapped function returns False."""
+        c = CompiledFuncCondition(lambda **kw: False)
+        assert c.check() is False
+
+    def test_check_passes_kwargs(self):
+        """check() forwards keyword arguments to the wrapped function."""
+        received = {}
+
+        def capture(**kw):
+            received.update(kw)
+            return True
+
+        c = CompiledFuncCondition(capture)
+        c.check(a=1, b="hello")
+        assert received == {"a": 1, "b": "hello"}
+
+    def test_check_passes_no_kwargs(self):
+        """check() with no extra kwargs calls func with no kwargs."""
+        called_with = {}
+
+        def record(**kw):
+            called_with.update(kw)
+            return True
+
+        c = CompiledFuncCondition(record)
+        c.check()
+        assert called_with == {}
+
+    # ------------------------------------------------------------------ FSM integration
+
+    def test_used_as_transition_condition(self):
+        """CompiledFuncCondition works as a drop-in guard in add_transition."""
+        allow = True
+        c = CompiledFuncCondition(lambda **kw: allow)
+        fsm = StateMachine(State("idle"))
+        fsm.add_state(State("running"))
+        fsm.add_transition("start", "idle", "running", condition=c)
+        result = fsm.trigger("start")
+        assert result.success is True
+
+    def test_condition_blocks_transition_when_false(self):
+        """Transition is blocked when CompiledFuncCondition returns False."""
+        c = CompiledFuncCondition(lambda **kw: False)
+        fsm = StateMachine(State("idle"))
+        fsm.add_state(State("running"))
+        fsm.add_transition("start", "idle", "running", condition=c)
+        result = fsm.trigger("start")
+        assert result.success is False
+
+    def test_kwargs_from_trigger_reach_condition(self):
+        """Context kwargs passed to trigger() arrive at the condition check()."""
+        seen = {}
+
+        def capture(**kw):
+            seen.update(kw)
+            return True
+
+        c = CompiledFuncCondition(capture)
+        fsm = StateMachine(State("a"))
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", condition=c)
+        fsm.trigger("go", payload=42)
+        assert seen.get("payload") == 42
+
+    # ------------------------------------------------------------------ parity with FuncCondition
+
+    def test_same_result_as_funccondition(self):
+        """CompiledFuncCondition and FuncCondition produce identical outcomes for the same func."""
+        fn = lambda **kw: kw.get("ok", False)  # noqa: E731
+        fc = FuncCondition(fn)
+        cc = CompiledFuncCondition(fn)
+        for ok in (True, False):
+            assert fc.check(ok=ok) == cc.check(ok=ok)
+
+    def test_is_condition_instance(self):
+        """CompiledFuncCondition is a Condition instance (duck-type compatible)."""
+        c = CompiledFuncCondition(lambda **kw: True)
+        assert isinstance(c, Condition)
+
+    def test_str_returns_name(self):
+        """str() returns the condition name, matching FuncCondition behaviour."""
+        c = CompiledFuncCondition(lambda **kw: True, name="is_ready")
+        assert str(c) == "is_ready"

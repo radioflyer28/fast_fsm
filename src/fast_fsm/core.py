@@ -78,6 +78,66 @@ class TransitionEntry:
         self.condition: Optional[Condition] = condition
 
 
+@mypyc_attr(native_class=False)
+class CompiledFuncCondition(Condition):
+    """A mypyc-compiled wrapper around a callable for use as a transition guard.
+
+    This is the **opt-in fast path** alternative to :class:`~fast_fsm.FuncCondition`.
+    Because this class lives in ``core.py`` (the compiled module), its ``check()``
+    method body is compiled to native machine code by mypyc.  This eliminates the
+    per-call CPython bytecode interpretation overhead that the uncompiled
+    :class:`~fast_fsm.FuncCondition` incurs when the guard fires on a hot
+    transition path.
+
+    **When to use this over** :class:`~fast_fsm.FuncCondition`:
+
+    * You have measured that condition evaluation is a bottleneck (≥ 5 % of
+      ``trigger()`` wall time in a profile).
+    * Your guard is a simple, self-contained callable with no need for
+      mixing-in additional behaviour.
+
+    **Implementation notes** — the class uses
+    ``@mypyc_attr(native_class=False)`` so that it can inherit from the
+    uncompiled ``Condition`` ABC without `__slots__` conflicts.  Attribute
+    storage falls back to a ``__dict__``.  The ``check()`` dispatch is
+    compiled; attribute access is not.  Unlike a fully-native mypyc class,
+    this class *can* be subclassed from interpreted Python — use
+    :class:`~fast_fsm.FuncCondition` as a base when subclassing is needed.
+
+    Args:
+        func: Any callable ``(**kwargs) -> bool``.  Receives the same sanitised
+            keyword arguments as every other condition (private ``_``-prefixed
+            keys stripped, capped at 50 items).
+        name: Human-readable label.  Defaults to ``func.__name__`` when
+            available, otherwise ``"compiled_func"``.
+        description: Optional longer description.
+
+    Example::
+
+        from fast_fsm import StateMachine, CompiledFuncCondition
+
+        is_ready = CompiledFuncCondition(lambda **kw: kw.get("ready", False))
+        fsm = StateMachine.quick_build("idle", [("start", "idle", "running")])
+        fsm.add_transition("go", "idle", "running", condition=is_ready)
+    """
+
+    def __init__(
+        self,
+        func: Callable[..., bool],
+        name: Optional[str] = None,
+        description: str = "",
+    ) -> None:
+        resolved_name: str = (
+            name if name is not None else getattr(func, "__name__", "compiled_func")
+        )
+        super().__init__(resolved_name, description)
+        self.func: Callable[..., bool] = func
+
+    def check(self, **kwargs: Any) -> bool:
+        """Call the wrapped function and return its result."""
+        return self.func(**kwargs)
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class State(ABC):
     """

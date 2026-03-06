@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit / from_dict / raise_if_failed)
+**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit / from_dict / raise_if_failed / CompiledFuncCondition)
 
 - `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
@@ -35,3 +35,4 @@
 - Callback exception safety: exceptions in per-state callbacks are caught and logged as warnings, not re-raised; the transition still completes.
 - `from_dict(config, *, name=None)` classmethod builds a machine from a plain dict; required keys: `"initial"` (str), `"transitions"` (list of `{"trigger", "from", "to"}`); optional keys: `"name"` (str), `"states"` (list of extra state names for isolated/terminal states). `"from"` may be a string or a list of strings (fan-out). Internally uses `from_states` + `add_transition`, bypassing `quick_build`'s typed tuple constraint.
 - `TransitionResult.raise_if_failed()` returns `self` unchanged on success (enabling one-liner chaining like `.raise_if_failed().to_state`); raises `TransitionError` on failure. `TransitionError(RuntimeError)` carries the originating result as `.result` attribute; message includes trigger, from_state, and error string. Decorated `@mypyc_attr(native_class=False)` because mypyc cannot natively compile `RuntimeError` subclasses.
+- `CompiledFuncCondition(func, *, name=None, description="")` — opt-in compiled callable wrapper in `core.py`; its `check()` method body is compiled to native code by mypyc, reducing per-call dispatch overhead vs the interpreted `FuncCondition`. Uses `@mypyc_attr(native_class=False)` to avoid `__slots__` conflicts when subclassing the uncompiled `Condition` ABC; attribute storage is `__dict__`-based. Drop-in replacement for `FuncCondition` when profiling shows guard evaluation is a bottleneck. Subclassable from interpreted Python (unlike fully-native mypyc classes).

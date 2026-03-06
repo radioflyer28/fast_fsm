@@ -169,6 +169,12 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   mypyc cannot natively compile built-in subclasses and will error at compile time without
   this annotation. `TransitionError` (added with `raise_if_failed()`) is the first example
   of this pattern in the codebase.
+- Any class in `core.py` that inherits from an UNCOMPILED class defined outside `core.py`
+  (e.g., `Condition` from `conditions.py`) which has `__slots__` MUST also use
+  `@mypyc_attr(native_class=False)` to avoid the runtime `TypeError: mypyc classes can't
+  have __slots__` error. With `native_class=False`, method bodies ARE compiled but attribute
+  storage falls back to `__dict__` (no native C struct slots). `CompiledFuncCondition` is
+  the canonical example of this pattern.
 
 **Follow-up work:**
 - If a future profiling pass shows condition evaluation is a bottleneck,
