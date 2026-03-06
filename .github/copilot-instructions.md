@@ -340,6 +340,8 @@ cd .specify/scripts/powershell
 
 **Existing ADRs:**
 - [ADR-001](../.specify/decisions/ADR-001-sparse-dense-scoring.md) — Sparse vs. Dense FSM scoring split
+- [ADR-002](../.specify/decisions/ADR-002-trigger-result-not-exception.md) — `trigger()` returns `TransitionResult` rather than raising
+- [ADR-003](../.specify/decisions/ADR-003-mypyc-compilation-boundary.md) — mypyc compiles `core.py` only; `conditions.py` stays interpreted
 
 
 ## SPR Memory (Sparse Priming Representations)
