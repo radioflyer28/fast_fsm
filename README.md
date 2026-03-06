@@ -111,10 +111,12 @@ fsm.add_transitions([
 ### Conditional Transitions
 
 ```python
-from fast_fsm import FuncCondition
+from fast_fsm import FuncCondition, CompiledFuncCondition
 
 enough_energy = FuncCondition("energy", lambda **kw: kw.get("energy", 0) > 5)
 fsm.add_transition("proceed", "waiting", "ready", condition=enough_energy)
+# CompiledFuncCondition is a mypyc-compiled drop-in for hot paths:
+# enough_energy = CompiledFuncCondition(lambda **kw: kw.get("energy", 0) > 5)
 
 fsm.trigger("proceed", energy=10)  # succeeds
 fsm.trigger("proceed", energy=3)   # blocked by condition
@@ -138,6 +140,27 @@ fsm.trigger("open", locked=True)   # blocked — is locked
 ```python
 fsm.add_transition("emergency_reset", ["error", "processing", "waiting"], "idle")
 ```
+
+### Error Handling
+
+By default `trigger()` returns a `TransitionResult` and never raises. Use
+`raise_if_failed()` for exception-based flow:
+
+```python
+from fast_fsm import TransitionError
+
+# Raises TransitionError when success is False
+try:
+    fsm.trigger("start").raise_if_failed()
+except TransitionError as exc:
+    print(exc.result.error)       # human-readable reason
+    print(exc.result.from_state)  # state at time of failure
+
+# Chain directly when you also need the destination
+target = fsm.trigger("start").raise_if_failed().to_state
+```
+
+`TransitionError.result` holds the original `TransitionResult` for inspection.
 
 ### Checking Active State
 
@@ -163,12 +186,50 @@ fsm.is_in("idle")    # False
 
 ### State Lifecycle Hooks
 
+Attach enter/exit callbacks at construction time using `CallbackState` or
+`State.create()`, or add them to any named state after construction with
+`fsm.on_enter()` / `fsm.on_exit()`:
+
 ```python
 from fast_fsm import CallbackState
 
+# Option A — CallbackState (constructed before the machine)
 idle = CallbackState("idle")
 idle.set_on_enter(lambda from_state, trigger, **kw: print("Now idle"))
 idle.set_on_exit(lambda to_state, trigger, **kw: print("Leaving idle"))
+
+# Option B — attach after construction (works on any StateMachine)
+fsm.on_enter("running", lambda from_s, t, **kw: print("→ running"))
+fsm.on_exit("running",  lambda to_s,   t, **kw: print("← running"))
+# Multiple callbacks per state are called in registration order.
+```
+
+### State Control
+
+```python
+# Force the machine into any state, bypassing guards (testing / error recovery)
+fsm.force_state("error")       # full callback chain fires; trigger = "__force__"
+fsm.reset()                    # return to initial_state_name
+
+# Snapshot / restore — JSON and pickle safe
+snap = fsm.snapshot()          # {"state": "running", "version": 1}
+# ... persist snap, restart process, etc. ...
+fsm.restore(snap)              # teleports back; full callback chain fires
+
+# Clone — same topology, independent current state, empty listeners
+worker = fsm.clone()           # ideal for per-request / per-session instances
+
+# Build from a dict / JSON / YAML config
+config = {
+    "initial": "idle",
+    "transitions": [
+        {"trigger": "start",  "from": "idle",    "to": "running"},
+        {"trigger": "stop",   "from": "running", "to": "idle"},
+        {"trigger": "fail",   "from": ["idle", "running"], "to": "error"},
+    ],
+}
+fsm = StateMachine.from_dict(config, name="MyFSM")
+# Add guard conditions via add_transition() after construction.
 ```
 
 ### Listeners (Observer Pattern)
@@ -300,12 +361,15 @@ print(v.export_report('json'))
 - **Memory Efficient** — ~1,000× less than alternatives
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
-- **Conditional Transitions** — guard conditions with `*args, **kwargs`
+- **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
+- **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
+- **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`
+- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, listeners
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`
 - **Declarative States** — `@transition` decorator for inline state definitions
-- **Optional Validation** — scoring (structural + completeness), batch comparison, lint, export (JSON/Markdown)
+- **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
 - **Visualization** — Mermaid diagrams, fenced blocks, full Markdown documents with adjacency matrix
-- **mypyc Compiled** — `core.py` optionally compiled for extra speed
+- **mypyc Compiled** — `core.py` optionally compiled; `CompiledFuncCondition` for hot condition paths
 
 ## Examples
 
