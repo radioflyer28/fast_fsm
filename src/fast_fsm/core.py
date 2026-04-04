@@ -13,7 +13,6 @@ Key design principles:
 """
 
 import logging
-from abc import ABC
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
 from dataclasses import dataclass
 import asyncio
@@ -139,7 +138,7 @@ class CompiledFuncCondition(Condition):
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
-class State(ABC):
+class State:
     """
     Base state class for FSM states.
     Uses slots for memory efficiency.
