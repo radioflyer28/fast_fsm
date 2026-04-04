@@ -1229,7 +1229,7 @@ class StateMachine:
         # Call exit handler
         try:
             old_state.on_exit(to_state, trigger, *args, **kwargs)
-        except Exception as e:
+        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
             self._logger.warning(
                 "%s: Exception in on_exit for state '%s': %s",
                 self._name,
@@ -1243,7 +1243,7 @@ class StateMachine:
             for fn in _exit_cbs:
                 try:
                     fn(to_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_exit callback for state '%s': %s",
                         self._name,
@@ -1256,7 +1256,7 @@ class StateMachine:
             for fn in self._on_exit_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_exit_state listener: %s",
                         self._name,
@@ -1269,7 +1269,7 @@ class StateMachine:
         # Call enter handler
         try:
             to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as e:
+        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
             self._logger.warning(
                 "%s: Exception in on_enter for state '%s': %s",
                 self._name,
@@ -1283,7 +1283,7 @@ class StateMachine:
             for fn in _enter_cbs:
                 try:
                     fn(old_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_enter callback for state '%s': %s",
                         self._name,
@@ -1296,7 +1296,7 @@ class StateMachine:
             for fn in self._on_enter_listeners:
                 try:
                     fn(to_state, old_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_enter_state listener: %s",
                         self._name,
@@ -1313,7 +1313,7 @@ class StateMachine:
             for fn in self._after_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in after_transition listener: %s",
                         self._name,
@@ -1372,7 +1372,7 @@ class StateMachine:
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
-            except Exception as e:
+            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
                 error_msg = f"Condition '{condition_name}' raised exception: {e}"
                 self._logger.warning("%s: FAILED - %s", self._name, error_msg)
                 return TransitionResult(
@@ -1399,6 +1399,26 @@ class StateMachine:
         """
         Safe version of trigger that never raises exceptions.
 
+        Unlike :meth:`trigger`, which propagates any exception that escapes
+        callback/condition isolation (e.g. a ``BaseException`` subclass or an
+        unexpected internal error), ``safe_trigger()`` wraps the entire call in a
+        broad ``except Exception`` barrier.  Any exception that reaches this
+        barrier is caught, logged at ERROR level, and returned as a failed
+        :class:`TransitionResult`.
+
+        **Exception semantics:**
+
+        * Exceptions from user callbacks (on_enter, on_exit, listeners) and
+          conditions are *already isolated* inside :meth:`trigger` —
+          they are caught, logged at WARNING level, and result in a failed
+          ``TransitionResult``.  They do **not** propagate to this barrier.
+        * ``safe_trigger()`` is a last-resort safety net — it catches any
+          exception that somehow escapes those inner guards (e.g. an unexpected
+          internal FSM error).  Normal user code should never see exceptions
+          land here.
+        * ``BaseException`` subclasses (``KeyboardInterrupt``, ``SystemExit``)
+          are **not** caught — they propagate normally.
+
         Args:
             trigger: The trigger/event name
             *args: Positional arguments for the transition
@@ -1409,7 +1429,7 @@ class StateMachine:
         """
         try:
             return self.trigger(trigger, *args, **kwargs)
-        except Exception as e:
+        except Exception as e:  # broad catch intentional — last-resort safe_trigger() barrier; see docstring
             error_msg = f"Exception during trigger '{trigger}': {e}"
             self._logger.error("%s: %s", self._name, error_msg)
             return TransitionResult(
@@ -1647,7 +1667,7 @@ class AsyncStateMachine(StateMachine):
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
-            except Exception as e:
+            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
                 error_msg = f"Condition '{condition_name}' raised exception: {e}"
                 self._logger.warning("%s: FAILED - %s", self._name, error_msg)
                 return TransitionResult(
@@ -1686,7 +1706,7 @@ class AsyncStateMachine(StateMachine):
             for fn in _async_exit:
                 try:
                     await fn(to_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_exit_async callback for state '%s': %s",
                         self._name,
@@ -1700,7 +1720,7 @@ class AsyncStateMachine(StateMachine):
             for fn in _async_enter:
                 try:
                     await fn(old_state, trigger, **kwargs)
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.warning(
                         "%s: Exception in on_enter_async callback for state '%s': %s",
                         self._name,
@@ -1838,7 +1858,7 @@ class DeclarativeState(State):
                     if not condition_result:
                         return False
 
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from DeclarativeState control flow
                     self._logger.warning(
                         "State '%s': Condition evaluation failed for trigger '%s': %s",
                         self.name,
@@ -1907,7 +1927,7 @@ class DeclarativeState(State):
 
                 return result
 
-            except Exception as e:
+            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
                 error_msg = f"Handler '{method_name}' raised exception: {e}"
                 self._logger.warning("State '%s': %s", self.name, error_msg)
                 return TransitionResult(False, error=error_msg)
@@ -1959,7 +1979,7 @@ class AsyncDeclarativeState(DeclarativeState):
                     if not condition_result:
                         return False
 
-                except Exception as e:
+                except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from AsyncDeclarativeState control flow
                     self._logger.warning(
                         "State '%s': Async condition evaluation failed for trigger '%s': %s",
                         self.name,
@@ -2023,7 +2043,7 @@ class AsyncDeclarativeState(DeclarativeState):
 
                 return result
 
-            except Exception as e:
+            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
                 error_msg = f"Async handler '{method_name}' raised exception: {e}"
                 self._logger.warning("State '%s': %s", self.name, error_msg)
                 return TransitionResult(False, error=error_msg)
