@@ -20,7 +20,6 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx_autodoc_typehints",
-    "sphinx.ext.intersphinx",
     # Markdown support — keeps existing .md docs working as-is
     "myst_parser",
     # Doctest builder — tests {testcode}/{testoutput} directive blocks in docs
@@ -67,9 +66,6 @@ from fast_fsm import (
 from fast_fsm.validation import validate_fsm, quick_validation_report
 """
 
-# Suppress warnings for cross-references to files outside the docs tree
-# (README.md, examples/, src/ etc. are valid in-repo links but not Sphinx docs).
-# Also used below for intersphinx -- see intersphinx section.
 
 # -- Napoleon settings (Google-style docstrings) -----------------------
 napoleon_google_docstring = True
@@ -87,17 +83,10 @@ autodoc_class_signature = "separated"
 always_document_param_types = True
 typehints_defaults = "comma"
 
-# -- Intersphinx -------------------------------------------------------
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-}
-# Prevent a network fetch failure from failing the build (-W turns warnings
-# into errors, so a timeout in CI would otherwise break the docs workflow).
-intersphinx_timeout = 10
-suppress_warnings = [
-    "myst.xref_missing",
-    "intersphinx.fetch_warning",
-]
+# suppress_warnings ---------------------------------------------------
+# Suppress warnings for cross-references to files outside the docs tree
+# (README.md, examples/, src/ etc. are valid in-repo links but not Sphinx docs).
+suppress_warnings = ["myst.xref_missing"]
 
 # -- HTML output -------------------------------------------------------
 html_theme = "furo"
