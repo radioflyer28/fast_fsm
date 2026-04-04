@@ -19,7 +19,7 @@ progress:
 Phase: Not started (defining requirements)
 Plan: —
 Status: v0.2.1 milestone complete
-Last activity: 2026-04-04
+Last activity: 2026-04-04 - Completed quick task 260404-exx: Fill callback/hook gaps
 
 ## Milestone
 
@@ -57,3 +57,9 @@ None.
 - Exact mechanism for version sync: `importlib.metadata.version()` at import time (preferred) vs build-time injection
 - Whether `py.typed` requires any changes to `setup.py` or just a file addition
 - How many tests in the suite are genuinely low-value (audit will tell)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260404-exx | Fill callback/hook gaps: before_transition, after_transition convenience, on_failed, on_trigger | 2026-04-04 | b3e6955 | Verified | [260404-exx-fill-callback-hook-gaps-before-transitio](./quick/260404-exx-fill-callback-hook-gaps-before-transitio/) |
