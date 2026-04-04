@@ -85,9 +85,9 @@ jobs:
       - name: Smoke test compiled module
         run: |
           uv run python -c "
-          from fast_fsm import StateMachine
-          sm = StateMachine('smoke')
-          sm.add_state('a'); sm.add_state('b')
+          from fast_fsm import StateMachine, State
+          sm = StateMachine(State('a'), name='smoke')
+          sm.add_state(State('b'))
           sm.add_transition('go', 'a', 'b')
           result = sm.trigger('go')
           assert result.success, 'trigger failed'

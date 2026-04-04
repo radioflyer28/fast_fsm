@@ -2648,7 +2648,7 @@ def set_fsm_logging_level(
         "warning": logging.WARNING,
         "error": logging.ERROR,
         "critical": logging.CRITICAL,
-        "off": logging.WARNING,       # convenience alias
+        "off": logging.WARNING,  # convenience alias
         "trace": logging.DEBUG - 5,  # custom ultra-verbose level
     }
 

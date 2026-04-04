@@ -1745,7 +1745,9 @@ class TestAfterTransitionMethod:
         """fsm.after_transition(fn) fires once on successful transition."""
         fsm = _make_simple_fsm()
         calls = []
-        fsm.after_transition(lambda src, tgt, trig, **kw: calls.append((src.name, tgt.name, trig)))
+        fsm.after_transition(
+            lambda src, tgt, trig, **kw: calls.append((src.name, tgt.name, trig))
+        )
         fsm.trigger("go")
         assert calls == [("idle", "running", "go")]
 
@@ -1808,8 +1810,8 @@ class TestOnTriggerMethod:
         fsm = _make_simple_fsm()
         calls = []
         fsm.on_trigger("go", lambda *a, **kw: calls.append("go_fired"))
-        fsm.trigger("go")     # advance to running
-        fsm.trigger("stop")   # different trigger
+        fsm.trigger("go")  # advance to running
+        fsm.trigger("stop")  # different trigger
         # only the "go" trigger should have triggered our callback
         assert calls == ["go_fired"]
 
@@ -1825,7 +1827,10 @@ class TestOnTriggerMethod:
         """on_trigger callback receives (from_state, to_state, trigger)."""
         fsm = _make_simple_fsm()
         captured = []
-        fsm.on_trigger("go", lambda src, tgt, trig, **kw: captured.append((src.name, tgt.name, trig)))
+        fsm.on_trigger(
+            "go",
+            lambda src, tgt, trig, **kw: captured.append((src.name, tgt.name, trig)),
+        )
         fsm.trigger("go")
         assert captured == [("idle", "running", "go")]
 
@@ -1842,7 +1847,6 @@ class TestCloneCallbackBehavior:
 
     def test_clone_does_not_copy_before_listeners(self):
         """Cloned FSM does NOT inherit before_transition listeners."""
-        from fast_fsm.core import StateMachine as SM
 
         fsm = _make_simple_fsm()
 

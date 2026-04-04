@@ -407,6 +407,7 @@ class TestConditionTemplateGaps:
         cond = ComparisonCondition("x", "==", "admin")
         assert cond.check(x="admin") is True
 
+
 # ---------------------------------------------------------------------------
 # NegatedCondition
 # ---------------------------------------------------------------------------
@@ -494,7 +495,9 @@ class TestUnlessShorthand:
         fsm = self._make_fsm()
         with pytest.raises(ValueError, match="mutually exclusive"):
             fsm.add_transition(
-                "go", "a", "b",
+                "go",
+                "a",
+                "b",
                 condition=AlwaysCondition(),
                 unless=NeverCondition(),
             )
@@ -545,7 +548,9 @@ class TestUnlessShorthandBuilder:
                 FSMBuilder(State("a"), name="builder_exclusive")
                 .add_state(State("b"))
                 .add_transition(
-                    "go", "a", "b",
+                    "go",
+                    "a",
+                    "b",
                     condition=AlwaysCondition(),
                     unless=NeverCondition(),
                 )
