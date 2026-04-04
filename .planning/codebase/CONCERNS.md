@@ -43,15 +43,18 @@ This is an intentional design decision (documented in conventions), but it means
 Users who want strict error propagation should check logs or use `trigger()` with
 explicit error handling in their callbacks.
 
-## No CI/CD Pipeline
+## CI/CD Pipeline
 
-**Severity: Medium**
+**Severity: Low (partial gap)**
 
-No GitHub Actions, CircleCI, or other CI configuration was found. Quality gates
-(tests, linting, type checking) are run locally via `Taskfile.yml`. This means:
-- No automated verification on push/PR
-- No build matrix for multiple Python versions
-- No automated benchmark regression detection
+CI is configured in `.github/workflows/` with three jobs:
+- `ci.yml` — lint (ruff, ty), tests across Python 3.10–3.13 × Linux/macOS/Windows
+- `docs.yml` — Sphinx docs build
+- `release.yml` — release automation
+
+Gap: **No benchmark regression job.** The performance test suite
+(`test_performance_benchmarks.py`, marked `@pytest.mark.slow`) is excluded from CI.
+Performance regressions can only be caught manually via `task benchmark`.
 
 ## No `py.typed` Marker
 
@@ -91,12 +94,21 @@ by `test_performance_benchmarks.py` (marked `@pytest.mark.slow`). However:
 
 ## `State` is an ABC but Instantiable
 
-**Severity: Low (design quirk)**
+**Severity: Low (misleading)**
 
-`State` is declared as `ABC` (inherits from `abc.ABC`) but has no abstract methods
-(the base implementations are all no-ops). This means `State` can be instantiated
-directly despite being "abstract." The ABC inheritance is used to signal intent
-(users should consider subclassing) rather than to enforce it.
+`State` inherits from `abc.ABC` but declares **no `@abstractmethod` methods** — all
+override points (`on_enter`, `on_exit`, `can_transition`, `handle_event`) are concrete
+no-ops. Python's ABC machinery provides zero enforcement here.
+
+Yet `State("name")` is the **primary instantiation pattern** used throughout the library
+and all tests. The `ABC` base class actively misleads: it implies direct instantiation
+is wrong, but it is the standard usage.
+
+**Resolution options:**
+- Remove `ABC` from `State` entirely (cleanest — no enforcement was happening anyway)
+- Keep `ABC` and add a docstring clarifying the intent
+
+Removing `ABC` is preferred: it eliminates the false signal without changing behaviour.
 
 ## Potential Future Concerns
 
