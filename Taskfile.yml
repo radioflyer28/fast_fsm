@@ -22,22 +22,30 @@ tasks:
   # ─────────────────────────────────────────────
 
   test:
-    desc: "Run full test suite — merge gate (62 tests, -x -q)"
+    desc: "Run full test suite — merge gate (pure Python, -x -q)"
+    env:
+      FAST_FSM_PURE_PYTHON: "1"
     cmds:
       - uv run pytest tests/ -x -q
 
   test-verbose:
     desc: Run full test suite with verbose output
+    env:
+      FAST_FSM_PURE_PYTHON: "1"
     cmds:
       - uv run pytest tests/ -v --tb=short
 
   test-fast:
     desc: Run tests excluding slow/integration markers
+    env:
+      FAST_FSM_PURE_PYTHON: "1"
     cmds:
       - uv run pytest tests/ -x -q -m "not slow and not integration"
 
   test-coverage:
     desc: Run tests with HTML coverage report
+    env:
+      FAST_FSM_PURE_PYTHON: "1"
     cmds:
       - uv run pytest tests/ --cov={{.SRC_DIR}} --cov-report=html --cov-report=term
 
@@ -49,14 +57,14 @@ tasks:
   fix:
     desc: "Phase 1: Auto-fix formatting and linting (never fails)"
     cmds:
-      - uv run ruff format .
-      - uv run ruff check --fix .
+      - uv run ruff format src/ tests/
+      - uv run ruff check --fix src/ tests/
 
   check:
     desc: "Phase 2: Validate formatting, linting, and types (blocks merge)"
     cmds:
-      - uv run ruff format --check .
-      - uv run ruff check .
+      - uv run ruff format --check src/ tests/
+      - uv run ruff check src/ tests/
       - uv run ty check {{.SRC_DIR}}/
 
   quality:
@@ -86,9 +94,23 @@ tasks:
 
   build:
     desc: "Build mypyc-compiled C extension (core.py only)"
-    deps: [typecheck]
     cmds:
-      - uv run python setup.py build_ext --inplace
+      - uv run python setup.py build_ext --inplace -q
+
+  build-check:
+    desc: "Build mypyc extension + smoke-test compiled module (mirrors CI build-check job)"
+    cmds:
+      - uv run python setup.py build_ext --inplace -q
+      - |
+        uv run python << 'PYEOF'
+        from fast_fsm import StateMachine, State
+        sm = StateMachine(State('a'), name='smoke')
+        sm.add_state(State('b'))
+        sm.add_transition('go', 'a', 'b')
+        r = sm.trigger('go')
+        assert r.success, 'trigger failed'
+        print('Compiled smoke test: OK')
+        PYEOF
 
   # ─────────────────────────────────────────────
   # Benchmarks (Constitution § Performance Standards)
@@ -153,12 +175,11 @@ tasks:
       - task: test-fast
 
   ci:
-    desc: "Full CI pipeline: validate → test → docs"
+    desc: "Full CI pipeline: lint → pure-python tests → mypyc build check (mirrors ci.yml)"
     cmds:
       - task: check
       - task: test
-      - task: docs-check
-      - task: docs-test
+      - task: build-check
 
   # ─────────────────────────────────────────────
   # Maintenance
