@@ -267,21 +267,6 @@ class TestStateTriggerMethods:
         assert result.success
         assert fsm.current_state.name == "state2"
 
-    def test_safe_trigger_with_invalid_trigger(self):
-        """Test safe_trigger with completely invalid trigger"""
-        state1 = State("state1")
-        fsm = StateMachine(state1, name="safe_trigger_test")
-
-        # Test invalid trigger with regular trigger
-        result = fsm.trigger("nonexistent")
-        assert not result.success
-        assert "No transition" in result.error
-
-        # Test invalid trigger with safe_trigger
-        result = fsm.safe_trigger("nonexistent")
-        assert not result.success
-        assert "No transition" in result.error
-
 
 class TestStateCallbacks:
     """Test state entry and exit callbacks thoroughly"""

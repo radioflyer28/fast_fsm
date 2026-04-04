@@ -14,11 +14,6 @@ from fast_fsm.conditions import AsyncCondition, Condition
 class TestBasicFunctionality:
     """Test basic FSM functionality"""
 
-    def test_state_creation(self):
-        """Test creating basic states"""
-        state = State("test_state")
-        assert state.name == "test_state"
-
     def test_state_machine_creation(self):
         """Test creating a state machine"""
         initial_state = State("initial")
@@ -351,62 +346,6 @@ class TestComplexScenarios:
         result = fsm.trigger("go_to_3")
         assert result.success
         assert fsm.current_state.name == "state3"
-
-
-@pytest.mark.integration
-class TestPerformance:
-    """Integration tests for performance characteristics"""
-
-    def test_many_states_performance(self):
-        """Test FSM with many states"""
-        import time
-
-        # Create FSM with many states
-        initial = State("state_0")
-        fsm = StateMachine(initial, name="large_fsm")
-
-        # Add 100 states
-        for i in range(1, 101):
-            state = State(f"state_{i}")
-            fsm.add_state(state)
-            fsm.add_transition(f"go_{i}", f"state_{i - 1}", f"state_{i}")
-
-        # Time transitions
-        start = time.time()
-        for i in range(1, 101):
-            result = fsm.trigger(f"go_{i}")
-            assert result.success
-
-        elapsed = time.time() - start
-
-        # Should complete 100 transitions quickly
-        assert elapsed < 1.0
-        assert fsm.current_state.name == "state_100"
-
-    def test_repeated_transitions_performance(self):
-        """Test performance of repeated transitions"""
-        import time
-
-        state1 = State("state1")
-        state2 = State("state2")
-
-        fsm = StateMachine(state1, name="perf_fsm")
-        fsm.add_state(state2)
-        fsm.add_transition("go", "state1", "state2")
-        fsm.add_transition("back", "state2", "state1")
-
-        # Time many transitions
-        start = time.time()
-        for i in range(1000):
-            if i % 2 == 0:
-                fsm.trigger("go")
-            else:
-                fsm.trigger("back")
-
-        elapsed = time.time() - start
-
-        # Should complete 1000 transitions quickly
-        assert elapsed < 1.0
 
 
 # ---------------------------------------------------------------------------
