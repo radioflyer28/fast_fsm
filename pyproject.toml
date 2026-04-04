@@ -41,6 +41,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+fast_fsm = ["py.typed"]
+
 [tool.mypyc]
 files = ["src/fast_fsm"]
 
