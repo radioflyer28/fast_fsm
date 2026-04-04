@@ -3,7 +3,7 @@
 Collection of common TransitionCondition patterns for real-world usage
 """
 
-from fast_fsm import Condition
+from .conditions import Condition
 from typing import Any, Set
 import re
 

@@ -42,7 +42,12 @@ from .validation import (
     fsm_lint,
 )
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _get_version, PackageNotFoundError as _PNF
+
+try:
+    __version__ = _get_version("fast_fsm")
+except _PNF:
+    __version__ = "unknown"
 __all__ = [
     # Core FSM components
     "State",
