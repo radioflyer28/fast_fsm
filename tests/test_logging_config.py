@@ -70,28 +70,38 @@ class TestSetFsmLoggingLevel:
         logger = logging.getLogger("fast_fsm.test_lvl_1")
         assert logger.level == logging.WARNING
 
-    def test_basic(self):
-        set_fsm_logging_level("basic", "fast_fsm.test_lvl_2")
+    def test_warning(self):
+        set_fsm_logging_level("warning", "fast_fsm.test_lvl_2")
         logger = logging.getLogger("fast_fsm.test_lvl_2")
-        assert logger.level == logging.DEBUG
+        assert logger.level == logging.WARNING
 
-    def test_detailed(self):
-        set_fsm_logging_level("detailed", "fast_fsm.test_lvl_3")
+    def test_debug(self):
+        set_fsm_logging_level("debug", "fast_fsm.test_lvl_3")
         logger = logging.getLogger("fast_fsm.test_lvl_3")
         assert logger.level == logging.DEBUG
 
-    def test_ultra(self):
-        set_fsm_logging_level("ultra", "fast_fsm.test_lvl_4")
+    def test_info(self):
+        set_fsm_logging_level("info", "fast_fsm.test_lvl_5")
+        logger = logging.getLogger("fast_fsm.test_lvl_5")
+        assert logger.level == logging.INFO
+
+    def test_trace(self):
+        set_fsm_logging_level("trace", "fast_fsm.test_lvl_4")
         logger = logging.getLogger("fast_fsm.test_lvl_4")
         assert logger.level == logging.DEBUG - 5
+
+    def test_case_insensitive(self):
+        set_fsm_logging_level("DEBUG", "fast_fsm.test_lvl_6")
+        logger = logging.getLogger("fast_fsm.test_lvl_6")
+        assert logger.level == logging.DEBUG
 
     def test_invalid_verbosity_raises(self):
         with pytest.raises(ValueError, match="Invalid verbosity"):
             set_fsm_logging_level("extreme")
 
-    def test_basic_emits_transition_logs(self, caplog):
-        """'basic' verbosity shows transitions in a real FSM."""
-        set_fsm_logging_level("basic", "fast_fsm.log_test_2")
+    def test_debug_emits_transition_logs(self, caplog):
+        """'debug' level shows transitions in a real FSM."""
+        set_fsm_logging_level("debug", "fast_fsm.log_test_2")
         fsm = StateMachine(
             State("idle"), name="log_test_2", logger_name="fast_fsm.log_test_2"
         )

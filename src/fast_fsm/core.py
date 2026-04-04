@@ -2513,43 +2513,49 @@ def configure_fsm_logging(
 
 
 def set_fsm_logging_level(
-    verbosity: str = "off", logger_name: str = "fast_fsm"
+    verbosity: str = "warning", logger_name: str = "fast_fsm"
 ) -> None:
     """
-    Set FSM logging level using friendly names.
+    Set FSM logging level using standard Python logging level names.
 
     Args:
-        verbosity: Logging verbosity level
-                  - 'off': No logging (default)
-                  - 'basic': Show transitions and failures (DEBUG level)
-                  - 'detailed': Same as basic (DEBUG level)
-                  - 'ultra': Show all trigger attempts with arguments
+        verbosity: Logging level name (case-insensitive).
+                  Standard levels: 'debug', 'info', 'warning', 'error', 'critical'.
+                  Convenience alias: 'off' (same as 'warning' — silences FSM logs).
+                  Custom level: 'trace' (DEBUG-5, ultra-verbose trigger attempts).
         logger_name: Logger name to configure
 
     Examples:
-        # Basic transition logging
-        set_fsm_logging_level('basic')
+        # Show transitions (DEBUG level)
+        set_fsm_logging_level('debug')
 
-        # Detailed debugging
-        set_fsm_logging_level('detailed', 'fast_fsm.MyFSM')
+        # Scope to a specific machine
+        set_fsm_logging_level('debug', 'fast_fsm.MyFSM')
 
-        # Ultra-verbose logging
-        set_fsm_logging_level('ultra')
+        # Silence FSM logs
+        set_fsm_logging_level('warning')  # or 'off'
+
+        # Ultra-verbose trigger tracing
+        set_fsm_logging_level('trace')
     """
     level_map = {
-        "off": logging.WARNING,
-        "basic": logging.DEBUG,
-        "detailed": logging.DEBUG,
-        "ultra": logging.DEBUG - 5,  # Custom ultra-verbose level
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+        "critical": logging.CRITICAL,
+        "off": logging.WARNING,       # convenience alias
+        "trace": logging.DEBUG - 5,  # custom ultra-verbose level
     }
 
-    if verbosity not in level_map:
+    key = verbosity.lower()
+    if key not in level_map:
         raise ValueError(
-            f"Invalid verbosity level: {verbosity}. "
+            f"Invalid verbosity level: {verbosity!r}. "
             f"Valid options: {list(level_map.keys())}"
         )
 
-    configure_fsm_logging(level_map[verbosity], logger_name)
+    configure_fsm_logging(level_map[key], logger_name)
 
 
 # Convenience factory functions
