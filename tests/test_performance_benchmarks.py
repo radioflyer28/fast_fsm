@@ -374,6 +374,74 @@ class TestAdvancedPerformance:
             f"Stress throughput {transitions_per_second:,.0f} TPS below 15k floor"
         )
 
+    @pytest.mark.slow
+    def test_trigger_min_throughput(self):
+        """Hot-path throughput regression gate: trigger() must stay above 200k ops/sec.
+
+        Uses a minimal 2-state toggle FSM — no conditions, no callbacks — to
+        measure the raw trigger() hot path.  The batch is timed without
+        per-iteration assertions so measurement overhead is near-zero.
+
+        This test is the primary CI-02 gate.  It runs with the mypyc-compiled
+        extension in the benchmark CI job, where the 200k threshold is
+        comfortably achievable.  In pure-Python mode throughput is typically
+        30–80k TPS; the test guards against catastrophic regressions there too.
+
+        Mode is detected at runtime by inspecting the core module's file suffix
+        (.so / .pyd = compiled, .py = interpreted).  Compiled floor: 200k ops/s.
+        Pure-Python floor: 30k ops/s.
+        """
+        state_a = State("state_a")
+        state_b = State("state_b")
+
+        fsm = StateMachine(state_a, name="throughput_gate")
+        fsm.add_state(state_b)
+        fsm.add_transition("toggle", "state_a", "state_b")
+        fsm.add_transition("toggle", "state_b", "state_a")
+
+        # Warm up — ensure JIT-style optimizations have settled
+        for _ in range(1000):
+            fsm.trigger("toggle")
+
+        gc.collect()
+
+        # Suppress FSM transition logging during timing — log output adds
+        # significant per-call overhead and would dominate the measurement.
+        import logging
+        fsm_logger = logging.getLogger("fast_fsm")
+        original_level = fsm_logger.level
+        fsm_logger.setLevel(logging.CRITICAL)
+
+        # Time a batch of 200k transitions without per-iteration assertions
+        iterations = 200_000
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fsm.trigger("toggle")
+        elapsed = time.perf_counter() - start
+
+        fsm_logger.setLevel(original_level)
+
+        ops_per_sec = iterations / elapsed
+
+        # Detect actual compilation by checking the core module's file suffix.
+        # The env var FAST_FSM_PURE_PYTHON suppresses compilation at build time
+        # but has no bearing on what is actually loaded at runtime.
+        import importlib, importlib.util
+        core_spec = importlib.util.find_spec("fast_fsm.core")
+        compiled = core_spec is not None and core_spec.origin is not None and (
+            core_spec.origin.endswith(".so")
+            or core_spec.origin.endswith(".pyd")
+        )
+        floor = 200_000 if compiled else 30_000
+
+        assert ops_per_sec >= floor, (
+            f"trigger() throughput {ops_per_sec:,.0f} ops/sec is below the "
+            f"{'compiled' if compiled else 'pure-Python'} floor of "
+            f"{floor:,} ops/sec.  This indicates a performance regression.\n"
+            f"  Elapsed for {iterations:,} transitions: {elapsed:.3f}s\n"
+            f"  Mode: {'compiled (mypyc)' if compiled else 'pure Python'}"
+        )
+
 
 @pytest.mark.unit
 class TestMicroBenchmarks:

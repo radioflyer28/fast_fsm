@@ -93,3 +93,24 @@ jobs:
           assert result.success, 'trigger failed'
           print('Compiled smoke test: OK')
           "
+
+  # ── Benchmark throughput gate (compiled, push to main only) ─────────────────
+  benchmark:
+    name: Benchmark throughput gate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev deps
+        run: uv sync --group dev
+
+      - name: Build mypyc extension
+        run: uv run python setup.py build_ext --inplace -q
+
+      - name: Run throughput regression gate
+        run: uv run pytest tests/test_performance_benchmarks.py -m slow -x -q
