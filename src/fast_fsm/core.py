@@ -247,9 +247,12 @@ class StateMachine:
         "_states",
         "_transitions",
         "_logger",
+        "_before_listeners",
         "_on_exit_listeners",
         "_on_enter_listeners",
         "_after_listeners",
+        "_on_failed_callbacks",
+        "_trigger_callbacks",
         "_state_exit_callbacks",
         "_state_enter_callbacks",
     )
@@ -285,9 +288,12 @@ class StateMachine:
 
         # Listener lists — pre-extracted bound method references for zero-overhead
         # empty checks.  Populated by add_listener().
+        self._before_listeners: list = []
         self._on_exit_listeners: List[Any] = []
         self._on_enter_listeners: List[Any] = []
         self._after_listeners: List[Any] = []
+        self._on_failed_callbacks: list = []
+        self._trigger_callbacks: dict = {}
 
         # Per-state callbacks registered via on_enter() / on_exit().
         # Keyed by state name; values are lists of callables (appended in
@@ -833,6 +839,9 @@ class StateMachine:
             fsm.add_listener(TransitionLogger())
         """
         for listener in listeners:
+            fn = getattr(listener, "before_transition", None)
+            if callable(fn):
+                self._before_listeners.append(fn)
             fn = getattr(listener, "on_exit_state", None)
             if callable(fn):
                 self._on_exit_listeners.append(fn)
@@ -889,6 +898,33 @@ class StateMachine:
         if state_name not in self._state_exit_callbacks:
             self._state_exit_callbacks[state_name] = []
         self._state_exit_callbacks[state_name].append(callback)
+
+    def after_transition(self, callback: Any) -> None:
+        """Register a callback fired after every successful transition.
+
+        Args:
+            callback: Callable ``fn(source, target, trigger, **kwargs)``.
+        """
+        self._after_listeners.append(callback)
+
+    def on_failed(self, callback: Any) -> None:
+        """Register a callback fired whenever trigger() returns a failed result.
+
+        Args:
+            callback: Callable ``fn(trigger, from_state, error, **kwargs)``.
+        """
+        self._on_failed_callbacks.append(callback)
+
+    def on_trigger(self, trigger_name: str, callback: Any) -> None:
+        """Register a callback fired after a successful transition for trigger_name.
+
+        Args:
+            trigger_name: The trigger name to watch.
+            callback: Callable ``fn(from_state, to_state, trigger, **kwargs)``.
+        """
+        if trigger_name not in self._trigger_callbacks:
+            self._trigger_callbacks[trigger_name] = []
+        self._trigger_callbacks[trigger_name].append(callback)
 
     @property
     def states(self) -> List[str]:
@@ -1163,6 +1199,10 @@ class StateMachine:
         new_fsm._state_enter_callbacks = {
             k: list(v) for k, v in self._state_enter_callbacks.items()
         }
+        # Copy per-trigger callbacks (shallow copy of outer dict; deep copy inner lists)
+        for tname, cbs in self._trigger_callbacks.items():
+            new_fsm._trigger_callbacks[tname] = list(cbs)
+        # _before_listeners and _on_failed_callbacks are intentionally NOT copied
         return new_fsm
 
     def _resolve_trigger(
@@ -1216,6 +1256,14 @@ class StateMachine:
         Assumes all pre-checks (condition, permission) have already passed.
         """
         old_state = self._current_state
+
+        # Fire before_transition listeners (before on_exit)
+        if self._before_listeners:
+            for fn in self._before_listeners:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                    self._logger.error("before_transition listener error: %s", e)
 
         # Log transition start
         self._logger.debug(
@@ -1320,6 +1368,14 @@ class StateMachine:
                         e,
                     )
 
+        # Fire per-trigger callbacks registered via on_trigger(name, fn)
+        if trigger in self._trigger_callbacks:
+            for fn in self._trigger_callbacks[trigger]:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                    self._logger.error("on_trigger callback error: %s", e)
+
         return TransitionResult(
             True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
         )
@@ -1341,6 +1397,12 @@ class StateMachine:
         """
         resolved = self._resolve_trigger(trigger, *args, **kwargs)
         if isinstance(resolved, TransitionResult):
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
             return resolved
         entry, current_name = resolved
         to_state = entry.to_state
@@ -1369,12 +1431,24 @@ class StateMachine:
                 if not condition_result:
                     error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
                     self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    if self._on_failed_callbacks:
+                        for fn in self._on_failed_callbacks:
+                            try:
+                                fn(trigger, current_name, error_msg, **kwargs)
+                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                                self._logger.error("on_failed callback error: %s", e)
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
             except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
                 error_msg = f"Condition '{condition_name}' raised exception: {e}"
                 self._logger.warning("%s: FAILED - %s", self._name, error_msg)
+                if self._on_failed_callbacks:
+                    for fn in self._on_failed_callbacks:
+                        try:
+                            fn(trigger, current_name, error_msg, **kwargs)
+                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                            self._logger.error("on_failed callback error: %s", e)
                 return TransitionResult(
                     False, from_state=current_name, trigger=trigger, error=error_msg
                 )
@@ -1389,6 +1463,12 @@ class StateMachine:
         if not self._current_state.can_transition(trigger, to_state, *args, **kwargs):
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, current_name, error_msg, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
@@ -1634,6 +1714,12 @@ class AsyncStateMachine(StateMachine):
         """
         resolved = self._resolve_trigger(trigger, *args, **kwargs)
         if isinstance(resolved, TransitionResult):
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
             return resolved
         entry, current_name = resolved
         to_state = entry.to_state
@@ -1664,12 +1750,24 @@ class AsyncStateMachine(StateMachine):
                 if not condition_result:
                     error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
                     self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    if self._on_failed_callbacks:
+                        for fn in self._on_failed_callbacks:
+                            try:
+                                fn(trigger, current_name, error_msg, **kwargs)
+                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                                self._logger.error("on_failed callback error: %s", e)
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
             except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
                 error_msg = f"Condition '{condition_name}' raised exception: {e}"
                 self._logger.warning("%s: FAILED - %s", self._name, error_msg)
+                if self._on_failed_callbacks:
+                    for fn in self._on_failed_callbacks:
+                        try:
+                            fn(trigger, current_name, error_msg, **kwargs)
+                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                            self._logger.error("on_failed callback error: %s", e)
                 return TransitionResult(
                     False, from_state=current_name, trigger=trigger, error=error_msg
                 )
@@ -1693,6 +1791,12 @@ class AsyncStateMachine(StateMachine):
         if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, current_name, error_msg, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
