@@ -53,7 +53,7 @@ class TestConfigureFsmLogging:
         fsm.add_state(State("b"))
         fsm.add_transition("go", "a", "b")
 
-        with caplog.at_level(logging.INFO, logger="fast_fsm.log_test_1"):
+        with caplog.at_level(logging.DEBUG, logger="fast_fsm.log_test_1"):
             fsm.trigger("go")
 
         assert any("go" in r.message for r in caplog.records)
@@ -73,7 +73,7 @@ class TestSetFsmLoggingLevel:
     def test_basic(self):
         set_fsm_logging_level("basic", "fast_fsm.test_lvl_2")
         logger = logging.getLogger("fast_fsm.test_lvl_2")
-        assert logger.level == logging.INFO
+        assert logger.level == logging.DEBUG
 
     def test_detailed(self):
         set_fsm_logging_level("detailed", "fast_fsm.test_lvl_3")
@@ -98,7 +98,7 @@ class TestSetFsmLoggingLevel:
         fsm.add_state(State("running"))
         fsm.add_transition("start", "idle", "running")
 
-        with caplog.at_level(logging.INFO, logger="fast_fsm.log_test_2"):
+        with caplog.at_level(logging.DEBUG, logger="fast_fsm.log_test_2"):
             fsm.trigger("start")
 
         assert any("start" in r.message for r in caplog.records)

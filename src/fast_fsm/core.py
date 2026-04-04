@@ -1201,7 +1201,7 @@ class StateMachine:
             error_msg = (
                 f"No transition for trigger '{trigger}' from state '{current_name}'"
             )
-            self._logger.info("%s: FAILED - %s", self._name, error_msg)
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
@@ -1304,7 +1304,7 @@ class StateMachine:
                     )
 
         # Log successful transition (main transition log)
-        self._logger.info(
+        self._logger.debug(
             "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
         )
 
@@ -1368,7 +1368,7 @@ class StateMachine:
                 )
                 if not condition_result:
                     error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.info("%s: FAILED - %s", self._name, error_msg)
+                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
@@ -1388,7 +1388,7 @@ class StateMachine:
         )
         if not self._current_state.can_transition(trigger, to_state, *args, **kwargs):
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.info("%s: FAILED - %s", self._name, error_msg)
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
@@ -1663,7 +1663,7 @@ class AsyncStateMachine(StateMachine):
                 )
                 if not condition_result:
                     error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.info("%s: FAILED - %s", self._name, error_msg)
+                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
                     return TransitionResult(
                         False, from_state=current_name, trigger=trigger, error=error_msg
                     )
@@ -1692,7 +1692,7 @@ class AsyncStateMachine(StateMachine):
             )
         if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.info("%s: FAILED - %s", self._name, error_msg)
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
@@ -1918,7 +1918,7 @@ class DeclarativeState(State):
                         "State '%s': Handler '%s' succeeded", self.name, method_name
                     )
                 else:
-                    self._logger.info(
+                    self._logger.debug(
                         "State '%s': Handler '%s' failed: %s",
                         self.name,
                         method_name,
@@ -2034,7 +2034,7 @@ class AsyncDeclarativeState(DeclarativeState):
                         method_name,
                     )
                 else:
-                    self._logger.info(
+                    self._logger.debug(
                         "State '%s': Async handler '%s' failed: %s",
                         self.name,
                         method_name,
@@ -2521,8 +2521,8 @@ def set_fsm_logging_level(
     Args:
         verbosity: Logging verbosity level
                   - 'off': No logging (default)
-                  - 'basic': Show successful transitions and failures
-                  - 'detailed': Show condition evaluation and validation
+                  - 'basic': Show transitions and failures (DEBUG level)
+                  - 'detailed': Same as basic (DEBUG level)
                   - 'ultra': Show all trigger attempts with arguments
         logger_name: Logger name to configure
 
@@ -2538,7 +2538,7 @@ def set_fsm_logging_level(
     """
     level_map = {
         "off": logging.WARNING,
-        "basic": logging.INFO,
+        "basic": logging.DEBUG,
         "detailed": logging.DEBUG,
         "ultra": logging.DEBUG - 5,  # Custom ultra-verbose level
     }

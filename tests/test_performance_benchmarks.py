@@ -405,22 +405,12 @@ class TestAdvancedPerformance:
 
         gc.collect()
 
-        # Suppress FSM transition logging during timing — log output adds
-        # significant per-call overhead and would dominate the measurement.
-        import logging
-
-        fsm_logger = logging.getLogger("fast_fsm")
-        original_level = fsm_logger.level
-        fsm_logger.setLevel(logging.CRITICAL)
-
         # Time a batch of 200k transitions without per-iteration assertions
         iterations = 200_000
         start = time.perf_counter()
         for _ in range(iterations):
             fsm.trigger("toggle")
         elapsed = time.perf_counter() - start
-
-        fsm_logger.setLevel(original_level)
 
         ops_per_sec = iterations / elapsed
 
