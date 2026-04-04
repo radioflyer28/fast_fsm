@@ -408,6 +408,7 @@ class TestAdvancedPerformance:
         # Suppress FSM transition logging during timing — log output adds
         # significant per-call overhead and would dominate the measurement.
         import logging
+
         fsm_logger = logging.getLogger("fast_fsm")
         original_level = fsm_logger.level
         fsm_logger.setLevel(logging.CRITICAL)
@@ -426,11 +427,14 @@ class TestAdvancedPerformance:
         # Detect actual compilation by checking the core module's file suffix.
         # The env var FAST_FSM_PURE_PYTHON suppresses compilation at build time
         # but has no bearing on what is actually loaded at runtime.
-        import importlib, importlib.util
+        import importlib
+        import importlib.util
+
         core_spec = importlib.util.find_spec("fast_fsm.core")
-        compiled = core_spec is not None and core_spec.origin is not None and (
-            core_spec.origin.endswith(".so")
-            or core_spec.origin.endswith(".pyd")
+        compiled = (
+            core_spec is not None
+            and core_spec.origin is not None
+            and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
         )
         floor = 200_000 if compiled else 30_000
 
