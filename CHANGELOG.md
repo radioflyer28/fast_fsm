@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+#### Callback / Hook API
+- `StateMachine.after_transition(fn)` — convenience method; appends `fn` directly to
+  the after-transition listener list without creating a listener class.
+  Signature: `fn(source, target, trigger, **kwargs)`.
+- `StateMachine.on_failed(fn)` — register a callback that fires whenever `trigger()` or
+  `trigger_async()` returns a failed result (wrong state, condition blocked, unknown
+  trigger).  Signature: `fn(trigger, from_state, error, **kwargs)`.
+  Not copied by `clone()` — intentional, consistent with listener lists.
+- `StateMachine.on_trigger(trigger_name, fn)` — per-trigger callback fired after every
+  *successful* transition for the named trigger.  Signature:
+  `fn(from_state, to_state, trigger, **kwargs)`.  Copied by `clone()`.
+- `before_transition` listener protocol slot — add `before_transition(source, target,
+  trigger, **kwargs)` to any listener object passed to `add_listener()` to receive a
+  hook that fires at the very start of `_execute_transition()`, before any `on_exit`
+  callback.
+
+#### CI / Build
+- Python 3.14 added to test matrix (`ci.yml`) and compiled wheel build (`release.yml`,
+  `cp314-*`).
+- `mypy[mypyc]` lower bound bumped to `>=1.17` (required for Python 3.14 mypyc support).
+
+### Changed
+
+- `set_fsm_logging_level()` now accepts standard Python logging level names:
+  `'debug'`, `'info'`, `'warning'`, `'error'`, `'critical'`.  Convenience aliases
+  `'off'` (→ WARNING) and `'trace'` (→ DEBUG−5 ultra-verbose) are retained.  The
+  old `'basic'` / `'detailed'` / `'ultra'` vocabulary has been **removed**.
+  Input is now case-insensitive.
+- Default parameter for `set_fsm_logging_level()` changed from `'off'` to
+  `'warning'` (explicit).
+- All per-transition log calls moved from `INFO` to `DEBUG` — library consumers
+  calling `logging.basicConfig(level=logging.INFO)` will no longer see FSM
+  transition noise in their application logs.
+
 ---
 
 ## [0.2.1] — 2026-04-04

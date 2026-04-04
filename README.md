@@ -248,6 +248,9 @@ implements any subset of the duck-typed protocol:
 
 ```python
 class TransitionLogger:
+    def before_transition(self, source, target, trigger, **kwargs):
+        print(f"About to leave {source.name}")
+
     def on_exit_state(self, source, target, trigger, **kwargs):
         print(f"Leaving {source.name}")
 
@@ -260,11 +263,20 @@ class TransitionLogger:
 fsm.add_listener(TransitionLogger())
 ```
 
-All three methods are optional — omit any you don't need. Multiple listeners can
+All four methods are optional — omit any you don't need. Multiple listeners can
 be registered; they are called in registration order. Listener exceptions are
 caught and logged without crashing the FSM. The empty-list guard
 (`if self._on_exit_listeners:`) means **zero overhead** when no listeners are
 attached.
+
+**Listener protocol — execution order per successful transition:**
+
+| Method | Fires | Signature |
+|---|---|---|
+| `before_transition` | First — before any `on_exit` callback | `(source, target, trigger, **kw)` |
+| `on_exit_state` | After state's own `on_exit` | `(source, target, trigger, **kw)` |
+| `on_enter_state` | After state's own `on_enter` | `(target, source, trigger, **kw)` |
+| `after_transition` | Last — after all enter callbacks | `(source, target, trigger, **kw)` |
 
 **Common pattern — transition history:**
 
@@ -278,6 +290,21 @@ hist = History()
 fsm.add_listener(hist)
 # hist.log → [("idle", "start", "running"), ...]
 ```
+
+**Inline convenience methods** (no listener class required):
+
+```python
+# Fires after every successful transition
+fsm.after_transition(lambda src, tgt, t, **kw: print(f"{src.name} → {tgt.name}"))
+
+# Fires whenever a trigger attempt fails (wrong state, condition blocked, unknown trigger)
+fsm.on_failed(lambda t, from_s, err, **kw: print(f"BLOCKED: {t} from {from_s} — {err}"))
+
+# Fires after every successful "submit" trigger specifically
+fsm.on_trigger("submit", lambda src, tgt, t, **kw: metrics.record(t))
+```
+
+`on_failed` callbacks are not copied by `clone()`. `on_trigger` callbacks are.
 
 Listeners work identically on `AsyncStateMachine` (same `_execute_transition`
 hook, called from `trigger_async`).
@@ -382,7 +409,7 @@ print(v.export_report('json'))
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
 - **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
 - **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`
-- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners
+- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
@@ -409,7 +436,7 @@ uv run python examples/<script>.py
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -x -q     # full suite (~340 tests)
+uv run pytest tests/ -x -q     # full suite (653 tests)
 ```
 
 ## Architecture

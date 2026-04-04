@@ -200,12 +200,26 @@ print(hist.log)  # [('idle', 'start', 'running'), ('running', 'stop', 'idle')]
 ```
 
 Each listener can implement any combination of:
+- `before_transition(source, target, trigger, **kwargs)` — called first, before any `on_exit`
 - `on_exit_state(source, target, trigger, **kwargs)` — called after the state's own `on_exit`
 - `on_enter_state(target, source, trigger, **kwargs)` — called after the state's own `on_enter`
 - `after_transition(source, target, trigger, **kwargs)` — called last, once per successful trigger
 
 Listener exceptions are logged and **never crash the FSM**. Zero overhead when no
 listeners are registered.
+
+**Inline convenience methods** (no listener class needed for simple cases):
+
+```python
+# After every successful transition
+fsm.after_transition(lambda src, tgt, t, **kw: print(f"{src.name} → {tgt.name}"))
+
+# When any trigger attempt is blocked
+fsm.on_failed(lambda t, from_s, err, **kw: print(f"blocked: {t}"))
+
+# After a specific trigger succeeds
+fsm.on_trigger("start", lambda src, tgt, t, **kw: print("machine started!"))
+```
 
 ### Pattern 6: Typed Constants with StrEnum *(Python 3.11+)*
 
