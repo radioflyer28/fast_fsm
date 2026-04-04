@@ -1021,20 +1021,20 @@ class TestClone:
         assert "extra" not in fsm.states
         assert not fsm.transition_exists("side", "idle", "extra")
 
-    def test_clone_listeners_are_empty(self):
-        """Listeners attached to the original are NOT copied to the clone."""
+    def test_clone_copies_listeners(self):
+        """Listeners attached to the original ARE copied to the clone."""
         fsm = self._make_fsm()
         events = []
 
         class L:
             def after_transition(self, old, new, t, **kw):
-                events.append("original")
+                events.append("fired")
 
         fsm.add_listener(L())
 
         clone = fsm.clone()
-        clone.trigger("start")  # should not fire original's listener
-        assert events == []
+        clone.trigger("start")  # should fire the copied listener
+        assert events == ["fired"]
 
     # ------------------------------------------------------------------
     # Multiple clones
@@ -1846,7 +1846,7 @@ class TestCloneCallbackBehavior:
         assert calls == ["fired"]
 
     def test_clone_does_not_copy_before_listeners(self):
-        """Cloned FSM does NOT inherit before_transition listeners."""
+        """Cloned FSM inherits before_transition listeners."""
 
         fsm = _make_simple_fsm()
 
@@ -1858,14 +1858,33 @@ class TestCloneCallbackBehavior:
         assert len(fsm._before_listeners) == 1
 
         clone = fsm.clone()
-        assert len(clone._before_listeners) == 0
+        assert len(clone._before_listeners) == 1
 
     def test_clone_does_not_copy_on_failed_callbacks(self):
-        """Cloned FSM does NOT inherit on_failed callbacks."""
+        """Cloned FSM inherits on_failed callbacks."""
         fsm = _make_simple_fsm()
         calls = []
         fsm.on_failed(lambda *a, **kw: calls.append("failed"))
 
         clone = fsm.clone()
-        clone.trigger("nonexistent")  # would trigger on_failed if copied
-        assert calls == []
+        clone.trigger("nonexistent")  # should fire the copied on_failed
+        assert calls == ["failed"]
+
+    def test_clone_callback_lists_are_independent(self):
+        """Adding a callback to clone after cloning does not affect original."""
+        fsm = _make_simple_fsm()
+        original_calls = []
+        clone_calls = []
+        fsm.on_failed(lambda *a, **kw: original_calls.append("orig"))
+
+        clone = fsm.clone()
+        clone.on_failed(lambda *a, **kw: clone_calls.append("clone"))
+
+        fsm.trigger("nonexistent")
+        assert original_calls == ["orig"]
+        assert clone_calls == []  # original's new callback not on clone
+
+        original_calls.clear()
+        clone.trigger("nonexistent")
+        assert clone_calls == ["clone"]
+        assert original_calls == ["orig"]  # shared callback fires on both

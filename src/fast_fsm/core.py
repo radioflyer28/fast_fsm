@@ -1156,14 +1156,15 @@ class StateMachine:
         self.force_state(state_name)
 
     def clone(self) -> "StateMachine":
-        """Create a structural clone of this machine reset to its initial state.
+        """Create a verbatim clone of this machine reset to its initial state.
 
-        The clone shares the same **topology** (states and transitions, including
-        any guard conditions) but starts with:
+        The clone is a shallow copy of the original: same topology (states,
+        transitions, guard conditions), same callbacks and listeners, but with
+        current state reset to the initial state.
 
-        - Current state set to the initial state (via :meth:`reset` semantics,
-          but no callbacks fire during construction).
-        - Empty listener lists — listeners are per-instance and are not copied.
+        All callback and listener lists are shallow-copied so the clone starts
+        with the same behaviour as the original. Adding new callbacks to the
+        clone after cloning does *not* affect the original, and vice versa.
 
         This is useful for running independent simulations from the same
         configured template, or for per-request/per-session FSM instances.
@@ -1172,14 +1173,9 @@ class StateMachine:
             A new :class:`StateMachine` (or subclass) instance.
 
         Note:
-            ``CallbackState`` on_enter / on_exit function references *are* shared
+            ``CallbackState`` on_enter / on_exit function references are shared
             (shallow copy), which is correct since they are typically pure
             functions or methods.
-
-            Per-state callbacks registered via :meth:`on_enter` / :meth:`on_exit`
-            (the ``_state_enter_callbacks`` / ``_state_exit_callbacks`` dicts) **are**
-            shallow-copied into the clone. Listener objects registered via
-            :meth:`add_listener` are **not** copied.
         """
         new_fsm: "StateMachine" = self.__class__(self._initial_state, name=self._name)
         # Replace the minimal state/transition tables __init__ created with
@@ -1191,7 +1187,6 @@ class StateMachine:
             for state_name, triggers in self._transitions.items()
         }
         # current_state is already _initial_state from __init__ — correct.
-        # Listener lists stay empty — intentional.
         # Per-state callbacks are copied (shallow copy of each list).
         new_fsm._state_exit_callbacks = {
             k: list(v) for k, v in self._state_exit_callbacks.items()
@@ -1199,10 +1194,14 @@ class StateMachine:
         new_fsm._state_enter_callbacks = {
             k: list(v) for k, v in self._state_enter_callbacks.items()
         }
-        # Copy per-trigger callbacks (shallow copy of outer dict; deep copy inner lists)
+        # Copy all listener/callback lists (shallow copy — same callables, independent lists).
+        new_fsm._before_listeners = list(self._before_listeners)
+        new_fsm._on_exit_listeners = list(self._on_exit_listeners)
+        new_fsm._on_enter_listeners = list(self._on_enter_listeners)
+        new_fsm._after_listeners = list(self._after_listeners)
+        new_fsm._on_failed_callbacks = list(self._on_failed_callbacks)
         for tname, cbs in self._trigger_callbacks.items():
             new_fsm._trigger_callbacks[tname] = list(cbs)
-        # _before_listeners and _on_failed_callbacks are intentionally NOT copied
         return new_fsm
 
     def _resolve_trigger(

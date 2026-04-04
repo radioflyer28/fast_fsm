@@ -223,7 +223,7 @@ snap = fsm.snapshot()          # {"state": "running", "version": 1}
 # ... persist snap, restart process, etc. ...
 fsm.restore(snap)              # teleports back; full callback chain fires
 
-# Clone — same topology, independent current state, empty listeners
+# Clone — verbatim copy reset to initial state; callbacks and topology are preserved
 worker = fsm.clone()           # ideal for per-request / per-session instances
 
 # Build from a dict / JSON / YAML config
@@ -304,7 +304,8 @@ fsm.on_failed(lambda t, from_s, err, **kw: print(f"BLOCKED: {t} from {from_s} �
 fsm.on_trigger("submit", lambda src, tgt, t, **kw: metrics.record(t))
 ```
 
-`on_failed` callbacks are not copied by `clone()`. `on_trigger` callbacks are.
+`clone()` copies all callbacks and listeners (shallow copy). Adding new callbacks
+to the clone after cloning does not affect the original.
 
 Listeners work identically on `AsyncStateMachine` (same `_execute_transition`
 hook, called from `trigger_async`).
