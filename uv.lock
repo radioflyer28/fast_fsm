@@ -516,7 +516,7 @@ benchmarks = [
 ]
 dev = [
     { name = "hypothesis", specifier = ">=6.136.6" },
-    { name = "mypy", extras = ["mypyc"], specifier = ">=1.11.2" },
+    { name = "mypy", extras = ["mypyc"], specifier = ">=1.17" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
