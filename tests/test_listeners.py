@@ -454,3 +454,75 @@ class TestTransitionHistoryPattern:
         fsm.trigger("start")
 
         assert metrics.counts == {"start": 2, "stop": 1}
+
+
+# ---------------------------------------------------------------------------
+# before_transition listener protocol hook
+# ---------------------------------------------------------------------------
+
+
+class TestBeforeTransitionListener:
+    def test_before_transition_fires_before_on_exit_state(self):
+        """before_transition fires before on_exit_state and after_transition."""
+        order = []
+
+        class OrderListener:
+            def before_transition(self, source, target, trigger, **kwargs):
+                order.append("before")
+
+            def on_exit_state(self, source, target, trigger, **kwargs):
+                order.append("exit")
+
+            def after_transition(self, source, target, trigger, **kwargs):
+                order.append("after")
+
+        fsm = _make_fsm()
+        fsm.add_listener(OrderListener())
+        fsm.trigger("start")
+
+        assert order.index("before") < order.index("exit") < order.index("after")
+
+    def test_before_transition_not_called_on_blocked_trigger(self):
+        """before_transition must NOT fire when a trigger has no matching transition."""
+        calls = []
+
+        class L:
+            def before_transition(self, source, target, trigger, **kwargs):
+                calls.append(trigger)
+
+        fsm = _make_fsm()
+        fsm.add_listener(L())
+        fsm.trigger("stop")  # blocked — no "stop" from idle
+        assert calls == []
+
+    def test_before_transition_receives_correct_args(self):
+        """before_transition receives (source: State, target: State, trigger: str)."""
+        captured = []
+
+        class L:
+            def before_transition(self, source, target, trigger, **kwargs):
+                captured.append((type(source).__name__, type(target).__name__, trigger))
+
+        fsm = _make_fsm()
+        fsm.add_listener(L())
+        fsm.trigger("start")
+
+        assert len(captured) == 1
+        src_type, tgt_type, trig = captured[0]
+        assert src_type == "State"
+        assert tgt_type == "State"
+        assert trig == "start"
+
+    def test_before_transition_state_values_correct(self):
+        """before_transition receives the correct source and target state objects."""
+        captured = []
+
+        class L:
+            def before_transition(self, source, target, trigger, **kwargs):
+                captured.append((source.name, target.name))
+
+        fsm = _make_fsm()
+        fsm.add_listener(L())
+        fsm.trigger("start")
+
+        assert captured == [("idle", "running")]

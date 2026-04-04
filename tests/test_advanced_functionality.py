@@ -1719,3 +1719,149 @@ class TestFromDictConditions:
             self._simple_config(), conditions={"start": TrivialAsync()}
         )
         assert isinstance(fsm, AsyncStateMachine)
+
+
+# ---------------------------------------------------------------------------
+# Convenience callback methods: after_transition, on_failed, on_trigger
+# ---------------------------------------------------------------------------
+
+
+def _make_simple_fsm():
+    """idle -[go]-> running -[stop]-> idle, with a guarded 'jump' from idle."""
+    from fast_fsm.conditions import FuncCondition
+
+    fsm = StateMachine.quick_build(
+        "idle",
+        [("go", "idle", "running"), ("stop", "running", "idle")],
+        name="ConvTest",
+    )
+    guard = FuncCondition(lambda **kw: kw.get("allowed", False), name="allowed")
+    fsm.add_transition("jump", "idle", "running", condition=guard)
+    return fsm
+
+
+class TestAfterTransitionMethod:
+    def test_after_transition_convenience_fires_after_success(self):
+        """fsm.after_transition(fn) fires once on successful transition."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.after_transition(lambda src, tgt, trig, **kw: calls.append((src.name, tgt.name, trig)))
+        fsm.trigger("go")
+        assert calls == [("idle", "running", "go")]
+
+    def test_after_transition_not_called_on_failed_trigger(self):
+        """fsm.after_transition(fn) must NOT fire when trigger fails."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.after_transition(lambda *a, **k: calls.append(a))
+        fsm.trigger("stop")  # blocked — no 'stop' from idle
+        assert calls == []
+
+
+class TestOnFailedMethod:
+    def test_on_failed_fires_on_no_matching_transition(self):
+        """on_failed fires when trigger has no matching transition."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_failed(lambda trig, from_s, err, **kw: calls.append((trig, from_s)))
+        fsm.trigger("nonexistent")
+        assert len(calls) == 1
+        assert calls[0][0] == "nonexistent"
+        assert calls[0][1] == "idle"
+
+    def test_on_failed_fires_on_condition_fail(self):
+        """on_failed fires when a guard condition returns False."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_failed(lambda trig, from_s, err, **kw: calls.append(trig))
+        fsm.trigger("jump", allowed=False)
+        assert calls == ["jump"]
+
+    def test_on_failed_not_called_on_success(self):
+        """on_failed must NOT fire on a successful transition."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_failed(lambda *a, **kw: calls.append(a))
+        fsm.trigger("go")
+        assert calls == []
+
+    def test_on_failed_receives_kwargs(self):
+        """on_failed receives the kwargs passed to trigger()."""
+        fsm = _make_simple_fsm()
+        received_kw = {}
+        fsm.on_failed(lambda trig, from_s, err, **kw: received_kw.update(kw))
+        fsm.trigger("nonexistent", extra="data")
+        assert received_kw.get("extra") == "data"
+
+
+class TestOnTriggerMethod:
+    def test_on_trigger_fires_for_matching_trigger(self):
+        """on_trigger fires after successful transition matching the name."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_trigger("go", lambda src, tgt, trig, **kw: calls.append(trig))
+        fsm.trigger("go")
+        assert calls == ["go"]
+
+    def test_on_trigger_not_fires_for_different_trigger(self):
+        """on_trigger does NOT fire when a different trigger succeeds."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_trigger("go", lambda *a, **kw: calls.append("go_fired"))
+        fsm.trigger("go")     # advance to running
+        fsm.trigger("stop")   # different trigger
+        # only the "go" trigger should have triggered our callback
+        assert calls == ["go_fired"]
+
+    def test_on_trigger_not_called_on_failed_transition(self):
+        """on_trigger does NOT fire when the named trigger fails."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_trigger("jump", lambda *a, **kw: calls.append("fired"))
+        fsm.trigger("jump", allowed=False)  # condition blocks it
+        assert calls == []
+
+    def test_on_trigger_receives_correct_args(self):
+        """on_trigger callback receives (from_state, to_state, trigger)."""
+        fsm = _make_simple_fsm()
+        captured = []
+        fsm.on_trigger("go", lambda src, tgt, trig, **kw: captured.append((src.name, tgt.name, trig)))
+        fsm.trigger("go")
+        assert captured == [("idle", "running", "go")]
+
+
+class TestCloneCallbackBehavior:
+    def test_clone_copies_trigger_callbacks(self):
+        """Cloned FSM inherits on_trigger callbacks."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_trigger("go", lambda *a, **kw: calls.append("fired"))
+        clone = fsm.clone()
+        clone.trigger("go")
+        assert calls == ["fired"]
+
+    def test_clone_does_not_copy_before_listeners(self):
+        """Cloned FSM does NOT inherit before_transition listeners."""
+        from fast_fsm.core import StateMachine as SM
+
+        fsm = _make_simple_fsm()
+
+        class L:
+            def before_transition(self, *a, **kw):
+                pass
+
+        fsm.add_listener(L())
+        assert len(fsm._before_listeners) == 1
+
+        clone = fsm.clone()
+        assert len(clone._before_listeners) == 0
+
+    def test_clone_does_not_copy_on_failed_callbacks(self):
+        """Cloned FSM does NOT inherit on_failed callbacks."""
+        fsm = _make_simple_fsm()
+        calls = []
+        fsm.on_failed(lambda *a, **kw: calls.append("failed"))
+
+        clone = fsm.clone()
+        clone.trigger("nonexistent")  # would trigger on_failed if copied
+        assert calls == []
