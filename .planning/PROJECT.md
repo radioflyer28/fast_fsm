@@ -8,18 +8,9 @@ High-performance, memory-efficient finite state machine library for Python. Outp
 
 Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000 ops/sec and all core operations must remain O(1).
 
-## Current Milestone: v0.2.1 Code Health & Quality
+## Completed: v0.2.1 Code Health & Quality (shipped 2026-04-04)
 
-**Goal:** Resolve technical debt and correctness concerns identified in the codebase audit — version hygiene, exception handling posture, type annotations, import consistency, `State` ABC cleanup, and test suite quality — without touching the public API.
-
-**Target features:**
-- Automated version sync between `pyproject.toml` and `__version__`
-- Exception handling audit and documentation of intent
-- `py.typed` PEP 561 marker (with pure-Python fallback safety)
-- `condition_templates.py` relative import fix
-- Remove misleading `ABC` base from `State`
-- Test suite triage — remove/consolidate low-value tests, document gaps
-- Benchmark regression job in CI
+14/14 requirements satisfied. See `.planning/milestones/v0.2.1-ROADMAP.md` for full details.
 
 ## Requirements
 
@@ -40,23 +31,17 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ Listener/observer pattern via `add_listener()` — existing
 - ✓ `unless=` negation shorthand on `add_transition()` — existing
 - ✓ CI pipeline: lint, tests (3.10–3.13 × Linux/macOS/Windows), docs, release — existing
+- ✓ **VERSION-01**: `__version__` derived from `importlib.metadata` — v0.2.1
+- ✓ **EXCEPT-01/02/03**: All 16 `except Exception` catches annotated; `safe_trigger()` semantics documented — v0.2.1
+- ✓ **TYPES-01/02**: `py.typed` PEP 561 marker; package recognized as typed — v0.2.1
+- ✓ **IMPORTS-01**: `condition_templates.py` uses relative import — v0.2.1
+- ✓ **STATE-01/02**: `State` no longer inherits from `ABC`; all subclassing works identically — v0.2.1
+- ✓ **TESTS-01/02/03**: Test suite audited; 4 low-value tests removed; coverage gaps documented — v0.2.1
+- ✓ **CI-01/02**: `benchmark` CI job with 200k ops/sec throughput gate — v0.2.1
 
 ### Active
 
-- [ ] **VERSION-01**: `__version__` in `__init__.py` is automatically derived from `pyproject.toml` at import time so they cannot drift
-- [ ] **EXCEPT-01**: Every `except Exception` catch in `core.py` is annotated with a comment explaining why the broad catch is intentional
-- [ ] **EXCEPT-02**: Catches in construction/validation paths narrowed to specific exception types where broad catch is unwarranted
-- [ ] **EXCEPT-03**: `safe_trigger()` exception semantics documented clearly in docstring
-- [ ] **TYPES-01**: `py.typed` PEP 561 marker file present in `src/fast_fsm/`
-- [ ] **TYPES-02**: Package recognized as typed by mypy/pyright after install, with pure-Python fallback remaining functional
-- [ ] **IMPORTS-01**: `condition_templates.py` uses relative import `from .conditions import Condition`
-- [ ] **STATE-01**: `State` no longer inherits from `abc.ABC` (no abstract methods exist; direct instantiation is the primary pattern)
-- [ ] **STATE-02**: All existing `State` subclassing and instantiation behavior unchanged post-removal
-- [ ] **TESTS-01**: Audit report identifies redundant, over-specified, and low-value tests
-- [ ] **TESTS-02**: Redundant/low-value tests removed or consolidated; test count reduced without reducing meaningful coverage
-- [ ] **TESTS-03**: Any coverage gaps identified and documented (not necessarily filled in this milestone)
-- [ ] **CI-01**: `@pytest.mark.slow` performance benchmarks run in a dedicated CI job on push to `main`
-- [ ] **CI-02**: Benchmark job uses a fixed performance threshold so regressions fail the build
+*(No active milestone — plan next milestone with `/gsd-new-milestone`)*
 
 ### Out of Scope
 
@@ -69,11 +54,11 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 ## Context
 
-- **Brownfield library:** v0.2.0 shipped in March 2026 with substantial API additions
+- **Current version:** v0.2.1 (shipped 2026-04-04)
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` stays interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work; `py.typed` solution cannot break this
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
-- **Version discrepancy at audit time:** `pyproject.toml` = 0.2.0, `__init__.py` = 0.1.0 (this milestone fixes it)
+- **Test count:** 634 (post-triage; 4 low-value tests removed from 637)
 
 ## Constraints
 
@@ -86,9 +71,10 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep `core.py` as single file | mypyc compilation unit must be single module | — Pending |
-| Remove `ABC` from `State` | No abstract methods exist; `ABC` provides no enforcement and misleads users | — Pending |
-| Automate version via `importlib.metadata` | Single source of truth in `pyproject.toml`; zero drift possible | — Pending |
+| Keep `core.py` as single file | mypyc compilation unit must be single module | ✓ Upheld — no refactoring |
+| Remove `ABC` from `State` | No abstract methods exist; `ABC` provides no enforcement and misleads users | ✓ Removed in v0.2.1 — 637 tests pass unchanged |
+| Automate version via `importlib.metadata` | Single source of truth in `pyproject.toml`; zero drift possible | ✓ Shipped in v0.2.1 |
+| Detect compiled mode by module file suffix | `FAST_FSM_PURE_PYTHON` env var only suppresses build-time compilation; can't reliably detect runtime mode | ✓ `find_spec().origin.endswith(".so")` is accurate |
 
 ## Evolution
 
@@ -108,4 +94,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-04 after v0.2.1 milestone initialization*
+*Last updated: 2026-04-04 after v0.2.1 milestone completion*

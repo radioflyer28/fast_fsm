@@ -7,6 +7,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.1] — 2026-04-04
+
+### Changed
+
+- `__version__` now derived dynamically from package metadata via `importlib.metadata`
+  so version string and `pyproject.toml` can never drift.
+- `condition_templates.py` uses relative import (`from .conditions import Condition`)
+  for consistency and source-install compatibility.
+- `State` no longer inherits from `abc.ABC` — no abstract methods were defined;
+  direct instantiation (`State("name")`) is the primary usage pattern.
+- All 16 `except Exception` catches in `core.py` annotated with inline comments
+  explaining the intentional broad-catch rationale (callback/condition isolation).
+- `safe_trigger()` docstring now fully documents exception isolation semantics vs
+  `trigger()`.
+
+### Added
+
+- `src/fast_fsm/py.typed` — PEP 561 marker; mypy/pyright now recognise fast_fsm
+  as a typed package after installation.
+- `test_trigger_min_throughput` — hot-path throughput regression gate (200k ops/sec
+  floor compiled, 30k pure-Python); marked `@pytest.mark.slow`.
+- `benchmark` CI job — compiles mypyc extension and runs `@pytest.mark.slow` tests
+  on every push to `main`.
+
+### Removed
+
+- 4 low-value/redundant tests pruned; test count 637 → 634 (net, including new
+  benchmark test).
+
+---
 ## [0.2.0] — 2026-03-06
 
 ### Added
