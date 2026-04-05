@@ -96,7 +96,10 @@ Plans:
 4. `trigger()` throughput with a timing condition guard ≥ 200,000 ops/sec (single `time.monotonic()` call in hot path)
 5. Full test suite passes (694+ baseline, 0 failures)
 
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 13-PLAN-01.md — Timing condition unit tests, FSM integration tests (sync + async + builder), throughput benchmark, regression gate
 
 ---
 
