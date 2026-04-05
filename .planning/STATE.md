@@ -1,14 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.2.1
-milestone_name: milestone
-status: completed
-last_updated: "2026-04-04T14:18:14.900Z"
-last_activity: 2026-04-04
+milestone: v0.2.2
+milestone_name: Introspection & Agent Tooling
+status: in_progress
+last_updated: "2026-04-05T00:00:00.000Z"
+last_activity: 2026-04-05
 progress:
-  total_phases: 6
+  total_phases: 0
   completed_phases: 0
-  total_plans: 1
+  total_plans: 0
   completed_plans: 0
 ---
 
@@ -18,14 +18,14 @@ progress:
 
 Phase: Not started (defining requirements)
 Plan: —
-Status: v0.2.1 milestone complete
-Last activity: 2026-04-04 - Completed quick task 260404-exx: Fill callback/hook gaps
+Status: Defining requirements
+Last activity: 2026-04-05 — Milestone v0.2.2 Introspection & Agent Tooling started
 
 ## Milestone
 
-**v0.2.1 Code Health & Quality**
-Goal: Resolve technical debt from codebase audit without touching public API.
-Phases: 6 (see ROADMAP.md)
+**v0.2.2 Introspection & Agent Tooling**
+Goal: Add structured, machine-readable access to FSM topology, transition history, and quality analysis for coding agents and users.
+Phases: TBD (see ROADMAP.md)
 
 ## Accumulated Context
 
