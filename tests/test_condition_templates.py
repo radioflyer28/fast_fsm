@@ -9,21 +9,26 @@ StateMachine.add_transition() and FSMBuilder.add_transition().
 All tests use real condition objects — no mocking.
 """
 
+import time
+
 import pytest
 
 from fast_fsm.condition_templates import (
     AlwaysCondition,
     AndCondition,
     ComparisonCondition,
+    CooldownCondition,
+    ElapsedCondition,
     KeyExistsCondition,
     NeverCondition,
     NotCondition,
     OrCondition,
     RegexCondition,
+    TimeoutCondition,
     ValueInSetCondition,
 )
 from fast_fsm.conditions import FuncCondition, NegatedCondition
-from fast_fsm.core import State, StateMachine, FSMBuilder
+from fast_fsm.core import AsyncStateMachine, FSMBuilder, State, StateMachine
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +275,111 @@ class TestNotCondition:
         c = NotCondition(inner)
         assert c.check(x=5) is True  # NOT (5 > 10) => True
         assert c.check(x=20) is False  # NOT (20 > 10) => False
+
+
+# ---------------------------------------------------------------------------
+# TimeoutCondition
+# ---------------------------------------------------------------------------
+
+
+class TestTimeoutCondition:
+    def test_passes_before_timeout(self):
+        cond = TimeoutCondition(10.0)
+        assert cond.check() is True
+
+    def test_blocks_after_timeout(self):
+        cond = TimeoutCondition(10.0)
+        cond._ref = time.monotonic() - 20
+        assert cond.check() is False
+
+    def test_reset_restarts_clock(self):
+        cond = TimeoutCondition(10.0)
+        cond._ref = time.monotonic() - 20
+        assert cond.check() is False
+        cond.reset()
+        assert cond.check() is True
+
+    def test_accepts_kwargs(self):
+        assert TimeoutCondition(10.0).check(foo="bar", x=1) is True
+
+    def test_slots_enforced(self):
+        with pytest.raises(AttributeError):
+            TimeoutCondition(1.0).nonexistent = 1
+
+    def test_name_and_description(self):
+        c = TimeoutCondition(5.0)
+        assert "timeout" in c.name
+        assert c.description
+
+
+# ---------------------------------------------------------------------------
+# CooldownCondition
+# ---------------------------------------------------------------------------
+
+
+class TestCooldownCondition:
+    def test_first_call_passes(self):
+        assert CooldownCondition(10.0).check() is True
+
+    def test_blocks_during_cooldown(self):
+        cond = CooldownCondition(10.0)
+        assert cond.check() is True
+        assert cond.check() is False
+
+    def test_passes_after_cooldown(self):
+        cond = CooldownCondition(1.0)
+        assert cond.check() is True
+        cond._last_success = time.monotonic() - 2
+        assert cond.check() is True
+
+    def test_reset_clears_last_success(self):
+        cond = CooldownCondition(10.0)
+        assert cond.check() is True
+        assert cond.check() is False
+        cond.reset()
+        assert cond.check() is True
+
+    def test_accepts_kwargs(self):
+        assert CooldownCondition(1.0).check(a=1) is True
+
+    def test_slots_enforced(self):
+        with pytest.raises(AttributeError):
+            CooldownCondition(1.0).nonexistent = 1
+
+
+# ---------------------------------------------------------------------------
+# ElapsedCondition
+# ---------------------------------------------------------------------------
+
+
+class TestElapsedCondition:
+    def test_blocks_before_elapsed(self):
+        cond = ElapsedCondition(10.0)
+        assert cond.check() is False
+
+    def test_passes_after_elapsed(self):
+        cond = ElapsedCondition(1.0)
+        cond._ref = time.monotonic() - 2
+        assert cond.check() is True
+
+    def test_reset_restarts_clock(self):
+        cond = ElapsedCondition(10.0)
+        cond._ref = time.monotonic() - 20
+        assert cond.check() is True
+        cond.reset()
+        assert cond.check() is False
+
+    def test_accepts_kwargs(self):
+        assert ElapsedCondition(10.0).check(key="val") is False
+
+    def test_slots_enforced(self):
+        with pytest.raises(AttributeError):
+            ElapsedCondition(1.0).nonexistent = 1
+
+    def test_name_and_description(self):
+        c = ElapsedCondition(5.0)
+        assert "elapsed" in c.name
+        assert c.description
 
 
 # ---------------------------------------------------------------------------
