@@ -3,6 +3,8 @@
 Collection of common TransitionCondition patterns for real-world usage
 """
 
+import time
+
 from .conditions import Condition
 from typing import Any, Set
 import re
@@ -156,6 +158,61 @@ class NotCondition(Condition):
 
     def check(self, **kwargs) -> bool:
         return not self.condition.check(**kwargs)
+
+
+class TimeoutCondition(Condition):
+    """Allows transitions until a timeout expires. Returns True before timeout, False after."""
+
+    __slots__ = ("seconds", "_ref")
+
+    def __init__(self, seconds: float):
+        super().__init__(f"timeout_{seconds}", f"Blocks after {seconds}s")
+        self.seconds = seconds
+        self._ref = time.monotonic()
+
+    def check(self, **kwargs) -> bool:
+        return (time.monotonic() - self._ref) < self.seconds
+
+    def reset(self) -> None:
+        self._ref = time.monotonic()
+
+
+class CooldownCondition(Condition):
+    """Enforces a minimum interval between successful checks. Passes on first call, then blocks until cooldown elapses since last success."""
+
+    __slots__ = ("seconds", "_last_success")
+
+    def __init__(self, seconds: float):
+        super().__init__(f"cooldown_{seconds}", f"Minimum {seconds}s between successes")
+        self.seconds = seconds
+        self._last_success: float = 0.0
+
+    def check(self, **kwargs) -> bool:
+        now = time.monotonic()
+        if (now - self._last_success) >= self.seconds:
+            self._last_success = now
+            return True
+        return False
+
+    def reset(self) -> None:
+        self._last_success = 0.0
+
+
+class ElapsedCondition(Condition):
+    """Returns True once a minimum elapsed time has passed. Returns False before, True after."""
+
+    __slots__ = ("seconds", "_ref")
+
+    def __init__(self, seconds: float):
+        super().__init__(f"elapsed_{seconds}", f"Passes after {seconds}s elapsed")
+        self.seconds = seconds
+        self._ref = time.monotonic()
+
+    def check(self, **kwargs) -> bool:
+        return (time.monotonic() - self._ref) >= self.seconds
+
+    def reset(self) -> None:
+        self._ref = time.monotonic()
 
 
 # Demo function
