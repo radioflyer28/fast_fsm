@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.2.2
-milestone_name: Introspection & Agent Tooling
+milestone: v0.2.3
+milestone_name: Timing Condition Helpers
 status: in_progress
 last_updated: "2026-04-05T00:00:00.000Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 5
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -19,12 +19,12 @@ progress:
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-04-05 — Milestone v0.2.2 Introspection & Agent Tooling started
+Last activity: 2026-04-05 — Milestone v0.2.3 Timing Condition Helpers started
 
 ## Milestone
 
-**v0.2.2 Introspection & Agent Tooling**
-Goal: Add structured, machine-readable access to FSM topology, transition history, and quality analysis for coding agents and users.
+**v0.2.3 Timing Condition Helpers**
+Goal: Add reusable, platform-safe time-based condition classes (timeout, cooldown, elapsed) so users can express timing guards without writing clock logic.
 Phases: TBD (see ROADMAP.md)
 
 ## Accumulated Context
@@ -32,21 +32,22 @@ Phases: TBD (see ROADMAP.md)
 ### Project facts
 
 - Library: pure Python package, src-layout, `uv` as package manager
-- mypyc compiles `core.py` only — `conditions.py` stays interpreted
+- mypyc compiles `core.py` only — `conditions.py` and `condition_templates.py` stay interpreted
 - Single runtime dep: `mypy-extensions`
 - CI: `.github/workflows/ci.yml` (lint + test 3.10–3.13 × 3 OSes), `docs.yml`, `release.yml`
-- No benchmark CI job yet
+- Benchmark CI job with 200k ops/sec throughput gate
 
-### v0.2.0 shipped 2026-03-06
+### v0.2.2 shipped 2026-04-05
 
-Major API additions: per-state callbacks, `from_dict`, `snapshot/restore/clone`, `unless=`, async per-state callbacks, `CompiledFuncCondition`, `NegatedCondition`, `TransitionError`, `raise_if_failed`.
+Introspection & agent tooling: `to_dict()`, `TransitionRecord` history, `to_plantuml()`, `to_json()`. 694 tests, 1.2M ops/sec.
 
-### Known constraints
+### v0.2.1 shipped 2026-04-04
 
-- `except Exception` swallow-and-log in all callback/listener paths is intentional
-- `State(ABC)` with no abstract methods is a design quirk to fix this milestone
-- `condition_templates.py` import inconsistency: uses absolute `from fast_fsm import` vs relative elsewhere
-- `__version__` in `__init__.py` was `"0.1.0"` while `pyproject.toml` was `"0.2.0"` — this milestone automates sync
+Code health: version sync, py.typed, ABC removal, exception annotation, test triage, benchmark CI.
+
+### Clock source decision
+
+All timing conditions use `time.monotonic()` — monotonic clock immune to NTP jumps and wall-clock adjustments across macOS/Linux/Windows. This is a passive guard approach — conditions are checked on trigger(), no auto-fire scheduler.
 
 ## Blockers
 
@@ -54,9 +55,7 @@ None.
 
 ## Pending Decisions
 
-- Exact mechanism for version sync: `importlib.metadata.version()` at import time (preferred) vs build-time injection
-- Whether `py.typed` requires any changes to `setup.py` or just a file addition
-- How many tests in the suite are genuinely low-value (audit will tell)
+None.
 
 ### Quick Tasks Completed
 
