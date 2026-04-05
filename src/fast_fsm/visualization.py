@@ -170,6 +170,146 @@ def to_plantuml(
     return "\n".join(lines)
 
 
+def to_json(fsm: "StateMachine") -> dict:
+    """
+    Return a JSON-serialisable dict describing FSM topology plus analysis.
+
+    The output is designed for consumption by coding agents and programmatic
+    tooling.  Sections:
+
+    - ``topology`` — states, initial state, transitions (with ``has_guard``)
+    - ``analysis.reachability`` — reachable / unreachable / terminal state lists
+    - ``analysis.cycles`` — whether cycles exist and which states participate
+    - ``analysis.quality`` — ``EnhancedFSMValidator`` scores (``None`` if the
+      validation module is unavailable)
+
+    ``validation.py`` is imported lazily so this function adds zero import-time
+    cost when the module is not installed or not needed.
+
+    Args:
+        fsm: The state machine to inspect.
+
+    Returns:
+        A plain dict safe for ``json.dumps()``.
+
+    Example::
+
+        >>> from fast_fsm import StateMachine, to_json
+        >>> fsm = StateMachine.quick_build(
+        ...     "idle",
+        ...     [("start", "idle", "running"), ("stop", "running", "idle")],
+        ... )
+        >>> data = to_json(fsm)
+        >>> data["topology"]["initial"]
+        'idle'
+    """
+    # --- Topology -----------------------------------------------------------
+    initial_name = next(iter(fsm._states))
+    states_list = sorted(fsm._states.keys())
+    transitions_list: list[dict] = []
+
+    for from_name, triggers in fsm._transitions.items():
+        for trigger_name, entry in triggers.items():
+            transitions_list.append(
+                {
+                    "trigger": trigger_name,
+                    "from": from_name,
+                    "to": entry.to_state.name,
+                    "has_guard": entry.condition is not None,
+                }
+            )
+
+    topology = {
+        "states": states_list,
+        "initial": initial_name,
+        "transitions": transitions_list,
+    }
+
+    # --- Reachability (BFS) -------------------------------------------------
+    reachable: set[str] = set()
+    queue = [initial_name]
+    while queue:
+        current = queue.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        for _trigger, entry in fsm._transitions.get(current, {}).items():
+            to_name = entry.to_state.name
+            if to_name not in reachable:
+                queue.append(to_name)
+
+    unreachable = sorted(set(fsm._states.keys()) - reachable)
+    terminal = sorted(
+        s
+        for s in fsm._states
+        if not fsm._transitions.get(s)
+    )
+
+    reachability = {
+        "reachable": sorted(reachable),
+        "unreachable": unreachable,
+        "terminal": terminal,
+    }
+
+    # --- Cycle detection (DFS with colour) ----------------------------------
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour: dict[str, int] = {s: WHITE for s in fsm._states}
+    states_in_cycles: set[str] = set()
+
+    def _dfs(node: str) -> None:
+        colour[node] = GREY
+        for _trigger, entry in fsm._transitions.get(node, {}).items():
+            successor = entry.to_state.name
+            if colour.get(successor) == GREY:
+                # Back-edge → cycle involving both nodes
+                states_in_cycles.add(node)
+                states_in_cycles.add(successor)
+            elif colour.get(successor) == WHITE:
+                _dfs(successor)
+        colour[node] = BLACK
+
+    for state_name in fsm._states:
+        if colour[state_name] == WHITE:
+            _dfs(state_name)
+
+    cycles = {
+        "has_cycles": bool(states_in_cycles),
+        "states_in_cycles": sorted(states_in_cycles),
+    }
+
+    # --- Quality (lazy import) ----------------------------------------------
+    quality = None
+    try:
+        from fast_fsm.validation import EnhancedFSMValidator
+
+        v = EnhancedFSMValidator(fsm)
+        score_data = v.get_validation_score()
+        quality = {
+            "completeness_score": score_data.get("completeness_score"),
+            "structural_score": score_data.get("structural_score"),
+            "overall_score": score_data.get("overall_score"),
+            "grade": score_data.get("grade"),
+            "issues": [
+                {
+                    "severity": issue.severity,
+                    "category": issue.category,
+                    "message": issue.description,
+                }
+                for issue in v.issues
+            ],
+        }
+    except Exception:
+        quality = None
+
+    analysis = {
+        "reachability": reachability,
+        "cycles": cycles,
+        "quality": quality,
+    }
+
+    return {"topology": topology, "analysis": analysis}
+
+
 def to_mermaid_fenced(
     fsm: "StateMachine",
     *,

@@ -9,7 +9,7 @@ rendering it.
 import pytest
 
 from fast_fsm import StateMachine, State, FuncCondition, to_mermaid
-from fast_fsm import to_mermaid_fenced, to_mermaid_document, to_plantuml
+from fast_fsm import to_mermaid_fenced, to_mermaid_document, to_plantuml, to_json
 from fast_fsm.visualization import _mermaid_id
 
 
@@ -399,3 +399,87 @@ class TestToPlantUMLEdgeCases:
         assert "[*] --> wait" in out
         assert "wait --> done : go" in out
         assert "done --> [*]" in out
+
+
+# ---------------------------------------------------------------------------
+# to_json
+# ---------------------------------------------------------------------------
+
+
+class TestToJsonTopology:
+    def test_top_level_keys(self, simple_fsm):
+        data = to_json(simple_fsm)
+        assert "topology" in data
+        assert "analysis" in data
+
+    def test_states_sorted(self, simple_fsm):
+        data = to_json(simple_fsm)
+        assert data["topology"]["states"] == sorted(["idle", "running", "done"])
+
+    def test_initial_state(self, simple_fsm):
+        data = to_json(simple_fsm)
+        assert data["topology"]["initial"] == "idle"
+
+    def test_transitions_present(self, simple_fsm):
+        data = to_json(simple_fsm)
+        triggers = {t["trigger"] for t in data["topology"]["transitions"]}
+        assert "start" in triggers
+        assert "finish" in triggers
+
+    def test_has_guard_false_when_no_condition(self, simple_fsm):
+        data = to_json(simple_fsm)
+        for t in data["topology"]["transitions"]:
+            assert t["has_guard"] is False
+
+    def test_has_guard_true_with_condition(self, conditional_fsm):
+        data = to_json(conditional_fsm)
+        guarded = [t for t in data["topology"]["transitions"] if t["has_guard"]]
+        assert len(guarded) >= 1
+
+
+class TestToJsonReachability:
+    def test_all_reachable_in_simple_fsm(self, simple_fsm):
+        r = to_json(simple_fsm)["analysis"]["reachability"]
+        assert set(r["reachable"]) == {"idle", "running", "done"}
+        assert r["unreachable"] == []
+
+    def test_unreachable_state_detected(self):
+        fsm = StateMachine(State("a"), name="Unreach")
+        fsm.add_state(State("b"))
+        fsm.add_state(State("orphan"))
+        fsm.add_transition("go", "a", "b")
+        r = to_json(fsm)["analysis"]["reachability"]
+        assert "orphan" in r["unreachable"]
+
+    def test_terminal_states(self, simple_fsm):
+        r = to_json(simple_fsm)["analysis"]["reachability"]
+        assert "done" in r["terminal"]
+
+
+class TestToJsonCycles:
+    def test_cyclic_machine(self, cyclic_fsm):
+        c = to_json(cyclic_fsm)["analysis"]["cycles"]
+        assert c["has_cycles"] is True
+        assert len(c["states_in_cycles"]) > 0
+
+    def test_dag_no_cycles(self, simple_fsm):
+        c = to_json(simple_fsm)["analysis"]["cycles"]
+        assert c["has_cycles"] is False
+        assert c["states_in_cycles"] == []
+
+
+class TestToJsonQuality:
+    def test_quality_section_populated(self, simple_fsm):
+        q = to_json(simple_fsm)["analysis"]["quality"]
+        assert q is not None
+        assert "overall_score" in q
+        assert "grade" in q
+        assert "issues" in q
+
+    def test_json_serialisable(self, simple_fsm):
+        import json
+
+        data = to_json(simple_fsm)
+        # Must not raise TypeError
+        serialised = json.dumps(data)
+        assert isinstance(serialised, str)
