@@ -49,7 +49,7 @@
 
 ## v0.2.3 Phases
 
-- [ ] **Phase 12: Timing Condition Implementation** — `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition` in `condition_templates.py` + exports (1 plan)
+- [x] **Phase 12: Timing Condition Implementation** — `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition` in `condition_templates.py` + exports (1 plan)
 - [ ] **Phase 13: Testing & Integration Verification** — unit tests, integration tests (sync + async FSM guards), performance benchmark, regression gate
 - [ ] **Phase 14: Documentation** — README timing condition examples, Sphinx API reference updates, milestone wrap-up
 
