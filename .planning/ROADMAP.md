@@ -49,7 +49,7 @@
 
 ## v0.2.3 Phases
 
-- [ ] **Phase 12: Timing Condition Implementation** — `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition` in `condition_templates.py` + exports
+- [ ] **Phase 12: Timing Condition Implementation** — `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition` in `condition_templates.py` + exports (1 plan)
 - [ ] **Phase 13: Testing & Integration Verification** — unit tests, integration tests (sync + async FSM guards), performance benchmark, regression gate
 - [ ] **Phase 14: Documentation** — README timing condition examples, Sphinx API reference updates, milestone wrap-up
 
@@ -74,7 +74,10 @@
 4. All three accept `**kwargs` in `check()` (per `Condition` ABC contract) and use `time.monotonic()` exclusively
 5. No `__dict__` on any instance — `__slots__` enforced
 
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 12-PLAN-01.md — Implement TimeoutCondition, CooldownCondition, ElapsedCondition + exports
 
 ---
 
