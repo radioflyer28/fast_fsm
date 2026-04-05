@@ -140,6 +140,34 @@ fsm.trigger("open", locked=True)   # blocked — is locked
 
 `condition=` and `unless=` are mutually exclusive.
 
+### Timing Conditions
+
+Built-in time-based guards remove the need for manual clock logic:
+
+```python
+from fast_fsm import StateMachine, State, TimeoutCondition, CooldownCondition, ElapsedCondition
+
+fsm = StateMachine(State("idle"), name="timed")
+fsm.add_state(State("active"))
+fsm.add_state(State("cooldown"))
+
+# TimeoutCondition — allow a transition only within the first N seconds
+timeout = TimeoutCondition(30.0)          # 30-second window
+fsm.add_transition("activate", "idle", "active", condition=timeout)
+
+# CooldownCondition — enforce a minimum interval between triggers  
+cooldown = CooldownCondition(5.0)         # at least 5 s between fires
+fsm.add_transition("retry", "active", "active", condition=cooldown)
+
+# ElapsedCondition — gate a transition until N seconds have passed
+warmup = ElapsedCondition(10.0)           # wait 10 s before allowing
+fsm.add_transition("ready", "active", "cooldown", condition=warmup)
+
+# All timing conditions use time.monotonic() (immune to NTP jumps)
+# and provide a reset() method to restart their internal clock:
+timeout.reset()
+```
+
 ### Multi-Source Transitions
 
 ```python
