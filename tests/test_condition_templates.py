@@ -441,6 +441,115 @@ class TestConditionTemplatesInFSM:
 
 
 # ---------------------------------------------------------------------------
+# Timing conditions in a real FSM (sync, async, builder)
+# ---------------------------------------------------------------------------
+
+
+class TestTimingConditionsInFSM:
+    """Integration tests: timing conditions as guards on real FSMs."""
+
+    # -- Sync StateMachine --
+
+    def test_timeout_guard_allows_before_expiry(self):
+        cond = TimeoutCondition(10.0)
+        fsm = StateMachine(State("idle"), name="timeout_sync")
+        fsm.add_state(State("active"))
+        fsm.add_transition("go", "idle", "active", cond)
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "active"
+
+    def test_timeout_guard_blocks_after_expiry(self):
+        cond = TimeoutCondition(10.0)
+        fsm = StateMachine(State("idle"), name="timeout_block")
+        fsm.add_state(State("active"))
+        fsm.add_transition("go", "idle", "active", cond)
+        cond._ref = time.monotonic() - 20
+        result = fsm.trigger("go")
+        assert not result.success
+        assert fsm.current_state.name == "idle"
+
+    def test_cooldown_guard_blocks_rapid_transitions(self):
+        cond = CooldownCondition(10.0)
+        fsm = StateMachine(State("a"), name="cooldown_sync")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", cond)
+        fsm.add_transition("back", "b", "a", cond)
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "b"
+        result = fsm.trigger("back")
+        assert not result.success
+        assert fsm.current_state.name == "b"
+
+    def test_elapsed_guard_blocks_then_allows(self):
+        cond = ElapsedCondition(10.0)
+        fsm = StateMachine(State("idle"), name="elapsed_sync")
+        fsm.add_state(State("done"))
+        fsm.add_transition("go", "idle", "done", cond)
+        assert not fsm.trigger("go").success
+        cond._ref = time.monotonic() - 20
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "done"
+
+    # -- AsyncStateMachine --
+
+    @pytest.mark.asyncio
+    async def test_async_cooldown_guard(self):
+        cond = CooldownCondition(10.0)
+        fsm = AsyncStateMachine(State("a"), name="cooldown_async")
+        fsm.add_state(State("b"))
+        fsm.add_transition("go", "a", "b", cond)
+        fsm.add_transition("back", "b", "a", cond)
+        result = await fsm.trigger_async("go")
+        assert result.success
+        assert fsm.current_state.name == "b"
+        result = await fsm.trigger_async("back")
+        assert not result.success
+        assert fsm.current_state.name == "b"
+
+    @pytest.mark.asyncio
+    async def test_async_timeout_guard(self):
+        cond = TimeoutCondition(10.0)
+        fsm = AsyncStateMachine(State("idle"), name="timeout_async")
+        fsm.add_state(State("active"))
+        fsm.add_transition("go", "idle", "active", cond)
+        fsm.add_transition("back", "active", "idle", cond)
+        result = await fsm.trigger_async("go")
+        assert result.success
+        assert fsm.current_state.name == "active"
+        cond._ref = time.monotonic() - 20
+        result = await fsm.trigger_async("back")
+        assert not result.success
+        assert fsm.current_state.name == "active"
+
+    # -- FSMBuilder --
+
+    def test_builder_with_elapsed_condition(self):
+        cond = ElapsedCondition(10.0)
+        fsm = (
+            FSMBuilder(State("start"), name="builder_elapsed")
+            .add_state(State("end"))
+            .add_transition("go", "start", "end", condition=cond)
+            .build()
+        )
+        assert isinstance(fsm, StateMachine)
+        assert not fsm.trigger("go").success
+        cond._ref = time.monotonic() - 20
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "end"
+
+    def test_builder_with_timeout_condition(self):
+        cond = TimeoutCondition(10.0)
+        fsm = (
+            FSMBuilder(State("start"), name="builder_timeout")
+            .add_state(State("end"))
+            .add_transition("go", "start", "end", condition=cond)
+            .build()
+        )
+        assert fsm.trigger("go").success
+        assert fsm.current_state.name == "end"
+
+
+# ---------------------------------------------------------------------------
 # Coverage gap tests for condition templates
 # ---------------------------------------------------------------------------
 
