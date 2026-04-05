@@ -51,6 +51,7 @@
 | Milestone | Phases | Sessions | What Changed |
 |-----------|--------|----------|-------------|
 | v0.2.1 | 6 | 1 | First autonomous milestone run; all infrastructure/cleanup |
+| v0.2.2 | 6 | 2 | Feature phases via autonomous + retroactive audit/gap closure; learned to audit after autonomous runs |
 
 ### Technical Debt Tracking
 
@@ -62,4 +63,46 @@
 | `except Exception` catches undocumented | pre-audit | ✓ | v0.2.1 |
 | Missing `py.typed` marker | pre-audit | ✓ | v0.2.1 |
 | Low-value/redundant tests (4) | pre-audit | ✓ | v0.2.1 |
-| `core.py` shows 0% in coverage (mypyc artifact) | v0.2.1 audit | Open | v0.2.2 |
+| `core.py` shows 0% in coverage (mypyc artifact) | v0.2.1 audit | Open | — |
+
+---
+
+## Milestone: v0.2.2 — Introspection & Agent Tooling
+
+**Shipped:** 2026-04-05
+**Phases:** 6 (7–11.1) | **Requirements:** 21/21 | **Sessions:** 2 (1 autonomous + 1 audit/gap closure)
+
+### What Was Built
+
+- `StateMachine.to_dict()` / `from_dict()` topology serialization roundtrip — machines can be serialized, stored, and reconstructed
+- Opt-in transition history via `enable_history()` / `disable_history()` with `TransitionRecord` dataclass and bounded `deque` buffer
+- `to_plantuml()` in `visualization.py` — generates valid PlantUML state diagrams with initial/terminal markers
+- `to_json()` machine-readable export — topology + reachability analysis + cycle detection + quality scores from `EnhancedFSMValidator`
+- History-enabled throughput benchmark (Phase 11.1 gap closure) — verified ≤ 2× degradation vs disabled baseline
+- README updated with performance table and transition history documentation
+
+### What Worked
+
+- **Autonomous mode scaled well for feature phases:** 5 phases (7–11) executed end-to-end without intervention. Feature work that follows clear requirements is a good fit for autonomous execution.
+- **`to_json()` lazy import of validation.py:** Quality section is populated only when `validation.py` is available — keeps the import-time dependency minimal.
+- **Bounded deque for history:** Using `collections.deque(maxlen=N)` for the circular buffer is both performant and eliminates unbounded memory growth risk.
+- **Zero-cost history when disabled:** Single `None` check in `trigger()` hot path means no measurable overhead when history is off.
+
+### What Was Inefficient
+
+- **Autonomous run skipped GSD closeout artifacts:** Phases 7–11 were executed with no SUMMARY.md files, which meant the `milestone complete` CLI couldn't extract accomplishments. Had to manually enrich the MILESTONES.md entry.
+- **PERF-02 gap missed during autonomous execution:** The autonomous run declared the milestone done without measuring history-enabled throughput. Caught only during the retroactive audit (Phase 11.1 gap closure).
+- **Archived REQUIREMENTS.md had wrong content:** The `milestone complete` CLI archived the current REQUIREMENTS.md which had already been replaced with v0.2.3 content. Had to manually restore from git history.
+
+### Patterns Established
+
+- **Always run `/gsd-audit-milestone` after autonomous execution:** Autonomous mode may skip verification steps. An explicit audit catches gaps before the milestone is archived.
+- **Gap closure phases use decimal numbering (e.g., 11.1):** Inserted between completed phases to close audit-identified gaps without renumbering.
+- **Archive REQUIREMENTS.md before creating new milestone:** When requirements are replaced via `/gsd-new-milestone`, the old content must be archived first — the CLI can't recover it later.
+
+### Key Lessons
+
+1. **Autonomous execution + GSD closeout require separate passes.** Autonomous mode prioritizes code delivery over GSD artifact creation. Closeout (audit, archive, tag) should be a deliberate follow-up step.
+2. **The `milestone complete` CLI assumes SUMMARY.md exists for each phase.** If phases lack summaries (e.g., from autonomous runs), the CLI reports empty accomplishments. Manual enrichment is needed.
+3. **REQUIREMENTS.md is a mutable file that gets overwritten by `new-milestone`.** Archive it before (or immediately after) creating a new milestone to avoid data loss.
+4. **History-enabled throughput is a distinct metric from baseline throughput.** Both should be benchmarked explicitly — don't assume one covers the other.

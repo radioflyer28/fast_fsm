@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.2.3
-milestone_name: Timing Condition Helpers
-status: in_progress
-last_updated: "2026-04-05T00:00:00.000Z"
+milestone_name: Phases
+status: Not started
+last_updated: "2026-04-05T16:29:34.590Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -19,7 +19,7 @@ progress:
 Phase: 12 — Timing Condition Implementation
 Plan: —
 Status: Not started
-Last activity: 2026-04-05 — Phase 11.1 complete (v0.2.2 gap closure: PERF-02 satisfied)
+Last activity: 2026-04-05
 
 ## Milestone
 

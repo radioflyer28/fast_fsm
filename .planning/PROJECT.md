@@ -54,6 +54,7 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ **SERIAL-01**: `StateMachine.to_dict()` topology serialization roundtrip — v0.2.2
 - ✓ **HIST-01/02/03**: Opt-in transition history with `TransitionRecord`, bounded buffer, zero-cost when disabled — v0.2.2
 - ✓ **VIS-01/02/03/04**: `to_plantuml()`, `to_json()` with topology + analysis + quality signals — v0.2.2
+- ✓ **PERF-02**: History-enabled throughput measured and documented (≤ 2× degradation verified) — v0.2.2
 
 ### Active
 
@@ -75,7 +76,7 @@ _(See REQUIREMENTS.md for v0.2.3 timing condition requirements)_
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` and `condition_templates.py` stay interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
-- **Test count:** 694 (post-v0.2.2)
+- **Test count:** 695 (post-v0.2.2, including history throughput benchmark)
 - **Clock source:** `time.monotonic()` for all timing — immune to NTP jumps across macOS/Linux/Windows
 
 ## Constraints
@@ -93,6 +94,7 @@ _(See REQUIREMENTS.md for v0.2.3 timing condition requirements)_
 | Remove `ABC` from `State` | No abstract methods exist; `ABC` provides no enforcement and misleads users | ✓ Removed in v0.2.1 — 637 tests pass unchanged |
 | Automate version via `importlib.metadata` | Single source of truth in `pyproject.toml`; zero drift possible | ✓ Shipped in v0.2.1 |
 | Detect compiled mode by module file suffix | `FAST_FSM_PURE_PYTHON` env var only suppresses build-time compilation; can't reliably detect runtime mode | ✓ `find_spec().origin.endswith(".so")` is accurate |
+| History recording is zero-cost when disabled | Single `None` check in `trigger()` hot path; bounded `deque` when enabled | ✓ Verified ≤ 2× overhead in benchmark |
 
 ## Evolution
 
@@ -112,4 +114,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 after v0.2.3 milestone start*
+*Last updated: 2026-04-05 after v0.2.2 milestone completion and v0.2.3 start*
