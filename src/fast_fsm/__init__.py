@@ -13,6 +13,7 @@ from .core import (
     TransitionResult,
     TransitionError,
     TransitionEntry,
+    TransitionRecord,
     Condition,
     FuncCondition,
     CompiledFuncCondition,

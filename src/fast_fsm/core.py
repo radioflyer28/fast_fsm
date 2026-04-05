@@ -13,6 +13,7 @@ Key design principles:
 """
 
 import logging
+import time
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
 from dataclasses import dataclass
 import asyncio
@@ -59,6 +60,30 @@ class TransitionResult:
         if not self.success:
             raise TransitionError(self)
         return self
+
+
+class TransitionRecord:
+    """A single recorded transition event.
+
+    Instances are created automatically when history recording is enabled
+    via :meth:`StateMachine.enable_history`.
+    """
+
+    __slots__ = ("from_state", "trigger", "to_state", "timestamp")
+
+    def __init__(
+        self, from_state: str, trigger: str, to_state: str, timestamp: float
+    ) -> None:
+        self.from_state: str = from_state
+        self.trigger: str = trigger
+        self.to_state: str = to_state
+        self.timestamp: float = timestamp
+
+    def __repr__(self) -> str:
+        return (
+            f"TransitionRecord(from_state={self.from_state!r}, "
+            f"trigger={self.trigger!r}, to_state={self.to_state!r})"
+        )
 
 
 class TransitionEntry:
@@ -255,6 +280,8 @@ class StateMachine:
         "_trigger_callbacks",
         "_state_exit_callbacks",
         "_state_enter_callbacks",
+        "_history",
+        "_history_max",
     )
 
     def __init__(
@@ -300,6 +327,10 @@ class StateMachine:
         # registration order, all called on transition).
         self._state_exit_callbacks: Dict[str, List[Any]] = {}
         self._state_enter_callbacks: Dict[str, List[Any]] = {}
+
+        # History — opt-in transition recording (None = disabled)
+        self._history: Optional[List[TransitionRecord]] = None
+        self._history_max: int = 1000
 
         # Register the initial state
         self._register_state(initial_state)
@@ -559,6 +590,37 @@ class StateMachine:
             "states": sorted(self._states.keys()),
             "transitions": transitions,
         }
+
+    def enable_history(self, max_entries: int = 1000) -> None:
+        """Enable transition history recording.
+
+        When enabled, every successful :meth:`trigger` call appends a
+        :class:`TransitionRecord` to an internal bounded buffer.  The buffer
+        holds at most *max_entries* records; when full the oldest entry is
+        dropped.
+
+        Calling this method again replaces the buffer (existing records are
+        discarded).
+
+        Args:
+            max_entries: Maximum number of records to keep.
+        """
+        self._history_max = max_entries
+        self._history = []
+
+    def disable_history(self) -> None:
+        """Disable transition history recording and discard all records."""
+        self._history = None
+
+    @property
+    def history(self) -> List["TransitionRecord"]:
+        """Return a copy of the transition history.
+
+        Returns an empty list when history is disabled.
+        """
+        if self._history is None:
+            return []
+        return list(self._history)
 
     def _register_state(self, state: State) -> None:
         """Register a state and initialize its transition table"""
@@ -1236,6 +1298,10 @@ class StateMachine:
         new_fsm._on_failed_callbacks = list(self._on_failed_callbacks)
         for tname, cbs in self._trigger_callbacks.items():
             new_fsm._trigger_callbacks[tname] = list(cbs)
+        # History is NOT copied — the clone starts with a fresh (disabled) history.
+        # If the original had history enabled, the clone does not inherit it.
+        new_fsm._history = None
+        new_fsm._history_max = self._history_max
         return new_fsm
 
     def _resolve_trigger(
@@ -1408,6 +1474,16 @@ class StateMachine:
                     fn(old_state, to_state, trigger, **kwargs)
                 except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.error("on_trigger callback error: %s", e)
+
+        # Record transition in history (zero-cost when disabled — single None check)
+        if self._history is not None:
+            if len(self._history) >= self._history_max:
+                del self._history[0]
+            self._history.append(
+                TransitionRecord(
+                    old_state.name, trigger, to_state.name, time.monotonic()
+                )
+            )
 
         return TransitionResult(
             True, from_state=old_state.name, to_state=to_state.name, trigger=trigger

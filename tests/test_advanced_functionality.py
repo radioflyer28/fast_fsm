@@ -1533,6 +1533,98 @@ class TestToDict:
         assert fsm2.current_state_name == "active"
 
 
+class TestTransitionHistory:
+    """Tests for enable_history / disable_history / history property."""
+
+    def _make_fsm(self):
+        return StateMachine.quick_build(
+            "a",
+            [("go", "a", "b"), ("go", "b", "c"), ("back", "c", "a")],
+            name="HistFSM",
+        )
+
+    def test_history_disabled_by_default(self):
+        fsm = self._make_fsm()
+        assert fsm.history == []
+        fsm.trigger("go")
+        assert fsm.history == []  # still empty — not recording
+
+    def test_enable_history_records(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        fsm.trigger("go")
+        h = fsm.history
+        assert len(h) == 2
+        assert h[0].from_state == "a"
+        assert h[0].trigger == "go"
+        assert h[0].to_state == "b"
+        assert h[1].from_state == "b"
+        assert h[1].trigger == "go"
+        assert h[1].to_state == "c"
+
+    def test_disable_history_clears(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        assert len(fsm.history) == 1
+        fsm.disable_history()
+        assert fsm.history == []
+        fsm.trigger("go")  # should NOT record
+        assert fsm.history == []
+
+    def test_max_entries_bounded(self):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=3)
+        for _ in range(5):
+            fsm.trigger("go")
+            if fsm.current_state_name == "c":
+                fsm.trigger("back")
+        h = fsm.history
+        assert len(h) == 3  # only last 3
+
+    def test_history_chronological_order(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")  # a->b
+        fsm.trigger("go")  # b->c
+        fsm.trigger("back")  # c->a
+        h = fsm.history
+        assert [r.to_state for r in h] == ["b", "c", "a"]
+
+    def test_history_has_timestamp(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        h = fsm.history
+        assert isinstance(h[0].timestamp, float)
+        assert h[0].timestamp > 0
+
+    def test_history_returns_copy(self):
+        """Mutating the returned list doesn't affect internal buffer."""
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        h = fsm.history
+        h.clear()
+        assert len(fsm.history) == 1
+
+    def test_enable_history_replaces_buffer(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        assert len(fsm.history) == 1
+        fsm.enable_history(max_entries=10)  # replaces
+        assert fsm.history == []
+
+    def test_clone_does_not_inherit_history(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+        clone = fsm.clone()
+        assert clone.history == []
+
+
 class TestTransitionResultRaiseIfFailed:
     """Tests for TransitionResult.raise_if_failed() and TransitionError."""
 

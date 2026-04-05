@@ -566,3 +566,29 @@ class TestAsyncPerStateCallbacks:
         # Original has no async enter callback for running
         await fsm.trigger_async("start")
         assert log == []  # not fired on original
+
+
+class TestAsyncHistory:
+    """HIST-07: AsyncStateMachine records to the same history buffer."""
+
+    @pytest.mark.asyncio
+    async def test_trigger_async_records_history(self):
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = AsyncStateMachine(idle, name="async_hist")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+
+        fsm.enable_history()
+        await fsm.trigger_async("start")
+        await fsm.trigger_async("finish")
+
+        h = fsm.history
+        assert len(h) == 2
+        assert h[0].from_state == "idle"
+        assert h[0].to_state == "running"
+        assert h[1].from_state == "running"
+        assert h[1].to_state == "done"
