@@ -6,7 +6,7 @@ status: in_progress
 last_updated: "2026-04-05T00:00:00.000Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -16,16 +16,16 @@ progress:
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 12 — Timing Condition Implementation
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-05 — Milestone v0.2.3 Timing Condition Helpers started
+Status: Not started
+Last activity: 2026-04-05 — Roadmap defined (3 phases: 12–14)
 
 ## Milestone
 
 **v0.2.3 Timing Condition Helpers**
 Goal: Add reusable, platform-safe time-based condition classes (timeout, cooldown, elapsed) so users can express timing guards without writing clock logic.
-Phases: TBD (see ROADMAP.md)
+Phases: 12–14 (3 phases, see ROADMAP.md)
 
 ## Accumulated Context
 

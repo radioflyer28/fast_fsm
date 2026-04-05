@@ -56,26 +56,26 @@ Goal: Add reusable, platform-safe time-based condition classes so users can expr
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TIME-01     | TBD   | Pending |
-| TIME-02     | TBD   | Pending |
-| TIME-03     | TBD   | Pending |
-| TIME-04     | TBD   | Pending |
-| TIME-05     | TBD   | Pending |
-| TIME-06     | TBD   | Pending |
-| TIME-07     | TBD   | Pending |
-| INT-01      | TBD   | Pending |
-| INT-02      | TBD   | Pending |
-| INT-03      | TBD   | Pending |
-| INT-04      | TBD   | Pending |
-| PERF-01     | TBD   | Pending |
-| COMPAT-01   | TBD   | Pending |
-| DOC-01      | TBD   | Pending |
-| DOC-02      | TBD   | Pending |
+| TIME-01     | 12    | Pending |
+| TIME-02     | 12    | Pending |
+| TIME-03     | 12    | Pending |
+| TIME-04     | 12    | Pending |
+| TIME-05     | 12    | Pending |
+| TIME-06     | 12    | Pending |
+| TIME-07     | 12    | Pending |
+| INT-01      | 12    | Pending |
+| INT-02      | 12    | Pending |
+| INT-03      | 13    | Pending |
+| INT-04      | 13    | Pending |
+| PERF-01     | 13    | Pending |
+| COMPAT-01   | 13    | Pending |
+| DOC-01      | 14    | Pending |
+| DOC-02      | 14    | Pending |
 
 **Coverage:**
 - v0.2.3 requirements: 15 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 15
+- Mapped to phases: 15
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-05*
