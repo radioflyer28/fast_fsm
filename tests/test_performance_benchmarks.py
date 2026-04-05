@@ -13,6 +13,7 @@ import io
 
 from fast_fsm.core import StateMachine, State
 from fast_fsm.conditions import Condition
+from fast_fsm.condition_templates import TimeoutCondition
 
 
 # Suppress print output during benchmarks
@@ -488,6 +489,58 @@ class TestAdvancedPerformance:
             f"  Baseline (disabled): {baseline_ops:,.0f} ops/sec\n"
             f"  History (enabled):   {history_ops:,.0f} ops/sec\n"
             f"  Ratio: {ratio:.2f}×"
+        )
+
+    @pytest.mark.slow
+    def test_trigger_timing_condition_throughput(self):
+        """Timing-condition throughput gate: trigger() with a TimeoutCondition
+        guard must stay above 200k ops/sec (compiled) / 30k ops/sec (pure Python).
+
+        Verifies PERF-01 — a single time.monotonic() call in the condition hot
+        path does not degrade throughput below the contract floor.
+        TimeoutCondition(999999.0) ensures the condition always passes so we
+        measure condition overhead, not blocked transitions.
+        """
+        state_a = State("state_a")
+        state_b = State("state_b")
+
+        cond = TimeoutCondition(999999.0)
+        fsm = StateMachine(state_a, name="timing_throughput_gate")
+        fsm.add_state(state_b)
+        fsm.add_transition("toggle", "state_a", "state_b", cond)
+        fsm.add_transition("toggle", "state_b", "state_a", cond)
+
+        # Warm up
+        for _ in range(1000):
+            fsm.trigger("toggle")
+
+        gc.collect()
+
+        iterations = 200_000
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fsm.trigger("toggle")
+        elapsed = time.perf_counter() - start
+
+        ops_per_sec = iterations / elapsed
+
+        import importlib
+        import importlib.util
+
+        core_spec = importlib.util.find_spec("fast_fsm.core")
+        compiled = (
+            core_spec is not None
+            and core_spec.origin is not None
+            and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
+        )
+        floor = 200_000 if compiled else 30_000
+
+        assert ops_per_sec >= floor, (
+            f"trigger() throughput with timing condition guard {ops_per_sec:,.0f} ops/sec "
+            f"is below the {'compiled' if compiled else 'pure-Python'} floor of "
+            f"{floor:,} ops/sec. This indicates a performance regression.\n"
+            f"  Elapsed for {iterations:,} transitions: {elapsed:.3f}s\n"
+            f"  Mode: {'compiled (mypyc)' if compiled else 'pure Python'}"
         )
 
 
