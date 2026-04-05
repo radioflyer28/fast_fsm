@@ -59,6 +59,7 @@ __all__ = [
     "TransitionResult",
     "TransitionError",
     "TransitionEntry",
+    "TransitionRecord",
     # Condition system
     "Condition",
     "FuncCondition",

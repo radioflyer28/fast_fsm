@@ -18,6 +18,14 @@ core runtime.
 .. autofunction:: fast_fsm.to_mermaid_document
 ```
 
+```{eval-rst}
+.. autofunction:: fast_fsm.to_plantuml
+```
+
+```{eval-rst}
+.. autofunction:: fast_fsm.to_json
+```
+
 ## Usage Notes
 
 ### Diagram only

@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+#### Serialization & Introspection
+- `StateMachine.to_dict()` — serialize FSM topology to a plain Python dict that
+  round-trips losslessly through `StateMachine.from_dict()`.  Guards are excluded
+  (callables are not serialisable).  Output is `json.dumps()`-safe.
+- `TransitionRecord` — `__slots__`-based record with `from_state`, `trigger`,
+  `to_state`, and `timestamp` (monotonic) attributes.
+- `StateMachine.enable_history(max_entries=1000)` — opt-in bounded transition
+  recording.  Zero cost when disabled (single `None` check in the hot path).
+- `StateMachine.disable_history()` — clears the buffer and stops recording.
+- `StateMachine.history` property — returns a chronological copy of recorded
+  `TransitionRecord` objects.  Empty list when history is disabled.
+- `AsyncStateMachine` inherits history recording through the shared
+  `_execute_transition()` code path.
+
+#### Visualization & Agent Tooling
+- `to_plantuml(fsm)` — generate PlantUML `@startuml`/`@enduml` state diagrams
+  with initial-state marker, transition labels, and terminal-state arrows.
+  Supports `title` and `show_conditions` options.
+- `to_json(fsm)` — machine-readable JSON export covering topology (states,
+  transitions with `has_guard`), reachability (reachable/unreachable/terminal),
+  cycle detection, and `EnhancedFSMValidator` quality scores.  Validation module
+  is imported lazily — `quality` is `null` if unavailable.
+
 #### Callback / Hook API
 - `StateMachine.after_transition(fn)` — convenience method; appends `fn` directly to
   the after-transition listener list without creating a listener class.

@@ -55,6 +55,10 @@ The core module provides the primary FSM classes and utilities.
 .. autoclass:: fast_fsm.TransitionResult
    :members:
    :undoc-members:
+
+.. autoclass:: fast_fsm.TransitionRecord
+   :members:
+   :undoc-members:
 ```
 
 ## Exceptions

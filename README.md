@@ -352,11 +352,10 @@ fsm.on_enter_async("alert", log_alert)
 
 ### Visualization
 
-Generate Mermaid state diagrams and self-contained Markdown documents:
+Generate Mermaid state diagrams, PlantUML diagrams, and self-contained Markdown documents:
 
 ```python
-from fast_fsm import to_mermaid, to_mermaid_fenced, to_mermaid_document
-from fast_fsm.validation import FSMValidator
+from fast_fsm import to_mermaid, to_mermaid_fenced, to_mermaid_document, to_plantuml
 
 # Raw Mermaid diagram string
 print(to_mermaid(fsm))
@@ -365,9 +364,44 @@ print(to_mermaid(fsm))
 print(to_mermaid_fenced(fsm))
 
 # Full document: diagram + adjacency matrix + transitions table
+from fast_fsm.validation import FSMValidator
 adj = FSMValidator(fsm).get_adjacency_matrix()
 doc = to_mermaid_document(fsm, adjacency_matrix=adj)
 print(doc)   # or save to a .md file
+
+# PlantUML output
+print(to_plantuml(fsm))
+```
+
+### Serialization & Introspection
+
+Round-trip topology snapshots and machine-readable JSON export for agents:
+
+```python
+# Serialize topology to a plain dict (JSON-safe)
+d = fsm.to_dict()
+rebuilt = StateMachine.from_dict(d)   # lossless roundtrip (guards excluded)
+
+# Machine-readable JSON for coding agents
+from fast_fsm import to_json
+data = to_json(fsm)
+data["topology"]["states"]              # sorted state names
+data["analysis"]["reachability"]        # reachable / unreachable / terminal
+data["analysis"]["cycles"]             # has_cycles, states_in_cycles
+data["analysis"]["quality"]            # overall_score, grade, issues
+```
+
+### Transition History
+
+Opt-in bounded recording of every transition — zero cost when disabled:
+
+```python
+fsm.enable_history(max_entries=1000)
+fsm.trigger("start")
+fsm.trigger("stop")
+for rec in fsm.history:
+    print(f"{rec.from_state} --{rec.trigger}--> {rec.to_state} @ {rec.timestamp}")
+fsm.disable_history()   # clears buffer and stops recording
 ```
 
 ### Validation (Design-Time)
@@ -409,12 +443,14 @@ print(v.export_report('json'))
 - **Clean API** — builder pattern, factory helpers, fluent interface
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
 - **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
-- **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`
+- **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`, `to_dict()`
 - **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
+- **Transition History** — opt-in `enable_history()` / `disable_history()` with bounded `TransitionRecord` buffer; zero cost when disabled
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
-- **Visualization** — Mermaid diagrams, fenced blocks, full Markdown documents with adjacency matrix
+- **Visualization** — Mermaid diagrams, PlantUML output, fenced blocks, full Markdown documents with adjacency matrix
+- **Agent Tooling** — `to_json()` exports topology + reachability + cycles + quality for programmatic consumption
 - **mypyc Compiled** — `core.py` optionally compiled; `CompiledFuncCondition` for hot condition paths
 
 ## Examples
