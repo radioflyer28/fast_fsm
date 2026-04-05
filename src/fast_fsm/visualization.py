@@ -104,6 +104,72 @@ def to_mermaid(
     return "\n".join(lines)
 
 
+def to_plantuml(
+    fsm: "StateMachine",
+    *,
+    title: str | None = None,
+    show_conditions: bool = True,
+) -> str:
+    """
+    Generate a PlantUML state diagram string from a StateMachine.
+
+    Args:
+        fsm: The state machine to visualize.
+        title: Optional diagram title (rendered with the ``title`` keyword).
+        show_conditions: When ``True``, condition names are appended to
+            transition labels in ``[brackets]``.  Defaults to ``True``.
+
+    Returns:
+        A PlantUML ``@startuml`` / ``@enduml`` string.
+
+    Example::
+
+        >>> from fast_fsm import StateMachine, to_plantuml
+        >>> fsm = StateMachine.quick_build(
+        ...     "idle",
+        ...     [("start", "idle", "running"), ("stop", "running", "idle")],
+        ... )
+        >>> print(to_plantuml(fsm))
+        @startuml
+        [*] --> idle
+        idle --> running : start
+        running --> idle : stop
+        @enduml
+    """
+    lines: list[str] = ["@startuml"]
+
+    if title:
+        lines.append(f"title {title}")
+
+    # Mark the initial state (first entry in _states).
+    initial_name = next(iter(fsm._states))
+    lines.append(f"[*] --> {initial_name}")
+
+    # Collect states that have outgoing transitions.
+    states_with_outgoing: set[str] = set()
+
+    # Emit one line per transition.
+    for from_name, triggers in fsm._transitions.items():
+        for trigger_name, entry in triggers.items():
+            states_with_outgoing.add(from_name)
+            to_name = entry.to_state.name
+            label = trigger_name
+            if show_conditions and entry.condition is not None:
+                cond_label = getattr(entry.condition, "name", None) or str(
+                    entry.condition
+                )
+                label = f"{trigger_name} [{cond_label}]"
+            lines.append(f"{from_name} --> {to_name} : {label}")
+
+    # Detect terminal states (no outgoing transitions) and mark them.
+    for state_name in fsm._states:
+        if state_name not in states_with_outgoing:
+            lines.append(f"{state_name} --> [*]")
+
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
 def to_mermaid_fenced(
     fsm: "StateMachine",
     *,

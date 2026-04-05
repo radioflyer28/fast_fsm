@@ -9,7 +9,7 @@ rendering it.
 import pytest
 
 from fast_fsm import StateMachine, State, FuncCondition, to_mermaid
-from fast_fsm import to_mermaid_fenced, to_mermaid_document
+from fast_fsm import to_mermaid_fenced, to_mermaid_document, to_plantuml
 from fast_fsm.visualization import _mermaid_id
 
 
@@ -325,3 +325,77 @@ class TestToMermaidDocumentWithMatrix:
         doc = to_mermaid_document(simple_fsm, adjacency_matrix={})
         assert isinstance(doc, str)
         assert "## State Diagram" in doc
+
+
+# ---------------------------------------------------------------------------
+# to_plantuml
+# ---------------------------------------------------------------------------
+
+
+class TestToPlantUMLBasic:
+    def test_starts_and_ends_correctly(self, simple_fsm):
+        out = to_plantuml(simple_fsm)
+        lines = out.splitlines()
+        assert lines[0] == "@startuml"
+        assert lines[-1] == "@enduml"
+
+    def test_initial_state_marker(self, simple_fsm):
+        out = to_plantuml(simple_fsm)
+        assert "[*] --> idle" in out
+
+    def test_all_transitions_present(self, simple_fsm):
+        out = to_plantuml(simple_fsm)
+        assert "idle --> running : start" in out
+        assert "running --> done : finish" in out
+
+    def test_terminal_state_marked(self, simple_fsm):
+        out = to_plantuml(simple_fsm)
+        assert "done --> [*]" in out
+
+    def test_cyclic_no_terminal_states(self, cyclic_fsm):
+        out = to_plantuml(cyclic_fsm)
+        # All states have outgoing transitions — no terminal markers
+        assert "--> [*]" not in out.replace("[*] -->", "")
+
+    def test_returns_string(self, simple_fsm):
+        assert isinstance(to_plantuml(simple_fsm), str)
+
+
+class TestToPlantUMLTitle:
+    def test_title_present(self, simple_fsm):
+        out = to_plantuml(simple_fsm, title="My FSM")
+        assert "title My FSM" in out
+
+    def test_no_title_by_default(self, simple_fsm):
+        out = to_plantuml(simple_fsm)
+        assert "title " not in out
+
+
+class TestToPlantUMLConditions:
+    def test_condition_shown_by_default(self, conditional_fsm):
+        out = to_plantuml(conditional_fsm)
+        assert "[positive]" in out
+
+    def test_condition_hidden_when_disabled(self, conditional_fsm):
+        out = to_plantuml(conditional_fsm, show_conditions=False)
+        assert "[positive]" not in out
+        assert "waiting --> active : go" in out
+
+
+class TestToPlantUMLEdgeCases:
+    def test_single_state_no_transitions(self):
+        fsm = StateMachine(State("lonely"), name="Solo")
+        out = to_plantuml(fsm)
+        assert "[*] --> lonely" in out
+        assert "lonely --> [*]" in out
+
+    def test_works_with_async_state_machine(self):
+        from fast_fsm import AsyncStateMachine
+
+        fsm = AsyncStateMachine(State("wait"), name="Async")
+        fsm.add_state(State("done"))
+        fsm.add_transition("go", "wait", "done")
+        out = to_plantuml(fsm)
+        assert "[*] --> wait" in out
+        assert "wait --> done : go" in out
+        assert "done --> [*]" in out
