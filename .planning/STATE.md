@@ -1,31 +1,32 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.2.3
-milestone_name: Phases
-status: Not started
-last_updated: "2026-04-05T16:58:07.289Z"
+milestone: null
+milestone_name: null
+status: Complete
+last_updated: "2026-04-05T00:00:00.000Z"
 last_activity: 2026-04-05
 progress:
-  total_phases: 3
+  total_phases: 0
   completed_phases: 0
   total_plans: 0
-  completed_plans: 1
+  completed_plans: 0
 ---
 
 # State: Fast FSM
 
 ## Current Position
 
-Phase: 12 — Timing Condition Implementation
+Phase: —
 Plan: —
-Status: Not started
+Status: No active milestone
 Last activity: 2026-04-05
 
-## Milestone
+## Project Reference
 
-**v0.2.3 Timing Condition Helpers**
-Goal: Add reusable, platform-safe time-based condition classes (timeout, cooldown, elapsed) so users can express timing guards without writing clock logic.
-Phases: 12–14 (3 phases, see ROADMAP.md)
+See: .planning/PROJECT.md (updated 2026-04-05)
+
+**Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec, all core ops O(1).
+**Current focus:** Planning next milestone
 
 ## Accumulated Context
 
@@ -36,6 +37,11 @@ Phases: 12–14 (3 phases, see ROADMAP.md)
 - Single runtime dep: `mypy-extensions`
 - CI: `.github/workflows/ci.yml` (lint + test 3.10–3.13 × 3 OSes), `docs.yml`, `release.yml`
 - Benchmark CI job with 200k ops/sec throughput gate
+- 722 tests passing (post-v0.2.3)
+
+### v0.2.3 shipped 2026-04-05
+
+Timing condition helpers: `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition`. 27 new tests, 722 total.
 
 ### v0.2.2 shipped 2026-04-05
 
@@ -44,10 +50,6 @@ Introspection & agent tooling: `to_dict()`, `TransitionRecord` history, `to_plan
 ### v0.2.1 shipped 2026-04-04
 
 Code health: version sync, py.typed, ABC removal, exception annotation, test triage, benchmark CI.
-
-### Clock source decision
-
-All timing conditions use `time.monotonic()` — monotonic clock immune to NTP jumps and wall-clock adjustments across macOS/Linux/Windows. This is a passive guard approach — conditions are checked on trigger(), no auto-fire scheduler.
 
 ## Blockers
 
