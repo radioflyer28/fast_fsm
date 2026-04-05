@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v0.2.1 Code Health & Quality** — Phases 1–6 (shipped 2026-04-04)
-- ✅ **v0.2.2 Introspection & Agent Tooling** — Phases 7–11 (shipped 2026-04-05)
+- 🔧 **v0.2.2 Introspection & Agent Tooling** — Phases 7–11.1 (20/21 reqs — gap closure pending)
 - 🔄 **v0.2.3 Timing Condition Helpers** — Phases 12–14 (in progress)
 
 ## Phases
@@ -23,17 +23,35 @@
 </details>
 
 <details>
-<summary>✅ v0.2.2 Introspection & Agent Tooling (Phases 7–11) — SHIPPED 2026-04-05</summary>
+<summary>✅ v0.2.2 Introspection & Agent Tooling (Phases 7–11.1) — SHIPPED 2026-04-05</summary>
 
 - [x] Phase 7: Serialization (`to_dict()`) — topology roundtrip via `StateMachine.to_dict()`
 - [x] Phase 8: Transition History — opt-in `enable_history()` / `disable_history()` with `TransitionRecord`
 - [x] Phase 9: PlantUML Output — `to_plantuml()` in `visualization.py`
 - [x] Phase 10: Machine-Readable JSON Export — `to_json()` with topology + analysis + quality signals
 - [x] Phase 11: Performance Verification & Docs — benchmark gate, README updates, milestone wrap-up
+- [ ] Phase 11.1: History-Enabled Performance Benchmark — gap closure for PERF-02
 
-**21/21 requirements satisfied.** 694 tests, 1.2M ops/sec.
+**20/21 requirements satisfied.** 694 tests, 1.2M ops/sec. Gap closure phase 11.1 pending.
 
 </details>
+
+### Phase 11.1: History-Enabled Performance Benchmark (Gap Closure)
+
+**Goal:** Measure and document `trigger()` throughput with `enable_history()` active; verify ≤ 2× degradation vs. disabled baseline.
+
+**Milestone:** v0.2.2 (gap closure — identified by milestone audit)
+
+**Requirements:** PERF-02
+
+**Depends on:** None (history implementation already shipped in Phase 8)
+
+**Success Criteria** (what must be TRUE):
+1. `test_performance_benchmarks.py` contains a test that enables history, measures `trigger()` throughput, and asserts it is no more than 2× slower than the disabled baseline
+2. README performance section documents measured overhead of history-enabled mode
+3. Full test suite passes (694+ baseline, 0 failures)
+
+**Plans:** TBD
 
 ---
 
