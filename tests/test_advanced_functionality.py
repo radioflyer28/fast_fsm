@@ -1443,6 +1443,96 @@ class TestFromDict:
         assert fsm.snapshot()["state"] == "active"
 
 
+class TestToDict:
+    """Tests for StateMachine.to_dict()."""
+
+    def test_basic_to_dict(self):
+        """to_dict() returns the expected keys and structure."""
+        fsm = StateMachine.quick_build(
+            "idle",
+            [("start", "idle", "running"), ("stop", "running", "idle")],
+            name="TestFSM",
+        )
+        d = fsm.to_dict()
+        assert d["name"] == "TestFSM"
+        assert d["initial"] == "idle"
+        assert set(d["states"]) == {"idle", "running"}
+        assert d["states"] == sorted(d["states"])  # sorted
+        assert len(d["transitions"]) == 2
+        triggers = {(t["trigger"], t["from"], t["to"]) for t in d["transitions"]}
+        assert ("start", "idle", "running") in triggers
+        assert ("stop", "running", "idle") in triggers
+
+    def test_to_dict_roundtrip(self):
+        """from_dict(fsm.to_dict()) produces an equivalent machine."""
+        fsm = StateMachine.quick_build(
+            "a",
+            [("go", "a", "b"), ("go", "b", "c"), ("back", "c", "a")],
+            name="Roundtrip",
+        )
+        config = fsm.to_dict()
+        fsm2 = StateMachine.from_dict(config)
+        assert set(fsm2.states) == set(fsm.states)
+        assert fsm2.current_state_name == "a"
+        assert fsm2.trigger("go").success
+        assert fsm2.current_state_name == "b"
+        assert fsm2.trigger("go").success
+        assert fsm2.current_state_name == "c"
+        assert fsm2.trigger("back").success
+        assert fsm2.current_state_name == "a"
+
+    def test_to_dict_excludes_guards(self):
+        """Guards are callable and therefore NOT in to_dict() output."""
+        from fast_fsm import FuncCondition
+
+        fsm = StateMachine.quick_build(
+            "off",
+            [("turn_on", "off", "on")],
+        )
+        fsm2 = StateMachine.from_dict(
+            {
+                "initial": "off",
+                "transitions": [{"trigger": "turn_on", "from": "off", "to": "on"}],
+            },
+            conditions={"turn_on": FuncCondition(lambda **kw: True, name="always")},
+        )
+        d = fsm2.to_dict()
+        for t in d["transitions"]:
+            assert "condition" not in t
+            assert "guard" not in t
+
+    def test_to_dict_json_serialisable(self):
+        """to_dict() output can be passed through json.dumps."""
+        import json
+
+        fsm = StateMachine.quick_build(
+            "idle",
+            [("start", "idle", "running"), ("finish", "running", "done")],
+        )
+        json_str = json.dumps(fsm.to_dict())
+        assert isinstance(json_str, str)
+
+    def test_to_dict_roundtrip_via_json(self):
+        """Full JSON roundtrip: to_dict → json.dumps → json.loads → from_dict."""
+        import json
+
+        fsm = StateMachine.quick_build(
+            "pending",
+            [
+                ("activate", "pending", "active"),
+                ("deactivate", "active", "inactive"),
+                ("reactivate", "inactive", "active"),
+            ],
+            name="Lifecycle",
+        )
+        json_str = json.dumps(fsm.to_dict())
+        config = json.loads(json_str)
+        fsm2 = StateMachine.from_dict(config)
+        assert set(fsm2.states) == set(fsm.states)
+        assert fsm2.trigger("activate").success
+        assert fsm2.current_state_name == "active"
+
+
 class TestTransitionResultRaiseIfFailed:
     """Tests for TransitionResult.raise_if_failed() and TransitionError."""
 

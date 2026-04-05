@@ -526,6 +526,40 @@ class StateMachine:
 
         return fsm
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Export the machine topology as a plain dictionary.
+
+        The returned dict is structurally compatible with :meth:`from_dict`,
+        enabling full roundtrip serialisation::
+
+            config = fsm.to_dict()
+            fsm2 = StateMachine.from_dict(config)
+
+        Guard conditions are **not** included — they are callable objects
+        and therefore not serialisable.  Re-attach them via the
+        ``conditions`` kwarg on :meth:`from_dict` after reconstruction.
+
+        Returns:
+            A JSON-serialisable dict with keys ``"name"``, ``"initial"``,
+            ``"states"``, and ``"transitions"``.
+        """
+        transitions: List[Dict[str, str]] = []
+        for from_name, triggers in self._transitions.items():
+            for trigger_name, entry in triggers.items():
+                transitions.append(
+                    {
+                        "trigger": trigger_name,
+                        "from": from_name,
+                        "to": entry.to_state.name,
+                    }
+                )
+        return {
+            "name": self._name,
+            "initial": self._initial_state.name,
+            "states": sorted(self._states.keys()),
+            "transitions": transitions,
+        }
+
     def _register_state(self, state: State) -> None:
         """Register a state and initialize its transition table"""
         self._states[state.name] = state
