@@ -436,6 +436,60 @@ class TestAdvancedPerformance:
             f"  Mode: {'compiled (mypyc)' if compiled else 'pure Python'}"
         )
 
+    @pytest.mark.slow
+    def test_trigger_history_enabled_throughput(self):
+        """History-enabled throughput gate: trigger() with enable_history() must
+        not degrade more than 2× vs. disabled baseline.
+
+        Uses the same minimal 2-state toggle FSM as test_trigger_min_throughput.
+        Measures baseline (history disabled), then re-measures with history
+        enabled (max_entries=1000).  Asserts the ratio stays within 2×.
+
+        PERF-02 requirement: history-enabled throughput measured and documented.
+        """
+        state_a = State("state_a")
+        state_b = State("state_b")
+
+        fsm = StateMachine(state_a, name="history_throughput_gate")
+        fsm.add_state(state_b)
+        fsm.add_transition("toggle", "state_a", "state_b")
+        fsm.add_transition("toggle", "state_b", "state_a")
+
+        iterations = 200_000
+
+        # --- Baseline: history disabled ---
+        for _ in range(1000):
+            fsm.trigger("toggle")
+        gc.collect()
+
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fsm.trigger("toggle")
+        baseline_elapsed = time.perf_counter() - start
+        baseline_ops = iterations / baseline_elapsed
+
+        # --- History enabled ---
+        fsm.enable_history(max_entries=1000)
+
+        for _ in range(1000):
+            fsm.trigger("toggle")
+        gc.collect()
+
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fsm.trigger("toggle")
+        history_elapsed = time.perf_counter() - start
+        history_ops = iterations / history_elapsed
+
+        ratio = baseline_ops / history_ops
+
+        assert ratio <= 2.0, (
+            f"History-enabled throughput degradation {ratio:.2f}× exceeds 2× limit.\n"
+            f"  Baseline (disabled): {baseline_ops:,.0f} ops/sec\n"
+            f"  History (enabled):   {history_ops:,.0f} ops/sec\n"
+            f"  Ratio: {ratio:.2f}×"
+        )
+
 
 @pytest.mark.unit
 class TestMicroBenchmarks:
