@@ -52,6 +52,7 @@
 |-----------|--------|----------|-------------|
 | v0.2.1 | 6 | 1 | First autonomous milestone run; all infrastructure/cleanup |
 | v0.2.2 | 6 | 2 | Feature phases via autonomous + retroactive audit/gap closure; learned to audit after autonomous runs |
+| v0.2.3 | 3 | 1 | Cleanest autonomous run yet; no blockers, no gaps, proactive enrichment |
 
 ### Technical Debt Tracking
 
@@ -106,3 +107,42 @@
 2. **The `milestone complete` CLI assumes SUMMARY.md exists for each phase.** If phases lack summaries (e.g., from autonomous runs), the CLI reports empty accomplishments. Manual enrichment is needed.
 3. **REQUIREMENTS.md is a mutable file that gets overwritten by `new-milestone`.** Archive it before (or immediately after) creating a new milestone to avoid data loss.
 4. **History-enabled throughput is a distinct metric from baseline throughput.** Both should be benchmarked explicitly — don't assume one covers the other.
+
+---
+
+## Milestone: v0.2.3 — Timing Condition Helpers
+
+**Shipped:** 2026-04-05
+**Phases:** 3 (12–14) | **Requirements:** 15/15 | **Sessions:** 1 (autonomous)
+
+### What Was Built
+
+- `TimeoutCondition(seconds)` — allows transitions within a time window, blocks after expiry
+- `CooldownCondition(seconds)` — enforces minimum interval between successful triggers
+- `ElapsedCondition(seconds)` — gates transitions until elapsed time threshold met
+- All three use `time.monotonic()`, `__slots__`, `reset()`, `**kwargs` in `check()`
+- 27 new tests: 18 unit, 8 FSM integration (sync + async + builder), 1 throughput benchmark
+- README timing condition examples + Sphinx autodoc coverage
+
+### What Worked
+
+- **Autonomous mode handled the entire milestone cleanly.** 3 well-defined phases with precise requirements executed without user intervention. Lessons from v0.2.2 applied: audit ran inline, MILESTONES.md enriched proactively.
+- **Infrastructure phase detection skipped unnecessary discuss steps.** Phases 13 (testing) and 14 (docs) were correctly identified as infrastructure and got minimal auto-generated context.
+- **Deterministic tests via direct attribute manipulation.** Setting `_ref` and `_last_success` directly instead of using `time.sleep()` made all timing tests instant and non-flaky.
+- **Purely additive to condition_templates.py.** Zero changes to `core.py` — no mypyc rebuild needed. The compilation boundary worked exactly as designed.
+
+### What Was Inefficient
+
+- Nothing noteworthy — this was a smooth, well-scoped milestone.
+
+### Patterns Established
+
+- **Timing tests manipulate internal attributes for determinism.** Never use `time.sleep()` in timing condition tests. Set `_ref = time.monotonic() - N` to simulate N seconds elapsed.
+- **Condition classes follow a strict template:** `__slots__`, `super().__init__(auto_name, auto_desc)`, `check(**kwargs)`, `reset()`. Future conditions should follow this pattern.
+- **Each milestone's throughput benchmark gets its own test.** `test_trigger_timing_condition_throughput` joins `test_trigger_min_throughput` and `test_trigger_history_enabled_throughput`.
+
+### Key Lessons
+
+1. **Well-scoped milestones with precise requirements execute fastest.** v0.2.3 had 15 non-ambiguous requirements across 3 phases — zero decisions needed from user, zero blockers encountered.
+2. **condition_templates.py is the right home for timing conditions.** Stays interpreted (user-subclassable), doesn't touch the mypyc boundary, and autodoc picks them up automatically.
+3. **Proactive MILESTONES.md enrichment after CLI archive avoids the v0.2.2 empty-accomplishments problem.**

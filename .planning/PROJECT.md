@@ -8,14 +8,9 @@ High-performance, memory-efficient finite state machine library for Python. Outp
 
 Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000 ops/sec and all core operations must remain O(1).
 
-## Current Milestone: v0.2.3 Timing Condition Helpers
+## Completed: v0.2.3 Timing Condition Helpers (shipped 2026-04-05)
 
-**Goal:** Add reusable, platform-safe time-based condition classes so users can express timeout, cooldown, and elapsed-time guards without writing clock logic.
-
-**Target features:**
-- `TimeoutCondition` — blocks a transition after N seconds elapsed since a reference point (e.g. state entry time)
-- `CooldownCondition` — blocks a transition until N seconds have passed since the last successful trigger
-- `ElapsedCondition` — passes when ≥ N seconds have elapsed since a reference timestamp
+15/15 requirements satisfied. `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition`. 722 tests.
 
 ## Completed: v0.2.2 Introspection & Agent Tooling (shipped 2026-04-05)
 
@@ -55,10 +50,16 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ **HIST-01/02/03**: Opt-in transition history with `TransitionRecord`, bounded buffer, zero-cost when disabled — v0.2.2
 - ✓ **VIS-01/02/03/04**: `to_plantuml()`, `to_json()` with topology + analysis + quality signals — v0.2.2
 - ✓ **PERF-02**: History-enabled throughput measured and documented (≤ 2× degradation verified) — v0.2.2
+- ✓ **TIME-01/02/03**: `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition` — v0.2.3
+- ✓ **TIME-04/05/06/07**: `time.monotonic()`, `reset()`, `**kwargs`, `__slots__` on all timing conditions — v0.2.3
+- ✓ **INT-01/02**: Timing conditions in `condition_templates.py`, exported from `fast_fsm` — v0.2.3
+- ✓ **INT-03/04**: Timing conditions work as guards on StateMachine, AsyncStateMachine, and FSMBuilder — v0.2.3
+- ✓ **PERF-01**: `trigger()` with timing guard ≥ 200k ops/sec — v0.2.3
+- ✓ **DOC-01/02**: README + Sphinx docs updated with timing condition examples — v0.2.3
 
 ### Active
 
-_(See REQUIREMENTS.md for v0.2.3 timing condition requirements)_
+_(No active milestone — next milestone TBD)_
 
 ### Out of Scope
 
@@ -72,11 +73,11 @@ _(See REQUIREMENTS.md for v0.2.3 timing condition requirements)_
 
 ## Context
 
-- **Current version:** v0.2.2 (shipped 2026-04-05); v0.2.3 in progress
+- **Current version:** v0.2.3 (shipped 2026-04-05)
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` and `condition_templates.py` stay interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
-- **Test count:** 695 (post-v0.2.2, including history throughput benchmark)
+- **Test count:** 722 (post-v0.2.3)
 - **Clock source:** `time.monotonic()` for all timing — immune to NTP jumps across macOS/Linux/Windows
 
 ## Constraints
@@ -95,6 +96,7 @@ _(See REQUIREMENTS.md for v0.2.3 timing condition requirements)_
 | Automate version via `importlib.metadata` | Single source of truth in `pyproject.toml`; zero drift possible | ✓ Shipped in v0.2.1 |
 | Detect compiled mode by module file suffix | `FAST_FSM_PURE_PYTHON` env var only suppresses build-time compilation; can't reliably detect runtime mode | ✓ `find_spec().origin.endswith(".so")` is accurate |
 | History recording is zero-cost when disabled | Single `None` check in `trigger()` hot path; bounded `deque` when enabled | ✓ Verified ≤ 2× overhead in benchmark |
+| Timing conditions in condition_templates.py (not core.py) | condition_templates.py stays interpreted for user subclassing; no mypyc rebuild needed | ✓ Purely additive — no core.py changes |
 
 ## Evolution
 
@@ -114,4 +116,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 after v0.2.2 milestone completion and v0.2.3 start*
+*Last updated: 2026-04-05 after v0.2.3 milestone completion*
