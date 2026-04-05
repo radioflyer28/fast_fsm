@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v0.2.1 Code Health & Quality** — Phases 1–6 (shipped 2026-04-04)
-- 🔧 **v0.2.2 Introspection & Agent Tooling** — Phases 7–11.1 (20/21 reqs — gap closure pending)
+- ✅ **v0.2.2 Introspection & Agent Tooling** — Phases 7–11.1 (shipped 2026-04-05)
 - 🔄 **v0.2.3 Timing Condition Helpers** — Phases 12–14 (in progress)
 
 ## Phases
@@ -30,9 +30,9 @@
 - [x] Phase 9: PlantUML Output — `to_plantuml()` in `visualization.py`
 - [x] Phase 10: Machine-Readable JSON Export — `to_json()` with topology + analysis + quality signals
 - [x] Phase 11: Performance Verification & Docs — benchmark gate, README updates, milestone wrap-up
-- [ ] Phase 11.1: History-Enabled Performance Benchmark — gap closure for PERF-02
+- [x] Phase 11.1: History-Enabled Performance Benchmark — gap closure for PERF-02 (2026-04-05)
 
-**20/21 requirements satisfied.** 694 tests, 1.2M ops/sec. Gap closure phase 11.1 pending.
+**21/21 requirements satisfied.** 695 tests, 1.2M ops/sec.
 
 </details>
 
@@ -51,7 +51,7 @@
 2. README performance section documents measured overhead of history-enabled mode
 3. Full test suite passes (694+ baseline, 0 failures)
 
-**Plans:** TBD
+**Plans:** 11.1-PLAN-01 ✅ Complete (2026-04-05)
 
 ---
 

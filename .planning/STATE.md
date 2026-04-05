@@ -19,7 +19,7 @@ progress:
 Phase: 12 — Timing Condition Implementation
 Plan: —
 Status: Not started
-Last activity: 2026-04-05 — Roadmap defined (3 phases: 12–14)
+Last activity: 2026-04-05 — Phase 11.1 complete (v0.2.2 gap closure: PERF-02 satisfied)
 
 ## Milestone
 
