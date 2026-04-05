@@ -447,7 +447,7 @@ print(v.export_report('json'))
 - **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
-- **Transition History** — opt-in `enable_history()` / `disable_history()` with bounded `TransitionRecord` buffer; zero cost when disabled
+- **Transition History** — opt-in `enable_history()` / `disable_history()` with bounded `TransitionRecord` buffer; zero cost when disabled, ≤ 2× overhead when enabled
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
 - **Visualization** — Mermaid diagrams, PlantUML output, fenced blocks, full Markdown documents with adjacency matrix
 - **Agent Tooling** — `to_json()` exports topology + reachability + cycles + quality for programmatic consumption
@@ -500,6 +500,7 @@ src/fast_fsm/
 | Operation | Complexity | Throughput | Memory |
 |-----------|-----------|------------|--------|
 | `trigger()` | O(1) | ~250K/sec | zero allocation |
+| `trigger()` + history | O(1) | ~125K+/sec | +TransitionRecord/trigger |
 | `can_trigger()` | O(1) | ~500K/sec | zero allocation |
 | `add_state()` | O(1) | instant | +~32 B/state |
 | `add_transition()` | O(1) | instant | +~64 B/transition |
