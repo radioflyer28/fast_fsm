@@ -30,3 +30,7 @@ benchmark_results.json
 
 # SPR index — build artifact, regenerate with aggregate-spr.ps1
 .specify/memory/spr-index.md
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

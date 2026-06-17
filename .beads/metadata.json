@@ -1,7 +1,7 @@
 {
   "database": "dolt",
-  "jsonl_export": "issues.jsonl",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "beads_fast_fsm"
+  "dolt_database": "beads_fast_fsm",
+  "project_id": "ae71adf4-6452-4e29-9133-5d40c30d9c8c"
 }
