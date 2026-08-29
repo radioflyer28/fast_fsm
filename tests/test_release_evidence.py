@@ -551,6 +551,59 @@ def test_slots_policy_fails_closed_for_inherited_or_declared_instance_dict(
         validate_slots_inventory(collect_class_declarations(source_root), {})
 
 
+@pytest.mark.parametrize(
+    ("source", "class_name"),
+    [
+        ("class Child(ExternalBase):\n    __slots__ = ()\n", "Child"),
+        (
+            "SLOTS = ('__dict__',)\n\nclass DynamicSlots:\n    __slots__ = SLOTS\n",
+            "DynamicSlots",
+        ),
+    ],
+)
+def test_slots_policy_rejects_unresolved_bases_and_dynamic_slot_aliases(
+    tmp_path: Path, source: str, class_name: str
+) -> None:
+    """Unprovable inheritance and slots declarations cannot be certified."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "slot_regression.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=f"fast_fsm.slot_regression.{class_name}"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_uses_qualified_imported_base_identities(tmp_path: Path) -> None:
+    """An imported local base is not confused with a same-named reviewed class."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "safe_base.py").write_text(
+        "class Shared:\n    __slots__ = ()\n", encoding="utf-8"
+    )
+    (package_root / "reviewed_shadow.py").write_text(
+        "class Shared:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "slot_regression.py").write_text(
+        "from .safe_base import Shared\n\nclass Child(Shared):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    inventory = validate_slots_inventory(
+        collect_class_declarations(source_root),
+        {
+            **REGISTERED_SLOTS_EXCEPTIONS,
+            "fast_fsm.reviewed_shadow.Shared": "reviewed fixture exception",
+        },
+    )
+
+    child = next(
+        item
+        for item in inventory
+        if item["qualified_name"] == "fast_fsm.slot_regression.Child"
+    )
+    assert child["classification"] == "slot-protected"
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {

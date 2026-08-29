@@ -66,8 +66,9 @@ class ClassDeclaration:
     qualified_name: str
     source_path: str
     line: int
-    base_names: tuple[str, ...]
+    base_references: tuple[str, ...]
     has_own_slots: bool
+    slots_are_literal: bool
     declares_instance_dict: bool
 
 
@@ -463,36 +464,101 @@ def _module_name_for_path(source_root: Path, source_file: Path) -> str:
     return ".".join([PACKAGE_NAME, *parts])
 
 
-def _base_names(class_node: ast.ClassDef) -> tuple[str, ...]:
-    """Extract simple local base names for static inheritance resolution."""
-    names: list[str] = []
+PROVEN_SAFE_SLOT_BASES = frozenset({"builtins.object", "abc.ABC"})
+
+
+def _resolve_from_import_module(module_name: str, statement: ast.ImportFrom) -> str:
+    """Resolve one ``from`` statement to its absolute module identity."""
+    if not statement.level:
+        return statement.module or ""
+    package_parts = module_name.rsplit(".", 1)[0].split(".")
+    if statement.level > 1:
+        package_parts = package_parts[: 1 - statement.level]
+    if statement.module:
+        package_parts.extend(statement.module.split("."))
+    return ".".join(package_parts)
+
+
+def _import_bindings(tree: ast.Module, module_name: str) -> dict[str, str]:
+    """Map local import names to qualified module or class identities."""
+    bindings: dict[str, str] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                local_name = alias.asname or alias.name.split(".", 1)[0]
+                bindings[local_name] = alias.name if alias.asname else local_name
+        elif isinstance(statement, ast.ImportFrom):
+            imported_module = _resolve_from_import_module(module_name, statement)
+            for alias in statement.names:
+                if alias.name == "*":
+                    continue
+                local_name = alias.asname or alias.name
+                bindings[local_name] = ".".join(
+                    part for part in (imported_module, alias.name) if part
+                )
+    return bindings
+
+
+def _dotted_expression_parts(expression: ast.expr) -> tuple[str, ...] | None:
+    """Return dotted source components only for statically resolvable bases."""
+    if isinstance(expression, ast.Name):
+        return (expression.id,)
+    if isinstance(expression, ast.Attribute):
+        prefix = _dotted_expression_parts(expression.value)
+        return (*prefix, expression.attr) if prefix is not None else None
+    return None
+
+
+def _base_references(
+    class_node: ast.ClassDef,
+    *,
+    module_name: str,
+    import_bindings: Mapping[str, str],
+    local_class_names: set[str],
+) -> tuple[str, ...]:
+    """Resolve bases to module-qualified identities or explicit unknown markers."""
+    references: list[str] = []
     for base in class_node.bases:
-        if isinstance(base, ast.Name):
-            names.append(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.append(base.attr)
-    return tuple(names)
+        parts = _dotted_expression_parts(base)
+        if not parts:
+            references.append(f"<unresolved:{ast.unparse(base)}>")
+            continue
+        binding = import_bindings.get(parts[0])
+        if binding is not None:
+            references.append(".".join([binding, *parts[1:]]))
+        elif len(parts) == 1 and parts[0] in local_class_names:
+            references.append(f"{module_name}.{parts[0]}")
+        elif parts == ("object",):
+            references.append("builtins.object")
+        else:
+            references.append(f"<unresolved:{'.'.join(parts)}>")
+    return tuple(references)
 
 
-def _slots_declaration(class_node: ast.ClassDef) -> tuple[bool, bool]:
-    """Return whether a class owns slots and explicitly enables ``__dict__``.
+def _slots_declaration(class_node: ast.ClassDef) -> tuple[bool, bool, bool]:
+    """Return slots presence, literal inspectability, and ``__dict__`` status.
 
-    The audit is deliberately conservative: a static ``__slots__`` declaration
-    is sufficient to establish the class-level contract, but placing
-    ``"__dict__"`` in it is always an instance-dictionary escape hatch.
+    Only literal strings and collections of literal strings prove a slots
+    declaration safe. Any alias, computed expression, or annotation without a
+    value leaves the instance layout unprovable and must fail closed.
     """
     has_own_slots = False
+    slots_are_literal = True
     declares_instance_dict = False
 
-    def contains_instance_dict(value: ast.expr) -> bool:
+    def literal_slot_names(value: ast.expr) -> tuple[str, ...] | None:
         if isinstance(value, ast.Constant):
-            return value.value == "__dict__"
+            return (value.value,) if isinstance(value.value, str) else None
         if isinstance(value, (ast.Tuple, ast.List, ast.Set)):
-            return any(
-                isinstance(item, ast.Constant) and item.value == "__dict__"
-                for item in value.elts
-            )
-        return False
+            names: list[str] = []
+            for item in value.elts:
+                if not isinstance(item, ast.Constant) or not isinstance(
+                    item.value, str
+                ):
+                    return None
+                names.append(item.value)
+            return tuple(names)
+        return None
 
     for statement in class_node.body:
         if isinstance(statement, ast.Assign):
@@ -501,20 +567,29 @@ def _slots_declaration(class_node: ast.ClassDef) -> tuple[bool, bool]:
                 for target in statement.targets
             ):
                 has_own_slots = True
-                declares_instance_dict = (
-                    declares_instance_dict or contains_instance_dict(statement.value)
-                )
+                names = literal_slot_names(statement.value)
+                if names is None:
+                    slots_are_literal = False
+                else:
+                    declares_instance_dict = (
+                        declares_instance_dict or "__dict__" in names
+                    )
         elif isinstance(statement, ast.AnnAssign):
             if (
                 isinstance(statement.target, ast.Name)
                 and statement.target.id == "__slots__"
             ):
                 has_own_slots = True
-                if statement.value is not None:
-                    declares_instance_dict = (
-                        declares_instance_dict
-                        or contains_instance_dict(statement.value)
-                    )
+                if statement.value is None:
+                    slots_are_literal = False
+                else:
+                    names = literal_slot_names(statement.value)
+                    if names is None:
+                        slots_are_literal = False
+                    else:
+                        declares_instance_dict = (
+                            declares_instance_dict or "__dict__" in names
+                        )
 
     for decorator in class_node.decorator_list:
         if not isinstance(decorator, ast.Call):
@@ -535,7 +610,7 @@ def _slots_declaration(class_node: ast.ClassDef) -> tuple[bool, bool]:
             for keyword in decorator.keywords
         ):
             has_own_slots = True
-    return has_own_slots, declares_instance_dict
+    return has_own_slots, slots_are_literal, declares_instance_dict
 
 
 def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
@@ -550,20 +625,32 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
         source = source_file.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(source_file))
         module_name = _module_name_for_path(resolved_source_root, source_file)
+        import_bindings = _import_bindings(tree, module_name)
+        local_class_names = {
+            node.name for node in tree.body if isinstance(node, ast.ClassDef)
+        }
         source_path = _normalized_relative_path(
             source_file, resolved_source_root.parent
         )
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
-            has_own_slots, declares_instance_dict = _slots_declaration(node)
+            has_own_slots, slots_are_literal, declares_instance_dict = (
+                _slots_declaration(node)
+            )
             declarations.append(
                 ClassDeclaration(
                     qualified_name=f"{module_name}.{node.name}",
                     source_path=source_path,
                     line=node.lineno,
-                    base_names=_base_names(node),
+                    base_references=_base_references(
+                        node,
+                        module_name=module_name,
+                        import_bindings=import_bindings,
+                        local_class_names=local_class_names,
+                    ),
                     has_own_slots=has_own_slots,
+                    slots_are_literal=slots_are_literal,
                     declares_instance_dict=declares_instance_dict,
                 )
             )
@@ -572,31 +659,31 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
 
 def _base_introduces_instance_dict(
     declaration: ClassDeclaration,
-    declarations_by_short_name: Mapping[str, ClassDeclaration],
+    declarations_by_name: Mapping[str, ClassDeclaration],
     visited: set[str] | None = None,
 ) -> bool:
-    """Return whether any local or known built-in base permits ``__dict__``.
+    """Return whether any base is unsafe or cannot be statically proven safe.
 
     A subclass must declare its own slots.  Even that is not enough when a
     parent has already introduced an instance dictionary, as the descendant
-    cannot remove it.  The exception hierarchy is included explicitly because
-    CPython exception instances expose a dictionary despite a subclass's local
-    ``__slots__`` declaration.
+    cannot remove it. References are resolved against module-qualified
+    identities; an external base is unsafe unless it is explicitly proven safe.
     """
     seen = set() if visited is None else visited
     if declaration.qualified_name in seen:
-        return False
-    seen.add(declaration.qualified_name)
-    for base_name in declaration.base_names:
-        base = declarations_by_short_name.get(base_name)
-        if base is None:
-            if base_name in {"BaseException", "Exception", "RuntimeError"}:
-                return True
+        return True
+    next_seen = {*seen, declaration.qualified_name}
+    for base_reference in declaration.base_references:
+        if base_reference in PROVEN_SAFE_SLOT_BASES:
             continue
+        base = declarations_by_name.get(base_reference)
+        if base is None:
+            return True
         if (
             not base.has_own_slots
+            or not base.slots_are_literal
             or base.declares_instance_dict
-            or _base_introduces_instance_dict(base, declarations_by_short_name, seen)
+            or _base_introduces_instance_dict(base, declarations_by_name, next_seen)
         ):
             return True
     return False
@@ -610,10 +697,6 @@ def validate_slots_inventory(
     ordered_declarations = sorted(declarations, key=lambda item: item.qualified_name)
     declarations_by_name = {
         declaration.qualified_name: declaration for declaration in ordered_declarations
-    }
-    declarations_by_short_name = {
-        declaration.qualified_name.rsplit(".", 1)[-1]: declaration
-        for declaration in ordered_declarations
     }
     stale_entries = sorted(set(registry) - set(declarations_by_name))
     if stale_entries:
@@ -638,10 +721,13 @@ def validate_slots_inventory(
         elif not declaration.has_own_slots:
             unprotected.append(declaration)
             continue
+        elif not declaration.slots_are_literal:
+            unprotected.append(declaration)
+            continue
         elif declaration.declares_instance_dict:
             unprotected.append(declaration)
             continue
-        elif _base_introduces_instance_dict(declaration, declarations_by_short_name):
+        elif _base_introduces_instance_dict(declaration, declarations_by_name):
             unprotected.append(declaration)
             continue
         else:
