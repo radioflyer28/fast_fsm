@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, cast
 from zipfile import ZipFile
 from xml.etree import ElementTree
 
@@ -480,26 +480,42 @@ def _resolve_from_import_module(module_name: str, statement: ast.ImportFrom) -> 
     return ".".join(package_parts)
 
 
-def _import_bindings(
-    statements: Iterable[ast.stmt], module_name: str
-) -> dict[str, str]:
-    """Map local import names to qualified module or class identities."""
-    bindings: dict[str, str] = {}
-    for statement in statements:
-        if isinstance(statement, ast.Import):
-            for alias in statement.names:
-                local_name = alias.asname or alias.name.split(".", 1)[0]
-                bindings[local_name] = alias.name if alias.asname else local_name
-        elif isinstance(statement, ast.ImportFrom):
-            imported_module = _resolve_from_import_module(module_name, statement)
-            for alias in statement.names:
-                if alias.name == "*":
-                    continue
+BindingEnvironment = dict[str, frozenset[str]]
+ClassOccurrence = tuple[ast.ClassDef, BindingEnvironment]
+
+
+def _merge_binding_environments(
+    environments: Iterable[Mapping[str, frozenset[str]]],
+) -> BindingEnvironment:
+    """Join possible reaching environments without choosing one branch."""
+    merged: dict[str, set[str]] = {}
+    for environment in environments:
+        for name, references in environment.items():
+            merged.setdefault(name, set()).update(references)
+    return {name: frozenset(references) for name, references in merged.items()}
+
+
+def _apply_import_binding(
+    statement: ast.stmt,
+    environment: Mapping[str, frozenset[str]],
+    module_name: str,
+) -> BindingEnvironment:
+    """Return one sequential environment after a statically known import."""
+    updated = dict(environment)
+    if isinstance(statement, ast.Import):
+        for alias in statement.names:
+            local_name = alias.asname or alias.name.split(".", 1)[0]
+            reference = alias.name if alias.asname else local_name
+            updated[local_name] = frozenset({reference})
+    elif isinstance(statement, ast.ImportFrom):
+        imported_module = _resolve_from_import_module(module_name, statement)
+        for alias in statement.names:
+            if alias.name != "*":
                 local_name = alias.asname or alias.name
-                bindings[local_name] = ".".join(
-                    part for part in (imported_module, alias.name) if part
+                updated[local_name] = frozenset(
+                    {".".join(part for part in (imported_module, alias.name) if part)}
                 )
-    return bindings
+    return updated
 
 
 def _is_main_demo_condition(condition: ast.expr) -> bool:
@@ -532,37 +548,89 @@ def _is_type_checking_condition(condition: ast.expr) -> bool:
     )
 
 
-def _module_level_statements(statements: Iterable[ast.stmt]) -> list[ast.stmt]:
-    """Flatten production module control flow without entering nested scopes.
-
-    A direct ``TYPE_CHECKING`` body and conventional ``__main__`` body cannot
-    define runtime imports/exports, so only their ``else`` branches are audited.
-    All other module-level branches are conservatively traversed.
-    """
-    result: list[ast.stmt] = []
+def _walk_module_statements(
+    statements: Iterable[ast.stmt],
+    environment: Mapping[str, frozenset[str]],
+    module_name: str,
+) -> tuple[list[ClassOccurrence], BindingEnvironment]:
+    """Walk module control flow in order with branch-local reaching bindings."""
+    occurrences: list[ClassOccurrence] = []
+    current = dict(environment)
     for statement in statements:
-        if isinstance(statement, ast.If):
+        if isinstance(statement, (ast.Import, ast.ImportFrom)):
+            current = _apply_import_binding(statement, current, module_name)
+        elif isinstance(statement, ast.ClassDef):
+            occurrences.append((statement, dict(current)))
+            current[statement.name] = frozenset({f"{module_name}.{statement.name}"})
+        elif isinstance(statement, ast.If):
             if _is_main_demo_condition(statement.test) or _is_type_checking_condition(
                 statement.test
             ):
-                result.extend(_module_level_statements(statement.orelse))
+                nested, current = _walk_module_statements(
+                    statement.orelse, current, module_name
+                )
+                occurrences.extend(nested)
             else:
-                result.extend(_module_level_statements(statement.body))
-                result.extend(_module_level_statements(statement.orelse))
-        elif isinstance(statement, ast.Try):
-            result.extend(_module_level_statements(statement.body))
-            for handler in statement.handlers:
-                result.extend(_module_level_statements(handler.body))
-            result.extend(_module_level_statements(statement.orelse))
-            result.extend(_module_level_statements(statement.finalbody))
+                then_occurrences, then_environment = _walk_module_statements(
+                    statement.body, current, module_name
+                )
+                else_occurrences, else_environment = _walk_module_statements(
+                    statement.orelse, current, module_name
+                )
+                occurrences.extend(then_occurrences)
+                occurrences.extend(else_occurrences)
+                current = _merge_binding_environments(
+                    (then_environment, else_environment)
+                )
+        elif (
+            isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar"
+        ):
+            try_statement = cast(ast.Try, statement)
+            body_occurrences, body_environment = _walk_module_statements(
+                try_statement.body, current, module_name
+            )
+            else_occurrences, successful_environment = _walk_module_statements(
+                try_statement.orelse, body_environment, module_name
+            )
+            occurrences.extend(body_occurrences)
+            occurrences.extend(else_occurrences)
+            path_environments = [successful_environment]
+            for handler in try_statement.handlers:
+                handler_occurrences, handler_environment = _walk_module_statements(
+                    handler.body, current, module_name
+                )
+                occurrences.extend(handler_occurrences)
+                path_environments.append(handler_environment)
+            final_environment = _merge_binding_environments(path_environments)
+            final_occurrences, current = _walk_module_statements(
+                try_statement.finalbody, final_environment, module_name
+            )
+            occurrences.extend(final_occurrences)
         elif isinstance(statement, (ast.With, ast.AsyncWith)):
-            result.extend(_module_level_statements(statement.body))
+            nested, current = _walk_module_statements(
+                statement.body, current, module_name
+            )
+            occurrences.extend(nested)
+        elif isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            body_occurrences, body_environment = _walk_module_statements(
+                statement.body, current, module_name
+            )
+            occurrences.extend(body_occurrences)
+            loop_environment = _merge_binding_environments((current, body_environment))
+            else_occurrences, current = _walk_module_statements(
+                statement.orelse, loop_environment, module_name
+            )
+            occurrences.extend(else_occurrences)
         elif isinstance(statement, ast.Match):
+            case_environments: list[BindingEnvironment] = []
             for case in statement.cases:
-                result.extend(_module_level_statements(case.body))
-        else:
-            result.append(statement)
-    return result
+                nested, case_environment = _walk_module_statements(
+                    case.body, current, module_name
+                )
+                occurrences.extend(nested)
+                case_environments.append(case_environment)
+            current = _merge_binding_environments(case_environments or [current])
+    return occurrences, current
 
 
 def _dotted_expression_parts(expression: ast.expr) -> tuple[str, ...] | None:
@@ -579,8 +647,7 @@ def _base_references(
     class_node: ast.ClassDef,
     *,
     module_name: str,
-    import_bindings: Mapping[str, str],
-    local_class_names: set[str],
+    import_bindings: Mapping[str, frozenset[str]],
 ) -> tuple[str, ...]:
     """Resolve bases to module-qualified identities or explicit unknown markers."""
     references: list[str] = []
@@ -589,11 +656,9 @@ def _base_references(
         if not parts:
             references.append(f"<unresolved:{ast.unparse(base)}>")
             continue
-        binding = import_bindings.get(parts[0])
-        if binding is not None:
-            references.append(".".join([binding, *parts[1:]]))
-        elif len(parts) == 1 and parts[0] in local_class_names:
-            references.append(f"{module_name}.{parts[0]}")
+        bindings = import_bindings.get(parts[0])
+        if bindings is not None:
+            references.extend(".".join([binding, *parts[1:]]) for binding in bindings)
         elif parts == ("object",):
             references.append("builtins.object")
         else:
@@ -691,17 +756,11 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
         source = source_file.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(source_file))
         module_name = _module_name_for_path(resolved_source_root, source_file)
-        statements = _module_level_statements(tree.body)
-        import_bindings = _import_bindings(statements, module_name)
-        local_class_names = {
-            node.name for node in statements if isinstance(node, ast.ClassDef)
-        }
+        occurrences, _ = _walk_module_statements(tree.body, {}, module_name)
         source_path = _normalized_relative_path(
             source_file, resolved_source_root.parent
         )
-        for node in statements:
-            if not isinstance(node, ast.ClassDef):
-                continue
+        for node, import_bindings in occurrences:
             has_own_slots, slots_are_literal, declares_instance_dict = (
                 _slots_declaration(node)
             )
@@ -714,7 +773,6 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
                         node,
                         module_name=module_name,
                         import_bindings=import_bindings,
-                        local_class_names=local_class_names,
                     ),
                     has_own_slots=has_own_slots,
                     slots_are_literal=slots_are_literal,

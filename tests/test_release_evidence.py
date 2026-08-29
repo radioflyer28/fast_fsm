@@ -704,6 +704,91 @@ def test_slots_policy_excludes_only_main_and_type_checking_bodies(
     validate_slots_inventory(declarations, REGISTERED_SLOTS_EXCEPTIONS)
 
 
+@pytest.mark.parametrize(
+    ("source", "class_name"),
+    [
+        (
+            "for value in values:\n    class LoopConditional:\n        pass\n",
+            "LoopConditional",
+        ),
+        (
+            "while enabled:\n"
+            "    class WhileConditional:\n"
+            "        pass\n"
+            "else:\n"
+            "    class WhileElseConditional:\n"
+            "        pass\n",
+            "WhileConditional",
+        ),
+        (
+            "try:\n"
+            "    class TryStarConditional:\n"
+            "        pass\n"
+            "except* ImportError:\n"
+            "    class ExceptStarConditional:\n"
+            "        pass\n",
+            "TryStarConditional",
+        ),
+    ],
+)
+def test_slots_policy_recurses_through_module_loops_and_try_star(
+    tmp_path: Path, source: str, class_name: str
+) -> None:
+    """Loop and exception-group bodies cannot hide runtime production classes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "loop_policy.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=f"fast_fsm.loop_policy.{class_name}"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_keeps_branch_local_imports_for_base_resolution(
+    tmp_path: Path,
+) -> None:
+    """An alternate safe alias cannot certify a runtime branch's unsafe base."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "branch_policy.py").write_text(
+        "if runtime_selector:\n"
+        "    from .unsafe_base import Ordinary as ABC\n\n"
+        "    class RuntimeChild(ABC):\n"
+        "        __slots__ = ()\n"
+        "else:\n"
+        "    from abc import ABC\n\n"
+        "    class AlternateChild(ABC):\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.branch_policy.RuntimeChild"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_rejects_ambiguous_reaching_base_bindings(tmp_path: Path) -> None:
+    """A class after divergent aliases fails unless every possible base is safe."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "branch_policy.py").write_text(
+        "if runtime_selector:\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "else:\n"
+        "    from abc import ABC as Base\n\n"
+        "class AmbiguousChild(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.branch_policy.AmbiguousChild"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {
