@@ -470,6 +470,26 @@ def test_slots_policy_rejects_stale_exception_registry_entries(tmp_path: Path) -
     assert "fast_fsm.core.RemovedException" in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class Base:\n    __slots__ = ()\n\nclass Child(Base):\n    pass\n",
+        "class Base:\n    __slots__ = ('__dict__',)\n\nclass Child(Base):\n    __slots__ = ()\n",
+        "class Child:\n    __slots__ = ('__dict__',)\n",
+    ],
+)
+def test_slots_policy_fails_closed_for_inherited_or_declared_instance_dict(
+    tmp_path: Path, source: str
+) -> None:
+    """A local subclass cannot inherit or declare an instance dictionary."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "slot_regression.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="fast_fsm.slot_regression.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {

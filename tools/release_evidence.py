@@ -59,6 +59,7 @@ class ClassDeclaration:
     line: int
     base_names: tuple[str, ...]
     has_own_slots: bool
+    declares_instance_dict: bool
 
 
 def _native_suffixes() -> tuple[str, ...]:
@@ -371,21 +372,47 @@ def _base_names(class_node: ast.ClassDef) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _has_own_slots(class_node: ast.ClassDef) -> bool:
-    """Recognize ``__slots__`` and ``@dataclass(slots=True)`` declarations."""
+def _slots_declaration(class_node: ast.ClassDef) -> tuple[bool, bool]:
+    """Return whether a class owns slots and explicitly enables ``__dict__``.
+
+    The audit is deliberately conservative: a static ``__slots__`` declaration
+    is sufficient to establish the class-level contract, but placing
+    ``"__dict__"`` in it is always an instance-dictionary escape hatch.
+    """
+    has_own_slots = False
+    declares_instance_dict = False
+
+    def contains_instance_dict(value: ast.expr) -> bool:
+        if isinstance(value, ast.Constant):
+            return value.value == "__dict__"
+        if isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+            return any(
+                isinstance(item, ast.Constant) and item.value == "__dict__"
+                for item in value.elts
+            )
+        return False
+
     for statement in class_node.body:
         if isinstance(statement, ast.Assign):
             if any(
                 isinstance(target, ast.Name) and target.id == "__slots__"
                 for target in statement.targets
             ):
-                return True
+                has_own_slots = True
+                declares_instance_dict = (
+                    declares_instance_dict or contains_instance_dict(statement.value)
+                )
         elif isinstance(statement, ast.AnnAssign):
             if (
                 isinstance(statement.target, ast.Name)
                 and statement.target.id == "__slots__"
             ):
-                return True
+                has_own_slots = True
+                if statement.value is not None:
+                    declares_instance_dict = (
+                        declares_instance_dict
+                        or contains_instance_dict(statement.value)
+                    )
 
     for decorator in class_node.decorator_list:
         if not isinstance(decorator, ast.Call):
@@ -405,8 +432,8 @@ def _has_own_slots(class_node: ast.ClassDef) -> bool:
             and keyword.value.value is True
             for keyword in decorator.keywords
         ):
-            return True
-    return False
+            has_own_slots = True
+    return has_own_slots, declares_instance_dict
 
 
 def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
@@ -427,24 +454,33 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
         for node in tree.body:
             if not isinstance(node, ast.ClassDef):
                 continue
+            has_own_slots, declares_instance_dict = _slots_declaration(node)
             declarations.append(
                 ClassDeclaration(
                     qualified_name=f"{module_name}.{node.name}",
                     source_path=source_path,
                     line=node.lineno,
                     base_names=_base_names(node),
-                    has_own_slots=_has_own_slots(node),
+                    has_own_slots=has_own_slots,
+                    declares_instance_dict=declares_instance_dict,
                 )
             )
     return sorted(declarations, key=lambda declaration: declaration.qualified_name)
 
 
-def _is_inherited_slot_protected(
+def _base_introduces_instance_dict(
     declaration: ClassDeclaration,
     declarations_by_short_name: Mapping[str, ClassDeclaration],
     visited: set[str] | None = None,
 ) -> bool:
-    """Return whether a declaration inherits slots from a local ancestor."""
+    """Return whether any local or known built-in base permits ``__dict__``.
+
+    A subclass must declare its own slots.  Even that is not enough when a
+    parent has already introduced an instance dictionary, as the descendant
+    cannot remove it.  The exception hierarchy is included explicitly because
+    CPython exception instances expose a dictionary despite a subclass's local
+    ``__slots__`` declaration.
+    """
     seen = set() if visited is None else visited
     if declaration.qualified_name in seen:
         return False
@@ -452,9 +488,13 @@ def _is_inherited_slot_protected(
     for base_name in declaration.base_names:
         base = declarations_by_short_name.get(base_name)
         if base is None:
+            if base_name in {"BaseException", "Exception", "RuntimeError"}:
+                return True
             continue
-        if base.has_own_slots or _is_inherited_slot_protected(
-            base, declarations_by_short_name, seen
+        if (
+            not base.has_own_slots
+            or base.declares_instance_dict
+            or _base_introduces_instance_dict(base, declarations_by_short_name, seen)
         ):
             return True
     return False
@@ -493,13 +533,17 @@ def validate_slots_inventory(
             entry.update(
                 classification="registered-exception", exception_reason=exception_reason
             )
-        elif declaration.has_own_slots:
-            entry["classification"] = "slot-protected"
-        elif _is_inherited_slot_protected(declaration, declarations_by_short_name):
-            entry["classification"] = "inherited-slot-protected"
-        else:
+        elif not declaration.has_own_slots:
             unprotected.append(declaration)
             continue
+        elif declaration.declares_instance_dict:
+            unprotected.append(declaration)
+            continue
+        elif _base_introduces_instance_dict(declaration, declarations_by_short_name):
+            unprotected.append(declaration)
+            continue
+        else:
+            entry["classification"] = "slot-protected"
         inventory.append(entry)
 
     if unprotected:
