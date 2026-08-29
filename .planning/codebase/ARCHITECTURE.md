@@ -1,152 +1,358 @@
+<!-- refreshed: 2026-08-29 -->
 # Architecture
 
-## Architectural Pattern
+**Analysis Date:** 2026-08-29
 
-**Library architecture** — Fast FSM is an importable Python package, not a service or
-application. Consumers instantiate `StateMachine` objects in their own code. There is
-no server, no event loop, no framework to buy into.
+## System Overview
 
-**Core design principle:** Minimize abstraction layers. Performance comes from:
-1. `__slots__` on all classes (no `__dict__` overhead)
-2. Direct dictionary lookups for transitions (`Dict[str, Dict[str, TransitionEntry]]`)
-3. No reflection, introspection, or metaclass magic on hot paths
-4. Optional mypyc compilation of `core.py` to C extension
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                    Public package API                        │
+│                    `src/fast_fsm/__init__.py`                │
+└──────────────┬──────────────────────┬───────────────────────┘
+               │                      │
+               ▼                      ▼
+┌──────────────────────────┐  ┌───────────────────────────────┐
+│ Runtime FSM core         │  │ Optional design-time tooling   │
+│ `src/fast_fsm/core.py`   │  │ `validation.py`, `visualization.py` │
+│ State/transition/async   │  │ analysis, diagrams, JSON       │
+└──────────────┬───────────┘  └───────────────┬───────────────┘
+               │                              │
+               ▼                              ▼
+┌──────────────────────────┐  ┌───────────────────────────────┐
+│ Guard condition system   │  │ User/application integration   │
+│ `conditions.py`          │  │ callbacks, listeners, logging  │
+│ `condition_templates.py` │  │ and serialized topology        │
+└──────────────────────────┘  └───────────────────────────────┘
+```
+
+Fast FSM is a compact library rather than an application service. Runtime state
+dispatch is concentrated in `src/fast_fsm/core.py`; optional analysis and output
+features consume the runtime model but are not called by `trigger()`.
+
+## Component Responsibilities
+
+| Component | Responsibility | File |
+|-----------|----------------|------|
+| Public API facade | Re-export runtime classes, condition types, factories, validators, and visualization helpers; derive `__version__` from package metadata | `src/fast_fsm/__init__.py` |
+| Synchronous runtime | Own state registry, current state, transition table, guard evaluation, callbacks, listeners, history, snapshots, and dispatch | `src/fast_fsm/core.py` (`StateMachine`) |
+| Asynchronous runtime | Extend `StateMachine` with awaitable guards and async state callbacks | `src/fast_fsm/core.py` (`AsyncStateMachine`) |
+| State objects | Represent named states and lifecycle hooks; provide extension points for custom transition permission and event handling | `src/fast_fsm/core.py` (`State`, `CallbackState`, `DeclarativeState`) |
+| Condition abstraction | Define synchronous/async guard contracts and callable/negation wrappers | `src/fast_fsm/conditions.py` |
+| Reusable guards | Provide common always/never, key, set, regex, comparison, boolean-composition, and timing conditions | `src/fast_fsm/condition_templates.py` |
+| Fluent construction | Queue states, transitions, conditions, and callbacks, auto-detecting async requirements before one-time materialization | `src/fast_fsm/core.py` (`FSMBuilder`) |
+| Validation | Inspect private FSM topology for reachability, dead states, completeness, determinism, complexity, scoring, linting, and reports | `src/fast_fsm/validation.py` |
+| Visualization/introspection | Render Mermaid/PlantUML, export topology and analysis as JSON, and emit fenced/document forms | `src/fast_fsm/visualization.py` |
+
+## Pattern Overview
+
+**Overall:** In-memory object graph with dictionary-indexed deterministic state
+dispatch, plus optional builder, observer, strategy/guard, and declarative-state
+patterns.
+
+**Key Characteristics:**
+
+- `StateMachine._states` maps state names to `State` objects, while
+  `StateMachine._transitions` maps `from_state_name -> trigger_name ->
+  TransitionEntry`; dispatch is direct lookup rather than scanning candidate
+  transitions (`src/fast_fsm/core.py:287-337`, `src/fast_fsm/core.py:1307-1350`).
+- Runtime classes use `__slots__`, and `TransitionEntry` stores the destination
+  and optional guard without a per-transition tuple/dict abstraction
+  (`src/fast_fsm/core.py:89-104`).
+- Conditions are strategy objects with a common `check()` contract. Plain
+  callables passed to `add_transition()` are normalized to `FuncCondition`, and
+  `unless=` is normalized to `NegatedCondition` (`src/fast_fsm/core.py:640-743`).
+- The observer surface is callback-based: listeners are registered once and
+  bound-method references are cached in listener lists for the hot path
+  (`src/fast_fsm/core.py:901-949`).
+- Optional validation, serialization, diagram generation, history, and logging
+  are opt-in concerns around the core state transition operation.
 
 ## Layers
 
-```
-┌─────────────────────────────────────────────────┐
-│  User Code                                       │
-│  (imports fast_fsm, creates FSMs, triggers)      │
-├─────────────────────────────────────────────────┤
-│  Convenience Layer                               │
-│  - FSMBuilder (fluent builder pattern)           │
-│  - quick_build(), from_dict(), from_states()     │
-│  - simple_fsm(), quick_fsm()                     │
-│  - condition_builder() decorator                 │
-├─────────────────────────────────────────────────┤
-│  Core Runtime                                    │
-│  - StateMachine.trigger() — O(1) hot path        │
-│  - State (ABC), CallbackState                    │
-│  - TransitionEntry (to_state + optional guard)   │
-│  - TransitionResult (success/failure dataclass)  │
-│  - AsyncStateMachine (async trigger_async)       │
-├─────────────────────────────────────────────────┤
-│  Condition System (uncompiled)                   │
-│  - Condition ABC → check(**kwargs) → bool        │
-│  - FuncCondition, NegatedCondition               │
-│  - AsyncCondition (awaitable check)              │
-│  - condition_templates.py (reusable patterns)    │
-├─────────────────────────────────────────────────┤
-│  Design-Time Tools (zero runtime overhead)       │
-│  - validation.py — FSMValidator, scoring         │
-│  - visualization.py — Mermaid diagram generation │
-└─────────────────────────────────────────────────┘
-```
+**Public API layer:**
 
-## Data Flow: Trigger Execution
+- Purpose: Provide stable import locations for users.
+- Location: `src/fast_fsm/__init__.py`
+- Contains: Re-exports and `__all__` for all supported symbols.
+- Depends on: `core.py`, `conditions.py`, `condition_templates.py`,
+  `validation.py`, and `visualization.py`.
+- Used by: Application code, examples, tests, and documentation.
 
-The hot path through `StateMachine.trigger()`:
+**Runtime model and dispatch layer:**
 
-```
-trigger("event", **kwargs)
-    │
-    ├── _resolve_trigger(trigger)
-    │   ├── Look up current_state.name in _transitions dict       ← O(1)
-    │   └── Look up trigger name in state's transition dict       ← O(1)
-    │       → Returns (TransitionEntry, current_state_name)
-    │         or TransitionResult(success=False)
-    │
-    ├── Check entry.condition (if present)
-    │   ├── _sanitize_condition_kwargs(kwargs)                    ← strips non-condition params
-    │   └── condition.check(**kwargs)                             ← user-defined guard
-    │       → If False: return TransitionResult(success=False)
-    │
-    ├── Check State.can_transition(trigger, to_state)             ← state permission
-    │   → Default: True (overridable in subclasses)
-    │
-    └── _execute_transition(to_state, trigger, **kwargs)
-        ├── old_state.on_exit(to_state, trigger, *args, **kwargs)
-        ├── Fire per-state exit callbacks
-        ├── Notify on_exit_state listeners
-        ├── self._current_state = to_state                        ← state change
-        ├── to_state.on_enter(old_state, trigger, *args, **kwargs)
-        ├── Fire per-state enter callbacks
-        ├── Notify on_enter_state listeners
-        ├── Notify after_transition listeners
-        └── Return TransitionResult(success=True)
-```
+- Purpose: Register states and transitions and execute one transition from the
+  current state.
+- Location: `src/fast_fsm/core.py`
+- Contains: `State`, `CallbackState`, `StateMachine`, `AsyncStateMachine`,
+  `TransitionEntry`, `TransitionResult`, `TransitionRecord`, declarative states,
+  builder, factories, and logging helpers.
+- Depends on: Standard-library logging/time/asyncio/dataclasses and condition
+  types from `src/fast_fsm/conditions.py`.
+- Used by: Public facade, validation, visualization, user subclasses, and tests.
+
+**Guard/condition layer:**
+
+- Purpose: Encapsulate transition eligibility checks.
+- Location: `src/fast_fsm/conditions.py`, `src/fast_fsm/condition_templates.py`.
+- Contains: `Condition`, `FuncCondition`, `AsyncCondition`, `NegatedCondition`,
+  and reusable concrete condition classes.
+- Depends on: Standard-library `asyncio`, `time`, `re`, and typing.
+- Used by: `StateMachine`, `AsyncStateMachine`, `FSMBuilder`, and callers.
+
+**Design-time inspection/output layer:**
+
+- Purpose: Analyze or represent an already-built FSM without changing dispatch.
+- Location: `src/fast_fsm/validation.py`, `src/fast_fsm/visualization.py`.
+- Contains: `FSMValidator`/`EnhancedFSMValidator`, lint/scoring helpers, and
+  Mermaid/PlantUML/JSON output.
+- Depends on: The public runtime object and its internal `_states`/
+  `_transitions` tables. `visualization.py` uses `TYPE_CHECKING` for its core
+  type and imports validation lazily inside `to_json()`.
+- Used by: Tests, diagnostics, docs, and tooling; not by the hot dispatch path.
+
+The practical dependency direction is `conditions.py -> core.py -> validation.py`
+for type/runtime use, with `condition_templates.py` depending on
+`conditions.py`. `core.py` does not import `validation.py`, avoiding a runtime
+cycle. `__init__.py` is the aggregation boundary.
+
+## Data Flow
+
+### Primary Synchronous Request Path
+
+1. Caller invokes `StateMachine.trigger(trigger, *args, **kwargs)` at
+   `src/fast_fsm/core.py:1492`.
+2. `_resolve_trigger()` reads the current state's name and performs a direct
+   lookup in `_transitions`; missing entries return a failed `TransitionResult`
+   and invoke `on_failed` callbacks (`src/fast_fsm/core.py:1307-1349`).
+3. If a guard exists, `trigger()` sanitizes keyword context (drops private keys,
+   rejects invalid keys, and caps input at 50 items) and calls
+   `Condition.check()` (`src/fast_fsm/core.py:1126-1171`,
+   `src/fast_fsm/core.py:1515-1586`).
+4. The current state's `can_transition()` hook is evaluated. A false result is
+   returned as a failed `TransitionResult` (`src/fast_fsm/core.py:1550-1586`).
+5. `_execute_transition()` runs the lifecycle in order: before listeners,
+   source `on_exit`, per-source exit callbacks, exit listeners, updates
+   `_current_state`, destination `on_enter`, per-destination enter callbacks,
+   enter listeners, after listeners, trigger-specific callbacks, and optional
+   history recording (`src/fast_fsm/core.py:1350-1490`).
+6. A successful `TransitionResult` containing source, destination, and trigger
+   names is returned (`src/fast_fsm/core.py:1480-1490`).
+
+### Asynchronous Request Path
+
+1. Caller invokes `await AsyncStateMachine.trigger_async(...)` at
+   `src/fast_fsm/core.py:1812`.
+2. The same direct transition resolution and failure callback model is used.
+3. `AsyncCondition.check_async()` is awaited when the guard is asynchronous;
+   synchronous conditions still call `check()` (`src/fast_fsm/core.py:1833-1882`).
+4. The state permission hook uses `can_transition_async()` when the current
+   state provides it, otherwise it falls back to `can_transition()`
+   (`src/fast_fsm/core.py:1884-1911`).
+5. The synchronous `_execute_transition()` lifecycle runs first, followed by
+   registered async exit callbacks and async enter callbacks in order
+   (`src/fast_fsm/core.py:1913-1944`).
+
+### Construction and Inspection Flows
+
+- `StateMachine.from_states()`, `quick_build()`, and `from_dict()` create state
+  objects, register them, then call `add_transition()` (`src/fast_fsm/core.py:339-559`).
+- `FSMBuilder` queues declarations and creates exactly one machine in `build()`;
+  async components promote the selected class when auto-detection is enabled
+  (`src/fast_fsm/core.py:2268-2669`).
+- `snapshot()` stores only current state and version; `restore()` validates that
+  shape and delegates to `force_state()` (`src/fast_fsm/core.py:1209-1253`).
+- `to_dict()` exports topology without callable guards, while
+  `StateMachine.from_dict(..., conditions=...)` reattaches guards by trigger
+  name (`src/fast_fsm/core.py:447-593`).
+- Validators and renderers walk `_states` and `_transitions` after construction;
+  they do not mutate the machine (`src/fast_fsm/validation.py:21-228`,
+  `src/fast_fsm/visualization.py:33-310`).
+
+**State Management:**
+
+- `_initial_state` is retained as the reset target; `_current_state` holds the
+  active object. State registration is name-keyed and transitions store actual
+  destination objects (`src/fast_fsm/core.py:287-338`,
+  `src/fast_fsm/core.py:625-638`).
+- `force_state()` and `reset()` bypass guards but preserve lifecycle callback
+  execution; `clone()` shallow-copies topology and callback lists while
+  resetting current state and disabling copied history (`src/fast_fsm/core.py:1173-1306`).
 
 ## Key Abstractions
 
-### State (ABC in `core.py`)
-- Abstract base with `__slots__ = ("name",)`
-- Factory method `State.create(name)` returns concrete instance
-- Override points: `on_enter()`, `on_exit()`, `can_transition()`, `handle_event()`
-- All no-ops by default — zero overhead when not overridden
+**`TransitionEntry`:**
 
-### CallbackState (extends State)
-- Adds `_on_enter` and `_on_exit` callback slots
-- Used when users need callback storage on a state without subclassing
+- Purpose: Store one trigger's destination `State` and optional `Condition`.
+- Examples: `src/fast_fsm/core.py:89-104`, consumed by
+  `StateMachine._transitions`.
+- Pattern: Compact `__slots__` value object for dictionary-indexed dispatch.
 
-### StateMachine
-- Core class with `__slots__` (18 slots)
-- Internal data: `_states: Dict[str, State]`, `_transitions: Dict[str, Dict[str, TransitionEntry]]`
-- Multiple construction patterns: constructor, `from_states()`, `quick_build()`, `from_dict()`
-- Listener/observer pattern via `add_listener()`
-- State persistence: `snapshot()` / `restore()` / `clone()`
+**`Condition`:**
 
-### AsyncStateMachine (extends StateMachine)
-- Adds `trigger_async()` for awaiting async conditions and callbacks
-- Adds `_async_state_enter_callbacks` and `_async_state_exit_callbacks` slots
-- `on_enter_async()` / `on_exit_async()` for async per-state callbacks
-- FSMBuilder auto-detects async requirements and returns this type
+- Purpose: Uniform guard interface for callable, composed, negated, timing, and
+  asynchronous checks.
+- Examples: `src/fast_fsm/conditions.py:15-149`,
+  `src/fast_fsm/condition_templates.py:8-181`.
+- Pattern: Strategy/adapter; use `check()` for sync and `check_async()` for async.
 
-### DeclarativeState / AsyncDeclarativeState
-- Convention-over-configuration: methods named `on_enter_<trigger>`, `handle_<event>`, `guard_<trigger>` are auto-discovered
-- Uses `_discover_handlers()` to introspect method names at init time
-- `transition` decorator for explicit handler declaration
+**`State`:**
 
-### FSMBuilder
-- Fluent builder pattern with method chaining
-- Auto-detects async requirements (returns `AsyncStateMachine` if any `AsyncCondition` found)
-- Stores deferred state/transition/callback registrations, applies on `build()`
+- Purpose: Named extension point for lifecycle hooks, transition permission, and
+  event handling.
+- Examples: `src/fast_fsm/core.py:173-231`, `CallbackState` at
+  `src/fast_fsm/core.py:232-263`, and user-defined subclasses in `examples/`.
+- Pattern: Template method/base class; override hooks while preserving the
+  machine's dispatch and result contracts.
 
-### Condition System
-- `Condition` ABC in `conditions.py` — must stay uncompiled for user subclassing
-- `FuncCondition` — wraps a callable as a condition
-- `CompiledFuncCondition` — mypyc-compiled variant in `core.py` for hot paths
-- `AsyncCondition` — async `check()` for use with `AsyncStateMachine`
-- `NegatedCondition` — decorator that inverts another condition
-- `condition_templates.py` — library of reusable patterns (Always, Never, Comparison, Regex, And, Or, Not)
+**`TransitionResult`:**
 
-### Validation (design-time only)
-- `FSMValidator` — reachability analysis, dead states, determinism, test path generation
-- `EnhancedFSMValidator` — adds scoring, issue classification, recommendations, export (JSON/MD/text)
-- Convenience functions: `validate_fsm()`, `quick_health_check()`, `batch_validate()`, `fsm_lint()`
-- Zero runtime overhead — only imported when needed
+- Purpose: Explicit success/failure value returned by all transition operations.
+- Examples: `src/fast_fsm/core.py:41-62`, `src/fast_fsm/core.py:1492-1630`.
+- Pattern: Slot-backed dataclass-style result object; call
+  `raise_if_failed()` when exception-style control flow is desired.
 
-### Visualization (design-time only)
-- `to_mermaid()` — generates Mermaid stateDiagram-v2 syntax
-- `to_mermaid_fenced()` — wraps in markdown fenced block
-- `to_mermaid_document()` — full HTML document with Mermaid rendering
+**Declarative handler metadata:**
+
+- Purpose: Let state methods declare trigger/from/to/guard metadata with
+  `@transition` and be discovered once at state construction.
+- Examples: decorator at `src/fast_fsm/core.py:1950-1975`, discovery at
+  `src/fast_fsm/core.py:2006-2032`.
+- Pattern: Metadata/declarative adapter over normal `State` hooks; use
+  `AsyncDeclarativeState` for awaitable handlers and guards.
 
 ## Entry Points
 
-| Entry point                     | Purpose                              |
-|---------------------------------|--------------------------------------|
-| `from fast_fsm import ...`      | Primary API — all public symbols     |
-| `from fast_fsm.core import ...` | Direct core module access            |
-| `from fast_fsm.conditions import ...` | Condition ABC for subclassing  |
-| `from fast_fsm.condition_templates import ...` | Reusable conditions  |
-| `from fast_fsm.validation import ...` | Design-time validation         |
-| `from fast_fsm.visualization import ...` | Mermaid diagram output      |
+**Library import:**
 
-## Design Decisions
+- Location: `src/fast_fsm/__init__.py`
+- Triggers: `import fast_fsm`.
+- Responsibilities: Expose the supported API and package version.
 
-- **TransitionResult over exceptions** (ADR-002): `trigger()` returns a result object
-  instead of raising on failure. This avoids exception overhead on the hot path. Use
-  `.raise_if_failed()` for exception-style API.
-- **Sparse vs. dense scoring** (ADR-001): Validation scoring adapts to FSM density
-  (sparse machines scored differently from dense ones).
-- **mypyc boundary** (ADR-003): Only `core.py` compiled; conditions stay interpreted.
+**Synchronous machine:**
+
+- Location: `src/fast_fsm/core.py` (`StateMachine` and `simple_fsm`/`quick_fsm`).
+- Triggers: Direct constructor, class factories, or convenience functions.
+- Responsibilities: Build topology and execute `trigger()`.
+
+**Asynchronous machine:**
+
+- Location: `src/fast_fsm/core.py` (`AsyncStateMachine`).
+- Triggers: Direct construction or `FSMBuilder.build()` after async detection.
+- Responsibilities: Execute `trigger_async()` and await async guards/hooks.
+
+**Declarative states:**
+
+- Location: `src/fast_fsm/core.py` (`transition`, `DeclarativeState`,
+  `AsyncDeclarativeState`).
+- Triggers: User subclasses decorated with `@transition`.
+- Responsibilities: Discover handlers and normalize handler return values into
+  `TransitionResult`.
+
+**Design-time tooling:**
+
+- Location: `src/fast_fsm/validation.py` and `src/fast_fsm/visualization.py`.
+- Triggers: Explicit calls such as `validate_fsm(fsm)`, `to_mermaid(fsm)`, or
+  `to_json(fsm)`.
+- Responsibilities: Report structural quality and emit diagrams/JSON.
+
+## Architectural Constraints
+
+- **Threading:** No locks or worker threads are used. Sync operations run in the
+  caller's thread; async operations use the caller's event loop. Concurrent
+  mutation/triggering is not coordinated by the library (`src/fast_fsm/core.py`).
+- **Global state:** No FSM singleton or module-level mutable machine registry is
+  present. Each `StateMachine` owns its tables and callback lists. Python's
+  module-level logging registry is used by `configure_fsm_logging()`
+  (`src/fast_fsm/core.py:2679-2776`).
+- **Circular imports:** No runtime cycle is detected. `core.py` imports condition
+  abstractions; `validation.py` imports `StateMachine`; visualization uses a
+  type-checking import and lazy validation import (`src/fast_fsm/visualization.py`).
+- **Compilation boundary:** `setup.py` compiles only `src/fast_fsm/core.py` with
+  mypyc. Keep `src/fast_fsm/conditions.py` interpreted so user-defined condition
+  subclasses remain possible (`setup.py`, `src/fast_fsm/core.py:106-166`).
+- **Performance:** Core lookup, state registration, and transition insertion are
+  designed as O(1); avoid scans, validation, or new allocations in the normal
+  `trigger()` path (`src/fast_fsm/core.py`, `docs/dev/architecture.md`).
+- **Topology ownership:** `validation.py` and `visualization.py` intentionally
+  read private `_states` and `_transitions`; changes to those internal shapes
+  require updating both consumers and their tests.
+
+## Anti-Patterns
+
+### Calling design-time analysis from dispatch
+
+**What happens:** A caller invokes validation or diagram generation on every
+trigger or embeds `FSMValidator` in a runtime callback.
+
+**Why it's wrong:** `src/fast_fsm/validation.py` performs graph walks and scoring,
+which defeats the O(1) hot path and adds avoidable allocations.
+
+**Do this instead:** Validate once after construction or in CI using
+`validate_fsm()`/`EnhancedFSMValidator` in `src/fast_fsm/validation.py`.
+
+### Mutating private topology tables directly
+
+**What happens:** Code edits `_states`, `_transitions`, or `_current_state`
+without the machine methods.
+
+**Why it's wrong:** It can leave transition destinations, per-state tables, and
+callback behavior inconsistent; analysis/output modules also depend on their
+shape.
+
+**Do this instead:** Use `add_state()`, `add_transition()`, `force_state()`,
+`restore()`, and `reset()` in `src/fast_fsm/core.py`.
+
+### Running async components through sync APIs
+
+**What happens:** An `AsyncCondition` or async declarative handler is attached to
+`StateMachine`, or `trigger()` is used where asynchronous work is required.
+
+**Why it's wrong:** Sync registration rejects async guards and sync declarative
+states cannot await them (`src/fast_fsm/core.py:640-743`,
+`src/fast_fsm/core.py:2034-2084`).
+
+**Do this instead:** Use `AsyncStateMachine.trigger_async()` or let
+`FSMBuilder` auto-detect async components (`src/fast_fsm/core.py:1782-1944`,
+`src/fast_fsm/core.py:2352-2380`).
+
+## Error Handling
+
+**Strategy:** Expected transition failures are values (`TransitionResult`), while
+invalid topology/API use raises `ValueError`, `TypeError`, or `KeyError`. User
+callback and condition exceptions are logged and converted to failed results or
+isolated from the transition lifecycle according to the path.
+
+**Patterns:**
+
+- Missing triggers, failed guards, and state vetoes return
+  `TransitionResult(False, ...)` and invoke registered `on_failed` callbacks
+  (`src/fast_fsm/core.py:1492-1630`).
+- `TransitionResult.raise_if_failed()` provides opt-in exception behavior via
+  `TransitionError` (`src/fast_fsm/core.py:25-62`).
+- Invalid target states and mutually exclusive `condition`/`unless` arguments
+  fail during `add_transition()` (`src/fast_fsm/core.py:640-743`).
+- Lifecycle/listener callback exceptions are logged so user hooks do not corrupt
+  the core state transition (`src/fast_fsm/core.py:1350-1480`).
+
+## Cross-Cutting Concerns
+
+**Logging:** Per-machine and per-state loggers use Python `logging`; public
+helpers configure hierarchy and verbosity (`src/fast_fsm/core.py:2679-2776`).
+
+**Validation:** Runtime guard context is sanitized in
+`StateMachine._sanitize_condition_kwargs()`; structural validation is explicit
+and external to dispatch (`src/fast_fsm/core.py:1126-1171`,
+`src/fast_fsm/validation.py`).
+
+**Authentication:** Not applicable; Fast FSM is an in-process library with no
+service boundary or identity provider.
+
+**Serialization:** Topology is JSON-safe through `to_dict()`/`from_dict()` and
+state snapshots through `snapshot()`/`restore()`; callable guards and callback
+objects are intentionally not serialized (`src/fast_fsm/core.py:447-593`,
+`src/fast_fsm/core.py:1209-1253`).
+
+---
+
+*Architecture analysis: 2026-08-29*

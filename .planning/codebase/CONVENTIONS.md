@@ -1,133 +1,108 @@
-# Code Conventions
+# Coding Conventions
+
+**Analysis Date:** 2026-08-29
+
+## Naming Patterns
+
+**Files:**
+- Use lowercase `snake_case.py` for implementation and test modules, for example `src/fast_fsm/condition_templates.py` and `tests/test_condition_templates.py`.
+- Use uppercase names only for repository-level documentation and metadata files; package modules do not use them.
+
+**Functions:**
+- Use lowercase `snake_case` for public functions, methods, and private helpers: `StateMachine.add_transition()` and `StateMachine._resolve_trigger()` in `src/fast_fsm/core.py`.
+- Prefix implementation-only helpers and attributes with one underscore, such as `_sanitize_condition_kwargs()` and `_current_state` in `src/fast_fsm/core.py`.
+- Use factory names that describe the construction shortcut, such as `simple_fsm()`, `quick_fsm()`, `StateMachine.from_states()`, and `StateMachine.quick_build()`.
+
+**Variables:**
+- Use descriptive lowercase `snake_case` locals (`initial_state`, `from_state`, `condition_result`).
+- Use short names only for tightly scoped iteration (`i`, `t`, `e`) or conventional values (`fsm`, `cb`).
+- Keep callback and guard call signatures permissive with `*args, **kwargs`; this is part of the public compatibility contract in `src/fast_fsm/core.py` and `src/fast_fsm/conditions.py`.
+
+**Types:**
+- Use PascalCase for classes and exceptions: `StateMachine`, `AsyncStateMachine`, `FSMBuilder`, `TransitionResult`, and `TransitionError`.
+- Use singular descriptive nouns for domain types (`Condition`, `State`, `TransitionRecord`) and suffix validation result types with `Issue` where appropriate (`ValidationIssue` in `src/fast_fsm/validation.py`).
+- Use `Optional`, `Union`, `Dict`, `List`, and `Tuple` in the older/public API portions of `src/fast_fsm/core.py`; newer code also uses built-in generics such as `list[str]` and `set[str]`. Match the surrounding module when extending it.
 
 ## Code Style
 
-- **Formatter:** Ruff (replaces Black) — line length 88 (default)
-- **Linter:** Ruff — runs both format and lint checks
-- **Type checker:** `ty` (primary), `mypy` (secondary, for mypyc compat verification)
-- **Python version:** >=3.10, uses modern type annotation syntax
+**Formatting:**
+- Use 4-space indentation, standard Python block layout, and an 88-character line target. Formatting is run with `uv run ruff format src/ tests/` through `Taskfile.yml`.
+- Keep module, class, and public method docstrings close to the implementation. Public API docstrings generally use Google-style `Args`, `Returns`, `Raises`, and `Example` sections, as in `StateMachine.from_dict()` in `src/fast_fsm/core.py`.
+- Use `@dataclass(slots=True)` for small record-like values (`TransitionResult` in `src/fast_fsm/core.py`) and `__slots__` for hot-path/domain objects (`State`, `StateMachine`, and condition classes).
+- Preserve selective mypyc annotations on user-subclassable core classes (`@mypyc_attr(allow_interpreted_subclasses=True)` in `src/fast_fsm/core.py`). New classes on the compiled boundary must follow the corresponding safety test in `tests/test_mypyc_guard.py`.
 
-## `__slots__` Everywhere
+**Linting:**
+- Ruff is the project formatter/linter and type validation uses `ty`; the operational commands are `uv run ruff check src/ tests/` and `uv run ty check src/` in `Taskfile.yml` and `.github/copilot-instructions.md`.
+- No `[tool.ruff]` section is present in `pyproject.toml`; use the repository commands and existing style rather than introducing a new lint configuration casually.
+- The project runs on Python `>=3.10` according to `pyproject.toml`; keep public annotations compatible with that minimum unless the package requirement is deliberately changed.
 
-**Mandatory for all classes in `src/fast_fsm/`.** This is a hard performance constraint.
+## Import Organization
 
-Every class uses `__slots__`:
-- `State.__slots__ = ("name",)`
-- `CallbackState.__slots__ = ("_on_enter", "_on_exit")`
-- `StateMachine.__slots__` = 18 fields (all internal state)
-- `TransitionEntry.__slots__ = ("to_state", "condition")`
-- `TransitionResult` uses `@dataclass(slots=True)`
-- `Condition.__slots__ = ("name", "description")`
-- `FSMValidator.__slots__` = 6 fields
-- `ValidationIssue.__slots__` = 6 fields
-- All condition templates use `__slots__`
+**Order:**
+1. Standard-library imports (`logging`, `time`, `asyncio`, `typing`, `dataclasses`, `collections`).
+2. Third-party imports (`pytest`, `hypothesis`, `mypy_extensions`).
+3. Local package imports (`from .conditions ...`, `from fast_fsm.core ...`).
 
-**Consequence:** You cannot add dynamic attributes to any FSM object. Use dedicated
-slots or `CallbackState` (which has `_on_enter`/`_on_exit` slots).
+The dominant order appears in `src/fast_fsm/conditions.py`, `tests/test_async.py`, and `tests/test_validation.py`. A few existing modules, notably `src/fast_fsm/condition_templates.py` and `tests/test_safety_kwargs.py`, have imports out of that order; preserve the local file carefully and let Ruff format/check determine whether a touched block needs cleanup.
 
-## Argument Passing Convention
+**Path Aliases:**
+- No path aliases are configured or used. Package-relative imports are used inside `src/fast_fsm/`, while tests import public symbols from `fast_fsm` or focused modules such as `fast_fsm.core` and `fast_fsm.conditions`.
 
-Every condition `.check()` and state callback (`on_enter`, `on_exit`, `can_transition`)
-receives `*args, **kwargs`. This pattern is preserved across the entire codebase for
-forward compatibility:
+## Error Handling
 
-```python
-# Condition check signature
-def check(self, **kwargs: Any) -> bool: ...
+**Patterns:**
+- Return a `TransitionResult(success=False, error=...)` for expected runtime transition failures: unknown triggers, wrong source states, rejected guards, and rejected state transitions in `src/fast_fsm/core.py`.
+- Raise `ValueError`, `TypeError`, or `KeyError` for invalid construction/configuration inputs, such as malformed `from_dict()` data and invalid transition conditions. Tests assert both exception type and message fragments with `pytest.raises(..., match=...)` in `tests/test_boundary_negative.py` and `tests/test_advanced_functionality.py`.
+- Use `TransitionResult.raise_if_failed()` when callers explicitly want exception-style control flow; it raises the domain-specific `TransitionError` while retaining the original result.
+- Isolate user callback and condition failures from FSM control flow: catch `Exception`, log the failure, and convert it to a failed result in `src/fast_fsm/core.py`. Keep this broad catch intentional and documented when adding another callback boundary.
+- Use `safe_trigger()` in `src/fast_fsm/core.py` as the last-resort API boundary that converts unexpected exceptions into failed results. Do not add validation work to the hot `trigger()` path without a measured reason.
 
-# State callback signatures
-def on_enter(self, from_state: "State", trigger: str, *args, **kwargs) -> None: ...
-def on_exit(self, to_state: "State", trigger: str, *args, **kwargs) -> None: ...
-def can_transition(self, trigger: str, to_state: "State", *args, **kwargs) -> bool: ...
-```
+## Logging
 
-## Error Handling Pattern
+**Framework:** Python standard-library `logging`, with per-machine/per-state loggers created in `src/fast_fsm/core.py`.
 
-- **Hot path (trigger):** Returns `TransitionResult` with `success=False` instead of raising
-  - Use `.raise_if_failed()` for exception-style flow
-- **Construction errors:** Raises `ValueError` or `TypeError` immediately
-  - Missing states, invalid configs, type mismatches
-- **Callback exceptions:** Caught, logged as warnings, never propagated
-  - State `on_enter`/`on_exit` exceptions don't crash the FSM
-  - Listener exceptions are isolated from each other
-- **Async errors:** Same pattern, with `await` in async variants
+**Patterns:**
+- Obtain named loggers with `logging.getLogger(...)`; use parameterized logger messages (`logger.debug("...%s", value)`) rather than eagerly interpolated strings in hot paths.
+- Use `debug` for dispatch/condition details, `info` for successful builder/setup events, `warning` for user callback/guard failures, and `error` for failures at callback or `safe_trigger()` barriers.
+- Configure logging through `configure_fsm_logging()` or `set_fsm_logging_level()` in `src/fast_fsm/core.py`; tests observe records with pytest’s `caplog` fixture in `tests/test_logging_config.py` and `tests/test_safety_kwargs.py`.
+- Keep normal library behavior quiet: direct `print()` calls are confined to demos/reporting paths such as `src/fast_fsm/condition_templates.py` and `src/fast_fsm/validation.py`.
 
-## Docstring Format
+## Comments
 
-- **Style:** Google-style (parsed by `napoleon` extension)
-- **Type annotations:** In signatures only — `sphinx-autodoc-typehints` renders them
-- **DO NOT** duplicate types in docstrings
-- Performance notes included inline: `Performance: O(1) - Direct dictionary lookup`
+**When to Comment:**
+- Comment performance-sensitive choices, compilation boundaries, callback ordering, and deliberate exception barriers. Representative comments are adjacent to slots/listener setup in `src/fast_fsm/core.py` and the mypyc guard rationale in `tests/test_mypyc_guard.py`.
+- Use section divider comments in long modules and test modules to group helpers, fixtures, and feature families; examples include `tests/test_builder.py` and `tests/test_validation.py`.
+- Prefer comments that explain why behavior is constrained. Keep comments synchronized with implementation; stale behavior comments are treated as defects by the project constitution in `.specify/memory/constitution.md`.
 
-Example pattern from `StateMachine.add_state()`:
-```python
-def add_state(self, state: State) -> None:
-    """
-    Add a state to the machine.
+**JSDoc/TSDoc:**
+- Not applicable; this is a Python package. Use Python docstrings instead.
+- Public functions/classes should have a concise summary and, where useful, Google-style argument/return/raise documentation. Internal underscore helpers generally have at least a one-line docstring when their behavior is non-obvious.
 
-    Performance: O(1) - Constant time state registration
-    Memory: +~32 bytes per state (slots optimization)
-    """
-```
+## Function Design
 
-## Import Patterns
+**Size:**
+- Keep hot-path operations shallow and O(1), especially `trigger()`, `can_trigger()`, `add_state()`, and `add_transition()` in `src/fast_fsm/core.py`. Move design-time analysis into `src/fast_fsm/validation.py` rather than adding it to dispatch.
+- `src/fast_fsm/core.py` is intentionally a large cohesive module; use nearby helpers and existing layer boundaries before creating another abstraction.
 
-```python
-# Standard library imports first
-import logging
-from abc import ABC
-from typing import Optional, Dict, Any, Callable, List, Union, Tuple
+**Parameters:**
+- Use keyword-only options for configuration that should not be confused with positional state/transition data, as in `StateMachine.__init__()` and `StateMachine.from_dict()`.
+- Preserve flexible callback/condition parameters (`*args, **kwargs`) and accept both domain objects and names where the existing API does (`StateMachine.quick_build()` and `FSMBuilder.add_transition()`).
+- For builder APIs, return `self` to support fluent chaining; follow `FSMBuilder.add_state()`, `add_transition()`, and callback registration methods.
 
-# Third-party
-from mypy_extensions import mypyc_attr
+**Return Values:**
+- Return explicit domain values (`TransitionResult`, `bool`, `List[str]`, or typed dictionaries) and document unusual normalization behavior. Declarative handlers normalize `None`, `bool`, and `TransitionResult` in `DeclarativeState.handle_event()` in `src/fast_fsm/core.py`.
+- Return copies for exposed mutable state/history snapshots where the surrounding API promises isolation (`StateMachine.history()` and `snapshot()` in `src/fast_fsm/core.py`).
 
-# Internal imports
-from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
-```
+## Module Design
 
-- Relative imports within the package (`.conditions`, `.core`)
-- `condition_templates.py` is the exception: imports via `from fast_fsm import Condition`
-  (through `__init__.py`)
+**Exports:**
+- Add public symbols to the package-level re-export list and `__all__` in `src/fast_fsm/__init__.py`; validation also maintains an explicit `__all__` in `src/fast_fsm/validation.py`.
+- Keep the implementation dependency direction simple: conditions are defined in `src/fast_fsm/conditions.py`, FSM behavior in `src/fast_fsm/core.py`, and design-time validation in `src/fast_fsm/validation.py`.
 
-## Logging Pattern
+**Barrel Files:**
+- `src/fast_fsm/__init__.py` is the sole package-level barrel/re-export module. There are no per-subdirectory barrel files.
+- Tests import through `fast_fsm` for public API examples and through focused modules when testing internals or specialized classes. Follow the same distinction in new tests.
 
-- Every `StateMachine` instance gets its own logger: `fast_fsm.{name}`
-- Level-gated log calls to avoid string formatting overhead:
-  ```python
-  if self._logger.isEnabledFor(logging.DEBUG - 5):
-      self._logger.log(logging.DEBUG - 5, "%s: ...", self._name, ...)
-  ```
-- Standard Python logging — no third-party logging libraries
+---
 
-## `@mypyc_attr(native_class=False)` Decorator
-
-Applied to classes in `core.py` that need to be subclassable from interpreted Python
-despite being in the compiled module:
-- `TransitionError` — users may catch/subclass
-- `CompiledFuncCondition` — inherits from uncompiled `Condition`
-- `State` — users subclass for custom state behavior
-
-## Factory & Builder Patterns
-
-Multiple construction patterns offered for different use cases:
-- `StateMachine(initial_state)` — full control constructor
-- `StateMachine.from_states("a", "b", "c")` — quick from names
-- `StateMachine.quick_build("idle", [("start", "idle", "running")])` — from transition list
-- `StateMachine.from_dict(config)` — from serializable dict (JSON/YAML/TOML friendly)
-- `FSMBuilder()` — fluent builder with method chaining
-- `simple_fsm()` / `quick_fsm()` — convenience module-level functions
-
-## Property Naming
-
-- Properties are clean (no underscore prefix): `.name`, `.current_state`, `.states`
-- Internal storage uses underscore: `_name`, `_current_state`, `_states`
-- Read-only properties: `name`, `current_state`, `current_state_name`, `initial_state_name`
-
-## Transition Storage
-
-```python
-_transitions: Dict[str, Dict[str, TransitionEntry]]
-#              ^state_name  ^trigger  ^(to_state, condition)
-```
-
-Two-level dict: `state_name → trigger → TransitionEntry`. O(1) lookup at each level.
+*Convention analysis: 2026-08-29*

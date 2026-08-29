@@ -1,140 +1,270 @@
-# Directory Structure
+# Codebase Structure
 
-## Top-Level Layout
+**Analysis Date:** 2026-08-29
 
-```
-fast_fsm/                          # Repository root
-├── src/
-│   └── fast_fsm/                  # Installable package (src-layout)
-│       ├── __init__.py            # Public API re-exports, __all__
-│       ├── core.py                # Main module (2626 lines) — StateMachine, State, FSMBuilder
-│       ├── conditions.py          # Condition ABC + FuncCondition + AsyncCondition (158 lines)
-│       ├── condition_templates.py # Reusable condition patterns (232 lines)
-│       ├── validation.py          # FSMValidator, EnhancedFSMValidator (1313 lines)
-│       └── visualization.py       # Mermaid diagram generation (225 lines)
-├── tests/                         # Test suite (8778 lines total, 16 files)
-│   ├── test_basic_functionality.py      # Core FSM operations (501 lines)
-│   ├── test_advanced_functionality.py   # Advanced transitions, callbacks, clone (1736 lines)
-│   ├── test_async.py                    # AsyncStateMachine + async conditions (568 lines)
-│   ├── test_boundary_negative.py        # Edge cases and error paths (377 lines)
-│   ├── test_builder.py                  # FSMBuilder tests (977 lines)
-│   ├── test_condition_templates.py      # Condition template tests (551 lines)
-│   ├── test_hypothesis.py              # Property-based tests (188 lines)
-│   ├── test_listeners.py               # Listener/observer tests (456 lines)
-│   ├── test_logging_config.py           # Logging configuration tests (104 lines)
-│   ├── test_mypyc_guard.py             # mypyc subclassing safety tests (168 lines)
-│   ├── test_performance_benchmarks.py   # Performance threshold tests (449 lines)
-│   ├── test_readme_examples.py          # README code example tests (460 lines)
-│   ├── test_safety_kwargs.py            # *args/**kwargs forwarding tests (579 lines)
-│   ├── test_state_machine_utils.py      # Utility method tests (296 lines)
-│   ├── test_validation.py              # Validation module tests (1041 lines)
-│   └── test_visualization.py           # Visualization output tests (327 lines)
-├── examples/                      # Runnable demo scripts (1202 lines total)
-│   ├── async_sensor_example.py    # Async FSM with sensor simulation (224 lines)
-│   ├── cross_fsm_demo.py         # Multi-FSM coordination patterns (231 lines)
-│   ├── declarative_state_example.py  # DeclarativeState usage (253 lines)
-│   ├── enhanced_builder_example.py   # FSMBuilder fluent API (270 lines)
-│   ├── order_processing.py       # E-commerce order workflow (141 lines)
-│   └── traffic_light.py          # Simple traffic light FSM (83 lines)
-├── benchmarks/                    # Performance benchmarking (3178 lines total)
-│   ├── benchmark_fast_fsm.py     # Fast FSM standalone benchmark (296 lines)
-│   ├── benchmark_my_fsm.py       # Legacy benchmark variant (787 lines)
-│   ├── benchmark_py_fsm.py       # python-statemachine comparison (549 lines)
-│   ├── benchmark_transitions_fsm.py  # transitions lib comparison (663 lines)
-│   ├── benchmark.py              # Unified comparison runner (600 lines)
-│   └── performance_demo.py       # Performance demo script (283 lines)
-├── docs/                          # Sphinx documentation source
-│   ├── conf.py                   # Sphinx configuration
-│   ├── index.rst                 # Root toctree
-│   ├── QUICK_START.md            # Getting Started guide
-│   ├── TUTORIAL.md               # Tutorial
-│   ├── FSM_LINKING_TECHNIQUES.md # Multi-FSM patterns (User Guide)
-│   ├── Makefile / make.bat       # Sphinx build scripts
-│   ├── api/                      # Autodoc API stubs
-│   │   ├── core.md
-│   │   ├── conditions.md
-│   │   ├── validation.md
-│   │   └── visualization.md
-│   ├── dev/                      # Developer guide
-│   │   ├── architecture.md
-│   │   ├── contributing.md
-│   │   └── testing.md
-│   └── examples/                 # Examples gallery
-│       └── index.md
-├── .specify/                     # Project memory & decisions
-│   ├── memory/                   # SPR files (AI-optimized knowledge)
-│   │   ├── spr-core-api.md
-│   │   ├── spr-validation.md
-│   │   └── spr-visualization.md
-│   └── decisions/                # Architecture Decision Records
-│       ├── ADR-001-sparse-dense-scoring.md
-│       ├── ADR-002-trigger-result-not-exception.md
-│       └── ADR-003-mypyc-compilation-boundary.md
-├── .github/
-│   └── copilot-instructions.md   # Copilot coding conventions
-├── pyproject.toml                # Project metadata + tool config
-├── setup.py                      # mypyc ext_modules only
-├── Taskfile.yml                  # Task runner commands
-├── AGENTS.md                     # Agent instructions reference
-├── CHANGELOG.md                  # Release changelog
-└── README.md                     # Project documentation
+## Directory Layout
+
+```text
+fast_fsm/
+├── src/fast_fsm/             # Installable package (src layout)
+│   ├── __init__.py           # Public exports and package version
+│   ├── core.py               # Runtime FSM, states, builder, factories
+│   ├── conditions.py         # Condition abstractions and callable wrappers
+│   ├── condition_templates.py # Reusable concrete guards
+│   ├── validation.py          # Design-time analysis and linting
+│   ├── visualization.py       # Mermaid/PlantUML/JSON output
+│   └── py.typed               # PEP 561 typing marker
+├── tests/                    # Pytest suite, one file per feature area
+├── examples/                 # Runnable usage examples
+├── benchmarks/               # Throughput and comparative benchmarks
+├── docs/                     # Sphinx/MyST documentation source
+│   ├── api/                   # API reference pages
+│   ├── dev/                   # Architecture, testing, contributing
+│   └── examples/              # Example documentation
+├── .github/                  # CI, release/docs workflows, GSD agents/skills
+├── .planning/                # GSD project state, milestones, phases, maps
+├── .specify/                 # Constitution, ADRs, and specification memory
+├── pyproject.toml             # Package, dependency, pytest, mypyc metadata
+├── setup.py                   # Optional selective mypyc extension build
+├── Taskfile.yml               # Developer task aliases
+└── uv.lock                   # Locked dependency resolution
 ```
 
-## Key Locations
+Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
+`.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `.hypothesis/`, and
+`docs/_build/` are build or test artifacts, not source locations for new code.
 
-| What you're looking for             | Where to find it                            |
-|--------------------------------------|---------------------------------------------|
-| Public API                          | `src/fast_fsm/__init__.py`                  |
-| StateMachine class                  | `src/fast_fsm/core.py` (line 238)           |
-| AsyncStateMachine class             | `src/fast_fsm/core.py` (line 1483)          |
-| FSMBuilder class                    | `src/fast_fsm/core.py` (line 2036)          |
-| Condition ABC                       | `src/fast_fsm/conditions.py` (line 15)      |
-| Condition templates                 | `src/fast_fsm/condition_templates.py`       |
-| Validation / scoring                | `src/fast_fsm/validation.py`                |
-| Mermaid visualization               | `src/fast_fsm/visualization.py`             |
-| Project dependencies                | `pyproject.toml`                            |
-| mypyc build config                  | `setup.py`                                  |
-| Task runner commands                | `Taskfile.yml`                              |
-| Test configuration                  | `pyproject.toml` `[tool.pytest.ini_options]` |
-| Ruff config                         | `pyproject.toml` (inherited defaults)       |
-| ADRs                                | `.specify/decisions/ADR-*.md`               |
-| SPR memory files                    | `.specify/memory/spr-*.md`                  |
-| Copilot conventions                 | `.github/copilot-instructions.md`           |
+## Directory Purposes
+
+**`src/fast_fsm/`:**
+
+- Purpose: Installable library implementation under the configured setuptools
+  `src` package root (`pyproject.toml`, `setup.py`).
+- Contains: Runtime classes, guards, analysis, output helpers, and typing marker.
+- Key files: `src/fast_fsm/core.py`, `src/fast_fsm/conditions.py`,
+  `src/fast_fsm/condition_templates.py`, `src/fast_fsm/validation.py`,
+  `src/fast_fsm/visualization.py`.
+
+**`tests/`:**
+
+- Purpose: Sequential pytest verification of public behavior, boundaries, and
+  performance.
+- Contains: `test_basic_functionality.py`, `test_advanced_functionality.py`,
+  `test_async.py`, `test_builder.py`, `test_validation.py`,
+  `test_visualization.py`, plus focused safety, callback, serialization,
+  property-based, and benchmark tests.
+- Key files: `tests/test_basic_functionality.py`,
+  `tests/test_advanced_functionality.py`, `tests/test_async.py`,
+  `tests/test_hypothesis.py`.
+
+**`examples/`:**
+
+- Purpose: Runnable demonstrations and executable API examples.
+- Contains: Basic traffic light/order flows, async sensors, declarative states,
+  cross-FSM coordination, and enhanced builder usage.
+- Key files: `examples/traffic_light.py`, `examples/async_sensor_example.py`,
+  `examples/declarative_state_example.py`,
+  `examples/enhanced_builder_example.py`.
+
+**`benchmarks/`:**
+
+- Purpose: Measure Fast FSM throughput/memory and compare alternative FSM
+  libraries.
+- Contains: Fast FSM, Python baseline, `transitions`, and
+  `python-statemachine` benchmark runners.
+- Key files: `benchmarks/benchmark_fast_fsm.py`,
+  `benchmarks/benchmark.py`, `benchmarks/performance_demo.py`.
+
+**`docs/`:**
+
+- Purpose: Sphinx documentation source built by `.github/workflows/docs.yml`.
+- Contains: MyST Markdown user guides, API pages, developer guides, examples,
+  Sphinx configuration, and Make targets.
+- Key files: `docs/index.rst`, `docs/conf.py`, `docs/api/core.md`,
+  `docs/dev/architecture.md`, `docs/dev/testing.md`.
+
+**`.github/`:**
+
+- Purpose: Repository automation and GSD workflow metadata.
+- Contains: `workflows/ci.yml` for lint/tests/build/benchmarks,
+  `workflows/docs.yml` for GitHub Pages docs, `workflows/release.yml` for
+  wheels/sdist releases, and agent/skill instructions under `agents/`,
+  `skills/`, and `get-shit-done/`.
+
+**`.planning/`:**
+
+- Purpose: Project-level GSD planning state and generated codebase intelligence.
+- Contains: `PROJECT.md`, `STATE.md`, `ROADMAP.md`, milestone/phase artifacts,
+  and `.planning/codebase/` mapping documents.
+- Generated status: `.planning/codebase/ARCHITECTURE.md` and
+  `.planning/codebase/STRUCTURE.md` are generated analysis artifacts intended to
+  be refreshed when the implementation structure changes.
+
+**`.specify/`:**
+
+- Purpose: Durable engineering rules and architecture decisions.
+- Contains: `.specify/memory/constitution.md`, SPRs, ADRs under
+  `.specify/decisions/`, and specification scripts/templates.
+
+## Key File Locations
+
+**Entry Points:**
+
+- `src/fast_fsm/__init__.py`: User-facing import surface and `__all__`.
+- `src/fast_fsm/core.py`: `StateMachine`, `AsyncStateMachine`, `FSMBuilder`,
+  `simple_fsm()`, and `quick_fsm()` construction/dispatch entry points.
+- `examples/*.py`: Standalone demonstration entry points.
+
+**Configuration:**
+
+- `pyproject.toml`: Package metadata, Python requirement, dependencies, pytest
+  options, and mypyc file selection.
+- `setup.py`: Optional `core.py` mypyc compilation and pure-Python fallback.
+- `Taskfile.yml`: Named developer commands.
+- `.github/workflows/ci.yml`: CI matrix and quality gates.
+- `docs/conf.py`: Sphinx/MyST/autodoc configuration.
+
+**Core Logic:**
+
+- `src/fast_fsm/core.py`: State graph, transition entries, dispatch lifecycle,
+  async dispatch, declarative handlers, builder, logging, and factories.
+- `src/fast_fsm/conditions.py`: Extension-friendly condition base classes.
+- `src/fast_fsm/condition_templates.py`: Reusable concrete guard patterns.
+
+**Design-Time Logic:**
+
+- `src/fast_fsm/validation.py`: Reachability, completeness, determinism,
+  scoring, recommendations, reports, and lint helpers.
+- `src/fast_fsm/visualization.py`: Diagram renderers and topology/analysis JSON.
+
+**Testing:**
+
+- `tests/`: Feature-oriented test modules configured by `pyproject.toml`.
+- `tests/test_performance_benchmarks.py`: Throughput regression gate.
+- `tests/test_mypyc_guard.py`: Compiled/pure-Python compatibility boundary.
+- `tests/test_readme_examples.py`: README/API example coverage.
 
 ## Naming Conventions
 
-### Files
-- **Source modules:** lowercase, snake_case (`condition_templates.py`)
-- **Test files:** `test_<description>.py` (pytest discovery pattern)
-- **Example scripts:** descriptive snake_case (`order_processing.py`)
-- **Documentation:** UPPER_CASE.md for guides, lowercase for API stubs
+**Files:**
 
-### Classes
-- PascalCase: `StateMachine`, `CallbackState`, `FSMBuilder`, `TransitionResult`
-- Condition subclasses suffix with `Condition`: `AlwaysCondition`, `RegexCondition`
-- Validator suffix with `Validator`: `FSMValidator`, `EnhancedFSMValidator`
+- Python modules use lowercase `snake_case.py`, e.g.
+  `condition_templates.py` and `visualization.py`.
+- Test modules use `test_<feature>.py`, e.g. `tests/test_async.py` and
+  `tests/test_state_machine_utils.py`.
+- Documentation uses descriptive lowercase Markdown names; API/developer pages
+  are grouped in `docs/api/` and `docs/dev/`.
+- Planning map documents use uppercase names, e.g.
+  `.planning/codebase/ARCHITECTURE.md`.
 
-### Methods & Functions
-- snake_case for all methods and functions
-- Private methods prefixed with `_`: `_resolve_trigger()`, `_execute_transition()`
-- Factory classmethods: `from_states()`, `from_dict()`, `quick_build()`
-- Convenience module-level: `simple_fsm()`, `quick_fsm()`, `condition_builder()`
+**Directories:**
 
-### Constants
-- No module-level constants (library values are instance-bound)
-- Logging level presets: string keys (`"quiet"`, `"detailed"`, `"ultra"`)
+- Source and test directories use lowercase names (`src/fast_fsm/`, `tests/`,
+  `examples/`, `benchmarks/`).
+- Feature-specific tests stay flat under `tests/`; do not create a parallel
+  package hierarchy unless the test surface materially requires it.
+- Documentation is grouped by audience (`docs/api/`, `docs/dev/`,
+  `docs/examples/`).
 
-## Source File Sizes (by lines)
+**Symbols:**
 
-| File                      | Lines | Role                              |
-|---------------------------|-------|-----------------------------------|
-| `core.py`                 | 2,626 | Core FSM runtime (largest module) |
-| `validation.py`           | 1,313 | Design-time validation & scoring  |
-| `condition_templates.py`  |   232 | Reusable condition patterns       |
-| `visualization.py`        |   225 | Mermaid diagram generation        |
-| `conditions.py`           |   158 | Condition ABC hierarchy           |
-| `__init__.py`             |    89 | Public API re-exports             |
-| **Total source**          | **4,643** |                              |
-| **Total tests**           | **8,778** | 16 test files                |
-| **Total examples**        | **1,202** | 6 example scripts            |
-| **Total benchmarks**      | **3,178** | 6 benchmark scripts          |
+- Classes use `PascalCase` (`StateMachine`, `AsyncDeclarativeState`).
+- Functions/methods and variables use `snake_case` (`trigger_async`,
+  `validate_fsm`).
+- Private implementation state uses a leading underscore (`_states`,
+  `_transitions`, `_execute_transition`).
+- Constants use uppercase names (`DEFAULT_COMPLETENESS_WEIGHT` in
+  `src/fast_fsm/validation.py`).
+
+## Where to Add New Code
+
+**New Runtime Feature:**
+
+- Primary code: Add to `src/fast_fsm/core.py` when it changes state, transition,
+  builder, lifecycle, or dispatch semantics. Preserve `__slots__` and the
+  direct dictionary lookup path.
+- Tests: Add focused coverage to the matching module under `tests/`; core
+  dispatch changes generally also need `tests/test_basic_functionality.py`,
+  `tests/test_advanced_functionality.py`, or
+  `tests/test_state_machine_utils.py`.
+- Public symbol: Re-export from `src/fast_fsm/__init__.py` and update the
+  appropriate API page under `docs/api/`.
+
+**New Condition:**
+
+- Implementation: Put extension-friendly base/wrapper types in
+  `src/fast_fsm/conditions.py`; put reusable concrete guards in
+  `src/fast_fsm/condition_templates.py`.
+- Tests: Use `tests/test_safety_kwargs.py`, `tests/test_async.py`, or add a
+  focused `tests/test_<condition>.py`.
+- Compilation rule: Keep user-subclassable condition modules interpreted; do not
+  add them to the mypyc list in `pyproject.toml`/`setup.py`.
+
+**New Validation or Analysis:**
+
+- Implementation: Add structural checks/scoring to
+  `src/fast_fsm/validation.py`; add diagram/topology representation to
+  `src/fast_fsm/visualization.py`.
+- Tests: Use `tests/test_validation.py` or `tests/test_visualization.py`.
+- Boundary: Keep design-time walks out of `StateMachine.trigger()` and
+  `can_trigger()`.
+
+**New Documentation or Example:**
+
+- User guide: Add to `docs/QUICK_START.md`, `docs/TUTORIAL.md`, or
+  `docs/FSM_LINKING_TECHNIQUES.md` according to audience, then link it from
+  `docs/index.rst`.
+- API details: Add to the matching `docs/api/*.md` page.
+- Developer guidance: Add to `docs/dev/architecture.md`,
+  `docs/dev/testing.md`, or `docs/dev/contributing.md`.
+- Runnable example: Add a script under `examples/` and cover its public behavior
+  in `tests/test_readme_examples.py` when it is presented as a documented API
+  example.
+
+**Utilities:**
+
+- Shared runtime helpers: Keep them in `src/fast_fsm/core.py` only when they
+  belong to the runtime API; otherwise prefer a dedicated package module with a
+  narrow dependency direction.
+- Test-only helpers: Keep them in the relevant `tests/` module or a clearly
+  named test helper; do not import test utilities into `src/`.
+
+## Special Directories
+
+**`build/`:**
+
+- Purpose: Setuptools/mypyc extension and wheel build output.
+- Generated: Yes.
+- Committed: No; do not edit or add source here.
+
+**`src/fast_fsm.egg-info/`:**
+
+- Purpose: Setuptools package metadata generated from the source distribution.
+- Generated: Yes.
+- Committed: Present in the working tree; treat as generated metadata and do
+  not use it as the source of implementation truth.
+
+**`.planning/codebase/`:**
+
+- Purpose: GSD codebase map consumed by planning/execution workflows.
+- Generated: Yes, by mapper workflows.
+- Committed: Intended to be committed as planning artifacts; refresh documents
+  when architecture or structure changes.
+
+**`.github/get-shit-done/`:**
+
+- Purpose: Repository-local GSD workflow implementation, templates, and helper
+  scripts.
+- Generated: No; repository workflow support files.
+- Committed: Yes.
+
+**`.specify/decisions/`:**
+
+- Purpose: Architecture decision records such as sparse/dense validation scoring,
+  result-vs-exception behavior, and mypyc compilation boundaries.
+- Generated: No, aside from project tooling output.
+- Committed: Yes.
+
+---
+
+*Structure analysis: 2026-08-29*
