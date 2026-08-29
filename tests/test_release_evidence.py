@@ -15,6 +15,17 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.release_evidence import (  # noqa: E402
+    REGISTERED_SLOTS_EXCEPTIONS,
+    EvidenceError,
+    collect_class_declarations,
+    validate_slots_inventory,
+)
+
+
 PACKAGE_SOURCE = ROOT / "src" / "fast_fsm"
 TOOL = ROOT / "tools" / "release_evidence.py"
 
@@ -220,3 +231,70 @@ def test_verify_wheel_keeps_one_pure_and_multiple_compiled_records_sorted(
         <= artifact.keys()
         for artifact in artifacts
     )
+
+
+def _write_nested_class(source_root: Path, name: str, base: str = "object") -> None:
+    """Add a future production class to a nested source module fixture."""
+    nested = source_root / "fast_fsm" / "nested"
+    nested.mkdir()
+    (nested / "__init__.py").write_text("", encoding="utf-8")
+    (nested / "future_policy.py").write_text(
+        f"class {name}({base}):\n    pass\n", encoding="utf-8"
+    )
+
+
+def test_slots_policy_recursively_classifies_every_production_class() -> None:
+    """All top-level production classes are either slotted or deliberately registered."""
+    completed = _run_evidence("slots-policy", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    evidence = json.loads(completed.stdout)
+    inventory = evidence["inventory"]
+    assert inventory
+    assert all(entry["classification"] for entry in inventory)
+    registered = {entry["qualified_name"]: entry for entry in evidence["registered_exceptions"]}
+    assert set(registered) == {
+        "fast_fsm.core.CompiledFuncCondition",
+        "fast_fsm.core.TransitionError",
+    }
+    for name, entry in registered.items():
+        assert entry["has_instance_dict"] is True, name
+        assert isinstance(entry["instance_size_bytes"], int)
+        assert entry["exception_reason"]
+
+
+@pytest.mark.parametrize(
+    ("name", "base"),
+    [
+        ("FuturePolicyClass", "object"),
+        ("FuturePolicyError", "Exception"),
+    ],
+)
+def test_slots_policy_rejects_nested_unregistered_instance_dict_classes(
+    tmp_path: Path, name: str, base: str
+) -> None:
+    """A future nested class without slots cannot disappear from the policy audit."""
+    source_root = _copy_clean_source(tmp_path)
+    _write_nested_class(source_root, name, base)
+    declarations = collect_class_declarations(source_root)
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(declarations, REGISTERED_SLOTS_EXCEPTIONS)
+
+    message = str(error.value)
+    assert f"fast_fsm.nested.future_policy.{name}" in message
+    assert "src/fast_fsm/nested/future_policy.py:1" in message
+
+
+def test_slots_policy_rejects_stale_exception_registry_entries(tmp_path: Path) -> None:
+    """Renamed or removed exceptions cannot remain silently allowlisted."""
+    declarations = collect_class_declarations(_copy_clean_source(tmp_path))
+    stale_registry = {
+        **REGISTERED_SLOTS_EXCEPTIONS,
+        "fast_fsm.core.RemovedException": "stale test fixture",
+    }
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(declarations, stale_registry)
+
+    assert "fast_fsm.core.RemovedException" in str(error.value)
