@@ -44,10 +44,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 770,
+      "collected": 775,
       "errors": 0,
       "failed": 0,
-      "passed": 770,
+      "passed": 775,
       "skipped": 0
     }
   },
@@ -156,19 +156,19 @@
       },
       {
         "classification": "slot-protected",
-        "line": 2153,
+        "line": 2163,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 1691,
+        "line": 1701,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 232,
+        "line": 237,
         "qualified_name": "fast_fsm.core.CallbackState",
         "source_path": "src/fast_fsm/core.py"
       },
@@ -181,13 +181,13 @@
       },
       {
         "classification": "slot-protected",
-        "line": 1979,
+        "line": 1989,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 2268,
+        "line": 2278,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },
@@ -199,7 +199,7 @@
       },
       {
         "classification": "slot-protected",
-        "line": 262,
+        "line": 267,
         "qualified_name": "fast_fsm.core.StateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
