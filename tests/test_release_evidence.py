@@ -734,6 +734,15 @@ def _validate_task_runner_steps(workflow: dict[str, object]) -> None:
         assert setup_steps, f"{job_id}: missing pinned Task setup"
         assert len(setup_steps) == 1, f"{job_id}: expected exactly one Task setup"
         setup_index, setup_step = setup_steps[0]
+        uv_indices = [
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict) and step.get("uses") == "astral-sh/setup-uv@v5"
+        ]
+        assert len(uv_indices) == 1, f"{job_id}: expected exactly one uv setup"
+        assert setup_index == uv_indices[0] + 1, (
+            f"{job_id}: Task setup must immediately follow uv setup"
+        )
         assert setup_step["uses"] == TASK_SETUP_ACTION, (
             f"{job_id}: Task setup must use the full verified action SHA"
         )
@@ -821,7 +830,9 @@ def test_task_runner_contract_rejects_missing_late_or_mispinned_setup() -> None:
     )
     late_steps.remove(setup)
     late_steps.append(setup)
-    with pytest.raises(AssertionError, match="lint: Task setup must precede"):
+    with pytest.raises(
+        AssertionError, match="lint: Task setup must immediately follow"
+    ):
         _validate_task_runner_steps(late)
 
     wrong_sha = deepcopy(fixture)
