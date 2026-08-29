@@ -25,6 +25,8 @@ tasks:
 
   test:
     desc: "Run full test suite — merge gate (pure Python, -x -q)"
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -32,6 +34,8 @@ tasks:
 
   test-verbose:
     desc: Run full test suite with verbose output
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -39,6 +43,8 @@ tasks:
 
   test-fast:
     desc: Run tests excluding slow/integration markers
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -46,6 +52,8 @@ tasks:
 
   test-coverage:
     desc: Run tests with HTML coverage report
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -226,6 +234,8 @@ tasks:
 
   docs:
     desc: Build Sphinx HTML documentation
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -233,6 +243,8 @@ tasks:
 
   docs-check:
     desc: "Build docs with warnings-as-errors (CI-ready)"
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -240,6 +252,8 @@ tasks:
 
   docs-test:
     desc: "Test code examples in docs ({testcode}/{testoutput} blocks)"
+    deps:
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -275,6 +289,7 @@ tasks:
   release-gate:
     desc: "Complete local release gate with named components and no hidden shell chain"
     cmds:
+      - task: pure-source-check
       - task: format-check
       - task: lint
       - task: typecheck-mypy

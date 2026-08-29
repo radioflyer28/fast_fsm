@@ -39,6 +39,7 @@ TOOL = ROOT / "tools" / "release_evidence.py"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DOCS_WORKFLOW = ROOT / ".github" / "workflows" / "docs.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+TASKFILE = ROOT / "Taskfile.yml"
 
 TASK_SETUP_ACTION = "arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52"
 TASK_VERSION = "3.53.1"
@@ -904,6 +905,64 @@ def test_repository_lock_records_each_exact_release_build_tool() -> None:
 def _workflow_text(path: Path) -> str:
     """Read a repository-owned GitHub workflow for contract assertions."""
     return path.read_text(encoding="utf-8")
+
+
+def _taskfile_data() -> dict[str, object]:
+    """Load the task contract so ordering checks do not rely on prose layout."""
+    data = yaml.safe_load(_workflow_text(TASKFILE))
+    assert isinstance(data, dict)
+    assert isinstance(data.get("tasks"), dict)
+    return data
+
+
+def _task_definitions(taskfile: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return validated Taskfile task mappings."""
+    tasks = taskfile["tasks"]
+    assert isinstance(tasks, dict)
+    assert all(
+        isinstance(name, str) and isinstance(task, dict) for name, task in tasks.items()
+    )
+    return tasks
+
+
+PURE_IMPORT_TASKS = frozenset(
+    {
+        "test",
+        "test-verbose",
+        "test-fast",
+        "test-coverage",
+        "docs",
+        "docs-check",
+        "docs-test",
+    }
+)
+
+
+def _validate_taskfile_pure_source_order(taskfile: dict[str, object]) -> None:
+    """Require source preflight before every independently runnable pure import task."""
+    tasks = _task_definitions(taskfile)
+    for task_name in PURE_IMPORT_TASKS:
+        task = tasks[task_name]
+        assert task.get("env", {}).get("FAST_FSM_BUILD_MODE") == "pure", task_name
+        dependencies = task.get("deps", [])
+        assert {"task": "pure-source-check"} in dependencies, (
+            f"{task_name}: pure-source-check must run before package import"
+        )
+    release_commands = tasks["release-gate"].get("cmds", [])
+    assert release_commands and release_commands[0] == {"task": "pure-source-check"}, (
+        "release-gate must run pure-source-check before every aggregate component"
+    )
+
+
+def test_taskfile_pure_source_preflight_precedes_local_test_and_docs_tasks() -> None:
+    """Taskfile gates cannot label native imports as pure-mode proof."""
+    _validate_taskfile_pure_source_order(_taskfile_data())
+
+    mutated = deepcopy(_taskfile_data())
+    tasks = _task_definitions(mutated)
+    tasks["docs-check"].pop("deps")
+    with pytest.raises(AssertionError, match="docs-check: pure-source-check"):
+        _validate_taskfile_pure_source_order(mutated)
 
 
 def _workflow_data(path: Path = CI_WORKFLOW) -> dict[str, object]:
