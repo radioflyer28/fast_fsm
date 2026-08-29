@@ -6,9 +6,14 @@ on:
       - "v*"
 
 jobs:
+  quality_gate:
+    name: Complete reusable quality gate
+    uses: ./.github/workflows/ci.yml
+
   # ── Build compiled wheels (cibuildwheel) ─────────────────────────────────────
   build_wheels:
     name: Wheels · ${{ matrix.artifact_name }}
+    needs: quality_gate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,6 +36,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # QEMU lets the x86_64 Linux runner build aarch64 wheels via emulation.
       - name: Set up QEMU (Linux aarch64)
@@ -73,18 +80,28 @@ jobs:
   # ── Build source distribution (pure-Python fallback) ───────────────────────
   build_sdist:
     name: Source distribution
+    needs: quality_gate
     runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v5
         with:
+          version: "0.12.6"
           python-version: "3.12"
+
+      - name: Install locked source-build dependencies
+        run: uv sync --locked --group release
+
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
 
       - name: Build sdist
         run: uv build --sdist
-        env:
-          FAST_FSM_PURE_PYTHON: "1"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -94,13 +111,15 @@ jobs:
   # ── Create GitHub Release and attach all artifacts ──────────────────────────
   github_release:
     name: Create GitHub Release
-    needs: [build_wheels, build_sdist]
+    needs: [quality_gate, build_wheels, build_sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Collect all wheel artifacts into dist/
       - uses: actions/download-artifact@v4

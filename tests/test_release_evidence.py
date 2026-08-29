@@ -560,7 +560,13 @@ def test_workflow_contract_has_dispatch_reusable_and_independent_gate_jobs() -> 
 def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> None:
     """No test, coverage, documentation, or build collection precedes source proof."""
     required = {
-        CI_WORKFLOW: ("test", "supported_python_build", "evidence", "docs_html", "docs_doctest"),
+        CI_WORKFLOW: (
+            "test",
+            "supported_python_build",
+            "evidence",
+            "docs_html",
+            "docs_doctest",
+        ),
         DOCS_WORKFLOW: ("build_docs",),
         RELEASE_WORKFLOW: ("build_sdist",),
     }
