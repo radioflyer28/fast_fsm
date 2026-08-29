@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
 current_phase: 15
-current_phase_name: 1 of 6 in v0.3.0
+current_phase_name: Release Baseline & Evidence Harness
 status: executing
-stopped_at: Phase 15 context gathered
-last_updated: "2026-08-29T18:50:06.650Z"
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-08-29T19:13:38.264Z"
 last_activity: 2026-08-29
 last_activity_desc: Approved requirements mapped to the v0.3.0 roadmap
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 15 of 20 (1 of 6 in v0.3.0)
-Plan: 0 of TBD in current phase
+Phase: 15 (Release Baseline & Evidence Harness) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-08-29 — Approved requirements mapped to the v0.3.0 roadmap
+Last activity: 2026-08-29 — Phase 15 execution started
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 17%
 
 ## Performance Metrics
 
@@ -50,6 +50,11 @@ Progress: [░░░░░░░░░░] 0%
 | 15–20 | 0 | TBD | — |
 
 **Recent Trend:** No v0.3.0 plans completed yet.
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 15 P01 | 16 min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -61,6 +66,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - Existing public symbols remain available; `core.py` remains one mypyc compilation unit with one runtime dependency.
 - Runtime hardening must preserve ≥200,000 compiled `trigger()` operations/sec and O(1) core operations.
 - Installed pure and compiled artifacts must prove equivalent hardened behavior before release.
+- [Phase 15]: Centralized build intent in FAST_FSM_BUILD_MODE while preserving FAST_FSM_PURE_PYTHON=1 as the pure alias.
+- [Phase 15]: Made release evidence fail closed and non-destructive; only CompiledFuncCondition and TransitionError are registered slots exceptions.
 
 ### Pending Todos
 
@@ -82,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-29T17:20:20.284Z
-Stopped at: Phase 15 context gathered
-Resume file: .planning/phases/15-release-baseline-evidence-harness/15-CONTEXT.md
+Last session: 2026-08-29T19:13:38.257Z
+Stopped at: Completed 15-01-PLAN.md
+Resume file: None
