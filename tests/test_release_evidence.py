@@ -91,6 +91,122 @@ def _write_wheel(
     return wheel
 
 
+CANONICAL_V023_CORRECTION = (
+    "Version 0.2.3 was shipped with defective 0.2.2 package metadata. "
+    "It remains a shipped release: the existing v0.2.3 tag and published "
+    "artifacts are immutable and unchanged. Corrected metadata will be "
+    "published in v0.3.0."
+)
+
+
+def _run_git(repository: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    """Run a local fixture Git command without touching repository refs."""
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+
+def _write_history_fixture(
+    tmp_path: Path,
+    *,
+    changelog: str | None = None,
+    correction: str = CANONICAL_V023_CORRECTION,
+) -> tuple[Path, Path]:
+    """Create an isolated immutable-tag fixture and its correction record."""
+    repository = tmp_path / "history"
+    repository.mkdir()
+    _run_git(repository, "init", "--quiet")
+    _run_git(repository, "config", "user.email", "release-evidence@example.test")
+    _run_git(repository, "config", "user.name", "Release Evidence")
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "fast_fsm"\nversion = "0.2.2"\n', encoding="utf-8"
+    )
+    (repository / "CHANGELOG.md").write_text(
+        changelog
+        or "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## [0.2.3] — 2026-04-05",
+                "",
+                CANONICAL_V023_CORRECTION,
+                "",
+                "## [0.2.2] — 2026-04-04",
+                "",
+                "The preceding release record remains available for audit.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _run_git(repository, "add", "pyproject.toml", "CHANGELOG.md")
+    _run_git(repository, "commit", "--quiet", "-m", "fixture release")
+    _run_git(repository, "tag", "-a", "v0.2.3", "-m", "fixture v0.2.3")
+    correction_path = repository / "docs" / "release-corrections" / "v0.2.3.md"
+    correction_path.parent.mkdir(parents=True)
+    correction_path.write_text(correction + "\n", encoding="utf-8")
+    return repository, correction_path
+
+
+def test_release_history_audits_immutable_v023_metadata_and_correction(
+    tmp_path: Path,
+) -> None:
+    """A v0.2.3 tag with 0.2.2 metadata needs an additive correction, not a retag."""
+    repository, correction_path = _write_history_fixture(tmp_path)
+    tag_before = _run_git(repository, "rev-parse", "v0.2.3").stdout.strip()
+
+    evidence = release_evidence.verify_history(
+        tag="v0.2.3", correction_path=correction_path, repository_root=repository
+    )
+
+    assert evidence["tag"] == "v0.2.3"
+    assert evidence["tag_pyproject_version"] == "0.2.2"
+    assert evidence["correction_path"] == "docs/release-corrections/v0.2.3.md"
+    assert _run_git(repository, "rev-parse", "v0.2.3").stdout.strip() == tag_before
+
+
+@pytest.mark.parametrize(
+    ("changelog", "correction", "expected"),
+    [
+        (
+            "# Changelog\n\n## [0.2.3] — 2026-04-05\n\n"
+            + CANONICAL_V023_CORRECTION
+            + "\n",
+            CANONICAL_V023_CORRECTION,
+            "0.2.2",
+        ),
+        (
+            None,
+            "Version 0.2.3 metadata is correct and its tag was moved.",
+            "defective 0.2.2 package metadata",
+        ),
+        (
+            "# Changelog\n\n## [0.2.3] — 2026-04-05\n\n"
+            "Version 0.2.3 was shipped with defective 0.2.2 package metadata.\n\n"
+            "## [0.2.2] — 2026-04-04\n",
+            CANONICAL_V023_CORRECTION,
+            "immutable and unchanged",
+        ),
+    ],
+)
+def test_release_history_rejects_missing_or_divergent_correction_facts(
+    tmp_path: Path, changelog: str | None, correction: str, expected: str
+) -> None:
+    """Missing dated history, changed facts, and retag wording fail audibly."""
+    repository, correction_path = _write_history_fixture(
+        tmp_path, changelog=changelog, correction=correction
+    )
+
+    with pytest.raises(EvidenceError, match=re.escape(expected)):
+        release_evidence.verify_history(
+            tag="v0.2.3", correction_path=correction_path, repository_root=repository
+        )
+
+
 def test_verify_source_reports_native_shadow_before_import_without_mutation(
     tmp_path: Path,
 ) -> None:
