@@ -21,8 +21,11 @@ if str(ROOT) not in sys.path:
 from tools.release_evidence import (  # noqa: E402
     REGISTERED_SLOTS_EXCEPTIONS,
     EvidenceError,
+    compare_manifests,
     collect_class_declarations,
+    serialize_manifest,
     validate_slots_inventory,
+    validate_manifest_regressions,
 )
 
 
@@ -300,3 +303,87 @@ def test_slots_policy_rejects_stale_exception_registry_entries(tmp_path: Path) -
         validate_slots_inventory(declarations, stale_registry)
 
     assert "fast_fsm.core.RemovedException" in str(error.value)
+
+
+def _manifest_fixture() -> dict[str, object]:
+    """Return a complete minimal stable manifest for comparison coverage."""
+    return {
+        "schema_version": 1,
+        "release_identity": {"package": "fast_fsm", "version": "0.2.2"},
+        "quality_baseline": {
+            "build_mode": "pure",
+            "tests": {"collected": 722, "passed": 722, "failed": 0},
+            "coverage": {"total_percent": 90.12, "core_percent": 95.34},
+            "source": {"core_origin": "src/fast_fsm/core.py"},
+        },
+        "toolchain": {"uv": "0.12.6"},
+        "artifact_evidence": {"wheels": []},
+        "slots_policy": {
+            "inventory": [{"qualified_name": "fast_fsm.core.State"}],
+            "registered_exceptions": [
+                {"qualified_name": "fast_fsm.core.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.core.TransitionError"},
+            ],
+            "measurements": [],
+        },
+        "performance_contract": {"compiled_trigger_ops_per_sec_min": 200000},
+        "measurement_environment": {"stable_fields": ["schema_version"]},
+    }
+
+
+def test_manifest_serialization_is_byte_stable_and_ends_with_one_newline() -> None:
+    """Equivalent evidence has deterministic sorted JSON representation."""
+    fixture = _manifest_fixture()
+    first = serialize_manifest(fixture)
+    second = serialize_manifest(dict(reversed(list(fixture.items()))))
+
+    assert first == second
+    assert first.endswith("\n")
+    assert not first.endswith("\n\n")
+    assert list(json.loads(first)) == sorted(fixture)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("schema_version",), 2),
+        (("quality_baseline", "tests", "passed"), 721),
+        (("toolchain", "uv"), "0.12.5"),
+        (("quality_baseline", "source", "core_origin"), "src/fast_fsm/core.so"),
+        (("slots_policy", "inventory"), []),
+    ],
+)
+def test_manifest_comparison_reports_field_level_staleness(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Stable evidence drift has an actionable JSON-path diff."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    target: dict[str, object] = observed
+    for part in path[:-1]:
+        target = target[part]  # type: ignore[assignment,index]
+    target[path[-1]] = replacement
+
+    differences = compare_manifests(expected, observed)
+
+    assert differences
+    assert ".".join(path) in "\n".join(differences)
+
+
+@pytest.mark.parametrize(
+    ("field", "observed_value"),
+    [
+        ("total_percent", 90.11),
+        ("core_percent", 95.33),
+    ],
+)
+def test_manifest_rejects_two_decimal_source_coverage_regressions(
+    field: str, observed_value: float
+) -> None:
+    """A lower total or core source percentage cannot silently refresh a baseline."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["quality_baseline"]["coverage"][field] = observed_value
+
+    with pytest.raises(EvidenceError, match="coverage regression"):
+        validate_manifest_regressions(expected, observed)
