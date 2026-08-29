@@ -73,7 +73,7 @@
   3. Release-producing tools resolve to reproducibly pinned versions, and stable compatibility checking does not depend solely on the pre-release `ty` checker.
   4. The shipped memory policy identifies and measures every deliberate slots exception, including `CompiledFuncCondition`, so maintainers can reconcile the implementation with performance claims.
 
-**Plans**: 6/7 plans executed
+**Plans**: 6/8 plans executed
 
 **Wave 1**
 
@@ -94,6 +94,10 @@
 - [x] 15-03-PLAN.md
 
 **Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 15-08-PLAN.md
+
+**Wave 6** *(blocked on Wave 5 completion)*
 
 - [ ] 15-05-PLAN.md
 
