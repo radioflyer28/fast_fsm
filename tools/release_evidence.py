@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,14 @@ PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
 REQUIRED_UV_VERSION = "0.12.6"
 MANIFEST_SCHEMA_VERSION = 1
+
+_RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
+_RELEASE_HISTORY_FACTS = (
+    "defective 0.2.2 package metadata",
+    "remains a shipped release",
+    "existing v0.2.3 tag and published artifacts are immutable and unchanged",
+    "v0.3.0",
+)
 
 REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
     "fast_fsm.core.CompiledFuncCondition": (
@@ -128,6 +137,104 @@ def verify_source(source_root: Path | None = None) -> dict[str, str]:
     return {
         "core_origin": _normalized_relative_path(origin, resolved_source_root.parent),
         "distribution_version": metadata.version("fast-fsm"),
+    }
+
+
+def _run_git_history_command(arguments: Sequence[str], *, repository_root: Path) -> str:
+    """Read historical Git evidence with argument-array subprocess safety."""
+    completed = subprocess.run(
+        ["git", "-C", str(repository_root), *arguments],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        rendered = " ".join(arguments)
+        raise EvidenceError(
+            f"Release-history Git command failed ({completed.returncode}): {rendered}\n"
+            f"{completed.stderr.strip()}"
+        )
+    return completed.stdout
+
+
+def _require_release_history_facts(text: str, *, artifact_name: str) -> None:
+    """Require canonical immutable-history facts in a mutable correction artifact."""
+    normalized = re.sub(r"\s+", " ", text.casefold())
+    missing = [fact for fact in _RELEASE_HISTORY_FACTS if fact not in normalized]
+    if missing:
+        rendered = "\n".join(f"  - {fact}" for fact in missing)
+        raise EvidenceError(
+            f"{artifact_name} is missing required immutable-history facts:\n{rendered}"
+        )
+
+
+def _require_dated_release_section(changelog: str, version: str) -> None:
+    """Require a dated Keep-a-Changelog section for a shipped release."""
+    pattern = re.compile(
+        rf"^## \[{re.escape(version)}\] — \d{{4}}-\d{{2}}-\d{{2}}$",
+        flags=re.MULTILINE,
+    )
+    if not pattern.search(changelog):
+        raise EvidenceError(
+            f"CHANGELOG.md is missing dated {version} section; expected "
+            f"'## [{version}] — YYYY-MM-DD'."
+        )
+
+
+def _tag_pyproject_version(tag: str, *, repository_root: Path) -> str:
+    """Read the immutable tagged package version without changing Git state."""
+    pyproject = _run_git_history_command(
+        ["show", f"{tag}:pyproject.toml"], repository_root=repository_root
+    )
+    version_match = re.search(r'^version\s*=\s*"([^"]+)"\s*$', pyproject, re.MULTILINE)
+    if not version_match:
+        raise EvidenceError(f"{tag}:pyproject.toml does not declare [project] version.")
+    return version_match.group(1)
+
+
+def verify_history(
+    *, tag: str, correction_path: Path, repository_root: Path | None = None
+) -> dict[str, str]:
+    """Audit the immutable v0.2.3 metadata mismatch and additive correction.
+
+    This command only reads Git objects and repository text. It deliberately
+    refuses to retag, rewrite artifacts, or infer correction facts from mutable
+    prose that does not state the complete immutable-history policy.
+    """
+    if not _RELEASE_TAG_PATTERN.fullmatch(tag):
+        raise EvidenceError(f"Expected a version tag such as 'v0.2.3', got {tag!r}.")
+
+    root = (repository_root or REPOSITORY_ROOT).resolve()
+    resolved_correction = correction_path.resolve()
+    correction_relative = _normalized_relative_path(resolved_correction, root)
+    try:
+        correction = resolved_correction.read_text(encoding="utf-8")
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    except OSError as error:
+        raise EvidenceError(
+            f"Could not read release-history artifact: {error}"
+        ) from error
+
+    _require_dated_release_section(changelog, "0.2.2")
+    _require_dated_release_section(changelog, tag.removeprefix("v"))
+    _require_release_history_facts(correction, artifact_name=correction_relative)
+    _require_release_history_facts(changelog, artifact_name="CHANGELOG.md")
+
+    tag_object = _run_git_history_command(
+        ["rev-parse", "--verify", f"{tag}^{{}}"], repository_root=root
+    ).strip()
+    tagged_version = _tag_pyproject_version(tag, repository_root=root)
+    if tagged_version != "0.2.2":
+        raise EvidenceError(
+            f"Expected {tag}:pyproject.toml to declare defective 0.2.2 metadata, "
+            f"observed {tagged_version!r}."
+        )
+
+    return {
+        "tag": tag,
+        "tag_target": tag_object,
+        "tag_pyproject_version": tagged_version,
+        "correction_path": correction_relative,
     }
 
 
@@ -916,6 +1023,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     slots_policy_parser.add_argument("--json", action="store_true")
 
+    history_parser = commands.add_parser(
+        "verify-history",
+        help="audit an immutable release tag against its additive correction",
+    )
+    history_parser.add_argument("--tag", required=True, help="immutable release tag")
+    history_parser.add_argument(
+        "--correction",
+        type=Path,
+        required=True,
+        help="canonical correction record under the repository root",
+    )
+    history_parser.add_argument("--json", action="store_true")
+
     evidence_parser = commands.add_parser(
         "evidence", help="write or non-destructively check release baseline evidence"
     )
@@ -960,6 +1080,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit(verify_wheels(parsed.wheel), parsed.json)
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
+        elif parsed.command == "verify-history":
+            _emit(
+                verify_history(tag=parsed.tag, correction_path=parsed.correction),
+                parsed.json,
+            )
         elif parsed.command == "evidence":
             manifest = collect_manifest(wheel_paths=parsed.wheel)
             write_or_check_manifest(

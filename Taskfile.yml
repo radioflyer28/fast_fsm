@@ -141,6 +141,13 @@ tasks:
           wheel_path="$(find "$evidence_dir" -name '*.whl' -print -quit)"
           uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --wheel "$wheel_path"
 
+  release-history-check:
+    desc: Audit immutable v0.2.3 metadata against its additive correction record
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv run python {{.EVIDENCE_TOOL}} verify-history --tag v0.2.3 --correction docs/release-corrections/v0.2.3.md --json
+
   supported-python-build-check:
     desc: Prove pure sdist inclusion and unpacked-wheel build for this interpreter
     env:

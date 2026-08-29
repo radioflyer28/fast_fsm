@@ -169,6 +169,22 @@ def test_release_history_audits_immutable_v023_metadata_and_correction(
     assert _run_git(repository, "rev-parse", "v0.2.3").stdout.strip() == tag_before
 
 
+def test_release_history_accepts_wrapped_canonical_correction(tmp_path: Path) -> None:
+    """Canonical Markdown wrapping must not change immutable-history facts."""
+    correction = CANONICAL_V023_CORRECTION.replace(
+        " It remains", "\nIt remains"
+    ).replace(" published", "\npublished")
+    repository, correction_path = _write_history_fixture(
+        tmp_path, correction=correction
+    )
+
+    evidence = release_evidence.verify_history(
+        tag="v0.2.3", correction_path=correction_path, repository_root=repository
+    )
+
+    assert evidence["tag_pyproject_version"] == "0.2.2"
+
+
 @pytest.mark.parametrize(
     ("changelog", "correction", "expected"),
     [

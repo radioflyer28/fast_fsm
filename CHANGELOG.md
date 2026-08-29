@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.2.3] — 2026-04-05
+
+### Added
+
+- `TimeoutCondition`, `CooldownCondition`, and `ElapsedCondition` provide
+  monotonic-clock transition guards for timeout, cooldown, and elapsed-time
+  policies.
+- Timing-condition unit, integration, and throughput coverage, plus README and
+  Sphinx documentation for the new helpers.
+
+### Release Metadata Correction
+
+Version 0.2.3 was shipped with defective 0.2.2 package metadata. It remains a
+shipped release: the existing v0.2.3 tag and published artifacts are immutable
+and unchanged. Corrected metadata will be published in v0.3.0.
+
+## [0.2.2] — 2026-04-04
+
 ### Added
 
 #### Serialization & Introspection
@@ -51,20 +71,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `cp314-*`).
 - `mypy[mypyc]` lower bound bumped to `>=1.17` (required for Python 3.14 mypyc support).
 
+### Performance
+
+- Added an explicit history-enabled throughput benchmark to protect the
+  transition-history performance contract.
+
 ### Changed
 
 - `set_fsm_logging_level()` now accepts standard Python logging level names:
-  `'debug'`, `'info'`, `'warning'`, `'error'`, `'critical'`.  Convenience aliases
-  `'off'` (→ WARNING) and `'trace'` (→ DEBUG−5 ultra-verbose) are retained.  The
-  old `'basic'` / `'detailed'` / `'ultra'` vocabulary has been **removed**.
-  Input is now case-insensitive.
-- Default parameter for `set_fsm_logging_level()` changed from `'off'` to
-  `'warning'` (explicit).
-- All per-transition log calls moved from `INFO` to `DEBUG` — library consumers
-  calling `logging.basicConfig(level=logging.INFO)` will no longer see FSM
-  transition noise in their application logs.
-
----
+  `'debug'`, `'info'`, `'warning'`, `'error'`, `'critical'`. Convenience aliases
+  `'off'` (→ WARNING) and `'trace'` (→ DEBUG−5 ultra-verbose) are retained. The
+  old `'basic'` / `'detailed'` / `'ultra'` vocabulary has been removed; input is
+  now case-insensitive.
+- The default `set_fsm_logging_level()` parameter changed from `'off'` to
+  `'warning'`.
+- Per-transition log calls moved from `INFO` to `DEBUG` so consumer INFO logs
+  do not include transition noise.
 
 ## [0.2.1] — 2026-04-04
 
