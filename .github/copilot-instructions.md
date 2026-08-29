@@ -7,7 +7,10 @@
 
 ## Project Overview
 
-**Fast FSM** is a high-performance, memory-efficient finite state machine library for Python. It outperforms popular alternatives (python-statemachine, transitions) by 5–20× in speed and ~1000× in memory usage through `__slots__` optimization, direct dictionary lookups, and minimal abstraction layers.
+**Fast FSM** is a high-performance, memory-efficient finite state machine
+library for Python. It uses `__slots__` where the runtime boundary allows it,
+direct dictionary lookups, and minimal abstraction layers. Exact benchmark
+observations are environment-labeled evidence, not durable policy claims.
 
 **Layout:** `src/fast_fsm/` is the installable package. Key modules:
 - `core.py` — `StateMachine`, `AsyncStateMachine`, `State`, `CallbackState`, `FSMBuilder`, `TransitionResult`
@@ -35,8 +38,12 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 - `uv run pytest ...` / `uv run python ...` / `uv sync` / `uv add <pkg>`
 
 **Performance:**
-- All core classes MUST use `__slots__` — no `__dict__` on hot-path objects
-- `trigger()` throughput MUST stay ≥ 200,000 ops/sec
+- Hot-path production classes MUST use `__slots__`; the recursive
+  `uv run python tools/release_evidence.py slots-policy --json` audit is the
+  authority. `CompiledFuncCondition` and `TransitionError` are the only
+  measured registered exceptions and may have an instance `__dict__` because
+  each uses `@mypyc_attr(native_class=False)`.
+- Compiled `trigger()` throughput MUST stay ≥ 200,000 ops/sec
 - Core operations (`trigger()`, `can_trigger()`, `add_state()`, `add_transition()`) MUST be O(1)
 - Verify with: `uv run python benchmarks/benchmark_fast_fsm.py`
 
@@ -47,9 +54,21 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 
 **Testing:**
 - **Full suite:** `uv run pytest tests/ -x -q` (or `task test`)
-- **Baseline (main branch):** 290 passed, 0 failures
+- **Durable baseline:** 700+ tests; exact test, coverage, toolchain,
+  source-origin, artifact-mode, and benchmark observations are in
+  `evidence/release-baseline.json`
 - **No parallel execution:** tests run sequentially
 - **Incremental testing:** During development, run only targeted tests. Full suite once before push.
+
+**Release evidence:**
+- Use only `uv`-based Taskfile/tool commands: `task pure-source-check`,
+  `task release-baseline-write`, and `task release-baseline-check`.
+- Select `FAST_FSM_BUILD_MODE=pure` for a clean evidence collection (the
+  `FAST_FSM_PURE_PYTHON=1` alias remains supported), run the non-destructive
+  source-origin preflight immediately after setup, and review a write diff.
+- CI runs the read-only freshness check; it never writes the manifest. The
+  preflight reports native shadows without deleting them, so only explicitly
+  reviewed reported artifacts may be cleaned up.
 
 **Branch model:**
 - Default branch: `main`
@@ -78,7 +97,9 @@ These constraints apply to EVERY task. Violating any of them is a bug.
    # PowerShell (Windows)
    $files = git diff --name-only --diff-filter=ACMR HEAD -- '*.py'
    uv run ruff format $files; uv run ruff check --fix $files   # Phase 1: auto-fix
-   uv run ruff check $files; uv run ty check $files            # Phase 2: validate
+   uv run ruff check $files                                    # Phase 2: validate
+   task typecheck-mypy                                         # blocking compatibility authority
+   task typecheck-ty                                           # independently visible advisory feedback
    ```
 5. **Incremental tests** (after each code change):
    ```bash
@@ -87,6 +108,9 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 6. **Full test suite** (once, right before merge):
    `uv run pytest tests/ -x -q`
 7. **Update docs** if changing public API (see [Documentation](#documentation) section)
+   When preserving concurrent work in a dirty worktree, inspect `git status`
+   and stage/commit only the task's explicit paths; never use `git add .` or
+   `git add -A`.
 8. **Merge to main and close:**
    ```bash
    git checkout main
@@ -181,13 +205,17 @@ GitHub Issue with a summary of what was delivered.
 
 ## Code Quality & Formatting
 
-**Two-phase quality gates:** Phase 1 auto-fixes (never fails), Phase 2 validates (may fail).
+**Two-phase quality gates:** Phase 1 auto-fixes (never fails), Phase 2 validates
+(may fail). Mypy is the blocking mypyc-compatibility authority; ty remains
+independently visible advisory feedback.
 
 ```powershell
 # PowerShell (Windows) — run on changed files
 $files = git diff --name-only --diff-filter=ACMR HEAD -- '*.py'
 uv run ruff format $files; uv run ruff check --fix $files   # Phase 1
-uv run ruff check $files; uv run ty check $files            # Phase 2
+uv run ruff check $files                                    # Phase 2
+task typecheck-mypy                                         # blocking
+task typecheck-ty                                           # advisory
 ```
 
 **Config:** Ruff settings in `pyproject.toml`, Python ≥ 3.10, line length 88.
@@ -276,7 +304,16 @@ than plain fenced code blocks so they are verified on every CI run.
 
 ## Architecture & Coding Gotchas
 
-1. **Slots optimization is mandatory.** All classes in `src/fast_fsm/` use `__slots__`. You CANNOT add dynamic attributes to `State`, `StateMachine`, etc. Use `CallbackState` (which has dedicated `_on_enter` / `_on_exit` slots) when you need callback storage on a state.
+1. **Slots optimization is mandatory on the hot path.** Recursively audit every
+   relevant class under `src/fast_fsm` with
+   `uv run python tools/release_evidence.py slots-policy --json`; the command
+   fails on an unregistered or omitted exception. `CompiledFuncCondition` uses
+   `@mypyc_attr(native_class=False)` to preserve the interpreted `Condition`
+   boundary, and `TransitionError` uses it to preserve normal Python exception
+   behavior. Those two ADR-003 registry entries may retain an instance
+   `__dict__`; `State`, `StateMachine`, and other hot-path objects may not. Use
+   `CallbackState` (with dedicated `_on_enter` / `_on_exit` slots) when you need
+   callback storage on a state.
 
 2. **Argument passing convention.** Every condition `.check()` and state callback (`on_enter`, `on_exit`, `can_transition`) receives `*args, **kwargs`. This MUST be preserved for forward compatibility.
 
@@ -290,7 +327,7 @@ than plain fenced code blocks so they are verified on every CI run.
 
 7. **Dependencies:** The library has a single runtime dependency: `mypy-extensions` (for `@mypyc_attr`). Everything else is in dependency groups: `dev` (pytest, hypothesis, mypy, ruff, ty), `benchmarks` (matplotlib, networkx, python-statemachine, transitions), `docs` (sphinx, furo, myst-parser). Use `uv sync --all-groups` to install everything.
 
-8. **mypyc selective compilation.** Only `core.py` is compiled via mypyc (configured in `setup.py`). `conditions.py` and `condition_templates.py` MUST stay uncompiled — users subclass `Condition` from interpreted Python, and mypyc-compiled classes cannot be subclassed from interpreted code. Build with: `uv run python setup.py build_ext --inplace`. The library MUST work correctly both compiled and uncompiled.
+8. **mypyc selective compilation.** Only `core.py` is compiled via mypyc (configured in `setup.py`). `conditions.py` and `condition_templates.py` MUST stay uncompiled — users subclass `Condition` from interpreted Python, and mypyc-compiled classes cannot be subclassed from interpreted code. Build with: `uv run python setup.py build_ext --inplace`. The library MUST work correctly both compiled and uncompiled. Use `FAST_FSM_BUILD_MODE=auto|pure|compiled` for explicit packaging intent; before clean pure-source evidence, run `task pure-source-check` after setup and then use the write/check commands above.
 
 
 ## Landing the Plane (Session Completion)

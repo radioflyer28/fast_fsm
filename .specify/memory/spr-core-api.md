@@ -2,10 +2,10 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-03-06 (added force_state / reset / initial_state_name / snapshot / restore / clone / on_enter / on_exit / from_dict / raise_if_failed / CompiledFuncCondition / from_dict conditions= / AsyncStateMachine on_enter_async + on_exit_async)
+**Updated**: 2026-08-29 (measured slots-policy registry and release-evidence authority)
 
-- `StateMachine` and all hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited.
-- Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; throughput target ≥ 250,000 ops/sec.
+- `StateMachine` and other hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited. The recursive `uv run python tools/release_evidence.py slots-policy --json` audit discovers every relevant `src/fast_fsm` class and fails on an unregistered or omitted exception.
+- Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; compiled `trigger()` throughput target ≥ 200,000 ops/sec.
 - `TransitionEntry(to_state, condition)` is the internal container replacing raw dicts; slots-optimised.
 - `trigger()` returns `TransitionResult(success, from_state, to_state, trigger, error)`; never raises by default.
 - `safe_trigger()` wraps `trigger()` in try/except; never raises under any circumstance.
@@ -22,7 +22,7 @@
 - `FSMBuilder` fluent builder; auto-detects async requirement from states/conditions; `force_async()` / `force_sync()` override; `build()` is idempotent. Fluent per-state callback registration: `on_enter(state, cb)`, `on_exit(state, cb)`, `on_enter_async(state, cb)`, `on_exit_async(state, cb)` — all return `self`; async variants auto-upgrade auto-detect builder to `AsyncStateMachine`; async callbacks on explicit-sync machine are warned and ignored.
 - `CallbackState` extends `State` with `_on_enter` / `_on_exit` slots; use when state-level callbacks needed without losing slots optimisation.
 - `DeclarativeState` enables `@transition`-decorated methods on state classes; auto-discovers via `_discover_handlers()`.
-- mypyc compiles `core.py` only; `conditions.py` and `condition_templates.py` must stay interpreted (users subclass `Condition` from Python).
+- mypyc compiles `core.py` only; `conditions.py` and `condition_templates.py` must stay interpreted (users subclass `Condition` from Python). ADR-003 records the selective compilation boundary and the two measured `native_class=False` slots-policy exceptions.
 - `_sanitize_condition_kwargs` strips private kwargs (leading `_`) and caps at 50 items before passing to conditions.
 - `force_state(name)` sets `_current_state` directly without guard checks; fires full on_exit / on_enter / after_transition callback chain with synthetic trigger `"__force__"`; raises `KeyError` for unregistered state names.
 - `reset()` calls `force_state(initial_state_name)`; fires callbacks even when already in initial state.
@@ -34,5 +34,5 @@
 - `on_exit(state_name, fn)` registers a per-state callback fired after `State.on_exit` and before `on_exit_state` listeners. Signature: `fn(to_state, trigger, **kwargs)`. Both are stored in `_state_enter_callbacks` / `_state_exit_callbacks` slots (`Dict[str, List]`).
 - Callback exception safety: exceptions in per-state callbacks are caught and logged as warnings, not re-raised; the transition still completes.
 - `from_dict(config, *, name=None, conditions=None)` classmethod builds a machine from a plain dict; required keys: `"initial"` (str), `"transitions"` (list of `{"trigger", "from", "to"}`); optional keys: `"name"` (str), `"states"` (list of extra state names). `"from"` may be a string or a list. `conditions` is an optional `Dict[str, Condition|Callable]` mapping trigger name → guard; applied at construction, same guard applied to all from-states sharing that trigger name. Internally uses `from_states` + `add_transition`.
-- `TransitionResult.raise_if_failed()` returns `self` unchanged on success (enabling one-liner chaining like `.raise_if_failed().to_state`); raises `TransitionError` on failure. `TransitionError(RuntimeError)` carries the originating result as `.result` attribute; message includes trigger, from_state, and error string. Decorated `@mypyc_attr(native_class=False)` because mypyc cannot natively compile `RuntimeError` subclasses.
-- `CompiledFuncCondition(func, *, name=None, description="")` — opt-in compiled callable wrapper in `core.py`; its `check()` method body is compiled to native code by mypyc, reducing per-call dispatch overhead vs the interpreted `FuncCondition`. Uses `@mypyc_attr(native_class=False)` to avoid `__slots__` conflicts when subclassing the uncompiled `Condition` ABC; attribute storage is `__dict__`-based. Drop-in replacement for `FuncCondition` when profiling shows guard evaluation is a bottleneck. Subclassable from interpreted Python (unlike fully-native mypyc classes).
+- `TransitionResult.raise_if_failed()` returns `self` unchanged on success (enabling one-liner chaining like `.raise_if_failed().to_state`); raises `TransitionError` on failure. `TransitionError(RuntimeError)` carries the originating result as `.result` attribute; message includes trigger, from_state, and error string. It is a measured registry exception: `@mypyc_attr(native_class=False)` preserves normal Python exception behavior, so instances can have `__dict__`.
+- `CompiledFuncCondition(func, *, name=None, description="")` — opt-in compiled callable wrapper in `core.py`; its `check()` method body is compiled to native code by mypyc, reducing per-call dispatch overhead vs the interpreted `FuncCondition`. It is a measured registry exception: `@mypyc_attr(native_class=False)` preserves the interpreted `Condition` inheritance boundary, so instances can have `__dict__`. Drop-in replacement for `FuncCondition` when profiling shows guard evaluation is a bottleneck. Subclassable from interpreted Python (unlike fully-native mypyc classes).
