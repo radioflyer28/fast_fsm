@@ -810,6 +810,25 @@ def _write_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     path.write_text(serialize_manifest(manifest), encoding="utf-8")
 
 
+def write_or_check_manifest(
+    manifest: Mapping[str, Any], *, manifest_path: Path, write: bool
+) -> dict[str, Any]:
+    """Intentionally write a baseline or compare it without mutating its bytes."""
+    if write:
+        _write_manifest(manifest_path, manifest)
+        return dict(manifest)
+
+    baseline = _read_manifest(manifest_path)
+    validate_manifest_regressions(baseline, manifest)
+    differences = compare_manifests(baseline, manifest)
+    if differences:
+        raise EvidenceError(
+            "Release evidence manifest is stale:\n"
+            + "\n".join(f"  - {difference}" for difference in differences)
+        )
+    return dict(manifest)
+
+
 def _render_summary(manifest: Mapping[str, Any]) -> str:
     """Return a compact human-readable evidence summary."""
     baseline = manifest["quality_baseline"]
@@ -919,17 +938,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit(slots_policy(parsed.source_root), parsed.json)
         elif parsed.command == "evidence":
             manifest = collect_manifest(wheel_paths=parsed.wheel)
-            if parsed.write:
-                _write_manifest(parsed.manifest, manifest)
-            else:
-                baseline = _read_manifest(parsed.manifest)
-                validate_manifest_regressions(baseline, manifest)
-                differences = compare_manifests(baseline, manifest)
-                if differences:
-                    raise EvidenceError(
-                        "Release evidence manifest is stale:\n"
-                        + "\n".join(f"  - {difference}" for difference in differences)
-                    )
+            write_or_check_manifest(
+                manifest, manifest_path=parsed.manifest, write=parsed.write
+            )
             summary = _render_summary(manifest)
             if parsed.summary:
                 parsed.summary.write_text(summary + "\n", encoding="utf-8")
