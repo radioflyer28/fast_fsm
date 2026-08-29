@@ -480,10 +480,12 @@ def _resolve_from_import_module(module_name: str, statement: ast.ImportFrom) -> 
     return ".".join(package_parts)
 
 
-def _import_bindings(tree: ast.Module, module_name: str) -> dict[str, str]:
+def _import_bindings(
+    statements: Iterable[ast.stmt], module_name: str
+) -> dict[str, str]:
     """Map local import names to qualified module or class identities."""
     bindings: dict[str, str] = {}
-    for statement in tree.body:
+    for statement in statements:
         if isinstance(statement, ast.Import):
             for alias in statement.names:
                 local_name = alias.asname or alias.name.split(".", 1)[0]
@@ -498,6 +500,69 @@ def _import_bindings(tree: ast.Module, module_name: str) -> dict[str, str]:
                     part for part in (imported_module, alias.name) if part
                 )
     return bindings
+
+
+def _is_main_demo_condition(condition: ast.expr) -> bool:
+    """Return whether an ``if`` body is the conventional script-only boundary."""
+    if not isinstance(condition, ast.Compare) or len(condition.ops) != 1:
+        return False
+    if not isinstance(condition.ops[0], ast.Eq) or len(condition.comparators) != 1:
+        return False
+    left, right = condition.left, condition.comparators[0]
+    return (
+        isinstance(left, ast.Name)
+        and left.id == "__name__"
+        and isinstance(right, ast.Constant)
+        and right.value == "__main__"
+    ) or (
+        isinstance(right, ast.Name)
+        and right.id == "__name__"
+        and isinstance(left, ast.Constant)
+        and left.value == "__main__"
+    )
+
+
+def _is_type_checking_condition(condition: ast.expr) -> bool:
+    """Return whether a direct standard type-only guard has no runtime body."""
+    return (isinstance(condition, ast.Name) and condition.id == "TYPE_CHECKING") or (
+        isinstance(condition, ast.Attribute)
+        and isinstance(condition.value, ast.Name)
+        and condition.value.id == "typing"
+        and condition.attr == "TYPE_CHECKING"
+    )
+
+
+def _module_level_statements(statements: Iterable[ast.stmt]) -> list[ast.stmt]:
+    """Flatten production module control flow without entering nested scopes.
+
+    A direct ``TYPE_CHECKING`` body and conventional ``__main__`` body cannot
+    define runtime imports/exports, so only their ``else`` branches are audited.
+    All other module-level branches are conservatively traversed.
+    """
+    result: list[ast.stmt] = []
+    for statement in statements:
+        if isinstance(statement, ast.If):
+            if _is_main_demo_condition(statement.test) or _is_type_checking_condition(
+                statement.test
+            ):
+                result.extend(_module_level_statements(statement.orelse))
+            else:
+                result.extend(_module_level_statements(statement.body))
+                result.extend(_module_level_statements(statement.orelse))
+        elif isinstance(statement, ast.Try):
+            result.extend(_module_level_statements(statement.body))
+            for handler in statement.handlers:
+                result.extend(_module_level_statements(handler.body))
+            result.extend(_module_level_statements(statement.orelse))
+            result.extend(_module_level_statements(statement.finalbody))
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            result.extend(_module_level_statements(statement.body))
+        elif isinstance(statement, ast.Match):
+            for case in statement.cases:
+                result.extend(_module_level_statements(case.body))
+        else:
+            result.append(statement)
+    return result
 
 
 def _dotted_expression_parts(expression: ast.expr) -> tuple[str, ...] | None:
@@ -626,14 +691,15 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
         source = source_file.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(source_file))
         module_name = _module_name_for_path(resolved_source_root, source_file)
-        import_bindings = _import_bindings(tree, module_name)
+        statements = _module_level_statements(tree.body)
+        import_bindings = _import_bindings(statements, module_name)
         local_class_names = {
-            node.name for node in tree.body if isinstance(node, ast.ClassDef)
+            node.name for node in statements if isinstance(node, ast.ClassDef)
         }
         source_path = _normalized_relative_path(
             source_file, resolved_source_root.parent
         )
-        for node in tree.body:
+        for node in statements:
             if not isinstance(node, ast.ClassDef):
                 continue
             has_own_slots, slots_are_literal, declares_instance_dict = (
@@ -655,7 +721,23 @@ def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
                     declares_instance_dict=declares_instance_dict,
                 )
             )
-    return sorted(declarations, key=lambda declaration: declaration.qualified_name)
+    ordered = sorted(declarations, key=lambda declaration: declaration.qualified_name)
+    duplicate_names = sorted(
+        {
+            declaration.qualified_name
+            for declaration in ordered
+            if sum(
+                item.qualified_name == declaration.qualified_name for item in ordered
+            )
+            > 1
+        }
+    )
+    if duplicate_names:
+        raise EvidenceError(
+            "Ambiguous duplicate class definition(s) in slots-policy inventory: "
+            + ", ".join(duplicate_names)
+        )
+    return ordered
 
 
 def _base_introduces_instance_dict(

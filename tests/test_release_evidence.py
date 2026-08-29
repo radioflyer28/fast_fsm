@@ -604,6 +604,106 @@ def test_slots_policy_uses_qualified_imported_base_identities(tmp_path: Path) ->
     assert child["classification"] == "slot-protected"
 
 
+@pytest.mark.parametrize(
+    ("source", "class_names"),
+    [
+        ("if True:\n    class Conditional:\n        pass\n", ("Conditional",)),
+        (
+            "if sys.version_info >= (3, 12):\n"
+            "    class VersionConditional:\n"
+            "        pass\n"
+            "else:\n"
+            "    class PlatformConditional:\n"
+            "        pass\n",
+            ("VersionConditional", "PlatformConditional"),
+        ),
+        (
+            "try:\n"
+            "    class TryConditional:\n"
+            "        pass\n"
+            "except ImportError:\n"
+            "    class ExceptConditional:\n"
+            "        pass\n",
+            ("TryConditional", "ExceptConditional"),
+        ),
+        (
+            "with context_manager:\n"
+            "    class WithConditional:\n"
+            "        pass\n"
+            "match selector:\n"
+            "    case _:\n"
+            "        class MatchConditional:\n"
+            "            pass\n",
+            ("WithConditional", "MatchConditional"),
+        ),
+    ],
+)
+def test_slots_policy_recurses_through_module_control_flow(
+    tmp_path: Path, source: str, class_names: tuple[str, ...]
+) -> None:
+    """Runtime-relevant module branches cannot hide un-slotted classes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+    message = str(error.value)
+    for class_name in class_names:
+        assert f"fast_fsm.conditional_policy.{class_name}" in message
+
+
+def test_slots_policy_rejects_ambiguous_conditional_class_definitions(
+    tmp_path: Path,
+) -> None:
+    """Mutually exclusive branches cannot silently collapse one class identity."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(
+        "if selector:\n"
+        "    class Ambiguous:\n"
+        "        __slots__ = ()\n"
+        "else:\n"
+        "    class Ambiguous:\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="Ambiguous duplicate class definition.*Ambiguous"
+    ):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_excludes_only_main_and_type_checking_bodies(
+    tmp_path: Path,
+) -> None:
+    """Demo/type-only classes stay out of the runtime inventory, not other scopes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(
+        "from typing import TYPE_CHECKING\n\n"
+        "if TYPE_CHECKING:\n"
+        "    class TypeOnly:\n"
+        "        pass\n\n"
+        "if __name__ == '__main__':\n"
+        "    class DemoOnly:\n"
+        "        pass\n\n"
+        "class RuntimeProtected:\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    declarations = collect_class_declarations(source_root)
+    names = {declaration.qualified_name for declaration in declarations}
+
+    assert "fast_fsm.conditional_policy.TypeOnly" not in names
+    assert "fast_fsm.conditional_policy.DemoOnly" not in names
+    assert "fast_fsm.conditional_policy.RuntimeProtected" in names
+    validate_slots_inventory(declarations, REGISTERED_SLOTS_EXCEPTIONS)
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {
