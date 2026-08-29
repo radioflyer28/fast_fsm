@@ -9,10 +9,16 @@
           "py3-none-any"
         ],
         "classified_mode": "pure",
+        "dist_info_directory": "fast_fsm-0.2.2.dist-info",
+        "dist_info_package": "fast-fsm",
+        "dist_info_version": "0.2.2",
         "filename": "fast_fsm-0.2.2-py3-none-any.whl",
+        "filename_package": "fast-fsm",
         "filename_tags": [
           "py3-none-any"
         ],
+        "filename_version": "0.2.2",
+        "metadata_name": "fast-fsm",
         "metadata_version": "0.2.2",
         "mode": "pure",
         "native_members": [],
@@ -32,7 +38,22 @@
   },
   "performance_contract": {
     "compiled_trigger_ops_per_sec_min": 200000,
-    "measurement": "environment-labeled; exact timing is not a freshness field"
+    "measurement": "environment-labeled; exact timing is not a freshness field",
+    "observation": {
+      "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
+      "elapsed_seconds": 0.043171,
+      "environment": {
+        "implementation": "cpython",
+        "machine": "arm64",
+        "platform": "macOS-26.5-arm64-arm-64bit",
+        "python_version": "3.12.10"
+      },
+      "metric": "StateMachine.trigger operations per second",
+      "mode": "pure",
+      "operations": 40000,
+      "ops_per_second": 926551.48,
+      "warmup_operations": 2000
+    }
   },
   "quality_baseline": {
     "build_mode": "pure",
@@ -44,10 +65,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 794,
+      "collected": 808,
       "errors": 0,
       "failed": 0,
-      "passed": 794,
+      "passed": 808,
       "skipped": 0
     }
   },
