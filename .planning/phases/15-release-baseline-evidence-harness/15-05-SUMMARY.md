@@ -14,15 +14,15 @@ provides:
   - Closed CI-gap tracking records for Task provisioning and portable freshness
 affects: [phase-15-verification, rel-02, rel-05, rel-06, release-runbook]
 actuals:
-  tokens: 3620
+  tokens: 4919
   tasks: 2
-  commits: 1
+  commits: 3
 tech-stack:
   added: []
   patterns: [exact-SHA hosted evidence, additive release-note correction, pre-post immutable identity comparison]
 key-files:
   created: [.planning/phases/15-release-baseline-evidence-harness/15-05-SUMMARY.md]
-  modified: []
+  modified: [.beads/issues.jsonl]
 key-decisions:
   - "Treat the terminal 29-job Actions table for the pushed SHA, not local YAML or partial matrices, as hosted-gate proof."
   - "Append the normalized canonical correction to the existing release body and require unchanged URL, tag refs, and asset identities."
@@ -60,7 +60,7 @@ status: complete
 - **Duration:** 20m across checkpoint resumptions
 - **Completed:** 2026-08-29T21:57:09Z
 - **Tasks:** 2/2
-- **Files modified:** 1 repository evidence record; external GitHub release body and Beads records
+- **Files modified:** 5 scoped planning/tracking records; external GitHub release body
 
 ## Accomplishments
 
@@ -130,11 +130,12 @@ The record intentionally excludes the release body, authentication details, and 
 
 ## Task Commits
 
-The two plan tasks changed external state or evidence only; no source commit was made for either task. This summary and scoped planning metadata are committed separately.
+The two plan tasks changed external state or evidence only; no source commit was made for either task. The scoped metadata commits are `d7534c0` (summary, state, roadmap, requirements) and `e927f9f` (closed CI-gap Beads records).
 
 ## Files Created/Modified
 
 - `.planning/phases/15-release-baseline-evidence-harness/15-05-SUMMARY.md` - Redacted durable evidence for the exact hosted run and externally verified release correction.
+- `.beads/issues.jsonl` - Closed `fast_fsm-6yg` and `fast_fsm-bhn` with exact-SHA run URLs and retained the parent bead in progress.
 
 ## Decisions Made
 
