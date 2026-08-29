@@ -107,16 +107,64 @@
 
 ## Traceability
 
-Roadmap phase mapping will be populated after the roadmap is approved.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| REL-01 | Phase 20 | Pending |
+| REL-02 | Phase 15 | Pending |
+| REL-03 | Phase 20 | Pending |
+| REL-04 | Phase 15 | Pending |
+| REL-05 | Phase 15 | Pending |
+| REL-06 | Phase 15 | Pending |
+| REL-07 | Phase 20 | Pending |
+| REL-08 | Phase 15 | Pending |
+| GRAF-01 | Phase 16 | Pending |
+| GRAF-02 | Phase 16 | Pending |
+| GRAF-03 | Phase 16 | Pending |
+| GRAF-04 | Phase 16 | Pending |
+| GRAF-05 | Phase 16 | Pending |
+| GRAF-06 | Phase 16 | Pending |
+| GRAF-07 | Phase 16 | Pending |
+| GRAF-08 | Phase 16 | Pending |
+| LIFE-01 | Phase 17 | Pending |
+| LIFE-02 | Phase 17 | Pending |
+| LIFE-03 | Phase 17 | Pending |
+| LIFE-04 | Phase 17 | Pending |
+| LIFE-05 | Phase 17 | Pending |
+| LIFE-06 | Phase 17 | Pending |
+| LIFE-07 | Phase 16 | Pending |
+| OWN-01 | Phase 18 | Pending |
+| OWN-02 | Phase 18 | Pending |
+| OWN-03 | Phase 18 | Pending |
+| OWN-04 | Phase 18 | Pending |
+| OWN-05 | Phase 18 | Pending |
+| OWN-06 | Phase 18 | Pending |
+| OWN-07 | Phase 18 | Pending |
+| DIAG-01 | Phase 19 | Pending |
+| DIAG-02 | Phase 19 | Pending |
+| DIAG-03 | Phase 19 | Pending |
+| DIAG-04 | Phase 19 | Pending |
+| DIAG-05 | Phase 19 | Pending |
+| DIAG-06 | Phase 19 | Pending |
+| DIAG-07 | Phase 19 | Pending |
+| DIAG-08 | Phase 19 | Pending |
+| OUT-01 | Phase 19 | Pending |
+| OUT-02 | Phase 19 | Pending |
+| OUT-03 | Phase 19 | Pending |
+| OUT-04 | Phase 19 | Pending |
+| OUT-05 | Phase 19 | Pending |
+| TEST-01 | Phase 20 | Pending |
+| TEST-02 | Phase 15 | Pending |
+| TEST-03 | Phase 20 | Pending |
+| TEST-04 | Phase 20 | Pending |
+| TEST-05 | Phase 20 | Pending |
+| TEST-06 | Phase 20 | Pending |
+| TEST-07 | Phase 20 | Pending |
 
 **Coverage:**
 - v0.3.0 requirements: 50 total
-- Mapped to phases: 0
-- Unmapped: 50
+- Mapped to phases: 50
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-08-29*
-*Last updated: 2026-08-29 after research-backed scope definition*
+*Last updated: 2026-08-29 after roadmap mapping*

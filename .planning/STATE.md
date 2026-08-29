@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
-status: planning
+status: ready_to_plan
 last_updated: "2026-08-29T16:11:53.389Z"
 last_activity: 2026-08-29
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -15,53 +15,68 @@ progress:
 
 # State: Fast FSM
 
-## Current Position
-
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-08-29 — Milestone v0.3.0 started
-
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-05)
+See: .planning/PROJECT.md (updated 2026-08-29)
 
-**Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec, all core ops O(1).
-**Current focus:** Planning next milestone
+**Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec and all core runtime operations O(1).
+**Current focus:** Phase 15 — Release Baseline & Evidence Harness
+
+## Current Position
+
+Phase: 15 of 20 (1 of 6 in v0.3.0)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-08-29 — Approved requirements mapped to the v0.3.0 roadmap
+
+Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 15–20 | 0 | TBD | — |
+
+**Recent Trend:** No v0.3.0 plans completed yet.
 
 ## Accumulated Context
 
-### Project facts
+### Decisions
 
-- Library: pure Python package, src-layout, `uv` as package manager
-- mypyc compiles `core.py` only — `conditions.py` and `condition_templates.py` stay interpreted
-- Single runtime dep: `mypy-extensions`
-- CI: `.github/workflows/ci.yml` (lint + test 3.10–3.13 × 3 OSes), `docs.yml`, `release.yml`
-- Benchmark CI job with 200k ops/sec throughput gate
-- 722 tests passing (post-v0.2.3)
+Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisions:
 
-### v0.2.3 shipped 2026-04-05
+- Safe defaults take precedence over unsafe pre-production callback, reentrancy, and concurrency semantics.
+- Existing public symbols remain available; `core.py` remains one mypyc compilation unit with one runtime dependency.
+- Runtime hardening must preserve ≥200,000 compiled `trigger()` operations/sec and O(1) core operations.
+- Installed pure and compiled artifacts must prove equivalent hardened behavior before release.
 
-Timing condition helpers: `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition`. 27 new tests, 722 total.
+### Pending Todos
 
-### v0.2.2 shipped 2026-04-05
+None yet.
 
-Introspection & agent tooling: `to_dict()`, `TransitionRecord` history, `to_plantuml()`, `to_json()`. 694 tests, 1.2M ops/sec.
+### Blockers/Concerns
 
-### v0.2.1 shipped 2026-04-04
+- Phase 15 must make release identity and import mode trustworthy before later evidence is accepted.
+- Phases 16–18 touch `core.py`; benchmark compiled and pure overhead before freezing each design.
+- Phase 19 must choose deterministic diagnostic budget behavior during planning.
 
-Code health: version sync, py.typed, ABC removal, exception annotation, test triage, benchmark CI.
+## Deferred Items
 
-## Blockers
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Transition policy | Queued reentrancy and callback compensation | Future | v0.3.0 requirements |
+| Async ownership | Cross-loop transfer and automatic callback offload | Future | v0.3.0 requirements |
+| Tooling | Public topology snapshot v2 and possible `CompiledFuncCondition` redesign | Future | v0.3.0 requirements |
 
-None.
+## Session Continuity
 
-## Pending Decisions
-
-None.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Status | Directory |
-|---|-------------|------|--------|--------|-----------|
-| 260404-exx | Fill callback/hook gaps: before_transition, after_transition convenience, on_failed, on_trigger | 2026-04-04 | b3e6955 | Verified | [260404-exx-fill-callback-hook-gaps-before-transitio](./quick/260404-exx-fill-callback-hook-gaps-before-transitio/) |
+Last session: 2026-08-29
+Stopped at: v0.3.0 roadmap created; Phase 15 is ready for planning
+Resume file: None
