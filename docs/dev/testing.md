@@ -73,28 +73,27 @@ Defined in `pytest.ini`:
 
 ### Example
 
-```python
-import pytest
-from fast_fsm import State, StateMachine, CallbackState
+```{testcode}
+from fast_fsm import State, StateMachine
 
-class TestTrafficLight:
-    """Test a simple traffic light FSM."""
+red = State("red")
+yellow = State("yellow")
+green = State("green")
 
-    def test_basic_cycle(self):
-        red = State("red")
-        yellow = State("yellow")
-        green = State("green")
+fsm = StateMachine(red, name="traffic")
+fsm.add_state(yellow)
+fsm.add_state(green)
+fsm.add_transition("next", "red", "green")
+fsm.add_transition("next", "green", "yellow")
+fsm.add_transition("next", "yellow", "red")
 
-        fsm = StateMachine("traffic", initial_state=red)
-        fsm.add_state(yellow)
-        fsm.add_state(green)
-        fsm.add_transition("next", "red", "green")
-        fsm.add_transition("next", "green", "yellow")
-        fsm.add_transition("next", "yellow", "red")
+assert fsm.current_state.name == "red"
+fsm.trigger("next")
+print(fsm.current_state.name)
+```
 
-        assert fsm.current_state.name == "red"
-        fsm.trigger("next")
-        assert fsm.current_state.name == "green"
+```{testoutput}
+green
 ```
 
 ## Performance Benchmarks
