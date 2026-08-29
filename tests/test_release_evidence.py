@@ -849,6 +849,49 @@ def test_slots_policy_invalidates_try_body_bindings_for_handlers(
         validate_slots_inventory(collect_class_declarations(source_root), {})
 
 
+def test_slots_policy_rejects_wildcard_imports_before_base_resolution(
+    tmp_path: Path,
+) -> None:
+    """A wildcard may overwrite a safe alias through an imported module's __all__."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "wildcard_base.py").write_text(
+        "class Ordinary:\n    pass\n\n__all__ = ['Base']\nBase = Ordinary\n",
+        encoding="utf-8",
+    )
+    (package_root / "wildcard_policy.py").write_text(
+        "from abc import ABC as Base\n"
+        "from .wildcard_base import *\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Wildcard import"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_keeps_nonmatching_match_environment(tmp_path: Path) -> None:
+    """A non-exhaustive match may leave an unsafe incoming base unchanged."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "match_policy.py"
+    target.write_text(
+        "from .unsafe_base import Ordinary as Base\n\n"
+        "match selector:\n"
+        "    case 'safe':\n"
+        "        from abc import ABC as Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    (source_root / "fast_fsm" / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.match_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {

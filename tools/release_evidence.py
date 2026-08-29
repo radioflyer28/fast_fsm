@@ -510,11 +510,15 @@ def _apply_import_binding(
     elif isinstance(statement, ast.ImportFrom):
         imported_module = _resolve_from_import_module(module_name, statement)
         for alias in statement.names:
-            if alias.name != "*":
-                local_name = alias.asname or alias.name
-                updated[local_name] = frozenset(
-                    {".".join(part for part in (imported_module, alias.name) if part)}
+            if alias.name == "*":
+                raise EvidenceError(
+                    "Wildcard import blocks fail-closed slots-policy analysis: "
+                    f"{imported_module or '<relative>'}"
                 )
+            local_name = alias.asname or alias.name
+            updated[local_name] = frozenset(
+                {".".join(part for part in (imported_module, alias.name) if part)}
+            )
     return updated
 
 
@@ -761,7 +765,7 @@ def _walk_module_statements(
             )
             occurrences.extend(else_occurrences)
         elif isinstance(statement, ast.Match):
-            case_environments: list[BindingEnvironment] = []
+            case_environments: list[BindingEnvironment] = [dict(current)]
             for case in statement.cases:
                 case_entry = _unresolved_environment(
                     current, _pattern_names(case.pattern)
@@ -771,7 +775,7 @@ def _walk_module_statements(
                 )
                 occurrences.extend(nested)
                 case_environments.append(case_environment)
-            current = _merge_binding_environments(case_environments or [current])
+            current = _merge_binding_environments(case_environments)
     return occurrences, current
 
 
