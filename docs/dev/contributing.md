@@ -60,15 +60,18 @@ task fix
 # uv run ruff check --fix .
 ```
 
-### Phase 2: Validate (blocks merge)
+### Phase 2: Validate
 
 ```bash
 task check
 # equivalent to:
 # uv run ruff format --check .
 # uv run ruff check .
-# uv run ty check src/fast_fsm/
 ```
+
+`task typecheck-mypy` is the blocking compatibility authority and is visible as
+its own gate. `task typecheck-ty` is also independently visible, but it is
+advisory feedback rather than a release-blocking verdict.
 
 ### Phase 3: Tests
 
@@ -85,14 +88,37 @@ task test
 ```bash
 task pre-commit   # fix → check → test-fast
 task ci           # check → test → docs-check
+
+# Release evidence: write only after reviewing a clean pure-source collection.
+task pure-source-check
+task release-baseline-write
+task release-baseline-check  # read-only freshness check used by CI
 ```
+
+The stable test claim is **700+ tests**. Exact counts, coverage, tool versions,
+source origin, wheel/artifact mode, and benchmark context are recorded only in
+[`evidence/release-baseline.json`](../../evidence/release-baseline.json). Review
+the generated diff before committing a write; CI only checks freshness.
 
 ## Coding Standards
 
-### `__slots__` on Every Class
+### `__slots__` on Every Relevant Class
 
-All classes in `src/fast_fsm/` MUST use `__slots__`. No exceptions.
-If you need callback storage on a state, use `CallbackState`.
+Hot-path classes in `src/fast_fsm/` MUST use `__slots__`. The canonical policy
+command recursively audits every relevant production class so a future class or
+exception cannot be silently omitted:
+
+```bash
+uv run python tools/release_evidence.py slots-policy --json
+```
+
+There are two measured, registered exceptions. `CompiledFuncCondition` has
+`@mypyc_attr(native_class=False)` to preserve the interpreted `Condition`
+subclass boundary; `TransitionError` has it to preserve normal Python exception
+behavior. Both can have an instance `__dict__`; their observed sizes are
+environment-labeled evidence, not a portable memory promise. If you need
+callback storage on a state, use `CallbackState`. These are the deliberate
+ADR-003 registry entries, not a relaxation of the hot-path policy.
 
 ### `*args, **kwargs` Convention
 
@@ -166,6 +192,14 @@ The library MUST work correctly both compiled and uncompiled. When
 adding new classes to `core.py`, ensure they are mypyc-compatible
 (use `__slots__`, avoid dynamic attributes, no metaclasses).
 
+Select the packaging intent with `FAST_FSM_BUILD_MODE=auto`, `pure`, or
+`compiled`; `FAST_FSM_PURE_PYTHON=1` remains the compatibility alias for pure
+mode. A pure evidence collection must run `task pure-source-check` immediately
+after setup and before collection. The check reports native extension shadows
+without deleting them. Inspect the exact reported path, explicitly remove only
+an intentional stale artifact, and rerun the check rather than using broad
+cleanup commands.
+
 Do NOT move condition base classes into `core.py` — this would compile
 them and break user subclassing.
 
@@ -174,7 +208,8 @@ them and break user subclassing.
 Before merging performance-sensitive changes:
 
 - [ ] Run `uv run python benchmarks/benchmark_fast_fsm.py`
-- [ ] `trigger()` throughput ≥ 200,000 ops/sec
+- [ ] Compiled `trigger()` throughput ≥ 200,000 ops/sec
 - [ ] `can_trigger()` throughput ≥ 400,000 ops/sec
-- [ ] No `__dict__` on hot-path classes
+- [ ] Recursive slots-policy audit passes; only the two registered measured
+      exceptions retain an instance `__dict__`
 - [ ] Core operations remain O(1)

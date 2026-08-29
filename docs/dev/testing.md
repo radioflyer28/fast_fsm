@@ -116,6 +116,67 @@ Benchmark results are hardware-dependent. Do not commit results as
 
 ## Baseline
 
-- **62 tests passing** on `main`
-- **0 failures** expected
-- Full suite is the merge gate: `uv run pytest tests/ -x -q`
+Fast FSM maintains a durable baseline of **700+ tests**. The full suite is the
+merge gate:
+
+```bash
+uv run pytest tests/ -x -q
+```
+
+Exact test counts, coverage, toolchain versions, source origin, artifact mode,
+and environment-labeled benchmark observations belong only in the tracked
+[`evidence/release-baseline.json`](../../evidence/release-baseline.json)
+manifest. Do not copy those changing observations into narrative documentation.
+
+## Release Evidence Workflow
+
+The checked-in manifest is produced from a clean pure-Python source collection.
+The Taskfile is the canonical interface:
+
+```bash
+# Confirm that imports resolve to pure Python and fail on native source shadows.
+task pure-source-check
+
+# Intentionally regenerate the tracked evidence after a reviewed change.
+task release-baseline-write
+
+# Read-only freshness and regression check (the command CI runs).
+task release-baseline-check
+```
+
+Use `FAST_FSM_BUILD_MODE=auto`, `pure`, or `compiled` to make a build intent
+explicit. `FAST_FSM_PURE_PYTHON=1` remains a compatible alias for pure mode.
+Before collecting evidence, select pure mode, run the source preflight, and
+only then run the write command. Review a generated manifest diff before
+committing it. CI runs the read-only check and never writes the baseline.
+
+The source preflight is deliberately non-destructive: it reports a native
+extension shadow before importing and leaves every file untouched. If a stale
+artifact is intentional to remove, first review the exact reported path and
+then explicitly remove only that artifact; rerun `task pure-source-check` to
+prove the cleanup. Never use broad cleanup commands for this procedure.
+
+## Type-Checking Authority
+
+`task typecheck-mypy` is the blocking compatibility authority, including the
+mypyc boundary. `task typecheck-ty` is separate advisory feedback: keep it
+visible and address useful findings, but do not treat it as the release-gate
+verdict.
+
+## Measured Slots Policy
+
+The canonical policy command recursively discovers every relevant production
+class below `src/fast_fsm` and fails if an unregistered or omitted exception
+would escape the audit:
+
+```bash
+uv run python tools/release_evidence.py slots-policy --json
+```
+
+Hot-path classes use `__slots__`. Two measured exceptions are deliberately
+registered: `CompiledFuncCondition` uses `@mypyc_attr(native_class=False)` to
+preserve the interpreted `Condition` subclass boundary, while `TransitionError`
+uses it to preserve ordinary Python exception behavior. Both can therefore have
+an instance `__dict__`; their environment-labeled measurements live in the
+evidence manifest rather than this guide. This is the measured exception policy
+recorded by ADR-003, not a relaxation of the general hot-path rule.

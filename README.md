@@ -10,19 +10,18 @@ intuitive API.
 
 ## Performance Highlights
 
-- **~250,000 transitions/sec** — maintains parity with hand-tuned implementations
-- **Ultra-low memory footprint** — ~1,000× more efficient than popular libraries
-- **Zero-overhead design** — `__slots__` optimization, direct dictionary lookups
-- **Production ready** — 290 tests, optional validation, mypyc compilation
+- **Stable performance contract** — compiled `trigger()` throughput is at least
+  200,000 operations per second.
+- **Memory-conscious design** — direct dictionary lookups and `__slots__` keep
+  the hot path lean.
+- **Production-ready verification** — 700+ tests, optional validation, and
+  optional mypyc compilation.
 
-| Library | Speed (ops/sec) | Memory | Ratio |
-|---------|----------------|--------|-------|
-| **fast_fsm** | ~250K | ~0.2 KB | baseline |
-| python-statemachine | ~30K | ~25–40 KB | 8× slower, 125× more memory |
-| transitions | ~50K | ~30–50 KB | 5× slower, 150× more memory |
-
-*100,000 transitions with realistic usage patterns.*
-*Run with* `uv run python benchmarks/benchmark_fast_fsm.py`
+Exact test, coverage, toolchain, source-origin, artifact-mode, and
+environment-labeled benchmark observations are recorded in the tracked
+[`evidence/release-baseline.json`](evidence/release-baseline.json) manifest.
+Regenerate or verify that evidence with the commands in the developer testing
+guide; do not treat a historical local benchmark as a universal result.
 
 ## Requirements
 
@@ -465,7 +464,7 @@ print(v.export_report('json'))
 
 ## Key Capabilities
 
-- **Ultra-High Performance** — 250K+ transitions/sec
+- **Ultra-High Performance** — compiled `trigger()` contract ≥200,000 ops/sec
 - **Memory Efficient** — ~1,000× less than alternatives
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
@@ -501,8 +500,12 @@ uv run python examples/<script>.py
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -x -q     # full suite (653 tests)
+uv run pytest tests/ -x -q     # full suite (700+ tests)
 ```
+
+For the authoritative, exact release evidence, use
+[`evidence/release-baseline.json`](evidence/release-baseline.json) with the
+write/check workflow in [`docs/dev/testing.md`](docs/dev/testing.md).
 
 ## Architecture
 
@@ -516,7 +519,8 @@ src/fast_fsm/
 
 ### Design Principles
 
-1. **`__slots__` everywhere** — all core classes, no `__dict__` on hot paths
+1. **`__slots__` on hot paths** — all relevant production classes are audited
+   recursively; the measured exceptions are documented in the contributor guide
 2. **Direct dictionary lookups** — O(1) `trigger()`, `can_trigger()`, `add_state()`, `add_transition()`
 3. **Minimal abstraction** — clean API without unnecessary layers
 4. **Optional features** — validation/logging add zero runtime overhead when unused
@@ -527,12 +531,15 @@ src/fast_fsm/
 
 | Operation | Complexity | Throughput | Memory |
 |-----------|-----------|------------|--------|
-| `trigger()` | O(1) | ~250K/sec | zero allocation |
-| `trigger()` + history | O(1) | ~125K+/sec | +TransitionRecord/trigger |
-| `can_trigger()` | O(1) | ~500K/sec | zero allocation |
-| `add_state()` | O(1) | instant | +~32 B/state |
-| `add_transition()` | O(1) | instant | +~64 B/transition |
-| `FSMBuilder.build()` | O(n) | one-time | optimized result |
+| `trigger()` | O(1) | compiled ≥200,000 ops/sec | implementation-dependent |
+| `trigger()` + history | O(1) | environment-labeled evidence | implementation-dependent |
+| `can_trigger()` | O(1) | environment-labeled evidence | implementation-dependent |
+| `add_state()` | O(1) | implementation-dependent | implementation-dependent |
+| `add_transition()` | O(1) | implementation-dependent | implementation-dependent |
+| `FSMBuilder.build()` | O(n) | one-time | implementation-dependent |
+
+See the [release evidence manifest](evidence/release-baseline.json) for exact
+observations from the reviewed clean-source collection.
 
 ## Contributing
 
