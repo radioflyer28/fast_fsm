@@ -9,15 +9,22 @@ from email.parser import Parser
 import importlib
 from importlib import machinery, metadata
 import json
+import os
 from pathlib import Path
+import platform
+import subprocess
 import sys
+import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 from zipfile import ZipFile
+from xml.etree import ElementTree
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
+REQUIRED_UV_VERSION = "0.12.6"
+MANIFEST_SCHEMA_VERSION = 1
 
 REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
     "fast_fsm.core.CompiledFuncCondition": (
@@ -201,11 +208,14 @@ def inspect_wheel(wheel_path: Path) -> dict[str, Any]:
             f"Wheel METADATA has no Version header: {resolved_wheel.name}"
         )
     return {
+        "filename": resolved_wheel.name,
         "normalized_basename": resolved_wheel.name.lower(),
         "filename_tags": list(filename_tags),
+        "archive_tags": list(wheel_tags),
         "wheel_tags": list(wheel_tags),
         "metadata_version": package_version,
         "native_members": list(native_members),
+        "classified_mode": mode,
         "mode": mode,
     }
 
@@ -461,6 +471,362 @@ def slots_policy(source_root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def serialize_manifest(manifest: Mapping[str, Any]) -> str:
+    """Render evidence as one stable JSON document with exactly one newline."""
+    return json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+
+
+def _render_field_value(value: Any) -> str:
+    """Make a compact, deterministic field-level diff value."""
+    return json.dumps(value, sort_keys=True, ensure_ascii=True)
+
+
+def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Return fields whose equality defines evidence freshness.
+
+    Platform/runtime observations are retained for audit context, but a different
+    runner must not churn a stable release baseline merely because its host or
+    timing characteristics differ.
+    """
+    stable = json.loads(serialize_manifest(manifest))
+    stable.pop("measurement_environment", None)
+    return stable
+
+
+def compare_manifests(
+    expected: Mapping[str, Any], observed: Mapping[str, Any]
+) -> list[str]:
+    """Return deterministic, actionable stable-field differences.
+
+    Lists deliberately compare as whole values. Their members are evidence
+    collections whose deterministic sort order is part of the release contract.
+    """
+    differences: list[str] = []
+
+    def compare(expected_value: Any, observed_value: Any, path: str) -> None:
+        if isinstance(expected_value, Mapping) and isinstance(observed_value, Mapping):
+            for key in sorted(set(expected_value) | set(observed_value)):
+                key_path = f"{path}.{key}" if path else str(key)
+                if key not in expected_value:
+                    differences.append(
+                        f"{key_path}: expected <missing>, observed "
+                        f"{_render_field_value(observed_value[key])}"
+                    )
+                elif key not in observed_value:
+                    differences.append(
+                        f"{key_path}: expected {_render_field_value(expected_value[key])}, "
+                        "observed <missing>"
+                    )
+                else:
+                    compare(expected_value[key], observed_value[key], key_path)
+            return
+        if expected_value != observed_value:
+            differences.append(
+                f"{path}: expected {_render_field_value(expected_value)}, observed "
+                f"{_render_field_value(observed_value)}"
+            )
+
+    compare(_stable_manifest(expected), _stable_manifest(observed), "")
+    return differences
+
+
+def validate_manifest_regressions(
+    baseline: Mapping[str, Any], observed: Mapping[str, Any]
+) -> None:
+    """Reject source-coverage regressions before considering baseline freshness."""
+    try:
+        baseline_coverage = baseline["quality_baseline"]["coverage"]
+        observed_coverage = observed["quality_baseline"]["coverage"]
+    except (KeyError, TypeError) as error:
+        raise EvidenceError("Manifest is missing quality_baseline.coverage.") from error
+
+    for field in ("total_percent", "core_percent"):
+        try:
+            expected_value = round(float(baseline_coverage[field]), 2)
+            observed_value = round(float(observed_coverage[field]), 2)
+        except (KeyError, TypeError, ValueError) as error:
+            raise EvidenceError(
+                f"Manifest is missing numeric quality_baseline.coverage.{field}."
+            ) from error
+        if observed_value < expected_value:
+            raise EvidenceError(
+                f"coverage regression at quality_baseline.coverage.{field}: "
+                f"expected at least {expected_value:.2f}, observed {observed_value:.2f}"
+            )
+
+
+def _command_environment() -> dict[str, str]:
+    """Force pure mode without leaking ambient environment into evidence."""
+    environment = dict(os.environ)
+    environment["FAST_FSM_BUILD_MODE"] = "pure"
+    environment.pop("FAST_FSM_PURE_PYTHON", None)
+    return environment
+
+
+def _run_checked(
+    arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str]
+) -> str:
+    """Run one controlled evidence command with argument-array safety."""
+    completed = subprocess.run(
+        list(arguments),
+        cwd=cwd,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        rendered = " ".join(arguments)
+        raise EvidenceError(
+            f"Evidence subprocess failed ({completed.returncode}): {rendered}\n"
+            f"{completed.stderr.strip()}"
+        )
+    return completed.stdout
+
+
+def _parse_junit_results(junit_path: Path) -> dict[str, int]:
+    """Parse exact pytest outcomes from JUnit XML rather than console text."""
+    try:
+        root = ElementTree.parse(junit_path).getroot()
+    except (ElementTree.ParseError, OSError) as error:
+        raise EvidenceError(
+            f"Could not parse pytest JUnit XML: {junit_path}"
+        ) from error
+
+    suites = [
+        suite
+        for suite in root.iter("testsuite")
+        if not any(child.tag == "testsuite" for child in suite)
+    ]
+    if not suites:
+        raise EvidenceError("JUnit XML contained no leaf testsuite results.")
+
+    def total(attribute: str) -> int:
+        try:
+            return sum(int(suite.attrib.get(attribute, "0")) for suite in suites)
+        except ValueError as error:
+            raise EvidenceError(
+                f"JUnit XML has invalid {attribute!r} count."
+            ) from error
+
+    collected = total("tests")
+    failures = total("failures")
+    errors = total("errors")
+    skipped = total("skipped")
+    passed = collected - failures - errors - skipped
+    if collected <= 0 or passed < 0:
+        raise EvidenceError("JUnit XML reported inconsistent test outcome counts.")
+    return {
+        "collected": collected,
+        "passed": passed,
+        "failed": failures,
+        "errors": errors,
+        "skipped": skipped,
+    }
+
+
+def _coverage_percentages(coverage_path: Path) -> dict[str, float]:
+    """Read rounded total and core.py source coverage from pytest-cov JSON."""
+    try:
+        payload = json.loads(coverage_path.read_text(encoding="utf-8"))
+        total_percent = float(payload["totals"]["percent_covered"])
+        core_entry = next(
+            entry
+            for source_path, entry in payload["files"].items()
+            if Path(source_path).as_posix().endswith("src/fast_fsm/core.py")
+        )
+        core_percent = float(core_entry["summary"]["percent_covered"])
+    except (KeyError, OSError, StopIteration, TypeError, ValueError) as error:
+        raise EvidenceError(
+            "Coverage JSON is missing total or src/fast_fsm/core.py source coverage."
+        ) from error
+    return {
+        "total_percent": round(total_percent, 2),
+        "core_percent": round(core_percent, 2),
+    }
+
+
+def _distribution_version(distribution: str) -> str:
+    """Read one resolved package version with a useful missing-tool error."""
+    try:
+        return metadata.version(distribution)
+    except metadata.PackageNotFoundError as error:
+        raise EvidenceError(
+            f"Required evidence tool {distribution!r} is not installed in the locked environment."
+        ) from error
+
+
+def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
+    """Return and validate the exact uv executable version for this phase."""
+    stdout = _run_checked(
+        ["uv", "--version"], cwd=REPOSITORY_ROOT, environment=environment
+    )
+    parts = stdout.strip().split()
+    if len(parts) < 2 or parts[0] != "uv":
+        raise EvidenceError(f"Could not parse uv version output: {stdout!r}")
+    version = parts[1]
+    if version != REQUIRED_UV_VERSION:
+        raise EvidenceError(
+            f"Release evidence requires uv {REQUIRED_UV_VERSION}, resolved {version}."
+        )
+    return version
+
+
+def _source_preflight(
+    *, source_root: Path, environment: Mapping[str, str]
+) -> dict[str, str]:
+    """Run the native-shadow/source-origin proof before any collection command."""
+    output = _run_checked(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "verify-source",
+            "--source-root",
+            str(source_root),
+            "--json",
+        ],
+        cwd=REPOSITORY_ROOT,
+        environment=environment,
+    )
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise EvidenceError(
+            "Source preflight did not emit valid JSON evidence."
+        ) from error
+    if not str(payload.get("core_origin", "")).endswith(".py"):
+        raise EvidenceError("Source preflight did not prove a core.py module origin.")
+    return {str(key): str(value) for key, value in payload.items()}
+
+
+def _collect_test_and_coverage(
+    *, environment: Mapping[str, str]
+) -> tuple[dict[str, int], dict[str, float]]:
+    """Collect test and coverage facts only after source preflight succeeded."""
+    with tempfile.TemporaryDirectory(prefix="fast-fsm-evidence-") as temp_directory:
+        temporary_root = Path(temp_directory)
+        junit_path = temporary_root / "pytest.xml"
+        coverage_path = temporary_root / "coverage.json"
+        _run_checked(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/",
+                "-x",
+                "-q",
+                f"--junitxml={junit_path}",
+                "--cov=src/fast_fsm",
+                f"--cov-report=json:{coverage_path}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            environment=environment,
+        )
+        return _parse_junit_results(junit_path), _coverage_percentages(coverage_path)
+
+
+def collect_manifest(
+    *, source_root: Path | None = None, wheel_paths: Iterable[Path] = ()
+) -> dict[str, Any]:
+    """Collect the schema-v1 release baseline in a deterministic shape.
+
+    The source preflight is intentionally the first subprocess action.  All
+    later tool, test, coverage, and wheel observations inherit explicit pure
+    mode, preventing a native build residue from being certified as source.
+    """
+    resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
+    environment = _command_environment()
+    source = _source_preflight(
+        source_root=resolved_source_root, environment=environment
+    )
+    tests, coverage = _collect_test_and_coverage(environment=environment)
+    wheel_artifacts = verify_wheels(wheel_paths)["artifacts"]
+    slots = slots_policy(resolved_source_root)
+    uv_version = _resolved_uv_version(environment=environment)
+
+    toolchain = {
+        "python": sys.version.split()[0],
+        "uv": uv_version,
+        "pytest": _distribution_version("pytest"),
+        "pytest_cov": _distribution_version("pytest-cov"),
+        "ruff": _distribution_version("ruff"),
+        "mypy": _distribution_version("mypy"),
+        "mypyc": _distribution_version("mypy"),
+        "ty": _distribution_version("ty"),
+        "sphinx": _distribution_version("sphinx"),
+        "setuptools": _distribution_version("setuptools"),
+        "wheel": _distribution_version("wheel"),
+    }
+    return {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "release_identity": {
+            "package": PACKAGE_NAME,
+            "distribution_version": source["distribution_version"],
+        },
+        "quality_baseline": {
+            "build_mode": "pure",
+            "tests": tests,
+            "coverage": coverage,
+            "source": {"core_origin": source["core_origin"]},
+        },
+        "toolchain": toolchain,
+        "artifact_evidence": {
+            "wheels": wheel_artifacts,
+            "source": {"core_origin": source["core_origin"]},
+        },
+        "slots_policy": {
+            "inventory": slots["inventory"],
+            "registered_exceptions": slots["registered_exceptions"],
+            "measurements": slots["representative_measurements"],
+        },
+        "performance_contract": {
+            "compiled_trigger_ops_per_sec_min": 200000,
+            "measurement": "environment-labeled; exact timing is not a freshness field",
+        },
+        "measurement_environment": {
+            "implementation": sys.implementation.name,
+            "python_version": sys.version.split()[0],
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "comparison": "stable fields exclude this environment observation",
+        },
+    }
+
+
+def _read_manifest(path: Path) -> dict[str, Any]:
+    """Load a tracked manifest without normalizing its source bytes."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"Could not read manifest {path}: {error}") from error
+    if not isinstance(payload, dict):
+        raise EvidenceError(f"Manifest {path} must contain a JSON object.")
+    return payload
+
+
+def _write_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
+    """Write only the explicitly selected baseline path with deterministic bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(serialize_manifest(manifest), encoding="utf-8")
+
+
+def _render_summary(manifest: Mapping[str, Any]) -> str:
+    """Return a compact human-readable evidence summary."""
+    baseline = manifest["quality_baseline"]
+    tests = baseline["tests"]
+    coverage = baseline["coverage"]
+    return "\n".join(
+        [
+            f"Release evidence schema: {manifest['schema_version']}",
+            f"Pure tests: {tests['passed']}/{tests['collected']} passed",
+            "Source coverage: "
+            f"total {coverage['total_percent']:.2f}%, core.py {coverage['core_percent']:.2f}%",
+            f"uv: {manifest['toolchain']['uv']}",
+            f"core origin: {baseline['source']['core_origin']}",
+        ]
+    )
+
+
 def _emit(payload: dict[str, Any], as_json: bool) -> None:
     """Write deterministic CLI output without exposing the caller environment."""
     if as_json:
@@ -506,6 +872,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="source directory containing the fast_fsm package (default: repository src)",
     )
     slots_policy_parser.add_argument("--json", action="store_true")
+
+    evidence_parser = commands.add_parser(
+        "evidence", help="write or non-destructively check release baseline evidence"
+    )
+    evidence_mode = evidence_parser.add_mutually_exclusive_group(required=True)
+    evidence_mode.add_argument(
+        "--write", action="store_true", help="intentionally regenerate the manifest"
+    )
+    evidence_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="compare in-memory evidence without writing",
+    )
+    evidence_parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=REPOSITORY_ROOT / "evidence" / "release-baseline.json",
+        help="tracked manifest path (default: evidence/release-baseline.json)",
+    )
+    evidence_parser.add_argument(
+        "--wheel",
+        type=Path,
+        action="append",
+        default=[],
+        help="wheel archive to preserve as independent artifact evidence (repeatable)",
+    )
+    evidence_parser.add_argument(
+        "--summary",
+        type=Path,
+        help="optional explicitly requested human-readable summary output path",
+    )
     return parser
 
 
@@ -520,6 +917,23 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit(verify_wheels(parsed.wheel), parsed.json)
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
+        elif parsed.command == "evidence":
+            manifest = collect_manifest(wheel_paths=parsed.wheel)
+            if parsed.write:
+                _write_manifest(parsed.manifest, manifest)
+            else:
+                baseline = _read_manifest(parsed.manifest)
+                validate_manifest_regressions(baseline, manifest)
+                differences = compare_manifests(baseline, manifest)
+                if differences:
+                    raise EvidenceError(
+                        "Release evidence manifest is stale:\n"
+                        + "\n".join(f"  - {difference}" for difference in differences)
+                    )
+            summary = _render_summary(manifest)
+            if parsed.summary:
+                parsed.summary.write_text(summary + "\n", encoding="utf-8")
+            print(summary)
         else:  # pragma: no cover - argparse constrains this branch.
             parser.error(f"Unknown command: {parsed.command}")
     except EvidenceError as error:
