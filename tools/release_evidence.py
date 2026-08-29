@@ -518,6 +518,104 @@ def _apply_import_binding(
     return updated
 
 
+def _target_names(target: ast.expr) -> set[str]:
+    """Return names directly rebound by one assignment-like target."""
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_target_names(item) for item in target.elts))
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    return set()
+
+
+def _pattern_names(pattern: ast.pattern) -> set[str]:
+    """Return capture names from one module-level match pattern."""
+    names: set[str] = set()
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchStar) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+    return names
+
+
+def _unresolved_environment(
+    environment: Mapping[str, frozenset[str]], names: Iterable[str]
+) -> BindingEnvironment:
+    """Invalidate bindings that an arbitrary runtime value could replace."""
+    updated = dict(environment)
+    for name in names:
+        updated[name] = frozenset({f"<unresolved:{name}>"})
+    return updated
+
+
+def _bound_names_in_statements(statements: Iterable[ast.stmt]) -> set[str]:
+    """Collect every binding in a control-flow tree without entering scopes."""
+    names: set[str] = set()
+    for statement in statements:
+        if isinstance(statement, ast.Import):
+            names.update(
+                alias.asname or alias.name.split(".", 1)[0] for alias in statement.names
+            )
+        elif isinstance(statement, ast.ImportFrom):
+            names.update(
+                alias.asname or alias.name
+                for alias in statement.names
+                if alias.name != "*"
+            )
+        elif isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                names.update(_target_names(target))
+        elif isinstance(statement, ast.AnnAssign):
+            names.update(_target_names(statement.target))
+        elif isinstance(statement, ast.AugAssign):
+            names.update(_target_names(statement.target))
+        elif isinstance(statement, ast.Delete):
+            for target in statement.targets:
+                names.update(_target_names(target))
+        elif isinstance(
+            statement, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            names.add(statement.name)
+        elif isinstance(statement, (ast.For, ast.AsyncFor)):
+            names.update(_target_names(statement.target))
+            names.update(_bound_names_in_statements(statement.body))
+            names.update(_bound_names_in_statements(statement.orelse))
+        elif isinstance(statement, ast.While):
+            names.update(_bound_names_in_statements(statement.body))
+            names.update(_bound_names_in_statements(statement.orelse))
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            for item in statement.items:
+                if item.optional_vars:
+                    names.update(_target_names(item.optional_vars))
+            names.update(_bound_names_in_statements(statement.body))
+        elif isinstance(statement, ast.If):
+            names.update(_bound_names_in_statements(statement.body))
+            names.update(_bound_names_in_statements(statement.orelse))
+        elif isinstance(statement, ast.Match):
+            for case in statement.cases:
+                names.update(_pattern_names(case.pattern))
+                names.update(_bound_names_in_statements(case.body))
+        elif (
+            isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar"
+        ):
+            try_statement = cast(ast.Try, statement)
+            names.update(_bound_names_in_statements(try_statement.body))
+            names.update(_bound_names_in_statements(try_statement.orelse))
+            names.update(_bound_names_in_statements(try_statement.finalbody))
+            for handler in try_statement.handlers:
+                if handler.name:
+                    names.add(handler.name)
+                names.update(_bound_names_in_statements(handler.body))
+        for node in ast.walk(statement):
+            if isinstance(node, ast.NamedExpr):
+                names.update(_target_names(node.target))
+    return names
+
+
 def _is_main_demo_condition(condition: ast.expr) -> bool:
     """Return whether an ``if`` body is the conventional script-only boundary."""
     if not isinstance(condition, ast.Compare) or len(condition.ops) != 1:
@@ -557,11 +655,35 @@ def _walk_module_statements(
     occurrences: list[ClassOccurrence] = []
     current = dict(environment)
     for statement in statements:
+        named_expression_names = {
+            name
+            for node in ast.walk(statement)
+            if isinstance(node, ast.NamedExpr)
+            for name in _target_names(node.target)
+        }
+        if named_expression_names:
+            current = _unresolved_environment(current, named_expression_names)
         if isinstance(statement, (ast.Import, ast.ImportFrom)):
             current = _apply_import_binding(statement, current, module_name)
         elif isinstance(statement, ast.ClassDef):
             occurrences.append((statement, dict(current)))
             current[statement.name] = frozenset({f"{module_name}.{statement.name}"})
+        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            current = _unresolved_environment(current, {statement.name})
+        elif isinstance(statement, ast.Assign):
+            current = _unresolved_environment(
+                current,
+                set().union(*(_target_names(target) for target in statement.targets)),
+            )
+        elif isinstance(statement, ast.AnnAssign):
+            current = _unresolved_environment(current, _target_names(statement.target))
+        elif isinstance(statement, ast.AugAssign):
+            current = _unresolved_environment(current, _target_names(statement.target))
+        elif isinstance(statement, ast.Delete):
+            current = _unresolved_environment(
+                current,
+                set().union(*(_target_names(target) for target in statement.targets)),
+            )
         elif isinstance(statement, ast.If):
             if _is_main_demo_condition(statement.test) or _is_type_checking_condition(
                 statement.test
@@ -595,9 +717,15 @@ def _walk_module_statements(
             occurrences.extend(body_occurrences)
             occurrences.extend(else_occurrences)
             path_environments = [successful_environment]
+            handler_entry = _unresolved_environment(
+                current, _bound_names_in_statements(try_statement.body)
+            )
             for handler in try_statement.handlers:
+                handler_environment_start = _unresolved_environment(
+                    handler_entry, {handler.name} if handler.name else set()
+                )
                 handler_occurrences, handler_environment = _walk_module_statements(
-                    handler.body, current, module_name
+                    handler.body, handler_environment_start, module_name
                 )
                 occurrences.extend(handler_occurrences)
                 path_environments.append(handler_environment)
@@ -607,11 +735,22 @@ def _walk_module_statements(
             )
             occurrences.extend(final_occurrences)
         elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            with_names = {
+                name
+                for item in statement.items
+                if item.optional_vars is not None
+                for name in _target_names(item.optional_vars)
+            }
+            current = _unresolved_environment(current, with_names)
             nested, current = _walk_module_statements(
                 statement.body, current, module_name
             )
             occurrences.extend(nested)
         elif isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            if isinstance(statement, (ast.For, ast.AsyncFor)):
+                current = _unresolved_environment(
+                    current, _target_names(statement.target)
+                )
             body_occurrences, body_environment = _walk_module_statements(
                 statement.body, current, module_name
             )
@@ -624,8 +763,11 @@ def _walk_module_statements(
         elif isinstance(statement, ast.Match):
             case_environments: list[BindingEnvironment] = []
             for case in statement.cases:
+                case_entry = _unresolved_environment(
+                    current, _pattern_names(case.pattern)
+                )
                 nested, case_environment = _walk_module_statements(
-                    case.body, current, module_name
+                    case.body, case_entry, module_name
                 )
                 occurrences.extend(nested)
                 case_environments.append(case_environment)

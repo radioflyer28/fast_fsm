@@ -789,6 +789,66 @@ def test_slots_policy_rejects_ambiguous_reaching_base_bindings(tmp_path: Path) -
         validate_slots_inventory(collect_class_declarations(source_root), {})
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from abc import ABC as Base\n"
+        "Base = type('Ordinary', (), {})\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n"
+        "del Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n\n"
+        "def Base():\n"
+        "    return object\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n\n"
+        "for Base in values:\n"
+        "    pass\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+    ],
+)
+def test_slots_policy_invalidates_rebound_or_deleted_base_names(
+    tmp_path: Path, source: str
+) -> None:
+    """Every ordinary module binding replaces a previously safe base identity."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "binding_policy.py").write_text(
+        source, encoding="utf-8"
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.binding_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_invalidates_try_body_bindings_for_handlers(
+    tmp_path: Path,
+) -> None:
+    """A handler sees unsafe imports made before a later exception in its try body."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "handler_policy.py").write_text(
+        "from abc import ABC as Base\n\n"
+        "try:\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "    raise RuntimeError\n"
+        "except RuntimeError:\n"
+        "    class Child(Base):\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.handler_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {
