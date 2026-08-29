@@ -535,7 +535,9 @@ def test_manifest_comparison_reports_field_level_staleness(
     assert ".".join(path) in "\n".join(differences)
 
 
-def test_manifest_freshness_accepts_same_minor_python_patches_without_mutation() -> None:
+def test_manifest_freshness_accepts_same_minor_python_patches_without_mutation() -> (
+    None
+):
     """Comparison treats only Python's major.minor as portable evidence."""
     expected = _manifest_fixture()
     observed = json.loads(serialize_manifest(expected))
