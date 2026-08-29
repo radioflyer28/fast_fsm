@@ -533,6 +533,131 @@ def _target_names(target: ast.expr) -> set[str]:
     return set()
 
 
+def _mutation_root_names(target: ast.expr) -> set[str]:
+    """Return imported-name roots mutated through an attribute or subscript."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_mutation_root_names(item) for item in target.elts))
+    if isinstance(target, ast.Starred):
+        return _mutation_root_names(target.value)
+    if not isinstance(target, (ast.Attribute, ast.Subscript)):
+        return set()
+    root: ast.expr = target
+    while isinstance(root, (ast.Attribute, ast.Subscript)):
+        root = root.value
+    return {root.id} if isinstance(root, ast.Name) else set()
+
+
+def _target_mutation_roots(targets: Iterable[ast.expr]) -> set[str]:
+    """Return roots mutated by one statement's assignment-like targets."""
+    return set().union(*(_mutation_root_names(target) for target in targets))
+
+
+def _is_imported_binding(references: frozenset[str], module_name: str) -> bool:
+    """Return whether a reaching name still identifies an imported object."""
+    local_prefix = f"{module_name}."
+    return any(
+        not reference.startswith("<unresolved:")
+        and reference != module_name
+        and not reference.startswith(local_prefix)
+        for reference in references
+    )
+
+
+def _reject_imported_binding_mutation(
+    roots: Iterable[str],
+    environment: Mapping[str, frozenset[str]],
+    module_name: str,
+) -> None:
+    """Fail closed when code mutates an object reached from an import binding."""
+    for root in roots:
+        references = environment.get(root)
+        if references is not None and _is_imported_binding(references, module_name):
+            raise EvidenceError(
+                "Imported binding mutation blocks fail-closed slots-policy analysis: "
+                f"{module_name}.{root}"
+            )
+
+
+def _expression_mutation_roots(expression: ast.expr) -> set[str]:
+    """Return roots passed to direct built-in attribute mutators in an expression."""
+    roots: set[str] = set()
+    for node in ast.walk(expression):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"setattr", "delattr"}
+            and node.args
+        ):
+            roots.update(_mutation_root_names(node.args[0]))
+            if isinstance(node.args[0], ast.Name):
+                roots.add(node.args[0].id)
+    return roots
+
+
+def _statement_mutation_roots(statement: ast.stmt) -> set[str]:
+    """Return imported roots mutated by this statement without descending scopes."""
+    if isinstance(statement, ast.Assign):
+        return _target_mutation_roots(statement.targets) | _expression_mutation_roots(
+            statement.value
+        )
+    if isinstance(statement, ast.AnnAssign):
+        roots = _mutation_root_names(statement.target)
+        return roots | (
+            _expression_mutation_roots(statement.value)
+            if statement.value is not None
+            else set()
+        )
+    if isinstance(statement, ast.AugAssign):
+        return _mutation_root_names(statement.target) | _expression_mutation_roots(
+            statement.value
+        )
+    if isinstance(statement, ast.Delete):
+        return _target_mutation_roots(statement.targets)
+    if isinstance(statement, ast.Expr):
+        return _expression_mutation_roots(statement.value)
+    if isinstance(statement, ast.If):
+        return _expression_mutation_roots(statement.test)
+    if isinstance(statement, ast.While):
+        return _expression_mutation_roots(statement.test)
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        return _expression_mutation_roots(statement.iter)
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return set().union(
+            *(_expression_mutation_roots(item.context_expr) for item in statement.items)
+        )
+    if isinstance(statement, ast.Match):
+        return _expression_mutation_roots(statement.subject)
+    return set()
+
+
+def _mutation_roots_in_statements(statements: Iterable[ast.stmt]) -> set[str]:
+    """Collect attribute/subscript mutation roots without entering child scopes."""
+    roots: set[str] = set()
+    for statement in statements:
+        roots.update(_statement_mutation_roots(statement))
+        if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            roots.update(_mutation_roots_in_statements(statement.body))
+            roots.update(_mutation_roots_in_statements(statement.orelse))
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            roots.update(_mutation_roots_in_statements(statement.body))
+        elif isinstance(statement, ast.If):
+            roots.update(_mutation_roots_in_statements(statement.body))
+            roots.update(_mutation_roots_in_statements(statement.orelse))
+        elif isinstance(statement, ast.Match):
+            for case in statement.cases:
+                roots.update(_mutation_roots_in_statements(case.body))
+        elif (
+            isinstance(statement, ast.Try) or statement.__class__.__name__ == "TryStar"
+        ):
+            try_statement = cast(ast.Try, statement)
+            roots.update(_mutation_roots_in_statements(try_statement.body))
+            roots.update(_mutation_roots_in_statements(try_statement.orelse))
+            roots.update(_mutation_roots_in_statements(try_statement.finalbody))
+            for handler in try_statement.handlers:
+                roots.update(_mutation_roots_in_statements(handler.body))
+    return roots
+
+
 def _pattern_names(pattern: ast.pattern) -> set[str]:
     """Return capture names from one module-level match pattern."""
     names: set[str] = set()
@@ -667,6 +792,9 @@ def _walk_module_statements(
         }
         if named_expression_names:
             current = _unresolved_environment(current, named_expression_names)
+        _reject_imported_binding_mutation(
+            _statement_mutation_roots(statement), current, module_name
+        )
         if isinstance(statement, (ast.Import, ast.ImportFrom)):
             current = _apply_import_binding(statement, current, module_name)
         elif isinstance(statement, ast.ClassDef):
@@ -751,6 +879,9 @@ def _walk_module_statements(
             )
             occurrences.extend(nested)
         elif isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            loop_invalidated_names = _bound_names_in_statements(
+                [*statement.body, *statement.orelse]
+            ) | _mutation_roots_in_statements([*statement.body, *statement.orelse])
             if isinstance(statement, (ast.For, ast.AsyncFor)):
                 current = _unresolved_environment(
                     current, _target_names(statement.target)
@@ -764,6 +895,7 @@ def _walk_module_statements(
                 statement.orelse, loop_environment, module_name
             )
             occurrences.extend(else_occurrences)
+            current = _unresolved_environment(current, loop_invalidated_names)
         elif isinstance(statement, ast.Match):
             case_environments: list[BindingEnvironment] = [dict(current)]
             for case in statement.cases:

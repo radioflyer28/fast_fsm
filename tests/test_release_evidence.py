@@ -892,6 +892,60 @@ def test_slots_policy_keeps_nonmatching_match_environment(tmp_path: Path) -> Non
         validate_slots_inventory(collect_class_declarations(source_root), {})
 
 
+def test_slots_policy_rejects_imported_base_attribute_mutation(tmp_path: Path) -> None:
+    """Mutating a qualified imported base cannot retain its safe certificate."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "attribute_mutation_policy.py"
+    target.write_text(
+        "import abc\n\n"
+        "abc.ABC = type('Ordinary', (), {})\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_rejects_setattr_of_imported_base(tmp_path: Path) -> None:
+    """Built-in attribute mutation cannot hide behind an imported module alias."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "setattr_mutation_policy.py"
+    target.write_text(
+        "import abc\n\n"
+        "setattr(abc, 'ABC', type('Ordinary', (), {}))\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_invalidates_loop_bindings_after_break(tmp_path: Path) -> None:
+    """An unreachable safe import after break cannot recertify an unsafe base."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "loop_break_policy.py").write_text(
+        "from abc import ABC as Base\n\n"
+        "for _ in (1,):\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "    break\n"
+        "    from abc import ABC as Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.loop_break_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {
