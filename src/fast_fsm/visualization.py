@@ -239,11 +239,7 @@ def to_json(fsm: "StateMachine") -> dict:
                 queue.append(to_name)
 
     unreachable = sorted(set(fsm._states.keys()) - reachable)
-    terminal = sorted(
-        s
-        for s in fsm._states
-        if not fsm._transitions.get(s)
-    )
+    terminal = sorted(s for s in fsm._states if not fsm._transitions.get(s))
 
     reachability = {
         "reachable": sorted(reachable),

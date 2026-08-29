@@ -1485,10 +1485,6 @@ class TestToDict:
         """Guards are callable and therefore NOT in to_dict() output."""
         from fast_fsm import FuncCondition
 
-        fsm = StateMachine.quick_build(
-            "off",
-            [("turn_on", "off", "on")],
-        )
         fsm2 = StateMachine.from_dict(
             {
                 "initial": "off",
