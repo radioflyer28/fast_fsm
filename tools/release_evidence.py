@@ -10,6 +10,12 @@ import importlib
 from importlib import machinery, metadata
 import json
 import os
+from packaging.utils import (
+    InvalidWheelFilename,
+    canonicalize_name,
+    parse_wheel_filename,
+)
+from packaging.version import InvalidVersion, Version
 from pathlib import Path
 import platform
 import re
@@ -239,52 +245,139 @@ def verify_history(
     }
 
 
-def _wheel_filename_tags(wheel_path: Path) -> tuple[str, ...]:
-    """Parse normalized compatibility tags from a wheel filename."""
+def _wheel_filename_identity(wheel_path: Path) -> tuple[str, Version, tuple[str, ...]]:
+    """Parse normalized distribution, version, and tags from a wheel filename."""
     if wheel_path.suffix.lower() != ".whl":
         raise EvidenceError(f"Expected a .whl archive, got {wheel_path.name!r}.")
-    parts = wheel_path.stem.split("-")
-    if len(parts) < 5:
-        raise EvidenceError(f"Invalid wheel filename: {wheel_path.name!r}.")
-    python_tags, abi_tags, platform_tags = parts[-3:]
-    return tuple(
-        sorted(
-            f"{python_tag}-{abi_tag}-{platform_tag}"
-            for python_tag in python_tags.split(".")
-            for abi_tag in abi_tags.split(".")
-            for platform_tag in platform_tags.split(".")
-        )
-    )
+    try:
+        distribution, version, _build_tag, tags = parse_wheel_filename(wheel_path.name)
+    except (InvalidWheelFilename, InvalidVersion) as error:
+        raise EvidenceError(f"Invalid wheel filename: {wheel_path.name!r}.") from error
+    return str(distribution), version, tuple(sorted(str(tag) for tag in tags))
 
 
-def _archive_metadata(archive: ZipFile, suffix: str) -> str:
-    """Read the one required dist-info metadata file without extracting it."""
-    matches = sorted(
-        name
-        for name in archive.namelist()
-        if name.endswith(suffix) and ".dist-info/" in name
+def _archive_dist_info_directory(archive: ZipFile) -> str:
+    """Return the one top-level ``.dist-info`` directory in an archive."""
+    directories = sorted(
+        {
+            name.split("/", 1)[0]
+            for name in archive.namelist()
+            if "/" in name and name.split("/", 1)[0].endswith(".dist-info")
+        }
     )
-    if len(matches) != 1:
+    if len(directories) != 1:
         raise EvidenceError(
-            f"Expected exactly one .dist-info/{suffix} file, found {matches!r}."
+            f"Expected exactly one .dist-info directory, found {directories!r}."
         )
+    return directories[0]
+
+
+def _archive_metadata(archive: ZipFile, dist_info_directory: str, filename: str) -> str:
+    """Read one required metadata file from the verified dist-info directory."""
+    target = f"{dist_info_directory}/{filename}"
+    matches = [name for name in archive.namelist() if name == target]
+    if len(matches) != 1:
+        raise EvidenceError(f"Expected exactly one {target} file, found {matches!r}.")
     return archive.read(matches[0]).decode("utf-8")
 
 
-def inspect_wheel(wheel_path: Path) -> dict[str, Any]:
-    """Inspect one wheel's filename, metadata, tags, and native members."""
+def _dist_info_identity(directory: str) -> tuple[str, Version]:
+    """Parse normalized identity from a wheel's ``.dist-info`` directory."""
+    if not directory.endswith(".dist-info"):
+        raise EvidenceError(f"Invalid dist-info directory: {directory!r}.")
+    stem = directory.removesuffix(".dist-info")
+    try:
+        distribution, version = stem.rsplit("-", 1)
+        return canonicalize_name(distribution), Version(version)
+    except (ValueError, InvalidVersion) as error:
+        raise EvidenceError(f"Invalid dist-info directory: {directory!r}.") from error
+
+
+def _metadata_identity(headers: Parser, wheel_name: str) -> tuple[str, Version]:
+    """Parse normalized package identity from one METADATA header block."""
+    package_name = headers.get("Name")
+    package_version = headers.get("Version")
+    if not package_name:
+        raise EvidenceError(f"Wheel METADATA has no Name header: {wheel_name}")
+    if not package_version:
+        raise EvidenceError(f"Wheel METADATA has no Version header: {wheel_name}")
+    try:
+        return canonicalize_name(package_name), Version(package_version)
+    except InvalidVersion as error:
+        raise EvidenceError(
+            f"Wheel METADATA has an invalid Version header: {wheel_name}"
+        ) from error
+
+
+def inspect_wheel(
+    wheel_path: Path,
+    *,
+    expected_package: str = PACKAGE_NAME,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    """Inspect one wheel and reject contradictory release identity evidence."""
     resolved_wheel = wheel_path.resolve()
     if not resolved_wheel.is_file():
         raise EvidenceError(f"Wheel does not exist: {resolved_wheel}")
 
-    filename_tags = _wheel_filename_tags(resolved_wheel)
+    filename_name, filename_version, filename_tags = _wheel_filename_identity(
+        resolved_wheel
+    )
     with ZipFile(resolved_wheel) as archive:
-        wheel_headers = Parser().parsestr(_archive_metadata(archive, "WHEEL"))
-        package_headers = Parser().parsestr(_archive_metadata(archive, "METADATA"))
+        dist_info_directory = _archive_dist_info_directory(archive)
+        wheel_headers = Parser().parsestr(
+            _archive_metadata(archive, dist_info_directory, "WHEEL")
+        )
+        package_headers = Parser().parsestr(
+            _archive_metadata(archive, dist_info_directory, "METADATA")
+        )
         wheel_tags = tuple(sorted(wheel_headers.get_all("Tag", [])))
         native_members = tuple(
             sorted(name for name in archive.namelist() if _is_native_member(name))
         )
+
+    dist_info_name, dist_info_version = _dist_info_identity(dist_info_directory)
+    metadata_name, metadata_version = _metadata_identity(
+        package_headers, resolved_wheel.name
+    )
+    normalized_expected_package = canonicalize_name(expected_package)
+    if filename_name != normalized_expected_package:
+        raise EvidenceError(
+            "Wheel filename package name contradicts release identity: "
+            f"expected {normalized_expected_package!r}, got {filename_name!r}."
+        )
+    if dist_info_name != filename_name:
+        raise EvidenceError(
+            "Wheel dist-info package name contradicts filename: "
+            f"expected {filename_name!r}, got {dist_info_name!r}."
+        )
+    if metadata_name != filename_name:
+        raise EvidenceError(
+            "Wheel METADATA Name contradicts filename: "
+            f"expected {filename_name!r}, got {metadata_name!r}."
+        )
+    if dist_info_version != filename_version:
+        raise EvidenceError(
+            "Wheel dist-info version contradicts filename: "
+            f"expected {filename_version!s}, got {dist_info_version!s}."
+        )
+    if metadata_version != filename_version:
+        raise EvidenceError(
+            "Wheel METADATA Version contradicts filename: "
+            f"expected {filename_version!s}, got {metadata_version!s}."
+        )
+    if expected_version is not None:
+        try:
+            normalized_expected_version = Version(expected_version)
+        except InvalidVersion as error:
+            raise EvidenceError(
+                f"Invalid expected release version: {expected_version!r}."
+            ) from error
+        if filename_version != normalized_expected_version:
+            raise EvidenceError(
+                "Wheel version contradicts release identity: "
+                f"expected {normalized_expected_version!s}, got {filename_version!s}."
+            )
 
     if not wheel_tags:
         raise EvidenceError(f"Wheel metadata has no Tag header: {resolved_wheel.name}")
@@ -310,27 +403,33 @@ def inspect_wheel(wheel_path: Path) -> dict[str, Any]:
             )
         mode = "compiled"
 
-    package_version = package_headers.get("Version")
-    if not package_version:
-        raise EvidenceError(
-            f"Wheel METADATA has no Version header: {resolved_wheel.name}"
-        )
     return {
         "filename": resolved_wheel.name,
         "normalized_basename": resolved_wheel.name.lower(),
+        "filename_package": filename_name,
+        "filename_version": str(filename_version),
+        "dist_info_directory": dist_info_directory,
+        "dist_info_package": dist_info_name,
+        "dist_info_version": str(dist_info_version),
         "filename_tags": list(filename_tags),
         "archive_tags": list(wheel_tags),
         "wheel_tags": list(wheel_tags),
-        "metadata_version": package_version,
+        "metadata_name": metadata_name,
+        "metadata_version": str(metadata_version),
         "native_members": list(native_members),
         "classified_mode": mode,
         "mode": mode,
     }
 
 
-def verify_wheels(wheel_paths: Iterable[Path]) -> dict[str, list[dict[str, Any]]]:
+def verify_wheels(
+    wheel_paths: Iterable[Path], *, expected_version: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """Collect deterministic independent evidence for a repeated wheel input."""
-    artifacts = [inspect_wheel(path) for path in wheel_paths]
+    release_version = expected_version or metadata.version("fast-fsm")
+    artifacts = [
+        inspect_wheel(path, expected_version=release_version) for path in wheel_paths
+    ]
     artifacts.sort(
         key=lambda artifact: (
             artifact["normalized_basename"],
@@ -928,7 +1027,9 @@ def collect_manifest(
         source_root=resolved_source_root, environment=environment
     )
     tests, coverage = _collect_test_and_coverage(environment=environment)
-    wheel_artifacts = verify_wheels(wheel_paths)["artifacts"]
+    wheel_artifacts = verify_wheels(
+        wheel_paths, expected_version=source["distribution_version"]
+    )["artifacts"]
     slots = slots_policy(resolved_source_root)
     uv_version = _resolved_uv_version(environment=environment)
 

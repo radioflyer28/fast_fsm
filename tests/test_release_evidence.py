@@ -98,10 +98,15 @@ def _write_wheel(
     wheel_tags: Iterable[str],
     native_members: Iterable[str] = (),
     version: str = "0.2.2",
+    filename_name: str = "fast_fsm",
+    dist_info_name: str = "fast_fsm",
+    dist_info_version: str | None = None,
+    metadata_name: str = "fast-fsm",
+    metadata_version: str | None = None,
 ) -> Path:
     """Create a minimal wheel archive with independently controllable evidence."""
-    wheel = directory / f"fast_fsm-{version}-{filename_tag}.whl"
-    dist_info = f"fast_fsm-{version}.dist-info"
+    wheel = directory / f"{filename_name}-{version}-{filename_tag}.whl"
+    dist_info = f"{dist_info_name}-{dist_info_version or version}.dist-info"
     with ZipFile(wheel, "w") as archive:
         archive.writestr(
             f"{dist_info}/WHEEL",
@@ -110,7 +115,9 @@ def _write_wheel(
         )
         archive.writestr(
             f"{dist_info}/METADATA",
-            f"Metadata-Version: 2.1\nName: fast-fsm\nVersion: {version}\n",
+            "Metadata-Version: 2.1\n"
+            f"Name: {metadata_name}\n"
+            f"Version: {metadata_version or version}\n",
         )
         archive.writestr("fast_fsm/__init__.py", "")
         archive.writestr("fast_fsm/core.py", "")
@@ -331,6 +338,34 @@ def test_verify_wheel_rejects_contradictory_pure_evidence(
         filename_tag=filename_tag,
         wheel_tags=wheel_tags,
         native_members=native_members,
+    )
+
+    completed = _run_evidence("verify-wheel", "--wheel", str(wheel), "--json")
+
+    assert completed.returncode != 0
+    assert expected in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"filename_name": "evil"}, "filename package name"),
+        ({"dist_info_name": "evil"}, "dist-info package name"),
+        ({"metadata_name": "evil"}, "metadata name"),
+        ({"dist_info_version": "9.9"}, "dist-info version"),
+        ({"metadata_version": "9.9"}, "metadata version"),
+        ({"version": "0.2.3"}, "version contradicts release identity"),
+    ],
+)
+def test_verify_wheel_rejects_every_contradictory_identity_surface(
+    tmp_path: Path, overrides: dict[str, str], expected: str
+) -> None:
+    """Filename, dist-info, METADATA, and release identity must agree exactly."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=["py3-none-any"],
+        **overrides,
     )
 
     completed = _run_evidence("verify-wheel", "--wheel", str(wheel), "--json")
