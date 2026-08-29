@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,9 @@ from tools.release_evidence import (  # noqa: E402
 
 PACKAGE_SOURCE = ROOT / "src" / "fast_fsm"
 TOOL = ROOT / "tools" / "release_evidence.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+DOCS_WORKFLOW = ROOT / ".github" / "workflows" / "docs.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 def _run_evidence(
@@ -500,3 +504,99 @@ def test_repository_lock_records_each_exact_release_build_tool() -> None:
     assert release_evidence._locked_package_version("setuptools") == "80.9.0"
     assert release_evidence._locked_package_version("wheel") == "0.45.1"
     assert release_evidence._locked_package_version("mypy") == "1.17.1"
+
+
+def _workflow_text(path: Path) -> str:
+    """Read a repository-owned GitHub workflow for contract assertions."""
+    return path.read_text(encoding="utf-8")
+
+
+def _setup_uv_blocks(workflow: str) -> list[str]:
+    """Return each setup-uv step through its following configuration boundary."""
+    return re.findall(
+        r"- uses: astral-sh/setup-uv@v5(?P<block>.*?)(?=\n\s*- uses:|\n\s*- name:|\Z)",
+        workflow,
+        flags=re.DOTALL,
+    )
+
+
+def test_setup_uv_actions_pin_the_exact_release_version() -> None:
+    """Every repository-owned setup-uv use shares the manifest's exact version."""
+    for workflow_path in (CI_WORKFLOW, DOCS_WORKFLOW, RELEASE_WORKFLOW):
+        blocks = _setup_uv_blocks(_workflow_text(workflow_path))
+        assert blocks, workflow_path
+        assert all('version: "0.12.6"' in block for block in blocks), workflow_path
+
+
+def test_workflow_contract_has_dispatch_reusable_and_independent_gate_jobs() -> None:
+    """Pull requests and releases expose every quality verdict independently."""
+    workflow = _workflow_text(CI_WORKFLOW)
+    for trigger in ("push:", "pull_request:", "workflow_dispatch:", "workflow_call:"):
+        assert trigger in workflow
+    for job in (
+        "format",
+        "lint",
+        "typecheck_mypy",
+        "typecheck_ty",
+        "test",
+        "supported_python_build",
+        "evidence",
+        "docs_html",
+        "docs_doctest",
+        "build_check",
+        "benchmark",
+    ):
+        assert re.search(rf"^  {job}:$", workflow, flags=re.MULTILINE), job
+    assert re.search(
+        r"^  typecheck_ty:.*?^    continue-on-error: true$",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert "fail-fast: false" in workflow
+    for version in ('"3.10"', '"3.11"', '"3.12"', '"3.13"', '"3.14"'):
+        assert version in workflow
+
+
+def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> None:
+    """No test, coverage, documentation, or build collection precedes source proof."""
+    required = {
+        CI_WORKFLOW: ("test", "supported_python_build", "evidence", "docs_html", "docs_doctest"),
+        DOCS_WORKFLOW: ("build_docs",),
+        RELEASE_WORKFLOW: ("build_sdist",),
+    }
+    preflight = "uv run python tools/release_evidence.py verify-source --json"
+    for workflow_path, jobs in required.items():
+        workflow = _workflow_text(workflow_path)
+        for job in jobs:
+            job_match = re.search(
+                rf"^  {job}:$(.*?)(?=^  [A-Za-z_][A-Za-z0-9_]*:$|\Z)",
+                workflow,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            assert job_match, f"Missing {job} in {workflow_path}"
+            body = job_match.group(1)
+            assert "FAST_FSM_BUILD_MODE: pure" in body
+            sync_index = body.index("uv sync --locked")
+            preflight_index = body.index(preflight)
+            assert sync_index < preflight_index
+            between = body[sync_index:preflight_index]
+            assert "uv run " not in between
+            assert "uv build" not in between
+            assert "pytest" not in between
+
+
+def test_release_workflow_gates_artifacts_without_publishing_a_pure_wheel() -> None:
+    """The reusable complete gate precedes existing artifacts; Phase 20 owns pure publication."""
+    workflow = _workflow_text(RELEASE_WORKFLOW)
+    assert "uses: ./.github/workflows/ci.yml" in workflow
+    for job in ("build_wheels", "build_sdist"):
+        job_match = re.search(
+            rf"^  {job}:$(.*?)(?=^  [A-Za-z_][A-Za-z0-9_]*:$|\Z)",
+            workflow,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert job_match
+        assert "needs: quality_gate" in job_match.group(1)
+    assert "FAST_FSM_BUILD_MODE: pure" in workflow
+    assert "uv sync --locked" in workflow
+    assert "py3-none-any" not in workflow
