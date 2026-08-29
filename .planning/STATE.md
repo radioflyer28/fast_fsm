@@ -5,15 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 15
 current_phase_name: Release Baseline & Evidence Harness
 status: executing
-stopped_at: Completed 15-01-PLAN.md
-last_updated: "2026-08-29T19:13:38.264Z"
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-08-29T19:50:55.369Z"
 last_activity: 2026-08-29
 last_activity_desc: Approved requirements mapped to the v0.3.0 roadmap
+state_head: 508f23cee2fc27593de735eca90e9553d78b3592
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 6
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -29,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 15 (Release Baseline & Evidence Harness) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-08-29 — Phase 15 execution started
 
-Progress: [██░░░░░░░░] 17%
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
@@ -55,6 +56,7 @@ Progress: [██░░░░░░░░] 17%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 15 P01 | 16 min | 3 tasks | 7 files |
+| Phase 15 P02 | 29m | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -68,6 +70,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - Installed pure and compiled artifacts must prove equivalent hardened behavior before release.
 - [Phase 15]: Centralized build intent in FAST_FSM_BUILD_MODE while preserving FAST_FSM_PURE_PYTHON=1 as the pure alias.
 - [Phase 15]: Made release evidence fail closed and non-destructive; only CompiledFuncCondition and TransitionError are registered slots exceptions.
+- [Phase 15]: Use evidence --write only for intentional regeneration; CI evidence --check remains read-only.
+- [Phase 15]: Read PEP 517 build provenance from uv.lock and constrain isolated builds to exact reviewed pins.
+- [Phase 15]: Mypy is blocking while ty remains an independently visible advisory gate.
 
 ### Pending Todos
 
@@ -89,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-29T19:13:38.257Z
-Stopped at: Completed 15-01-PLAN.md
+Last session: 2026-08-29T19:50:55.361Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None

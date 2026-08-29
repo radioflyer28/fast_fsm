@@ -11,7 +11,7 @@
 - [ ] **REL-01**: A maintainer can verify that package metadata, `fast_fsm.__version__`, changelog, documentation, and the release tag all identify v0.3.0 before publishing.
 - [ ] **REL-02**: A maintainer can audit the historical v0.2.3 version mismatch through an explicit correction record without moving or silently replacing the existing tag.
 - [ ] **REL-03**: A requested compiled release fails when mypyc compilation fails or the produced wheel does not contain the expected native extension.
-- [ ] **REL-04**: A maintainer can intentionally build and identify a pure-Python wheel without triggering the strict compiled-release failure policy.
+- [x] **REL-04**: A maintainer can intentionally build and identify a pure-Python wheel without triggering the strict compiled-release failure policy.
 - [ ] **REL-05**: A clean checkout passes formatting, lint, stable type compatibility, full tests, Sphinx HTML, and doctests with one documented test baseline.
 - [ ] **REL-06**: Release-producing build tools are reproducibly pinned, and compatibility does not depend solely on the pre-release `ty` checker.
 - [ ] **REL-07**: CI verifies installed pure and compiled artifacts rather than relying only on imports from the source checkout.
@@ -112,7 +112,7 @@
 | REL-01 | Phase 20 | Pending |
 | REL-02 | Phase 15 | Pending |
 | REL-03 | Phase 20 | Pending |
-| REL-04 | Phase 15 | Pending |
+| REL-04 | Phase 15 | Complete |
 | REL-05 | Phase 15 | Pending |
 | REL-06 | Phase 15 | Pending |
 | REL-07 | Phase 20 | Pending |
@@ -161,6 +161,7 @@
 | TEST-07 | Phase 20 | Pending |
 
 **Coverage:**
+
 - v0.3.0 requirements: 50 total
 - Mapped to phases: 50
 - Unmapped: 0
