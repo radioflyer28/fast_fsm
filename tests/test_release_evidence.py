@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import tools.release_evidence as release_evidence  # noqa: E402
 from tools.release_evidence import (  # noqa: E402
     REGISTERED_SLOTS_EXCEPTIONS,
     EvidenceError,
@@ -387,3 +388,75 @@ def test_manifest_rejects_two_decimal_source_coverage_regressions(
 
     with pytest.raises(EvidenceError, match="coverage regression"):
         validate_manifest_regressions(expected, observed)
+
+
+def test_manifest_write_then_check_is_read_only_and_renders_summary(tmp_path: Path) -> None:
+    """Only an explicit write updates bytes; a succeeding check leaves them alone."""
+    manifest_path = tmp_path / "release-baseline.json"
+    fixture = _manifest_fixture()
+
+    written = release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=True
+    )
+    before_check = manifest_path.read_bytes()
+    checked = release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=False
+    )
+
+    assert written == checked
+    assert before_check == manifest_path.read_bytes()
+    assert "Pure tests: 722/722 passed" in release_evidence._render_summary(fixture)
+
+
+def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> None:
+    """A changed exact test count fails check mode with a field-level diff."""
+    manifest_path = tmp_path / "release-baseline.json"
+    fixture = _manifest_fixture()
+    release_evidence.write_or_check_manifest(fixture, manifest_path=manifest_path, write=True)
+    original = manifest_path.read_bytes()
+    observed = json.loads(serialize_manifest(fixture))
+    observed["quality_baseline"]["tests"]["passed"] = 721
+
+    with pytest.raises(EvidenceError, match="quality_baseline.tests.passed"):
+        release_evidence.write_or_check_manifest(
+            observed, manifest_path=manifest_path, write=False
+        )
+
+    assert manifest_path.read_bytes() == original
+
+
+def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed native-origin preflight prevents test and coverage collection."""
+    calls: list[str] = []
+
+    def fail_preflight(**_kwargs: object) -> dict[str, str]:
+        calls.append("preflight")
+        raise EvidenceError("native shadow")
+
+    def collect_after_preflight(**_kwargs: object) -> tuple[dict[str, int], dict[str, float]]:
+        calls.append("test-and-coverage")
+        return ({"collected": 1, "passed": 1}, {"total_percent": 100, "core_percent": 100})
+
+    monkeypatch.setattr(release_evidence, "_source_preflight", fail_preflight)
+    monkeypatch.setattr(release_evidence, "_collect_test_and_coverage", collect_after_preflight)
+
+    with pytest.raises(EvidenceError, match="native shadow"):
+        release_evidence.collect_manifest()
+
+    assert calls == ["preflight"]
+
+
+def test_resolved_uv_must_match_the_phase_contract(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ambient uv executable cannot silently change release evidence."""
+    monkeypatch.setattr(
+        release_evidence,
+        "_run_checked",
+        lambda *_args, **_kwargs: "uv 0.12.5 (unexpected)\n",
+    )
+
+    with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
+        release_evidence._resolved_uv_version(environment={})
