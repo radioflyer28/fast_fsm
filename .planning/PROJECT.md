@@ -20,6 +20,17 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 14/14 requirements satisfied. See `.planning/milestones/v0.2.1-ROADMAP.md` for full details.
 
+## Current Milestone: v0.3.0 Reliability & Runtime Hardening
+
+**Goal:** Make Fast FSM release-auditable, internally consistent, and safe by default before expanding its API.
+
+**Target features:**
+- Restore release integrity across package metadata, changelog, documentation, quality gates, and compiled artifacts
+- Enforce runtime graph, builder, guard, history, declarative-dispatch, and sync/async invariants
+- Make callback failure, reentrancy, and concurrent-access behavior safe by default
+- Correct and bound validation, comparison, cycle analysis, visualization, and diagnostic behavior
+- Preserve the performance contract and verify compiled/pure-Python parity
+
 ## Requirements
 
 ### Validated
@@ -59,7 +70,12 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 ### Active
 
-_(No active milestone — next milestone TBD)_
+- [ ] Release metadata, changelog, documentation, and quality gates agree on one auditable version and test baseline
+- [ ] Runtime graph construction, transition dispatch, guards, history, declarative states, and builders preserve explicit invariants
+- [ ] Callback failures, reentrant transitions, and concurrent access use safe default behavior
+- [ ] Validation, comparison, visualization, and diagnostic APIs produce correct bounded results
+- [ ] Logging and trace output avoid leaking payloads or disrupting application-owned handlers
+- [ ] Compiled and pure-Python execution paths pass equivalent tests while preserving the throughput contract
 
 ### Out of Scope
 
@@ -79,6 +95,8 @@ _(No active milestone — next milestone TBD)_
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
 - **Test count:** 722 (post-v0.2.3)
 - **Clock source:** `time.monotonic()` for all timing — immune to NTP jumps across macOS/Linux/Windows
+- **v0.3.0 scope source:** `.planning/codebase/CONCERNS.md` audit dated 2026-08-29
+- **Compatibility posture:** Existing public symbols remain available, but safe default behavior takes precedence over preserving unsafe pre-production semantics
 
 ## Constraints
 
@@ -97,6 +115,7 @@ _(No active milestone — next milestone TBD)_
 | Detect compiled mode by module file suffix | `FAST_FSM_PURE_PYTHON` env var only suppresses build-time compilation; can't reliably detect runtime mode | ✓ `find_spec().origin.endswith(".so")` is accurate |
 | History recording is zero-cost when disabled | Single `None` check in `trigger()` hot path; bounded `deque` when enabled | ✓ Verified ≤ 2× overhead in benchmark |
 | Timing conditions in condition_templates.py (not core.py) | condition_templates.py stays interpreted for user subclassing; no mypyc rebuild needed | ✓ Purely additive — no core.py changes |
+| Adopt safe defaults for callback failure, reentrancy, and concurrent access in v0.3.0 | The library is not yet used in production; correcting unsafe semantics now is cheaper than preserving them indefinitely | — Pending implementation |
 
 ## Evolution
 
@@ -116,4 +135,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-05 after v0.2.3 milestone completion*
+*Last updated: 2026-08-29 after starting v0.3.0 milestone*

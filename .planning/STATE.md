@@ -1,25 +1,26 @@
 ---
 gsd_state_version: 1.0
-milestone: null
-milestone_name: null
-status: Complete
-last_updated: "2026-04-05T00:00:00.000Z"
-last_activity: 2026-04-05
+milestone: v0.3.0
+milestone_name: Reliability & Runtime Hardening
+status: planning
+last_updated: "2026-08-29T16:11:53.389Z"
+last_activity: 2026-08-29
 progress:
   total_phases: 0
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
+  percent: 0
 ---
 
 # State: Fast FSM
 
 ## Current Position
 
-Phase: —
+Phase: Not started (defining requirements)
 Plan: —
-Status: No active milestone
-Last activity: 2026-04-05
+Status: Defining requirements
+Last activity: 2026-08-29 — Milestone v0.3.0 started
 
 ## Project Reference
 
