@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 15
 current_phase_name: Release Baseline & Evidence Harness
 status: executing
-stopped_at: Completed 15-09-PLAN.md
-last_updated: "2026-08-29T21:46:11.784Z"
+stopped_at: Completed 15-05-PLAN.md
+last_updated: "2026-08-29T21:59:09.663Z"
 last_activity: 2026-08-29
 last_activity_desc: Approved requirements mapped to the v0.3.0 roadmap
-state_head: 9ef2e88a9ae91e23a38a5e96492c1cc116946e2e
+state_head: beca82ae2099c107fbf4f317e61968c0f3d8c1bb
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 15 (Release Baseline & Evidence Harness) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-08-29 — Phase 15 execution started
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 15 P01 | 16 min | 3 tasks | 7 files |
 | Phase 15 P02 | 29m | 3 tasks | 10 files |
+| Phase 15 P05 | 20m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 15]: Use evidence --write only for intentional regeneration; CI evidence --check remains read-only.
 - [Phase 15]: Read PEP 517 build provenance from uv.lock and constrain isolated builds to exact reviewed pins.
 - [Phase 15]: Mypy is blocking while ty remains an independently visible advisory gate.
+- [Phase 15]: Accepted only a terminal 29-job Actions run whose head SHA equals the pushed Phase 15 branch.
+- [Phase 15]: Published the authorized v0.2.3 correction additively after unchanged URL, tag-ref, and asset checks.
 
 ### Pending Todos
 
@@ -94,6 +97,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-29T21:46:11.775Z
-Stopped at: Completed 15-09-PLAN.md
+Last session: 2026-08-29T21:59:09.654Z
+Stopped at: Completed 15-05-PLAN.md
 Resume file: None
