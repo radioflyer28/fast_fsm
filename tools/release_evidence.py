@@ -656,6 +656,29 @@ def _distribution_version(distribution: str) -> str:
         ) from error
 
 
+def _locked_package_version(package_name: str, lock_path: Path | None = None) -> str:
+    """Read one resolved package version from uv.lock without a runtime import.
+
+    Build-system requirements are installed in uv's isolated build environment,
+    not necessarily in the project environment.  Their evidence must therefore
+    come from the reviewed lock instead of turning a build tool into a runtime
+    dependency merely to ask it for ``__version__``.
+    """
+    path = lock_path or REPOSITORY_ROOT / "uv.lock"
+    try:
+        sections = path.read_text(encoding="utf-8").split("[[package]]")
+    except OSError as error:
+        raise EvidenceError(f"Could not read resolved lock file {path}.") from error
+    name_marker = f'name = "{package_name}"'
+    for section in sections[1:]:
+        if name_marker not in section:
+            continue
+        for line in section.splitlines():
+            if line.startswith("version = "):
+                return line.split('"', 2)[1]
+    raise EvidenceError(f"Resolved package {package_name!r} is missing from {path}.")
+
+
 def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
     """Return and validate the exact uv executable version for this phase."""
     stdout = _run_checked(
@@ -750,12 +773,12 @@ def collect_manifest(
         "pytest": _distribution_version("pytest"),
         "pytest_cov": _distribution_version("pytest-cov"),
         "ruff": _distribution_version("ruff"),
-        "mypy": _distribution_version("mypy"),
-        "mypyc": _distribution_version("mypy"),
+        "mypy": _locked_package_version("mypy"),
+        "mypyc": _locked_package_version("mypy"),
         "ty": _distribution_version("ty"),
         "sphinx": _distribution_version("sphinx"),
-        "setuptools": _distribution_version("setuptools"),
-        "wheel": _distribution_version("wheel"),
+        "setuptools": _locked_package_version("setuptools"),
+        "wheel": _locked_package_version("wheel"),
     }
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,

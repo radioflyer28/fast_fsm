@@ -390,7 +390,9 @@ def test_manifest_rejects_two_decimal_source_coverage_regressions(
         validate_manifest_regressions(expected, observed)
 
 
-def test_manifest_write_then_check_is_read_only_and_renders_summary(tmp_path: Path) -> None:
+def test_manifest_write_then_check_is_read_only_and_renders_summary(
+    tmp_path: Path,
+) -> None:
     """Only an explicit write updates bytes; a succeeding check leaves them alone."""
     manifest_path = tmp_path / "release-baseline.json"
     fixture = _manifest_fixture()
@@ -412,7 +414,9 @@ def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> N
     """A changed exact test count fails check mode with a field-level diff."""
     manifest_path = tmp_path / "release-baseline.json"
     fixture = _manifest_fixture()
-    release_evidence.write_or_check_manifest(fixture, manifest_path=manifest_path, write=True)
+    release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=True
+    )
     original = manifest_path.read_bytes()
     observed = json.loads(serialize_manifest(fixture))
     observed["quality_baseline"]["tests"]["passed"] = 721
@@ -426,7 +430,7 @@ def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> N
 
 
 def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed native-origin preflight prevents test and coverage collection."""
     calls: list[str] = []
@@ -435,12 +439,19 @@ def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
         calls.append("preflight")
         raise EvidenceError("native shadow")
 
-    def collect_after_preflight(**_kwargs: object) -> tuple[dict[str, int], dict[str, float]]:
+    def collect_after_preflight(
+        **_kwargs: object,
+    ) -> tuple[dict[str, int], dict[str, float]]:
         calls.append("test-and-coverage")
-        return ({"collected": 1, "passed": 1}, {"total_percent": 100, "core_percent": 100})
+        return (
+            {"collected": 1, "passed": 1},
+            {"total_percent": 100, "core_percent": 100},
+        )
 
     monkeypatch.setattr(release_evidence, "_source_preflight", fail_preflight)
-    monkeypatch.setattr(release_evidence, "_collect_test_and_coverage", collect_after_preflight)
+    monkeypatch.setattr(
+        release_evidence, "_collect_test_and_coverage", collect_after_preflight
+    )
 
     with pytest.raises(EvidenceError, match="native shadow"):
         release_evidence.collect_manifest()
@@ -449,7 +460,7 @@ def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
 
 
 def test_resolved_uv_must_match_the_phase_contract(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An ambient uv executable cannot silently change release evidence."""
     monkeypatch.setattr(
@@ -460,3 +471,25 @@ def test_resolved_uv_must_match_the_phase_contract(
 
     with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
         release_evidence._resolved_uv_version(environment={})
+
+
+def test_build_tool_versions_are_read_from_the_reviewed_lock_not_runtime_imports(
+    tmp_path: Path,
+) -> None:
+    """A PEP 517-only build input remains evidence without becoming a project dependency."""
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                "",
+                "[[package]]",
+                'name = "wheel"',
+                'version = "0.45.1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert release_evidence._locked_package_version("wheel", lock_path) == "0.45.1"
