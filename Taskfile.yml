@@ -130,11 +130,7 @@ tasks:
     cmds:
       - uv sync --locked --all-groups
       - uv run python {{.EVIDENCE_TOOL}} verify-source --json
-      - |
-          evidence_dir="$(mktemp -d)"
-          uv build --wheel --out-dir "$evidence_dir"
-          wheel_path="$(find "$evidence_dir" -name '*.whl' -print -quit)"
-          uv run python {{.EVIDENCE_TOOL}} evidence --write --manifest {{.EVIDENCE_MANIFEST}} --wheel "$wheel_path"
+      - uv run python {{.EVIDENCE_TOOL}} evidence --write --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
 
   release-baseline-check:
     desc: Read-only pure-source release evidence freshness and coverage check
@@ -143,11 +139,7 @@ tasks:
     cmds:
       - uv sync --locked --all-groups
       - uv run python {{.EVIDENCE_TOOL}} verify-source --json
-      - |
-          evidence_dir="$(mktemp -d)"
-          uv build --wheel --out-dir "$evidence_dir"
-          wheel_path="$(find "$evidence_dir" -name '*.whl' -print -quit)"
-          uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --wheel "$wheel_path"
+      - uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
 
   release-history-check:
     desc: Audit immutable v0.2.3 metadata against its additive correction record

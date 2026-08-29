@@ -859,6 +859,66 @@ def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
     assert calls == ["preflight"]
 
 
+def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical wheel path is Python-managed and cannot leak a Taskfile temp dir."""
+    calls: list[str] = []
+    observed_wheel: list[Path] = []
+
+    def preflight(**_kwargs: object) -> dict[str, str]:
+        calls.append("preflight")
+        return {
+            "core_origin": "src/fast_fsm/core.py",
+            "distribution_version": "0.2.2",
+        }
+
+    def build(arguments: Iterable[str], **_kwargs: object) -> str:
+        calls.append("build")
+        arguments = list(arguments)
+        assert arguments[:3] == ["uv", "build", "--wheel"]
+        _write_wheel(
+            Path(arguments[-1]),
+            filename_tag="py3-none-any",
+            wheel_tags=["py3-none-any"],
+        )
+        return ""
+
+    def collect(**kwargs: object) -> dict[str, object]:
+        calls.append("collect")
+        wheel_paths = tuple(kwargs["wheel_paths"])
+        assert len(wheel_paths) == 1
+        observed_wheel.extend(wheel_paths)
+        assert wheel_paths[0].is_file()
+        return {"status": "collected"}
+
+    monkeypatch.setattr(release_evidence, "_source_preflight", preflight)
+    monkeypatch.setattr(release_evidence, "_run_checked", build)
+    monkeypatch.setattr(release_evidence, "_collect_manifest_after_preflight", collect)
+
+    assert release_evidence.collect_manifest(build_wheel=True) == {
+        "status": "collected"
+    }
+    assert calls == ["preflight", "build", "collect"]
+    assert observed_wheel and not observed_wheel[0].parent.exists()
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_temporary_wheel_selection_requires_exactly_one_archive(
+    tmp_path: Path, count: int
+) -> None:
+    """Canonical evidence has the same one-wheel semantics on every platform."""
+    for index in range(count):
+        _write_wheel(
+            tmp_path,
+            filename_tag=f"py3-none-any.{index}",
+            wheel_tags=["py3-none-any"],
+        )
+
+    with pytest.raises(EvidenceError, match="exactly one temporary wheel"):
+        release_evidence._exactly_one_wheel(tmp_path)
+
+
 def test_resolved_uv_must_match_the_phase_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -963,6 +1023,23 @@ def test_taskfile_pure_source_preflight_precedes_local_test_and_docs_tasks() -> 
     tasks["docs-check"].pop("deps")
     with pytest.raises(AssertionError, match="docs-check: pure-source-check"):
         _validate_taskfile_pure_source_order(mutated)
+
+
+def test_taskfile_baseline_tasks_delegate_temp_wheel_lifecycle_to_python() -> None:
+    """Windows and POSIX use one Python cleanup path instead of shell utilities."""
+    taskfile = _taskfile_data()
+    tasks = _task_definitions(taskfile)
+    for task_name, mode in (
+        ("release-baseline-write", "--write"),
+        ("release-baseline-check", "--check"),
+    ):
+        commands = tasks[task_name]["cmds"]
+        assert isinstance(commands, list)
+        rendered = "\n".join(str(command) for command in commands)
+        assert "mktemp" not in rendered
+        assert "find " not in rendered
+        assert f"evidence {mode}" in rendered
+        assert "--build-wheel" in rendered
 
 
 def _workflow_data(path: Path = CI_WORKFLOW) -> dict[str, object]:

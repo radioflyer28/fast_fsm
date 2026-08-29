@@ -1123,25 +1123,19 @@ def _collect_trigger_benchmark(
     }
 
 
-def collect_manifest(
-    *, source_root: Path | None = None, wheel_paths: Iterable[Path] = ()
+def _collect_manifest_after_preflight(
+    *,
+    source_root: Path,
+    source: Mapping[str, str],
+    environment: Mapping[str, str],
+    wheel_paths: Iterable[Path],
 ) -> dict[str, Any]:
-    """Collect the schema-v1 release baseline in a deterministic shape.
-
-    The source preflight is intentionally the first subprocess action.  All
-    later tool, test, coverage, and wheel observations inherit explicit pure
-    mode, preventing a native build residue from being certified as source.
-    """
-    resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
-    environment = _command_environment()
-    source = _source_preflight(
-        source_root=resolved_source_root, environment=environment
-    )
+    """Collect release facts after a caller has proved the pure source origin."""
     tests, coverage = _collect_test_and_coverage(environment=environment)
     wheel_artifacts = verify_wheels(
         wheel_paths, expected_version=source["distribution_version"]
     )["artifacts"]
-    slots = slots_policy(resolved_source_root)
+    slots = slots_policy(source_root)
     benchmark = _collect_trigger_benchmark()
     uv_version = _resolved_uv_version(environment=environment)
 
@@ -1193,6 +1187,63 @@ def collect_manifest(
             "comparison": "stable fields exclude this environment observation",
         },
     }
+
+
+def _exactly_one_wheel(directory: Path) -> Path:
+    """Return the one wheel built into an isolated evidence directory."""
+    wheels = sorted(directory.glob("*.whl"), key=lambda path: path.name.casefold())
+    if len(wheels) != 1:
+        raise EvidenceError(
+            "Expected exactly one temporary wheel for release evidence, found "
+            f"{[wheel.name for wheel in wheels]!r}."
+        )
+    return wheels[0]
+
+
+def collect_manifest(
+    *,
+    source_root: Path | None = None,
+    wheel_paths: Iterable[Path] = (),
+    build_wheel: bool = False,
+) -> dict[str, Any]:
+    """Collect the schema-v1 release baseline in a deterministic shape.
+
+    The source preflight is intentionally the first subprocess action.  All
+    later tool, test, coverage, and wheel observations inherit explicit pure
+    mode, preventing a native build residue from being certified as source.
+    When a caller requests a canonical wheel, its temporary directory is
+    created and cleaned in Python so Taskfile behavior is portable.
+    """
+    supplied_wheels = tuple(wheel_paths)
+    if build_wheel and supplied_wheels:
+        raise EvidenceError("Use either supplied wheels or --build-wheel, not both.")
+    resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
+    environment = _command_environment()
+    source = _source_preflight(
+        source_root=resolved_source_root, environment=environment
+    )
+    if not build_wheel:
+        return _collect_manifest_after_preflight(
+            source_root=resolved_source_root,
+            source=source,
+            environment=environment,
+            wheel_paths=supplied_wheels,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="fast-fsm-wheel-evidence-") as temporary:
+        wheel_directory = Path(temporary)
+        _run_checked(
+            ["uv", "build", "--wheel", "--out-dir", str(wheel_directory)],
+            cwd=REPOSITORY_ROOT,
+            environment=environment,
+        )
+        wheel = _exactly_one_wheel(wheel_directory)
+        return _collect_manifest_after_preflight(
+            source_root=resolved_source_root,
+            source=source,
+            environment=environment,
+            wheel_paths=(wheel,),
+        )
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -1335,6 +1386,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="wheel archive to preserve as independent artifact evidence (repeatable)",
     )
     evidence_parser.add_argument(
+        "--build-wheel",
+        action="store_true",
+        help="build one temporary pure wheel with portable Python cleanup",
+    )
+    evidence_parser.add_argument(
         "--summary",
         type=Path,
         help="optional explicitly requested human-readable summary output path",
@@ -1359,7 +1415,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 parsed.json,
             )
         elif parsed.command == "evidence":
-            manifest = collect_manifest(wheel_paths=parsed.wheel)
+            manifest = collect_manifest(
+                wheel_paths=parsed.wheel, build_wheel=parsed.build_wheel
+            )
             write_or_check_manifest(
                 manifest, manifest_path=parsed.manifest, write=parsed.write
             )
