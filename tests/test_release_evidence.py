@@ -683,7 +683,10 @@ def _workflow_jobs(workflow: dict[str, object]) -> dict[str, dict[str, object]]:
     """Return verified job mappings from a parsed workflow."""
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
-    assert all(isinstance(job_id, str) and isinstance(job, dict) for job_id, job in jobs.items())
+    assert all(
+        isinstance(job_id, str) and isinstance(job, dict)
+        for job_id, job in jobs.items()
+    )
     return jobs
 
 
