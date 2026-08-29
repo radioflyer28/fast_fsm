@@ -1,6 +1,10 @@
+<!-- refreshed: 2026-08-29 -->
 # Testing Patterns
 
 **Analysis Date:** 2026-08-29
+
+**Assessment Basis:** Independent test inventory plus executed pytest, coverage,
+Ruff, ty, Sphinx HTML, and Sphinx doctest commands against the live checkout.
 
 ## Test Framework
 
@@ -24,7 +28,28 @@ task test                                  # Pure-Python full suite wrapper
 task test-coverage                          # HTML + terminal coverage wrapper
 ```
 
-The repository uses `FAST_FSM_PURE_PYTHON=1` in the `test` Taskfile task so the merge gate runs without the optional mypyc extension. A local pure-Python run on 2026-08-29 collected and passed 722 tests.
+The repository sets `FAST_FSM_PURE_PYTHON=1` in the `test` Taskfile task and in
+fresh CI environments to prevent extension compilation. That variable does not
+change Python's import precedence: an already-built `.so`/`.pyd` beside
+`core.py` still loads. The 2026-08-29 local run collected and passed 722 tests,
+but it loaded `src/fast_fsm/core.cpython-312-darwin.so`; it is therefore a
+compiled-core run, not proof of a clean local pure-Python run.
+
+## Verified Gate Snapshot
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| Full pytest suite | PASS | 722 collected, 722 passed in 3.34s with coverage enabled |
+| `ty check src/fast_fsm/` | PASS | All checks passed; tool emitted its pre-release warning |
+| Ruff format check | FAIL | `src/fast_fsm/visualization.py` would be reformatted |
+| Ruff lint | FAIL | F841 at `tests/test_advanced_functionality.py:1488` |
+| Sphinx HTML with `-W` | PASS | Build completed without warnings |
+| Sphinx doctest | PASS | 1 doctest passed |
+
+This means tests are green while the repository's combined quality gate is not.
+The README contains both 290- and 653-test claims, and
+`.github/copilot-instructions.md` still cites a 290-test baseline; the actual
+collected baseline is 722.
 
 ## Test File Organization
 
@@ -138,6 +163,18 @@ task test-coverage
 
 The HTML report is written to `htmlcov/`, which is ignored by `.gitignore`.
 
+**Observed coverage caveat (2026-08-29):**
+- The local report showed 44% total: `validation.py` 99%, `visualization.py`
+  98%, `__init__.py` 80%, and the two condition modules fully covered.
+- `core.py` appeared as 0/922 statements because tests executed the compiled
+  extension while coverage measured `core.py`. This is a measurement artifact,
+  not evidence that core behavior was untested, but it also means this run gives
+  no line-level Python-core coverage assurance.
+- Run `task clean` (or otherwise remove ignored extension artifacts) before a
+  true pure-Python coverage run; separately run the compiled suite to assess the
+  mypyc path. The CI compiled job currently performs only a smoke test plus the
+  slow performance file, not the complete suite.
+
 ## Test Types
 
 **Unit Tests:**
@@ -184,6 +221,21 @@ Use `pytest.raises` for invalid setup/API contracts and inspect failed `Transiti
 **Timing and Performance:**
 - Use `time.perf_counter()` for benchmark elapsed time, warm up hot paths, call `gc.collect()` where memory/throughput measurements require it, and use generous hardware-tolerant thresholds. These patterns are in `tests/test_performance_benchmarks.py`.
 - Avoid `sleep()` in guard tests. `tests/test_condition_templates.py` adjusts monotonic reference fields to simulate elapsed time deterministically.
+
+**Confirmed Missing Edge Coverage:**
+- No test rejects or defines `enable_history(0)`, which currently raises
+  `IndexError` on the next successful transition.
+- No parity test covers positional context through guards or private/oversized
+  kwargs through async guards.
+- No integration test proves that `@transition` handlers execute during normal
+  `StateMachine.trigger()`; they currently do not.
+- No invariant test covers unknown source states, unregistered object targets,
+  or duplicate state-name replacement.
+- Cycle tests check only `has_cycles`; they do not require every state in a
+  multi-node cycle to appear in `states_in_cycles`.
+- Validation comparison tests do not cover zero inputs or duplicate FSM names.
+- No release-consistency test reconciles `pyproject.toml`, `__version__`,
+  `CHANGELOG.md`, and `.planning/PROJECT.md`.
 
 ---
 

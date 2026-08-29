@@ -1,6 +1,11 @@
+<!-- refreshed: 2026-08-29 -->
 # Codebase Structure
 
 **Analysis Date:** 2026-08-29
+
+**Assessment Basis:** Independent file inventory and ownership analysis of the
+live checkout. Generated GSD support files are treated as repository tooling,
+not as part of the `fast_fsm` runtime architecture.
 
 ## Directory Layout
 
@@ -44,6 +49,9 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
 - Key files: `src/fast_fsm/core.py`, `src/fast_fsm/conditions.py`,
   `src/fast_fsm/condition_templates.py`, `src/fast_fsm/validation.py`,
   `src/fast_fsm/visualization.py`.
+- Concentration: `core.py` is roughly 2,864 lines and owns most public runtime
+  behavior; `validation.py` is roughly 1,248 lines. That concentration is a
+  change-risk signal, not a reason to place every new feature in those files.
 
 **`tests/`:**
 
@@ -96,9 +104,11 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
 - Purpose: Project-level GSD planning state and generated codebase intelligence.
 - Contains: `PROJECT.md`, `STATE.md`, `ROADMAP.md`, milestone/phase artifacts,
   and `.planning/codebase/` mapping documents.
-- Generated status: `.planning/codebase/ARCHITECTURE.md` and
-  `.planning/codebase/STRUCTURE.md` are generated analysis artifacts intended to
-  be refreshed when the implementation structure changes.
+- Generated status: `.planning/codebase/*.md` began as generated analysis
+  artifacts. As of 2026-08-29, all seven files have also been independently
+  checked against source and executed behavior; future regeneration should
+  preserve or re-verify the empirical findings rather than assuming generated
+  text is authoritative.
 
 **`.specify/`:**
 
@@ -144,6 +154,14 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
 - `tests/test_mypyc_guard.py`: Compiled/pure-Python compatibility boundary.
 - `tests/test_readme_examples.py`: README/API example coverage.
 
+**Observed Local Shadowing:**
+
+- `src/fast_fsm/core.cpython-312-darwin.so` is an ignored local build artifact in
+  this checkout and takes import precedence over `core.py`. Setting
+  `FAST_FSM_PURE_PYTHON=1` prevents a new build but does not disable an existing
+  extension. Remove build artifacts (for example via `task clean`) before a
+  local pure-Python coverage run.
+
 ## Naming Conventions
 
 **Files:**
@@ -183,6 +201,10 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
 - Primary code: Add to `src/fast_fsm/core.py` when it changes state, transition,
   builder, lifecycle, or dispatch semantics. Preserve `__slots__` and the
   direct dictionary lookup path.
+- Sync/async parity: Any change to guard evaluation, failure notification,
+  sanitization, or callbacks must be reviewed in both `trigger()` and
+  `trigger_async()` plus both `can_trigger()` variants; those paths currently
+  contain duplicated logic and known behavior drift.
 - Tests: Add focused coverage to the matching module under `tests/`; core
   dispatch changes generally also need `tests/test_basic_functionality.py`,
   `tests/test_advanced_functionality.py`, or
@@ -208,6 +230,9 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
 - Tests: Use `tests/test_validation.py` or `tests/test_visualization.py`.
 - Boundary: Keep design-time walks out of `StateMachine.trigger()` and
   `can_trigger()`.
+- Private-layout rule: Both modules currently read `_states` and `_transitions`
+  directly. A topology representation change should introduce or update one
+  stable graph-snapshot boundary rather than patching consumers independently.
 
 **New Documentation or Example:**
 
@@ -257,6 +282,9 @@ Generated/local directories such as `build/`, `src/fast_fsm/__pycache__/`,
   scripts.
 - Generated: No; repository workflow support files.
 - Committed: Yes.
+- Runtime relevance: None. Changes here can dominate `git status` and repository
+  file counts but do not change the installed package unless they also modify
+  `src/`, packaging, or CI configuration.
 
 **`.specify/decisions/`:**
 

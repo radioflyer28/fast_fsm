@@ -1,6 +1,16 @@
+<!-- refreshed: 2026-08-29 -->
 # Codebase Concerns
 
 **Analysis Date:** 2026-08-29
+
+**Assessment Basis:** Independent source review and executable reproduction of
+the highest-risk edge cases. Items labeled as bugs below were reproduced on
+CPython 3.12.10 against the local compiled-core checkout unless explicitly
+described as static/configuration findings.
+
+**Priority Summary:** Fix release-version drift and graph/dispatch correctness
+before expanding the API. The 722 passing tests are substantial, but they do not
+cover several malformed-topology, async-parity, and release-integrity cases.
 
 ## Tech Debt
 
@@ -28,7 +38,36 @@
 - Impact: A broken compiler configuration, source incompatibility, or packaging defect can ship as a slower artifact instead of failing CI/release; the performance contract is then silently lost.
 - Fix approach: Catch only expected tool-availability failures, expose a strict build flag for releases, and verify the selected artifact type and benchmark threshold in wheel CI.
 
+**Slots policy has an undocumented exception:**
+- Issue: `CompiledFuncCondition` lives in compiled `core.py` but deliberately
+  uses `@mypyc_attr(native_class=False)` without `__slots__`, so instances have a
+  `__dict__`. This conflicts with the unqualified “all core classes” slots rule
+  in `.github/copilot-instructions.md` and the zero-overhead messaging in
+  `README.md`.
+- Files: `src/fast_fsm/core.py:106-166`, `.github/copilot-instructions.md`
+- Impact: Future contributors cannot tell whether the implementation or the
+  written invariant is authoritative; memory claims can be overstated.
+- Fix approach: Document a narrow measured exception or redesign the compiled
+  wrapper so its storage and subclassing requirements satisfy the declared rule.
+
 ## Known Bugs
+
+**Release/version records disagree:**
+- Symptoms: `pyproject.toml` and `fast_fsm.__version__` report `0.2.2`, while
+  `.planning/PROJECT.md` and `.planning/STATE.md` say v0.2.3 shipped. The
+  v0.2.2/v0.2.3 feature set is still under `Unreleased` in `CHANGELOG.md`, and
+  the `v0.2.3` Git tag points to source whose package metadata still says
+  `0.2.2`. README/project guidance also advertises stale 290- and 653-test
+  baselines instead of 722.
+- Files: `pyproject.toml`, `src/fast_fsm/__init__.py`, `CHANGELOG.md`,
+  `README.md`, `.planning/PROJECT.md`, `.planning/STATE.md`,
+  `.github/copilot-instructions.md`
+- Impact: The v0.2.3 release workflow builds artifacts whose package metadata
+  says 0.2.2; release notes and support claims are not auditable from one source
+  of truth.
+- Fix approach: Choose the intended released version, update package metadata
+  before tagging, move release notes into versioned changelog sections, and add
+  a CI test comparing tag/package/changelog versions.
 
 **Condition guards reject positional trigger arguments:**
 - Symptoms: A transition with a condition returns a failed result when `trigger()` or `can_trigger()` receives positional arguments, even when the guard would accept them. The failure is `FuncCondition.check() takes 1 positional argument but 2 were given`.
@@ -60,11 +99,30 @@
 - Trigger: Pass two distinct machines with the same `name`.
 - Workaround: Assign unique names before comparison; preserve positional results or reject duplicate names.
 
+**Empty comparison crashes:**
+- Symptoms: `compare_fsms()` with no arguments raises `ZeroDivisionError` while
+  computing `avg_score`, despite already handling an empty ranking for
+  `best_fsm`.
+- Files: `src/fast_fsm/validation.py:1112-1157`
+- Trigger: `compare_fsms()`.
+- Workaround: Validate that at least one FSM is supplied or return a documented
+  empty-result structure.
+
 **Async `unless=` is not auto-detected by the builder:**
 - Symptoms: `FSMBuilder` wraps an `AsyncCondition` used through `unless=` in `NegatedCondition`, then checks only the outer type. It builds a synchronous `StateMachine`, which has no `trigger_async()` and may call `asyncio.run()` from a running event loop.
 - Files: `src/fast_fsm/core.py:2352-2380`, `src/fast_fsm/core.py:2407-2459`, `src/fast_fsm/conditions.py:95-121`
 - Trigger: Build with `.add_transition(..., unless=AsyncCondition())` in auto-detect mode.
 - Workaround: Call `force_async()` before adding/building or pass a pre-wrapped condition only after selecting `AsyncStateMachine` explicitly; recursively inspect compound/negated conditions.
+
+**Cycle membership output is incomplete:**
+- Symptoms: `to_json()` correctly reports `has_cycles=True` but records only the
+  endpoints of each DFS back edge. For `a -> b -> c -> a`,
+  `states_in_cycles` is `['a', 'c']` and omits `b`.
+- Files: `src/fast_fsm/visualization.py:254-278`
+- Impact: Agent/tool consumers receive a false list despite the public field
+  claiming to identify states participating in cycles.
+- Fix approach: Track the active DFS stack or compute strongly connected
+  components, then test complete membership for cycles longer than two nodes.
 
 ## Security Considerations
 
@@ -180,6 +238,17 @@
 - Risk: mypyc-only dispatch, extension import precedence, and platform-specific packaging regressions can ship unnoticed.
 - Priority: High
 
+**Local “pure Python” tasks can load stale compiled code:**
+- What's not tested: `FAST_FSM_PURE_PYTHON=1` prevents `setup.py` from building
+  an extension but does not stop an existing ignored `.so`/`.pyd` from shadowing
+  `core.py`. The assessment's coverage run loaded
+  `src/fast_fsm/core.cpython-312-darwin.so` and consequently measured `core.py`
+  as 0%.
+- Files: `Taskfile.yml`, `setup.py`, `.gitignore`, `src/fast_fsm/core.py`
+- Risk: Developers can believe they tested the pure-Python path when they tested
+  a stale compiled artifact; line coverage becomes misleading.
+- Priority: High
+
 **Guard argument and async sanitization parity:**
 - What's not tested: Positional arguments to guarded sync/async transitions, private/unbounded kwargs on async conditions, and parity between `can_trigger*()` and `trigger*()`.
 - Files: `src/fast_fsm/core.py`, `src/fast_fsm/conditions.py`, `tests/test_safety_kwargs.py`, `tests/test_async.py`
@@ -199,7 +268,11 @@
 - Priority: Medium
 
 **Quality gate drift:**
-- What's not tested: The repository's current quality gate is green end-to-end. The full pytest suite passes, but `ruff check src/fast_fsm tests` reports an unused assignment at `tests/test_advanced_functionality.py:1488`, and `ruff format --check` reports `src/fast_fsm/visualization.py` would be reformatted.
+- Current status: The repository's quality gate is not green end-to-end. The
+  full 722-test suite, `ty`, Sphinx HTML, and doctest checks pass, but
+  `ruff check src/ tests/` reports an unused assignment at
+  `tests/test_advanced_functionality.py:1488`, and `ruff format --check` reports
+  `src/fast_fsm/visualization.py` would be reformatted.
 - Files: `Taskfile.yml:60-89`, `.github/workflows/ci.yml:24-44`, `tests/test_advanced_functionality.py:1488`, `src/fast_fsm/visualization.py`
 - Risk: A release or pull request can fail CI despite passing tests, obscuring actual regressions and weakening confidence in the documented baseline.
 - Priority: Medium

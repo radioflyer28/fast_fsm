@@ -1,6 +1,10 @@
+<!-- refreshed: 2026-08-29 -->
 # Coding Conventions
 
 **Analysis Date:** 2026-08-29
+
+**Assessment Basis:** Independent comparison of written project rules with the
+actual signatures, control flow, tests, and locally executed quality gates.
 
 ## Naming Patterns
 
@@ -16,7 +20,11 @@
 **Variables:**
 - Use descriptive lowercase `snake_case` locals (`initial_state`, `from_state`, `condition_result`).
 - Use short names only for tightly scoped iteration (`i`, `t`, `e`) or conventional values (`fsm`, `cb`).
-- Keep callback and guard call signatures permissive with `*args, **kwargs`; this is part of the public compatibility contract in `src/fast_fsm/core.py` and `src/fast_fsm/conditions.py`.
+- Keep callback and guard call signatures permissive with `*args, **kwargs` as
+  required by `.github/copilot-instructions.md`. The current guard hierarchy in
+  `src/fast_fsm/conditions.py` implements only `**kwargs`; passing positional
+  context through a guarded transition is a confirmed defect, not a convention
+  to copy.
 
 **Types:**
 - Use PascalCase for classes and exceptions: `StateMachine`, `AsyncStateMachine`, `FSMBuilder`, `TransitionResult`, and `TransitionError`.
@@ -35,6 +43,10 @@
 - Ruff is the project formatter/linter and type validation uses `ty`; the operational commands are `uv run ruff check src/ tests/` and `uv run ty check src/` in `Taskfile.yml` and `.github/copilot-instructions.md`.
 - No `[tool.ruff]` section is present in `pyproject.toml`; use the repository commands and existing style rather than introducing a new lint configuration casually.
 - The project runs on Python `>=3.10` according to `pyproject.toml`; keep public annotations compatible with that minimum unless the package requirement is deliberately changed.
+- Current gate state is not an example of the desired convention: on
+  2026-08-29, `ty` passed, but `ruff format --check` reported
+  `src/fast_fsm/visualization.py` and `ruff check` reported the unused `fsm`
+  assignment at `tests/test_advanced_functionality.py:1488`.
 
 ## Import Organization
 
@@ -54,7 +66,11 @@ The dominant order appears in `src/fast_fsm/conditions.py`, `tests/test_async.py
 - Return a `TransitionResult(success=False, error=...)` for expected runtime transition failures: unknown triggers, wrong source states, rejected guards, and rejected state transitions in `src/fast_fsm/core.py`.
 - Raise `ValueError`, `TypeError`, or `KeyError` for invalid construction/configuration inputs, such as malformed `from_dict()` data and invalid transition conditions. Tests assert both exception type and message fragments with `pytest.raises(..., match=...)` in `tests/test_boundary_negative.py` and `tests/test_advanced_functionality.py`.
 - Use `TransitionResult.raise_if_failed()` when callers explicitly want exception-style control flow; it raises the domain-specific `TransitionError` while retaining the original result.
-- Isolate user callback and condition failures from FSM control flow: catch `Exception`, log the failure, and convert it to a failed result in `src/fast_fsm/core.py`. Keep this broad catch intentional and documented when adding another callback boundary.
+- Isolate guard failures by returning a failed result; isolate lifecycle callback
+  failures by logging and continuing. Do not describe those policies as
+  equivalent: callback failure may still yield a successful transition after
+  state mutation. `State.can_transition()` exceptions are not caught by
+  `trigger()` and reach `safe_trigger()` or the caller.
 - Use `safe_trigger()` in `src/fast_fsm/core.py` as the last-resort API boundary that converts unexpected exceptions into failed results. Do not add validation work to the hot `trigger()` path without a measured reason.
 
 ## Logging
@@ -86,7 +102,11 @@ The dominant order appears in `src/fast_fsm/conditions.py`, `tests/test_async.py
 
 **Parameters:**
 - Use keyword-only options for configuration that should not be confused with positional state/transition data, as in `StateMachine.__init__()` and `StateMachine.from_dict()`.
-- Preserve flexible callback/condition parameters (`*args, **kwargs`) and accept both domain objects and names where the existing API does (`StateMachine.quick_build()` and `FSMBuilder.add_transition()`).
+- Preserve flexible callback/condition parameters (`*args, **kwargs`) as the
+  intended compatibility contract, and add parity tests whenever modifying
+  sync/async dispatch. Accept both domain objects and names only where endpoint
+  registration remains valid; the current ability to attach an unregistered
+  `State` target is an invariant bug, not an extension pattern.
 - For builder APIs, return `self` to support fluent chaining; follow `FSMBuilder.add_state()`, `add_transition()`, and callback registration methods.
 
 **Return Values:**
@@ -97,7 +117,10 @@ The dominant order appears in `src/fast_fsm/conditions.py`, `tests/test_async.py
 
 **Exports:**
 - Add public symbols to the package-level re-export list and `__all__` in `src/fast_fsm/__init__.py`; validation also maintains an explicit `__all__` in `src/fast_fsm/validation.py`.
-- Keep the implementation dependency direction simple: conditions are defined in `src/fast_fsm/conditions.py`, FSM behavior in `src/fast_fsm/core.py`, and design-time validation in `src/fast_fsm/validation.py`.
+- Keep the implementation dependency direction simple: `core.py` imports
+  conditions, validation imports the core, and visualization avoids a top-level
+  validation import. Do not introduce a reverse import from conditions or core
+  into design-time modules.
 
 **Barrel Files:**
 - `src/fast_fsm/__init__.py` is the sole package-level barrel/re-export module. There are no per-subdirectory barrel files.

@@ -3,6 +3,10 @@
 
 **Analysis Date:** 2026-08-29
 
+**Assessment Basis:** Independent repository inspection plus local execution of
+the configured test, type-check, documentation, and behavioral probe commands.
+This revision does not rely on mapper-agent conclusions as evidence.
+
 ## Languages
 
 **Primary:**
@@ -16,7 +20,11 @@
 ## Runtime
 
 **Environment:**
-- CPython 3.10–3.14 - The supported range is declared in `pyproject.toml`; the CI matrix in `.github/workflows/ci.yml` tests every version in that range on Ubuntu, Windows, and macOS. Local development is pinned to Python 3.12 by `.python-version`.
+- CPython 3.10+ - `pyproject.toml` declares only the lower bound
+  `requires-python = ">=3.10"`; it does not declare an upper bound. The tested
+  compatibility window is narrower: `.github/workflows/ci.yml` exercises
+  3.10–3.14 on Ubuntu, Windows, and macOS, and `.python-version` selects 3.12
+  for local development.
 
 **Package Manager:**
 - uv - Dependency resolution, virtual-environment execution, packaging, and lockfile management are standardized in `pyproject.toml`, `uv.lock`, and `docs/dev/contributing.md`.
@@ -76,6 +84,20 @@
 - `docs/conf.py` - Sphinx extensions, MyST settings, autodoc behavior, doctest setup, and Furo HTML output.
 - `.github/workflows/ci.yml` - CI matrix and quality/build gates; `.github/workflows/release.yml` - wheel/sdist packaging; `.github/workflows/docs.yml` - docs build/deployment.
 
+**Version sources:**
+- `pyproject.toml` is the package metadata source and currently declares
+  `0.2.2`; importing the installed checkout also returns
+  `fast_fsm.__version__ == "0.2.2"` through `importlib.metadata` in
+  `src/fast_fsm/__init__.py`.
+- `.planning/PROJECT.md` and `.planning/STATE.md` say v0.2.3 shipped, while
+  v0.2.2/v0.2.3-era features remain under `Unreleased` in `CHANGELOG.md`.
+  The local `v0.2.3` Git tag itself points to a `pyproject.toml` that still
+  declares `0.2.2`. These are conflicting release records, not alternate
+  runtime versions.
+- `[tool.mypyc]` in `pyproject.toml` names `src/fast_fsm`, but the executable
+  build definition in `setup.py` explicitly compiles only
+  `src/fast_fsm/core.py`; treat `setup.py` as the actual extension boundary.
+
 ## Platform Requirements
 
 **Development:**
@@ -84,8 +106,23 @@
 - Task is optional convenience tooling; equivalent `uv run` commands are documented in `docs/dev/contributing.md`.
 
 **Production:**
-- Any supported CPython 3.10–3.14 environment that can install the package from its wheel or source distribution. Compiled wheels are built for Linux, Windows, and macOS by `.github/workflows/release.yml`; source distributions support the pure-Python fallback.
+- Any CPython 3.10+ environment compatible with the package metadata; CI
+  evidence currently covers 3.10–3.14. `.github/workflows/release.yml` is
+  configured to build compiled wheels for Linux, Windows, and macOS plus a
+  source distribution, but the repository does not itself prove publication
+  or installation success for every configured artifact.
 - No server process, container, database, or cloud runtime is required by `fast_fsm` itself.
+
+## Verified Local Snapshot
+
+- Runtime used for this assessment: CPython 3.12.10.
+- Import resolution: `src/fast_fsm/core.cpython-312-darwin.so` shadows
+  `src/fast_fsm/core.py` in this checkout.
+- Test collection/execution: 722 collected and 722 passed.
+- Static/docs status: `ty` passes; Sphinx HTML and doctest builds pass; Ruff
+  formatting and linting each report one failure. See
+  `.planning/codebase/TESTING.md` and `.planning/codebase/CONCERNS.md` for the
+  exact gate results.
 
 ---
 

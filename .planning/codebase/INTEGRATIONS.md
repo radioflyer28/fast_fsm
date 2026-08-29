@@ -3,6 +3,10 @@
 
 **Analysis Date:** 2026-08-29
 
+**Assessment Basis:** Direct import scan of `src/fast_fsm/`, configuration
+inspection, and execution of the local docs/test toolchain. No service behavior
+is inferred from examples or workflow names alone.
+
 Fast FSM has no runtime network or service integrations. It is an embeddable, in-memory Python library; callers provide callback and condition code when integrating it with their own applications.
 
 ## APIs & External Services
@@ -55,6 +59,9 @@ Fast FSM has no runtime network or service integrations. It is an embeddable, in
 - `ci.yml` tests CPython 3.10–3.14 on Ubuntu, Windows, and macOS; the same file verifies `core.py` compilation and runs the slow performance benchmark on pushes to `main`.
 - `release.yml` targets Linux x86_64/aarch64, Windows AMD64, and macOS x86_64/arm64/universal2; it skips musllinux and selected emulated/cross-compiled test combinations as documented in that workflow.
 - PyPI publishing is not active - the `publish_pypi` job in `.github/workflows/release.yml` is commented out and would require repository configuration/secret setup before enabling.
+- Tag pushes create GitHub Release artifacts, not a PyPI release. The workflow
+  comment saying Linux includes musl is stale because `CIBW_SKIP` excludes all
+  `musllinux` builds.
 
 ## Environment Configuration
 
@@ -73,6 +80,10 @@ Fast FSM has no runtime network or service integrations. It is an embeddable, in
 
 **Outgoing:**
 - No outbound webhooks - Transition listeners and state callbacks in `src/fast_fsm/core.py` execute caller-provided functions. Any notification, API call, or persistence action must be implemented by the embedding application.
+- Callback integration is best-effort by default: most callback exceptions are
+  logged and swallowed after dispatch continues. Applications that use hooks
+  for durable writes or security-sensitive side effects must add their own
+  transaction/failure policy; see `.planning/codebase/CONCERNS.md`.
 
 ---
 

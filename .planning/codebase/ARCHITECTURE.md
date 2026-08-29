@@ -3,6 +3,10 @@
 
 **Analysis Date:** 2026-08-29
 
+**Assessment Basis:** Independent inspection of the runtime, conditions,
+validation, visualization, packaging, tests, and executed edge-case probes. The
+architecture below distinguishes intended contracts from observed behavior.
+
 ## System Overview
 
 ```text
@@ -111,10 +115,13 @@ patterns.
   type and imports validation lazily inside `to_json()`.
 - Used by: Tests, diagnostics, docs, and tooling; not by the hot dispatch path.
 
-The practical dependency direction is `conditions.py -> core.py -> validation.py`
-for type/runtime use, with `condition_templates.py` depending on
-`conditions.py`. `core.py` does not import `validation.py`, avoiding a runtime
-cycle. `__init__.py` is the aggregation boundary.
+Using `A -> B` to mean “A imports/depends on B,” the practical dependency
+direction is `core.py -> conditions.py`, `condition_templates.py ->
+conditions.py`, and `validation.py -> core.py`. `visualization.py` imports the
+core type only under `TYPE_CHECKING` and imports validation lazily inside
+`to_json()`. `core.py` does not import validation or visualization, avoiding a
+runtime cycle. `__init__.py` is the aggregation boundary and eagerly imports
+all public modules.
 
 ## Data Flow
 
@@ -127,8 +134,10 @@ cycle. `__init__.py` is the aggregation boundary.
    and invoke `on_failed` callbacks (`src/fast_fsm/core.py:1307-1349`).
 3. If a guard exists, `trigger()` sanitizes keyword context (drops private keys,
    rejects invalid keys, and caps input at 50 items) and calls
-   `Condition.check()` (`src/fast_fsm/core.py:1126-1171`,
-   `src/fast_fsm/core.py:1515-1586`).
+   `Condition.check(*args, **safe_kwargs)` (`src/fast_fsm/core.py:1126-1171`,
+   `src/fast_fsm/core.py:1515-1586`). The condition interface itself accepts
+   only `**kwargs`, so non-empty positional arguments currently turn a guarded
+   transition into a failed result rather than reaching the guard callable.
 4. The current state's `can_transition()` hook is evaluated. A false result is
    returned as a failed `TransitionResult` (`src/fast_fsm/core.py:1550-1586`).
 5. `_execute_transition()` runs the lifecycle in order: before listeners,
@@ -146,12 +155,17 @@ cycle. `__init__.py` is the aggregation boundary.
 2. The same direct transition resolution and failure callback model is used.
 3. `AsyncCondition.check_async()` is awaited when the guard is asynchronous;
    synchronous conditions still call `check()` (`src/fast_fsm/core.py:1833-1882`).
+   Unlike the sync path, both `trigger_async()` and `can_trigger_async()` pass
+   raw keyword arguments and do not call `_sanitize_condition_kwargs()`.
 4. The state permission hook uses `can_transition_async()` when the current
    state provides it, otherwise it falls back to `can_transition()`
    (`src/fast_fsm/core.py:1884-1911`).
-5. The synchronous `_execute_transition()` lifecycle runs first, followed by
-   registered async exit callbacks and async enter callbacks in order
-   (`src/fast_fsm/core.py:1913-1944`).
+5. The entire synchronous `_execute_transition()` lifecycle runs first,
+   including state mutation, synchronous enter/exit/listener callbacks,
+   after-transition callbacks, and history recording. Registered async exit
+   callbacks and then async enter callbacks run only afterward
+   (`src/fast_fsm/core.py:1913-1944`). This ordering is observable and is not a
+   transactional async lifecycle.
 
 ### Construction and Inspection Flows
 
@@ -247,7 +261,10 @@ cycle. `__init__.py` is the aggregation boundary.
   `AsyncDeclarativeState`).
 - Triggers: User subclasses decorated with `@transition`.
 - Responsibilities: Discover handlers and normalize handler return values into
-  `TransitionResult`.
+  `TransitionResult` when callers invoke `handle_event()` or
+  `handle_event_async()` directly. Normal `StateMachine.trigger()` /
+  `trigger_async()` dispatch does not invoke the decorated handler; it uses only
+  the handler metadata's condition through `can_transition*()`.
 
 **Design-time tooling:**
 
@@ -277,6 +294,16 @@ cycle. `__init__.py` is the aggregation boundary.
 - **Topology ownership:** `validation.py` and `visualization.py` intentionally
   read private `_states` and `_transitions`; changes to those internal shapes
   require updating both consumers and their tests.
+- **Graph invariants are not enforced:** `add_transition()` accepts unknown
+  source names and unregistered `State` targets, while duplicate state names
+  replace `_states[name]` without rewriting existing `TransitionEntry` object
+  references. The runtime, diagnostics, and public `states` list can therefore
+  disagree about one machine.
+- **Initial-state representation is duplicated:** Runtime reset uses
+  `_initial_state`, visualization derives the initial name from the first
+  `_states` key, and `FSMValidator` currently captures `current_state` as its
+  `initial_state`. These are equivalent only while graph invariants hold and
+  validation occurs before dispatch.
 
 ## Anti-Patterns
 
@@ -319,9 +346,11 @@ states cannot await them (`src/fast_fsm/core.py:640-743`,
 ## Error Handling
 
 **Strategy:** Expected transition failures are values (`TransitionResult`), while
-invalid topology/API use raises `ValueError`, `TypeError`, or `KeyError`. User
-callback and condition exceptions are logged and converted to failed results or
-isolated from the transition lifecycle according to the path.
+invalid topology/API use raises `ValueError`, `TypeError`, or `KeyError`. Guard
+exceptions are converted to failed results and lifecycle callback exceptions are
+logged and swallowed. Exceptions from `State.can_transition()` are not caught by
+`trigger()` and can propagate; `safe_trigger()` is the public catch-all for those
+ordinary `Exception` failures.
 
 **Patterns:**
 
@@ -333,7 +362,9 @@ isolated from the transition lifecycle according to the path.
 - Invalid target states and mutually exclusive `condition`/`unless` arguments
   fail during `add_transition()` (`src/fast_fsm/core.py:640-743`).
 - Lifecycle/listener callback exceptions are logged so user hooks do not corrupt
-  the core state transition (`src/fast_fsm/core.py:1350-1480`).
+  control flow (`src/fast_fsm/core.py:1350-1480`). This is best-effort isolation,
+  not rollback: the state is mutated before destination-entry callbacks, and a
+  successful result may be returned even when one or more side effects failed.
 
 ## Cross-Cutting Concerns
 
