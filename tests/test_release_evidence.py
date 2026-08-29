@@ -481,7 +481,7 @@ def _manifest_fixture() -> dict[str, object]:
             "coverage": {"total_percent": 90.12, "core_percent": 95.34},
             "source": {"core_origin": "src/fast_fsm/core.py"},
         },
-        "toolchain": {"uv": "0.12.6"},
+        "toolchain": {"python": "3.12.10", "uv": "0.12.6"},
         "artifact_evidence": {"wheels": []},
         "slots_policy": {
             "inventory": [{"qualified_name": "fast_fsm.core.State"}],
@@ -533,6 +533,99 @@ def test_manifest_comparison_reports_field_level_staleness(
 
     assert differences
     assert ".".join(path) in "\n".join(differences)
+
+
+def test_manifest_freshness_accepts_same_minor_python_patches_without_mutation() -> None:
+    """Comparison treats only Python's major.minor as portable evidence."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    expected_before = serialize_manifest(expected)
+    observed_before = serialize_manifest(observed)
+
+    assert compare_manifests(expected, observed) == []
+    assert serialize_manifest(expected) == expected_before
+    assert serialize_manifest(observed) == observed_before
+    assert '"python": "3.12.10"' in expected_before
+    assert '"python": "3.12.3"' in observed_before
+
+
+@pytest.mark.parametrize("observed_python", ["3.11.9", "3.13.0"])
+def test_manifest_freshness_rejects_different_python_minors(
+    observed_python: str,
+) -> None:
+    """Python minor drift remains an actionable stable-field difference."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = observed_python
+
+    differences = compare_manifests(expected, observed)
+
+    assert differences
+    assert "toolchain.python" in "\n".join(differences)
+
+
+@pytest.mark.parametrize("observed_python", ["3", "3.12", "3.x.1", "python"])
+def test_manifest_freshness_fails_closed_for_malformed_python_identity(
+    observed_python: str,
+) -> None:
+    """Missing or nonnumeric Python minor identities cannot be normalized away."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = observed_python
+
+    with pytest.raises(EvidenceError, match="toolchain.python"):
+        compare_manifests(expected, observed)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("collected", 782),
+        ("passed", 782),
+        ("failed", 1),
+    ],
+)
+def test_manifest_freshness_keeps_exact_test_inventory_strict(
+    field: str, replacement: int
+) -> None:
+    """Test outcomes and counts stay stale even when Python patches agree."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["quality_baseline"]["tests"][field] = replacement
+
+    differences = compare_manifests(expected, observed)
+
+    assert differences
+    rendered = "\n".join(differences)
+    assert f"quality_baseline.tests.{field}" in rendered
+    assert "toolchain.python" not in rendered
+
+
+def test_manifest_freshness_keeps_non_python_toolchain_pins_strict() -> None:
+    """Exact uv pins remain stable fields while Python patch drift is portable."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["toolchain"]["uv"] = "0.12.5"
+
+    differences = compare_manifests(expected, observed)
+
+    rendered = "\n".join(differences)
+    assert "toolchain.uv" in rendered
+    assert "toolchain.python" not in rendered
+
+
+def test_manifest_coverage_regression_stays_blocking_across_python_patches() -> None:
+    """Portable Python patch comparison cannot bypass coverage regression checks."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["quality_baseline"]["coverage"]["total_percent"] = 90.11
+
+    with pytest.raises(EvidenceError, match="coverage regression"):
+        validate_manifest_regressions(expected, observed)
 
 
 @pytest.mark.parametrize(
