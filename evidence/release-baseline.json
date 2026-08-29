@@ -44,10 +44,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 766,
+      "collected": 770,
       "errors": 0,
       "failed": 0,
-      "passed": 766,
+      "passed": 770,
       "skipped": 0
     }
   },
