@@ -11,10 +11,11 @@ import tarfile
 
 import pytest
 
-from tools.build_modes import BuildMode, resolve_build_mode
-
-
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.build_modes import BuildMode, resolve_build_mode  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -86,10 +87,14 @@ sys.modules['mypyc.build'] = build
 setuptools.setup = lambda **kwargs: print(json.dumps(kwargs['ext_modules']))
 runpy.run_path('setup.py', run_name='__setup__')
 """
+    process_environ = os.environ.copy()
+    process_environ.pop("FAST_FSM_BUILD_MODE", None)
+    process_environ.pop("FAST_FSM_PURE_PYTHON", None)
+    process_environ.update(environ)
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,
-        env={**os.environ, **environ},
+        env=process_environ,
         capture_output=True,
         text=True,
         check=True,
@@ -145,7 +150,14 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
     dist_dir = tmp_path / "dist"
     build_env = {**os.environ, "FAST_FSM_BUILD_MODE": "pure"}
     subprocess.run(
-        ["uv", "build", "--sdist", "--out-dir", str(dist_dir)],
+        [
+            "uv",
+            "build",
+            "--no-build-isolation",
+            "--sdist",
+            "--out-dir",
+            str(dist_dir),
+        ],
         cwd=ROOT,
         env=build_env,
         check=True,
@@ -155,12 +167,23 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
         names = archive.getnames()
         assert any(name.endswith("/tools/__init__.py") for name in names)
         assert any(name.endswith("/tools/build_modes.py") for name in names)
-        archive.extractall(tmp_path / "unpacked", filter="data")
+        unpacked = tmp_path / "unpacked"
+        if sys.version_info >= (3, 12):
+            archive.extractall(unpacked, filter="data")
+        else:
+            archive.extractall(unpacked)
 
-    source_root = next((tmp_path / "unpacked").iterdir())
+    source_root = next(unpacked.iterdir())
     wheel_dir = tmp_path / "wheel"
     subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        [
+            "uv",
+            "build",
+            "--no-build-isolation",
+            "--wheel",
+            "--out-dir",
+            str(wheel_dir),
+        ],
         cwd=source_root,
         env=build_env,
         check=True,
