@@ -41,6 +41,13 @@ than popular alternatives, while maintaining a clean, intuitive API.
    dev/architecture
    dev/testing
    dev/contributing
+   dev/releasing
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Release Records
+
+   release-corrections/v0.2.3
 
 
 Indices and tables
