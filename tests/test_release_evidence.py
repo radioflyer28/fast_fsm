@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Iterable
 from zipfile import ZipFile
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +38,32 @@ TOOL = ROOT / "tools" / "release_evidence.py"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DOCS_WORKFLOW = ROOT / ".github" / "workflows" / "docs.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+
+TASK_SETUP_ACTION = "arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52"
+TASK_VERSION = "3.53.1"
+TASK_CONSUMING_CI_JOBS = frozenset(
+    {
+        "format",
+        "lint",
+        "typecheck_mypy",
+        "typecheck_ty",
+        "test",
+        "supported_python_build",
+        "evidence",
+        "docs_html",
+        "docs_doctest",
+    }
+)
+_TASK_COMMAND = re.compile(
+    r"""(?mx)
+    (?:^|[;&|])\s*
+    (?:
+        [A-Za-z_][A-Za-z0-9_]*=
+        (?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]+)\s+
+    )*
+    task(?:\s|$)
+    """
+)
 
 
 def _run_evidence(
@@ -641,6 +669,196 @@ def test_repository_lock_records_each_exact_release_build_tool() -> None:
 def _workflow_text(path: Path) -> str:
     """Read a repository-owned GitHub workflow for contract assertions."""
     return path.read_text(encoding="utf-8")
+
+
+def _workflow_data(path: Path = CI_WORKFLOW) -> dict[str, object]:
+    """Load a workflow as YAML so step discovery cannot be fooled by prose."""
+    data = yaml.safe_load(_workflow_text(path))
+    assert isinstance(data, dict), path
+    assert isinstance(data.get("jobs"), dict), path
+    return data
+
+
+def _workflow_jobs(workflow: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return verified job mappings from a parsed workflow."""
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    assert all(isinstance(job_id, str) and isinstance(job, dict) for job_id, job in jobs.items())
+    return jobs
+
+
+def _task_invocation_steps(job: dict[str, object]) -> list[int]:
+    """Find every shell step that executes Task, including multiline forms."""
+    steps = job.get("steps")
+    assert isinstance(steps, list)
+    return [
+        index
+        for index, step in enumerate(steps)
+        if isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and _TASK_COMMAND.search(step["run"])
+    ]
+
+
+def _task_consuming_jobs(workflow: dict[str, object]) -> dict[str, list[int]]:
+    """Return each Taskfile-consuming job and all of its invocation indices."""
+    return {
+        job_id: invocation_indices
+        for job_id, job in _workflow_jobs(workflow).items()
+        if (invocation_indices := _task_invocation_steps(job))
+    }
+
+
+def _validate_task_runner_steps(workflow: dict[str, object]) -> None:
+    """Require one exact, earlier Task setup in every consuming CI job."""
+    consumers = _task_consuming_jobs(workflow)
+    assert set(consumers) == TASK_CONSUMING_CI_JOBS, (
+        "Taskfile-consuming job set changed: "
+        f"expected {sorted(TASK_CONSUMING_CI_JOBS)}, got {sorted(consumers)}"
+    )
+
+    for job_id, invocation_indices in consumers.items():
+        job = _workflow_jobs(workflow)[job_id]
+        steps = job["steps"]
+        assert isinstance(steps, list)
+        setup_steps = [
+            (index, step)
+            for index, step in enumerate(steps)
+            if isinstance(step, dict)
+            and isinstance(step.get("uses"), str)
+            and step["uses"].startswith("arduino/setup-task@")
+        ]
+        assert setup_steps, f"{job_id}: missing pinned Task setup"
+        assert len(setup_steps) == 1, f"{job_id}: expected exactly one Task setup"
+        setup_index, setup_step = setup_steps[0]
+        assert setup_step["uses"] == TASK_SETUP_ACTION, (
+            f"{job_id}: Task setup must use the full verified action SHA"
+        )
+        inputs = setup_step.get("with")
+        assert isinstance(inputs, dict), f"{job_id}: Task setup must provide inputs"
+        assert inputs.get("version") == TASK_VERSION, (
+            f"{job_id}: Task setup must pin version {TASK_VERSION}"
+        )
+        assert all(setup_index < index for index in invocation_indices), (
+            f"{job_id}: Task setup must precede every Taskfile invocation"
+        )
+
+
+def _validate_task_runner_comments(workflow_text: str) -> None:
+    """Keep the human-readable v3.0.0 provenance beside every exact SHA pin."""
+    pinned_uses = re.findall(
+        rf"(?m)^\s*- uses: {re.escape(TASK_SETUP_ACTION)} # v3\.0\.0$",
+        workflow_text,
+    )
+    assert len(pinned_uses) == len(TASK_CONSUMING_CI_JOBS), (
+        "Every exact Task action pin must retain its adjacent # v3.0.0 comment"
+    )
+
+
+def _workflow_with_pinned_task_setup(workflow: dict[str, object]) -> dict[str, object]:
+    """Create a valid parsed-workflow fixture for negative mutation tests."""
+    fixture = deepcopy(workflow)
+    for job_id in TASK_CONSUMING_CI_JOBS:
+        job = _workflow_jobs(fixture)[job_id]
+        steps = job["steps"]
+        assert isinstance(steps, list)
+        uv_index = next(
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict) and step.get("uses") == "astral-sh/setup-uv@v5"
+        )
+        steps.insert(
+            uv_index + 1,
+            {
+                "name": "Install pinned Task runner",
+                "uses": TASK_SETUP_ACTION,
+                "with": {"version": TASK_VERSION},
+            },
+        )
+    return fixture
+
+
+def test_task_runner_contract_covers_every_taskfile_consuming_ci_job() -> None:
+    """All current Taskfile jobs need an exact, earlier cross-platform setup."""
+    _validate_task_runner_steps(_workflow_data())
+    _validate_task_runner_comments(_workflow_text(CI_WORKFLOW))
+
+
+def test_task_runner_contract_rejects_missing_late_or_mispinned_setup() -> None:
+    """A sibling setup, late setup, action tag, or version drift cannot satisfy CI."""
+    fixture = _workflow_with_pinned_task_setup(_workflow_data())
+
+    missing = deepcopy(fixture)
+    missing_steps = _workflow_jobs(missing)["format"]["steps"]
+    assert isinstance(missing_steps, list)
+    missing_steps[:] = [
+        step
+        for step in missing_steps
+        if not isinstance(step, dict) or step.get("uses") != TASK_SETUP_ACTION
+    ]
+    with pytest.raises(AssertionError, match="format: missing pinned Task setup"):
+        _validate_task_runner_steps(missing)
+
+    late = deepcopy(fixture)
+    late_steps = _workflow_jobs(late)["lint"]["steps"]
+    assert isinstance(late_steps, list)
+    setup = next(
+        step
+        for step in late_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )
+    late_steps.remove(setup)
+    late_steps.append(setup)
+    with pytest.raises(AssertionError, match="lint: Task setup must precede"):
+        _validate_task_runner_steps(late)
+
+    wrong_sha = deepcopy(fixture)
+    wrong_sha_steps = _workflow_jobs(wrong_sha)["typecheck_mypy"]["steps"]
+    assert isinstance(wrong_sha_steps, list)
+    next(
+        step
+        for step in wrong_sha_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )["uses"] = "arduino/setup-task@v3"
+    with pytest.raises(AssertionError, match="typecheck_mypy: Task setup must use"):
+        _validate_task_runner_steps(wrong_sha)
+
+    wrong_version = deepcopy(fixture)
+    wrong_version_steps = _workflow_jobs(wrong_version)["typecheck_ty"]["steps"]
+    assert isinstance(wrong_version_steps, list)
+    next(
+        step
+        for step in wrong_version_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )["with"]["version"] = "3.53.2"
+    with pytest.raises(AssertionError, match="typecheck_ty: Task setup must pin"):
+        _validate_task_runner_steps(wrong_version)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        "task format-check",
+        "task first\ntask second",
+        "echo ready && task lint",
+        "FAST_FSM_BUILD_MODE=pure task test",
+    ],
+)
+def test_task_runner_contract_detects_all_shell_invocation_forms(run: str) -> None:
+    """Plain, block, multiline, and environment-prefixed Task runs cannot evade setup."""
+    fixture = _workflow_with_pinned_task_setup(_workflow_data())
+    job = _workflow_jobs(fixture)["build_check"]
+    steps = job["steps"]
+    assert isinstance(steps, list)
+    steps.append({"name": "Unprovisioned Task variant", "run": run})
+
+    with pytest.raises(AssertionError, match="Taskfile-consuming job set changed"):
+        _validate_task_runner_steps(fixture)
+
+
+def test_task_runner_detector_ignores_nonexecuting_prose() -> None:
+    """A mention of Task in an echo command is not a Taskfile invocation."""
+    assert not _TASK_COMMAND.search("echo task format-check")
 
 
 def _setup_uv_blocks(workflow: str) -> list[str]:
