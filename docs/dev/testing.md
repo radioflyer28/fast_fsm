@@ -124,7 +124,7 @@ uv run pytest tests/ -x -q
 ```
 
 Exact test counts, coverage, toolchain versions, source origin, artifact mode,
-and environment-labeled benchmark observations belong only in the tracked
+and collected environment-labeled trigger-throughput observations belong only in the tracked
 [`evidence/release-baseline.json`](../../evidence/release-baseline.json)
 manifest. Do not copy those changing observations into narrative documentation.
 

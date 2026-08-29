@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import ast
 from dataclasses import dataclass
+from email.message import Message
 from email.parser import Parser
+import gc
 import importlib
 from importlib import machinery, metadata
 import json
@@ -22,6 +24,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterable, Mapping, Sequence
 from zipfile import ZipFile
 from xml.etree import ElementTree
@@ -293,7 +296,7 @@ def _dist_info_identity(directory: str) -> tuple[str, Version]:
         raise EvidenceError(f"Invalid dist-info directory: {directory!r}.") from error
 
 
-def _metadata_identity(headers: Parser, wheel_name: str) -> tuple[str, Version]:
+def _metadata_identity(headers: Message, wheel_name: str) -> tuple[str, Version]:
     """Parse normalized package identity from one METADATA header block."""
     package_name = headers.get("Name")
     package_version = headers.get("Version")
@@ -753,6 +756,9 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     toolchain = stable.get("toolchain")
     if isinstance(toolchain, dict) and "python" in toolchain:
         toolchain["python"] = _python_major_minor(toolchain["python"])
+    performance_contract = stable.get("performance_contract")
+    if isinstance(performance_contract, dict):
+        performance_contract.pop("observation", None)
     return stable
 
 
@@ -816,6 +822,58 @@ def validate_manifest_regressions(
                 f"coverage regression at quality_baseline.coverage.{field}: "
                 f"expected at least {expected_value:.2f}, observed {observed_value:.2f}"
             )
+
+
+def validate_performance_observation(manifest: Mapping[str, Any]) -> None:
+    """Require one complete, positive, environment-labeled benchmark observation."""
+    try:
+        observation = manifest["performance_contract"]["observation"]
+    except (KeyError, TypeError) as error:
+        raise EvidenceError(
+            "Manifest is missing performance_contract.observation."
+        ) from error
+    if not isinstance(observation, Mapping):
+        raise EvidenceError("Manifest performance observation must be an object.")
+    try:
+        command = observation["command"]
+        mode = observation["mode"]
+        metric = observation["metric"]
+        operations = int(observation["operations"])
+        warmup_operations = int(observation["warmup_operations"])
+        elapsed_seconds = float(observation["elapsed_seconds"])
+        ops_per_second = float(observation["ops_per_second"])
+        environment = observation["environment"]
+    except (KeyError, TypeError, ValueError) as error:
+        raise EvidenceError("Manifest performance observation is malformed.") from error
+    if not all(isinstance(value, str) and value for value in (command, mode, metric)):
+        raise EvidenceError(
+            "Manifest performance observation requires non-empty command, mode, and metric."
+        )
+    if mode != "pure":
+        raise EvidenceError(
+            f"Manifest performance observation must record pure mode, got {mode!r}."
+        )
+    if (
+        operations <= 0
+        or warmup_operations < 0
+        or elapsed_seconds <= 0
+        or ops_per_second <= 0
+    ):
+        raise EvidenceError(
+            "Manifest performance observation requires positive measurements."
+        )
+    expected_rate = operations / elapsed_seconds
+    if abs(ops_per_second - expected_rate) / expected_rate > 0.02:
+        raise EvidenceError(
+            "Manifest performance observation ops_per_second contradicts operations/elapsed_seconds."
+        )
+    if not isinstance(environment, Mapping) or not all(
+        isinstance(environment.get(field), str) and environment[field]
+        for field in ("implementation", "python_version", "platform", "machine")
+    ):
+        raise EvidenceError(
+            "Manifest performance observation requires a complete environment label."
+        )
 
 
 def _command_environment() -> dict[str, str]:
@@ -1012,6 +1070,59 @@ def _collect_test_and_coverage(
         return _parse_junit_results(junit_path), _coverage_percentages(coverage_path)
 
 
+def _collect_trigger_benchmark(
+    *, iterations: int = 20_000, warmup_iterations: int = 1_000
+) -> dict[str, Any]:
+    """Collect one local pure-source trigger observation for release evidence."""
+    if iterations <= 0 or warmup_iterations < 0:
+        raise EvidenceError(
+            "Benchmark iterations must be positive with nonnegative warmup."
+        )
+
+    from fast_fsm.core import State, StateMachine
+
+    idle = State("benchmark-idle")
+    active = State("benchmark-active")
+    fsm = StateMachine(idle, name="release-evidence-trigger-benchmark")
+    fsm.add_state(active)
+    fsm.add_transition("start", "benchmark-idle", "benchmark-active")
+    fsm.add_transition("finish", "benchmark-active", "benchmark-idle")
+
+    for _ in range(warmup_iterations):
+        fsm.trigger("start")
+        fsm.trigger("finish")
+    gc.collect()
+    started = time.perf_counter()
+    for _ in range(iterations):
+        fsm.trigger("start")
+        fsm.trigger("finish")
+    elapsed_seconds = time.perf_counter() - started
+    if elapsed_seconds <= 0:
+        raise EvidenceError(
+            "Trigger benchmark did not produce a positive elapsed time."
+        )
+
+    operations = iterations * 2
+    return {
+        "command": (
+            "tools/release_evidence.py evidence "
+            "(StateMachine.trigger alternating-transition microbenchmark)"
+        ),
+        "mode": "pure",
+        "metric": "StateMachine.trigger operations per second",
+        "operations": operations,
+        "warmup_operations": warmup_iterations * 2,
+        "elapsed_seconds": round(elapsed_seconds, 6),
+        "ops_per_second": round(operations / elapsed_seconds, 2),
+        "environment": {
+            "implementation": sys.implementation.name,
+            "python_version": sys.version.split()[0],
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+        },
+    }
+
+
 def collect_manifest(
     *, source_root: Path | None = None, wheel_paths: Iterable[Path] = ()
 ) -> dict[str, Any]:
@@ -1031,6 +1142,7 @@ def collect_manifest(
         wheel_paths, expected_version=source["distribution_version"]
     )["artifacts"]
     slots = slots_policy(resolved_source_root)
+    benchmark = _collect_trigger_benchmark()
     uv_version = _resolved_uv_version(environment=environment)
 
     toolchain = {
@@ -1071,6 +1183,7 @@ def collect_manifest(
         "performance_contract": {
             "compiled_trigger_ops_per_sec_min": 200000,
             "measurement": "environment-labeled; exact timing is not a freshness field",
+            "observation": benchmark,
         },
         "measurement_environment": {
             "implementation": sys.implementation.name,
@@ -1103,11 +1216,13 @@ def write_or_check_manifest(
     manifest: Mapping[str, Any], *, manifest_path: Path, write: bool
 ) -> dict[str, Any]:
     """Intentionally write a baseline or compare it without mutating its bytes."""
+    validate_performance_observation(manifest)
     if write:
         _write_manifest(manifest_path, manifest)
         return dict(manifest)
 
     baseline = _read_manifest(manifest_path)
+    validate_performance_observation(baseline)
     validate_manifest_regressions(baseline, manifest)
     differences = compare_manifests(baseline, manifest)
     if differences:

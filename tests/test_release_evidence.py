@@ -30,6 +30,7 @@ from tools.release_evidence import (  # noqa: E402
     serialize_manifest,
     validate_slots_inventory,
     validate_manifest_regressions,
+    validate_performance_observation,
 )
 
 
@@ -570,7 +571,24 @@ def _manifest_fixture() -> dict[str, object]:
             ],
             "measurements": [],
         },
-        "performance_contract": {"compiled_trigger_ops_per_sec_min": 200000},
+        "performance_contract": {
+            "compiled_trigger_ops_per_sec_min": 200000,
+            "observation": {
+                "command": "tools/release_evidence.py evidence (fixture)",
+                "mode": "pure",
+                "metric": "StateMachine.trigger operations per second",
+                "operations": 2000,
+                "warmup_operations": 200,
+                "elapsed_seconds": 0.02,
+                "ops_per_second": 100000.0,
+                "environment": {
+                    "implementation": "cpython",
+                    "python_version": "3.12.10",
+                    "platform": "fixture-platform",
+                    "machine": "fixture-machine",
+                },
+            },
+        },
         "measurement_environment": {"stable_fields": ["schema_version"]},
     }
 
@@ -765,6 +783,49 @@ def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> N
         )
 
     assert manifest_path.read_bytes() == original
+
+
+def test_manifest_requires_a_valid_environment_labeled_benchmark_observation() -> None:
+    """Volatile timing may vary, but complete positive evidence cannot disappear."""
+    manifest = _manifest_fixture()
+    validate_performance_observation(manifest)
+
+    missing = json.loads(serialize_manifest(manifest))
+    del missing["performance_contract"]["observation"]
+    with pytest.raises(EvidenceError, match="performance_contract.observation"):
+        validate_performance_observation(missing)
+
+    malformed = json.loads(serialize_manifest(manifest))
+    malformed["performance_contract"]["observation"]["ops_per_second"] = 0
+    with pytest.raises(EvidenceError, match="positive measurements"):
+        validate_performance_observation(malformed)
+
+
+def test_manifest_freshness_excludes_only_volatile_benchmark_measurements() -> None:
+    """A valid benchmark measurement may change without weakening its presence contract."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observation = observed["performance_contract"]["observation"]
+    observation["elapsed_seconds"] = 0.04
+    observation["ops_per_second"] = 50000.0
+    observation["environment"]["machine"] = "another-machine"
+
+    validate_performance_observation(observed)
+    assert compare_manifests(expected, observed) == []
+
+
+def test_trigger_benchmark_collects_structured_environment_labeled_evidence() -> None:
+    """The manifest collector runs a concrete benchmark rather than recording prose."""
+    observation = release_evidence._collect_trigger_benchmark(
+        iterations=100, warmup_iterations=10
+    )
+
+    assert observation["operations"] == 200
+    assert observation["mode"] == "pure"
+    assert "release_evidence.py evidence" in observation["command"]
+    validate_performance_observation(
+        {"performance_contract": {"observation": observation}}
+    )
 
 
 def test_collect_manifest_preflights_before_any_test_or_coverage_collection(

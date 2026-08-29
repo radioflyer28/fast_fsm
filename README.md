@@ -1,8 +1,7 @@
 # Fast FSM — High-Performance Finite State Machine Library
 
-A blazing-fast, memory-efficient finite state machine library for Python that
-outperforms popular alternatives by **5–20×** while providing a clean,
-intuitive API.
+A high-performance, memory-efficient finite state machine library for Python
+with a clean, intuitive API.
 
 **Full documentation:** after installing, run
 `uv run sphinx-build -b html docs docs/_build/html` and open
@@ -17,7 +16,7 @@ intuitive API.
 - **Production-ready verification** — 700+ tests, optional validation, and
   optional mypyc compilation.
 
-Exact test, coverage, toolchain, source-origin, artifact-mode, and
+Exact test, coverage, toolchain, source-origin, artifact-mode, and collected
 environment-labeled benchmark observations are recorded in the tracked
 [`evidence/release-baseline.json`](evidence/release-baseline.json) manifest.
 Regenerate or verify that evidence with the commands in the developer testing
@@ -465,7 +464,7 @@ print(v.export_report('json'))
 ## Key Capabilities
 
 - **Ultra-High Performance** — compiled `trigger()` contract ≥200,000 ops/sec
-- **Memory Efficient** — ~1,000× less than alternatives
+- **Memory Efficient** — direct dictionary lookups and slots-aware hot paths
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
@@ -474,7 +473,7 @@ print(v.export_report('json'))
 - **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
-- **Transition History** — opt-in `enable_history()` / `disable_history()` with bounded `TransitionRecord` buffer; zero cost when disabled, ≤ 2× overhead when enabled
+- **Transition History** — opt-in `enable_history()` / `disable_history()` with a bounded `TransitionRecord` buffer and environment-labeled performance evidence
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
 - **Visualization** — Mermaid diagrams, PlantUML output, fenced blocks, full Markdown documents with adjacency matrix
 - **Agent Tooling** — `to_json()` exports topology + reachability + cycles + quality for programmatic consumption
