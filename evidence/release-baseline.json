@@ -38,7 +38,7 @@
     "build_mode": "pure",
     "coverage": {
       "core_percent": 92.95,
-      "total_percent": 47.88
+      "total_percent": 95.75
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
