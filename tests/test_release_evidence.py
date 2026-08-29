@@ -41,6 +41,30 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 TASK_SETUP_ACTION = "arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52"
 TASK_VERSION = "3.53.1"
+SETUP_UV_ACTION = "astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
+THIRD_PARTY_ACTION_PINS = {
+    "actions/checkout": ("11d5960a326750d5838078e36cf38b85af677262", "v4"),
+    "actions/configure-pages": ("983d7736d9b0ae728b81ab479565c72886d7745b", "v5"),
+    "actions/deploy-pages": ("d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e", "v4"),
+    "actions/download-artifact": ("d3f86a106a0bac45b974a628896c90dbdf5c8093", "v4"),
+    "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4"),
+    "actions/upload-pages-artifact": (
+        "56afc609e74202658d3ffba0e8f6dda462b719fa",
+        "v3",
+    ),
+    "arduino/setup-task": ("c0bc642852239c2689f73f4ea6459c29405f3c52", "v3.0.0"),
+    "astral-sh/setup-uv": ("d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86", "v5"),
+    "docker/setup-qemu-action": ("c7c53464625b32c7a7e944ae62b3e17d2b600130", "v3"),
+    "pypa/cibuildwheel": ("ee63bf16da6cddfb925f542f2c7b59ad50e93969", "v2.22.0"),
+    "pypa/gh-action-pypi-publish": (
+        "ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
+        "v1.9.0",
+    ),
+    "softprops/action-gh-release": (
+        "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+        "v2",
+    ),
+}
 TASK_CONSUMING_CI_JOBS = frozenset(
     {
         "format",
@@ -887,7 +911,7 @@ def _validate_task_runner_steps(workflow: dict[str, object]) -> None:
         uv_indices = [
             index
             for index, step in enumerate(steps)
-            if isinstance(step, dict) and step.get("uses") == "astral-sh/setup-uv@v5"
+            if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
         ]
         assert len(uv_indices) == 1, f"{job_id}: expected exactly one uv setup"
         assert setup_index == uv_indices[0] + 1, (
@@ -936,7 +960,7 @@ def _workflow_with_pinned_task_setup(workflow: dict[str, object]) -> dict[str, o
         uv_index = next(
             index
             for index, step in enumerate(steps)
-            if isinstance(step, dict) and step.get("uses") == "astral-sh/setup-uv@v5"
+            if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
         )
         steps.insert(
             uv_index + 1,
@@ -1035,9 +1059,9 @@ def test_task_runner_detector_ignores_nonexecuting_prose() -> None:
 
 
 def _setup_uv_blocks(workflow: str) -> list[str]:
-    """Return each setup-uv step through its following configuration boundary."""
+    """Return each pinned setup-uv step through its following configuration boundary."""
     return re.findall(
-        r"- uses: astral-sh/setup-uv@v5(?P<block>.*?)(?=\n\s*- uses:|\n\s*- name:|\Z)",
+        rf"- uses: {re.escape(SETUP_UV_ACTION)} # v5(?P<block>.*?)(?=\n\s*- uses:|\n\s*- name:|\Z)",
         workflow,
         flags=re.DOTALL,
     )
@@ -1049,6 +1073,99 @@ def test_setup_uv_actions_pin_the_exact_release_version() -> None:
         blocks = _setup_uv_blocks(_workflow_text(workflow_path))
         assert blocks, workflow_path
         assert all('version: "0.12.6"' in block for block in blocks), workflow_path
+
+
+def _third_party_action_uses(workflow: dict[str, object]) -> set[str]:
+    """Return executable non-local actions from parsed workflow job steps."""
+    actions: set[str] = set()
+    for job in _workflow_jobs(workflow).values():
+        steps = job.get("steps", [])
+        assert isinstance(steps, list)
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            action = step.get("uses")
+            if isinstance(action, str) and not action.startswith("./"):
+                actions.add(action)
+    return actions
+
+
+def _validate_action_pins(workflow_path: Path) -> None:
+    """Require every executable third-party action to be pinned and documented."""
+    parsed_uses = _third_party_action_uses(_workflow_data(workflow_path))
+    expected_uses = {
+        f"{repository}@{sha}"
+        for repository, (sha, _version) in THIRD_PARTY_ACTION_PINS.items()
+    }
+    assert parsed_uses <= expected_uses, (
+        f"{workflow_path}: unpinned or unknown executable action(s): "
+        f"{sorted(parsed_uses - expected_uses)}"
+    )
+    text = _workflow_text(workflow_path)
+    for action in parsed_uses:
+        repository, sha = action.split("@", 1)
+        assert re.fullmatch(r"[0-9a-f]{40}", sha), action
+        expected_sha, version = THIRD_PARTY_ACTION_PINS[repository]
+        assert sha == expected_sha
+        assert f"uses: {action} # {version}" in text
+
+
+def test_workflow_actions_use_reviewed_immutable_pins() -> None:
+    """Tags cannot regain execution authority through a future workflow edit."""
+    for workflow_path in (CI_WORKFLOW, DOCS_WORKFLOW, RELEASE_WORKFLOW):
+        _validate_action_pins(workflow_path)
+        for action in re.findall(
+            r"(?m)^\s*(?:#\s*)?(?:-\s*)?uses:\s+([^\s#]+)",
+            _workflow_text(workflow_path),
+        ):
+            if action.startswith("./"):
+                continue
+            repository, sha = action.split("@", 1)
+            assert re.fullmatch(r"[0-9a-f]{40}", sha), action
+            expected_sha, version = THIRD_PARTY_ACTION_PINS[repository]
+            assert sha == expected_sha
+            assert f"uses: {action} # {version}" in _workflow_text(workflow_path)
+
+    mutated = _workflow_data(CI_WORKFLOW)
+    steps = _workflow_jobs(mutated)["format"]["steps"]
+    assert isinstance(steps, list)
+    next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+    )["uses"] = "astral-sh/setup-uv@v5"
+    with pytest.raises(AssertionError, match="unpinned or unknown"):
+        parsed_uses = _third_party_action_uses(mutated)
+        expected_uses = {
+            f"{repository}@{sha}"
+            for repository, (sha, _version) in THIRD_PARTY_ACTION_PINS.items()
+        }
+        assert parsed_uses <= expected_uses, (
+            "unpinned or unknown executable action(s): "
+            f"{sorted(parsed_uses - expected_uses)}"
+        )
+
+
+def test_workflow_permissions_follow_least_privilege_boundaries() -> None:
+    """Only the two publication jobs receive their distinct write privileges."""
+    ci = _workflow_data(CI_WORKFLOW)
+    docs = _workflow_data(DOCS_WORKFLOW)
+    release = _workflow_data(RELEASE_WORKFLOW)
+
+    assert ci.get("permissions") == {"contents": "read"}
+    assert docs.get("permissions") == {"contents": "read"}
+    assert release.get("permissions") == {"contents": "read"}
+    assert "permissions" not in _workflow_jobs(docs)["build_docs"]
+    assert _workflow_jobs(docs)["deploy_docs"]["permissions"] == {
+        "pages": "write",
+        "id-token": "write",
+    }
+    assert _workflow_jobs(release)["github_release"]["permissions"] == {
+        "contents": "write"
+    }
+    for job_id, job in _workflow_jobs(release).items():
+        if job_id != "github_release":
+            assert "permissions" not in job, job_id
 
 
 def test_workflow_contract_has_dispatch_reusable_and_independent_gate_jobs() -> None:
