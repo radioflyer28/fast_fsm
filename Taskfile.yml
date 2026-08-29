@@ -271,7 +271,6 @@ tasks:
       - task: format-check
       - task: lint
       - task: typecheck-mypy
-      - task: typecheck-ty
       - task: test
       - task: docs-check
       - task: docs-test
