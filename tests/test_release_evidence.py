@@ -747,7 +747,7 @@ def _validate_task_runner_steps(workflow: dict[str, object]) -> None:
 def _validate_task_runner_comments(workflow_text: str) -> None:
     """Keep the human-readable v3.0.0 provenance beside every exact SHA pin."""
     pinned_uses = re.findall(
-        rf"(?m)^\s*- uses: {re.escape(TASK_SETUP_ACTION)} # v3\.0\.0$",
+        rf"(?m)^\s*uses: {re.escape(TASK_SETUP_ACTION)} # v3\.0\.0$",
         workflow_text,
     )
     assert len(pinned_uses) == len(TASK_CONSUMING_CI_JOBS), (
@@ -762,6 +762,15 @@ def _workflow_with_pinned_task_setup(workflow: dict[str, object]) -> dict[str, o
         job = _workflow_jobs(fixture)[job_id]
         steps = job["steps"]
         assert isinstance(steps, list)
+        steps[:] = [
+            step
+            for step in steps
+            if not (
+                isinstance(step, dict)
+                and isinstance(step.get("uses"), str)
+                and step["uses"].startswith("arduino/setup-task@")
+            )
+        ]
         uv_index = next(
             index
             for index, step in enumerate(steps)
