@@ -19,7 +19,9 @@ PACKAGE_SOURCE = ROOT / "src" / "fast_fsm"
 TOOL = ROOT / "tools" / "release_evidence.py"
 
 
-def _run_evidence(*arguments: str, environ: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_evidence(
+    *arguments: str, environ: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the evidence CLI in an isolated subprocess."""
     return subprocess.run(
         [sys.executable, str(TOOL), *arguments],
@@ -208,7 +210,13 @@ def test_verify_wheel_keeps_one_pure_and_multiple_compiled_records_sorted(
         "pure",
     ]
     assert all(
-        {"normalized_basename", "filename_tags", "wheel_tags", "metadata_version", "native_members"}
+        {
+            "normalized_basename",
+            "filename_tags",
+            "wheel_tags",
+            "metadata_version",
+            "native_members",
+        }
         <= artifact.keys()
         for artifact in artifacts
     )
