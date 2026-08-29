@@ -22,6 +22,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked quality dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -42,6 +46,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked quality dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -62,6 +70,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked quality dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -83,6 +95,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked quality dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -108,6 +124,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: ${{ matrix.python-version }}
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked test dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -132,6 +152,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: ${{ matrix.python-version }}
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked release build dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -152,6 +176,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked evidence dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -172,6 +200,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked documentation dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
@@ -192,6 +224,10 @@ jobs:
         with:
           version: "0.12.6"
           python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
       - name: Install locked documentation dependencies
         run: uv sync --locked --all-groups
       - name: Verify pure source origin
