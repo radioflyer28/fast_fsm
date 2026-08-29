@@ -1037,7 +1037,28 @@ def validate_performance_observation(manifest: Mapping[str, Any]) -> None:
     if any(
         isinstance(value, bool) or not isinstance(value, (int, float))
         for value in (elapsed_seconds, ops_per_second)
-    ) or not all(math.isfinite(value) for value in (elapsed_seconds, ops_per_second)):
+    ):
+        raise EvidenceError(
+            "Manifest performance observation requires finite positive measurements."
+        )
+    try:
+        numeric_operations = float(operations)
+        numeric_elapsed_seconds = float(elapsed_seconds)
+        numeric_ops_per_second = float(ops_per_second)
+        expected_rate = numeric_operations / numeric_elapsed_seconds
+    except (OverflowError, ValueError, ZeroDivisionError) as error:
+        raise EvidenceError(
+            "Manifest performance observation requires finite positive measurements."
+        ) from error
+    if not all(
+        math.isfinite(value)
+        for value in (
+            numeric_operations,
+            numeric_elapsed_seconds,
+            numeric_ops_per_second,
+            expected_rate,
+        )
+    ):
         raise EvidenceError(
             "Manifest performance observation requires finite positive measurements."
         )
@@ -1050,8 +1071,7 @@ def validate_performance_observation(manifest: Mapping[str, Any]) -> None:
         raise EvidenceError(
             "Manifest performance observation requires positive measurements."
         )
-    expected_rate = operations / elapsed_seconds
-    if abs(ops_per_second - expected_rate) / expected_rate > 0.02:
+    if not math.isclose(numeric_ops_per_second, expected_rate, rel_tol=0.02):
         raise EvidenceError(
             "Manifest performance observation ops_per_second contradicts operations/elapsed_seconds."
         )

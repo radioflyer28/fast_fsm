@@ -1001,6 +1001,28 @@ def test_manifest_rejects_non_integer_benchmark_operation_counts(
         validate_performance_observation(manifest)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("operations", 10**10000, id="huge-integer"),
+        ("elapsed_seconds", 5e-324),
+        ("operations", 10**308),
+    ],
+)
+def test_manifest_rejects_overflowing_benchmark_rate_calculations(
+    field: str, value: object
+) -> None:
+    """Extreme finite JSON values cannot crash or bypass rate consistency."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+    observation["ops_per_second"] = 1.0
+
+    with pytest.raises(EvidenceError, match="finite positive measurements"):
+        validate_performance_observation(manifest)
+
+
 @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
 def test_manifest_reader_rejects_non_standard_json_numbers(
     tmp_path: Path, token: str
