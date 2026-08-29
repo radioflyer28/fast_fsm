@@ -1,0 +1,290 @@
+{
+  "artifact_evidence": {
+    "source": {
+      "core_origin": "src/fast_fsm/core.py"
+    },
+    "wheels": [
+      {
+        "archive_tags": [
+          "py3-none-any"
+        ],
+        "classified_mode": "pure",
+        "filename": "fast_fsm-0.2.2-py3-none-any.whl",
+        "filename_tags": [
+          "py3-none-any"
+        ],
+        "metadata_version": "0.2.2",
+        "mode": "pure",
+        "native_members": [],
+        "normalized_basename": "fast_fsm-0.2.2-py3-none-any.whl",
+        "wheel_tags": [
+          "py3-none-any"
+        ]
+      }
+    ]
+  },
+  "measurement_environment": {
+    "comparison": "stable fields exclude this environment observation",
+    "implementation": "cpython",
+    "machine": "arm64",
+    "platform": "macOS-26.5-arm64-arm-64bit",
+    "python_version": "3.12.10"
+  },
+  "performance_contract": {
+    "compiled_trigger_ops_per_sec_min": 200000,
+    "measurement": "environment-labeled; exact timing is not a freshness field"
+  },
+  "quality_baseline": {
+    "build_mode": "pure",
+    "coverage": {
+      "core_percent": 92.95,
+      "total_percent": 47.88
+    },
+    "source": {
+      "core_origin": "src/fast_fsm/core.py"
+    },
+    "tests": {
+      "collected": 766,
+      "errors": 0,
+      "failed": 0,
+      "passed": 766,
+      "skipped": 0
+    }
+  },
+  "release_identity": {
+    "distribution_version": "0.2.2",
+    "package": "fast_fsm"
+  },
+  "schema_version": 1,
+  "slots_policy": {
+    "inventory": [
+      {
+        "classification": "slot-protected",
+        "line": 13,
+        "qualified_name": "fast_fsm.condition_templates.AlwaysCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 118,
+        "qualified_name": "fast_fsm.condition_templates.AndCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 84,
+        "qualified_name": "fast_fsm.condition_templates.ComparisonCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 180,
+        "qualified_name": "fast_fsm.condition_templates.CooldownCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 201,
+        "qualified_name": "fast_fsm.condition_templates.ElapsedCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 37,
+        "qualified_name": "fast_fsm.condition_templates.KeyExistsCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 25,
+        "qualified_name": "fast_fsm.condition_templates.NeverCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 150,
+        "qualified_name": "fast_fsm.condition_templates.NotCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 134,
+        "qualified_name": "fast_fsm.condition_templates.OrCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 68,
+        "qualified_name": "fast_fsm.condition_templates.RegexCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 163,
+        "qualified_name": "fast_fsm.condition_templates.TimeoutCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 53,
+        "qualified_name": "fast_fsm.condition_templates.ValueInSetCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 124,
+        "qualified_name": "fast_fsm.conditions.AsyncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 15,
+        "qualified_name": "fast_fsm.conditions.Condition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 58,
+        "qualified_name": "fast_fsm.conditions.FuncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 95,
+        "qualified_name": "fast_fsm.conditions.NegatedCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 2153,
+        "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 1691,
+        "qualified_name": "fast_fsm.core.AsyncStateMachine",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 232,
+        "qualified_name": "fast_fsm.core.CallbackState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "registered-exception",
+        "exception_reason": "@mypyc_attr(native_class=False) preserves the interpreted Condition inheritance boundary.",
+        "line": 106,
+        "qualified_name": "fast_fsm.core.CompiledFuncCondition",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 1979,
+        "qualified_name": "fast_fsm.core.DeclarativeState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 2268,
+        "qualified_name": "fast_fsm.core.FSMBuilder",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 166,
+        "qualified_name": "fast_fsm.core.State",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 262,
+        "qualified_name": "fast_fsm.core.StateMachine",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 89,
+        "qualified_name": "fast_fsm.core.TransitionEntry",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "registered-exception",
+        "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
+        "line": 25,
+        "qualified_name": "fast_fsm.core.TransitionError",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 65,
+        "qualified_name": "fast_fsm.core.TransitionRecord",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 41,
+        "qualified_name": "fast_fsm.core.TransitionResult",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 414,
+        "qualified_name": "fast_fsm.validation.EnhancedFSMValidator",
+        "source_path": "src/fast_fsm/validation.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 21,
+        "qualified_name": "fast_fsm.validation.FSMValidator",
+        "source_path": "src/fast_fsm/validation.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 376,
+        "qualified_name": "fast_fsm.validation.ValidationIssue",
+        "source_path": "src/fast_fsm/validation.py"
+      }
+    ],
+    "measurements": [
+      {
+        "has_instance_dict": false,
+        "instance_size_bytes": 40,
+        "qualified_name": "fast_fsm.core.State"
+      },
+      {
+        "has_instance_dict": false,
+        "instance_size_bytes": 72,
+        "qualified_name": "fast_fsm.core.TransitionResult"
+      }
+    ],
+    "registered_exceptions": [
+      {
+        "exception_reason": "@mypyc_attr(native_class=False) preserves the interpreted Condition inheritance boundary.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 64,
+        "qualified_name": "fast_fsm.core.CompiledFuncCondition"
+      },
+      {
+        "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 104,
+        "qualified_name": "fast_fsm.core.TransitionError"
+      }
+    ]
+  },
+  "toolchain": {
+    "mypy": "1.17.1",
+    "mypyc": "1.17.1",
+    "pytest": "8.4.1",
+    "pytest_cov": "6.2.1",
+    "python": "3.12.10",
+    "ruff": "0.12.11",
+    "setuptools": "80.9.0",
+    "sphinx": "9.1.0",
+    "ty": "0.0.1a19",
+    "uv": "0.12.6",
+    "wheel": "0.45.1"
+  }
+}

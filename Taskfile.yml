@@ -15,6 +15,8 @@ vars:
   SRC_DIR: src/fast_fsm
   DOCS_DIR: docs
   DOCS_BUILD: docs/_build/html
+  EVIDENCE_TOOL: tools/release_evidence.py
+  EVIDENCE_MANIFEST: evidence/release-baseline.json
 
 tasks:
   # ─────────────────────────────────────────────
@@ -24,28 +26,28 @@ tasks:
   test:
     desc: "Run full test suite — merge gate (pure Python, -x -q)"
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -x -q
 
   test-verbose:
     desc: Run full test suite with verbose output
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -v --tb=short
 
   test-fast:
     desc: Run tests excluding slow/integration markers
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -x -q -m "not slow and not integration"
 
   test-coverage:
     desc: Run tests with HTML coverage report
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ --cov={{.SRC_DIR}} --cov-report=html --cov-report=term
 
@@ -60,12 +62,22 @@ tasks:
       - uv run ruff format src/ tests/
       - uv run ruff check --fix src/ tests/
 
-  check:
-    desc: "Phase 2: Validate formatting, linting, and types (blocks merge)"
+  format-check:
+    desc: Check Ruff formatting without rewriting files
     cmds:
       - uv run ruff format --check src/ tests/
+
+  lint:
+    desc: Check Ruff lint rules without rewriting files
+    cmds:
       - uv run ruff check src/ tests/
-      - uv run ty check {{.SRC_DIR}}/
+
+  check:
+    desc: "Phase 2: Validate formatting, linting, and stable mypy compatibility"
+    cmds:
+      - task: format-check
+      - task: lint
+      - task: typecheck-mypy
 
   quality:
     desc: "Full quality gate: Phase 1 (auto-fix) → Phase 2 (validate)"
@@ -78,14 +90,82 @@ tasks:
   # ─────────────────────────────────────────────
 
   typecheck:
-    desc: Type check with ty (primary type checker)
+    desc: Type check with ty (advisory compatibility feedback)
+    cmds:
+      - task: typecheck-ty
+
+  typecheck-ty:
+    desc: Type check with ty (advisory compatibility feedback)
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run ty check {{.SRC_DIR}}/
 
   typecheck-mypy:
-    desc: Type check with mypy (mypyc compatibility verification)
+    desc: Type check with mypy (blocking mypyc compatibility verification)
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run mypy {{.SRC_DIR}}/
+
+  pure-source-check:
+    desc: Fail closed when a native core artifact would shadow pure source
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+
+  release-baseline-write:
+    desc: Intentionally regenerate the tracked pure-source release baseline
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - |
+          evidence_dir="$(mktemp -d)"
+          uv build --wheel --out-dir "$evidence_dir"
+          wheel_path="$(find "$evidence_dir" -name '*.whl' -print -quit)"
+          uv run python {{.EVIDENCE_TOOL}} evidence --write --manifest {{.EVIDENCE_MANIFEST}} --wheel "$wheel_path"
+
+  release-baseline-check:
+    desc: Read-only pure-source release evidence freshness and coverage check
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - |
+          evidence_dir="$(mktemp -d)"
+          uv build --wheel --out-dir "$evidence_dir"
+          wheel_path="$(find "$evidence_dir" -name '*.whl' -print -quit)"
+          uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --wheel "$wheel_path"
+
+  supported-python-build-check:
+    desc: Prove pure sdist inclusion and unpacked-wheel build for this interpreter
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - uv run pytest tests/test_build_modes.py -x -q -k pure_sdist_contains_selector_and_can_build_wheel_in_isolation
+
+  supported-python-build-matrix-local:
+    desc: Exercise every locally available CPython 3.10-3.14 build proof
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - |
+          for version in 3.10 3.11 3.12 3.13 3.14; do
+            if interpreter="$(uv python find "$version" --no-python-downloads 2>/dev/null)"; then
+              echo "Python $version: $interpreter"
+              uv sync --locked --all-groups --python "$interpreter"
+              uv run --python "$interpreter" python {{.EVIDENCE_TOOL}} verify-source --json
+              uv run --python "$interpreter" pytest tests/test_build_modes.py -x -q -k pure_sdist_contains_selector_and_can_build_wheel_in_isolation
+            else
+              echo "Python $version: unavailable locally"
+            fi
+          done
 
   # ─────────────────────────────────────────────
   # mypyc Build
@@ -139,16 +219,22 @@ tasks:
 
   docs:
     desc: Build Sphinx HTML documentation
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}}
 
   docs-check:
     desc: "Build docs with warnings-as-errors (CI-ready)"
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}} -W --keep-going
 
   docs-test:
     desc: "Test code examples in docs ({testcode}/{testoutput} blocks)"
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b doctest {{.DOCS_DIR}} {{.DOCS_DIR}}/_build/doctest
 
@@ -175,11 +261,21 @@ tasks:
       - task: test-fast
 
   ci:
-    desc: "Full CI pipeline: lint → pure-python tests → mypyc build check (mirrors ci.yml)"
+    desc: "Full local gate: independently named pure-source quality commands"
     cmds:
-      - task: check
+      - task: release-gate
+
+  release-gate:
+    desc: "Complete local release gate with named components and no hidden shell chain"
+    cmds:
+      - task: format-check
+      - task: lint
+      - task: typecheck-mypy
+      - task: typecheck-ty
       - task: test
-      - task: build-check
+      - task: docs-check
+      - task: docs-test
+      - task: release-baseline-check
 
   # ─────────────────────────────────────────────
   # Maintenance
