@@ -73,7 +73,7 @@
   3. Release-producing tools resolve to reproducibly pinned versions, and stable compatibility checking does not depend solely on the pre-release `ty` checker.
   4. The shipped memory policy identifies and measures every deliberate slots exception, including `CompiledFuncCondition`, so maintainers can reconcile the implementation with performance claims.
 
-**Plans**: 7/8 plans executed
+**Plans**: 7/9 plans executed
 
 **Wave 1**
 
@@ -98,6 +98,10 @@
 - [x] 15-08-PLAN.md
 
 **Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 15-09-PLAN.md
+
+**Wave 7** *(blocked on Wave 6 completion)*
 
 - [ ] 15-05-PLAN.md
 
@@ -182,7 +186,7 @@
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 15. Release Baseline & Evidence Harness | v0.3.0 | 7/8 | In Progress|  |
+| 15. Release Baseline & Evidence Harness | v0.3.0 | 7/9 | In Progress|  |
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 0/TBD | Not started | - |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 0/TBD | Not started | - |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 0/TBD | Not started | - |
