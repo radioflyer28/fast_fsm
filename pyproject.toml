@@ -18,6 +18,11 @@ dev = [
     "ruff>=0.12.11",
     "ty>=0.0.1a19",
 ]
+release = [
+    "setuptools==80.9.0",
+    "wheel==0.45.1",
+    "mypy[mypyc]==1.17.1",
+]
 benchmarks = [
     "matplotlib>=3.10.3",
     "networkx>=3.2",

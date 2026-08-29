@@ -671,9 +671,10 @@ def _locked_package_version(package_name: str, lock_path: Path | None = None) ->
         raise EvidenceError(f"Could not read resolved lock file {path}.") from error
     name_marker = f'name = "{package_name}"'
     for section in sections[1:]:
-        if name_marker not in section:
+        section_lines = [line for line in section.splitlines() if line]
+        if not section_lines or section_lines[0] != name_marker:
             continue
-        for line in section.splitlines():
+        for line in section_lines:
             if line.startswith("version = "):
                 return line.split('"', 2)[1]
     raise EvidenceError(f"Resolved package {package_name!r} is missing from {path}.")
