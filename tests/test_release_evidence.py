@@ -855,6 +855,69 @@ def test_manifest_requires_a_valid_environment_labeled_benchmark_observation() -
         validate_performance_observation(malformed)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("elapsed_seconds", float("nan")),
+        ("elapsed_seconds", float("inf")),
+        ("ops_per_second", float("-inf")),
+    ],
+)
+def test_manifest_rejects_non_finite_benchmark_measurements(
+    field: str, value: float
+) -> None:
+    """Volatile measurements still have to be finite JSON-compatible numbers."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+
+    with pytest.raises(EvidenceError, match="finite positive measurements"):
+        validate_performance_observation(manifest)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        serialize_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("operations", True),
+        ("warmup_operations", False),
+        ("operations", 1.5),
+        ("warmup_operations", 2.0),
+        ("operations", "2000"),
+    ],
+)
+def test_manifest_rejects_non_integer_benchmark_operation_counts(
+    field: str, value: object
+) -> None:
+    """Operation counts are integral evidence, not truthy or coercible values."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+
+    with pytest.raises(EvidenceError, match="integer operation counts"):
+        validate_performance_observation(manifest)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_manifest_reader_rejects_non_standard_json_numbers(
+    tmp_path: Path, token: str
+) -> None:
+    """Tracked evidence cannot use Python's permissive non-standard constants."""
+    manifest_path = tmp_path / "release-baseline.json"
+    malformed = serialize_manifest(_manifest_fixture()).replace(
+        '"elapsed_seconds": 0.02', f'"elapsed_seconds": {token}'
+    )
+    manifest_path.write_text(malformed, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="Could not read manifest"):
+        release_evidence.write_or_check_manifest(
+            _manifest_fixture(), manifest_path=manifest_path, write=False
+        )
+
+
 def test_manifest_freshness_excludes_only_volatile_benchmark_measurements() -> None:
     """A valid benchmark measurement may change without weakening its presence contract."""
     expected = _manifest_fixture()

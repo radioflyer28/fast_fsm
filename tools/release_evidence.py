@@ -11,6 +11,7 @@ import gc
 import importlib
 from importlib import machinery, metadata
 import json
+import math
 import os
 from packaging.utils import (
     InvalidWheelFilename,
@@ -812,12 +813,17 @@ def slots_policy(source_root: Path | None = None) -> dict[str, Any]:
 
 def serialize_manifest(manifest: Mapping[str, Any]) -> str:
     """Render evidence as one stable JSON document with exactly one newline."""
-    return json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    return (
+        json.dumps(
+            manifest, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False
+        )
+        + "\n"
+    )
 
 
 def _render_field_value(value: Any) -> str:
     """Make a compact, deterministic field-level diff value."""
-    return json.dumps(value, sort_keys=True, ensure_ascii=True)
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, allow_nan=False)
 
 
 def _python_major_minor(version: Any) -> str:
@@ -924,12 +930,12 @@ def validate_performance_observation(manifest: Mapping[str, Any]) -> None:
         command = observation["command"]
         mode = observation["mode"]
         metric = observation["metric"]
-        operations = int(observation["operations"])
-        warmup_operations = int(observation["warmup_operations"])
-        elapsed_seconds = float(observation["elapsed_seconds"])
-        ops_per_second = float(observation["ops_per_second"])
+        operations = observation["operations"]
+        warmup_operations = observation["warmup_operations"]
+        elapsed_seconds = observation["elapsed_seconds"]
+        ops_per_second = observation["ops_per_second"]
         environment = observation["environment"]
-    except (KeyError, TypeError, ValueError) as error:
+    except KeyError as error:
         raise EvidenceError("Manifest performance observation is malformed.") from error
     if not all(isinstance(value, str) and value for value in (command, mode, metric)):
         raise EvidenceError(
@@ -938,6 +944,20 @@ def validate_performance_observation(manifest: Mapping[str, Any]) -> None:
     if mode != "pure":
         raise EvidenceError(
             f"Manifest performance observation must record pure mode, got {mode!r}."
+        )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in (operations, warmup_operations)
+    ):
+        raise EvidenceError(
+            "Manifest performance observation requires integer operation counts."
+        )
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in (elapsed_seconds, ops_per_second)
+    ) or not all(math.isfinite(value) for value in (elapsed_seconds, ops_per_second)):
+        raise EvidenceError(
+            "Manifest performance observation requires finite positive measurements."
         )
     if (
         operations <= 0
@@ -1334,9 +1354,16 @@ def collect_manifest(
 
 def _read_manifest(path: Path) -> dict[str, Any]:
     """Load a tracked manifest without normalizing its source bytes."""
+
+    def reject_non_standard_number(value: str) -> None:
+        raise ValueError(f"non-standard JSON number {value!r}")
+
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=reject_non_standard_number,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as error:
         raise EvidenceError(f"Could not read manifest {path}: {error}") from error
     if not isinstance(payload, dict):
         raise EvidenceError(f"Manifest {path} must contain a JSON object.")
@@ -1390,9 +1417,9 @@ def _render_summary(manifest: Mapping[str, Any]) -> str:
 def _emit(payload: dict[str, Any], as_json: bool) -> None:
     """Write deterministic CLI output without exposing the caller environment."""
     if as_json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
         return
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
 
 
 def _build_parser() -> argparse.ArgumentParser:
