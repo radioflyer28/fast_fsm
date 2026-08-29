@@ -148,12 +148,18 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
 ) -> None:
     """A source archive retains setup-time selector imports without repository access."""
     dist_dir = tmp_path / "dist"
+    build_constraints = tmp_path / "build-constraints.txt"
+    build_constraints.write_text(
+        "setuptools==80.9.0\nwheel==0.45.1\nmypy[mypyc]==1.17.1\n",
+        encoding="utf-8",
+    )
     build_env = {**os.environ, "FAST_FSM_BUILD_MODE": "pure"}
     subprocess.run(
         [
             "uv",
             "build",
-            "--no-build-isolation",
+            "--build-constraints",
+            str(build_constraints),
             "--sdist",
             "--out-dir",
             str(dist_dir),
@@ -179,7 +185,8 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
         [
             "uv",
             "build",
-            "--no-build-isolation",
+            "--build-constraints",
+            str(build_constraints),
             "--wheel",
             "--out-dir",
             str(wheel_dir),
