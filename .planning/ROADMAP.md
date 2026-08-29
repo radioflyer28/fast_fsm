@@ -182,7 +182,7 @@
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 15. Release Baseline & Evidence Harness | v0.3.0 | 6/7 | In Progress|  |
+| 15. Release Baseline & Evidence Harness | v0.3.0 | 6/8 | In Progress|  |
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 0/TBD | Not started | - |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 0/TBD | Not started | - |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 0/TBD | Not started | - |
