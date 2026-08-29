@@ -186,16 +186,21 @@ class State:
 
         Args:
             name: State name
-            on_enter: Optional callback for entering the state
-            on_exit: Optional callback for exiting the state
+            on_enter: Optional callback for entering the state. It receives
+                ``*args`` and ``**kwargs``.
+            on_exit: Optional callback for exiting the state. It receives
+                ``*args`` and ``**kwargs``.
 
         Returns:
             CallbackState instance with configured callbacks
 
-        Example:
-            state = State.create('processing',
-                               on_enter=lambda *args, **kwargs: print('Processing started'),
-                               on_exit=lambda *args, **kwargs: print('Processing finished'))
+        Example::
+
+            state = State.create(
+                "processing",
+                on_enter=lambda *args, **kwargs: print("Processing started"),
+                on_exit=lambda *args, **kwargs: print("Processing finished"),
+            )
         """
         return CallbackState(name, on_enter, on_exit)
 
@@ -392,12 +397,16 @@ class StateMachine:
         Returns:
             Configured StateMachine
 
-        Example:
-            fsm = StateMachine.quick_build('idle', [
-                ('start', 'idle', 'running'),
-                ('stop', 'running', 'idle'),
-                ('error', 'running', 'error')
-            ])
+        Example::
+
+            fsm = StateMachine.quick_build(
+                "idle",
+                [
+                    ("start", "idle", "running"),
+                    ("stop", "running", "idle"),
+                    ("error", "running", "error"),
+                ],
+            )
         """
         # Collect all state names from transitions
         all_states = set()
@@ -911,10 +920,10 @@ class StateMachine:
                 def on_enter_state(self, target, source, trigger, **kwargs): ...
                 def after_transition(self, source, target, trigger, **kwargs): ...
 
-        **Argument semantics:**
+        .. rubric:: Argument semantics
 
-        - *source* / *target* — :class:`State` objects (access ``.name`` for the string)
-        - *trigger* — the trigger name string
+        - ``source`` / ``target`` — :class:`State` objects (access ``.name`` for the string)
+        - ``trigger`` — the trigger name string
         - ``**kwargs`` — forwarded from the original :meth:`trigger` call
 
         Bound method references are extracted at registration time so the
@@ -927,7 +936,8 @@ class StateMachine:
         Args:
             *listeners: One or more observer objects.
 
-        Example:
+        Example::
+
             class TransitionLogger:
                 def after_transition(self, source, target, trigger, **kwargs):
                     print(f"{source.name} --[{trigger}]--> {target.name}")
@@ -2808,11 +2818,15 @@ def quick_fsm(
     Returns:
         Configured StateMachine
 
-    Example:
-        fsm = quick_fsm('idle', [
-            ('start', 'idle', 'running'),
-            ('stop', 'running', 'idle')
-        ])
+    Example::
+
+        fsm = quick_fsm(
+            "idle",
+            [
+                ("start", "idle", "running"),
+                ("stop", "running", "idle"),
+            ],
+        )
     """
     return StateMachine.quick_build(initial_state, transitions, name=name)
 
@@ -2848,7 +2862,8 @@ def condition_builder(
         ``FuncCondition`` when used as bare decorator, or a decorator
         callable when used with arguments.
 
-    Example:
+    Example::
+
         @condition_builder(name="fuel_check", description="Check fuel level")
         def has_fuel(level=0, **kwargs):
             return level > 0
