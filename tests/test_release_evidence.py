@@ -493,3 +493,10 @@ def test_build_tool_versions_are_read_from_the_reviewed_lock_not_runtime_imports
     )
 
     assert release_evidence._locked_package_version("wheel", lock_path) == "0.45.1"
+
+
+def test_repository_lock_records_each_exact_release_build_tool() -> None:
+    """The manifest can audit all exact PEP 517 inputs from uv.lock."""
+    assert release_evidence._locked_package_version("setuptools") == "80.9.0"
+    assert release_evidence._locked_package_version("wheel") == "0.45.1"
+    assert release_evidence._locked_package_version("mypy") == "1.17.1"
