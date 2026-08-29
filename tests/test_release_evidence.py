@@ -252,7 +252,9 @@ def test_slots_policy_recursively_classifies_every_production_class() -> None:
     inventory = evidence["inventory"]
     assert inventory
     assert all(entry["classification"] for entry in inventory)
-    registered = {entry["qualified_name"]: entry for entry in evidence["registered_exceptions"]}
+    registered = {
+        entry["qualified_name"]: entry for entry in evidence["registered_exceptions"]
+    }
     assert set(registered) == {
         "fast_fsm.core.CompiledFuncCondition",
         "fast_fsm.core.TransitionError",

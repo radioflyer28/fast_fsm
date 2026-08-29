@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import ast
+from dataclasses import dataclass
 from email.parser import Parser
 import importlib
 from importlib import machinery, metadata
 import json
 from pathlib import Path
 import sys
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 from zipfile import ZipFile
 
 
@@ -17,9 +19,30 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
 
+REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
+    "fast_fsm.core.CompiledFuncCondition": (
+        "@mypyc_attr(native_class=False) preserves the interpreted Condition "
+        "inheritance boundary."
+    ),
+    "fast_fsm.core.TransitionError": (
+        "@mypyc_attr(native_class=False) preserves normal Python exception behavior."
+    ),
+}
+
 
 class EvidenceError(RuntimeError):
     """Raised when local release evidence is incomplete or contradictory."""
+
+
+@dataclass(frozen=True)
+class ClassDeclaration:
+    """A top-level class declaration discovered by the static slots inventory."""
+
+    qualified_name: str
+    source_path: str
+    line: int
+    base_names: tuple[str, ...]
+    has_own_slots: bool
 
 
 def _native_suffixes() -> tuple[str, ...]:
@@ -209,6 +232,235 @@ def verify_wheels(wheel_paths: Iterable[Path]) -> dict[str, list[dict[str, Any]]
     return {"artifacts": artifacts}
 
 
+def _module_name_for_path(source_root: Path, source_file: Path) -> str:
+    """Map an importable package path to its module name."""
+    relative = source_file.relative_to(source_root).with_suffix("")
+    parts = list(relative.parts)
+    if parts and parts[0] == PACKAGE_NAME:
+        parts.pop(0)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join([PACKAGE_NAME, *parts])
+
+
+def _base_names(class_node: ast.ClassDef) -> tuple[str, ...]:
+    """Extract simple local base names for static inheritance resolution."""
+    names: list[str] = []
+    for base in class_node.bases:
+        if isinstance(base, ast.Name):
+            names.append(base.id)
+        elif isinstance(base, ast.Attribute):
+            names.append(base.attr)
+    return tuple(names)
+
+
+def _has_own_slots(class_node: ast.ClassDef) -> bool:
+    """Recognize ``__slots__`` and ``@dataclass(slots=True)`` declarations."""
+    for statement in class_node.body:
+        if isinstance(statement, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "__slots__"
+                for target in statement.targets
+            ):
+                return True
+        elif isinstance(statement, ast.AnnAssign):
+            if (
+                isinstance(statement.target, ast.Name)
+                and statement.target.id == "__slots__"
+            ):
+                return True
+
+    for decorator in class_node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        decorator_name = (
+            decorator.func.id
+            if isinstance(decorator.func, ast.Name)
+            else decorator.func.attr
+            if isinstance(decorator.func, ast.Attribute)
+            else ""
+        )
+        if decorator_name != "dataclass":
+            continue
+        if any(
+            keyword.arg == "slots"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in decorator.keywords
+        ):
+            return True
+    return False
+
+
+def collect_class_declarations(source_root: Path) -> list[ClassDeclaration]:
+    """Recursively collect importable top-level production classes from source."""
+    resolved_source_root = source_root.resolve()
+    package_root = resolved_source_root / PACKAGE_NAME
+    if not package_root.is_dir():
+        raise EvidenceError(f"Package directory does not exist: {package_root}")
+
+    declarations: list[ClassDeclaration] = []
+    for source_file in sorted(package_root.rglob("*.py")):
+        source = source_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(source_file))
+        module_name = _module_name_for_path(resolved_source_root, source_file)
+        source_path = _normalized_relative_path(
+            source_file, resolved_source_root.parent
+        )
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            declarations.append(
+                ClassDeclaration(
+                    qualified_name=f"{module_name}.{node.name}",
+                    source_path=source_path,
+                    line=node.lineno,
+                    base_names=_base_names(node),
+                    has_own_slots=_has_own_slots(node),
+                )
+            )
+    return sorted(declarations, key=lambda declaration: declaration.qualified_name)
+
+
+def _is_inherited_slot_protected(
+    declaration: ClassDeclaration,
+    declarations_by_short_name: Mapping[str, ClassDeclaration],
+    visited: set[str] | None = None,
+) -> bool:
+    """Return whether a declaration inherits slots from a local ancestor."""
+    seen = set() if visited is None else visited
+    if declaration.qualified_name in seen:
+        return False
+    seen.add(declaration.qualified_name)
+    for base_name in declaration.base_names:
+        base = declarations_by_short_name.get(base_name)
+        if base is None:
+            continue
+        if base.has_own_slots or _is_inherited_slot_protected(
+            base, declarations_by_short_name, seen
+        ):
+            return True
+    return False
+
+
+def validate_slots_inventory(
+    declarations: Iterable[ClassDeclaration],
+    registry: Mapping[str, str] = REGISTERED_SLOTS_EXCEPTIONS,
+) -> list[dict[str, Any]]:
+    """Classify every discovered class or fail on stale/un-slotted entries."""
+    ordered_declarations = sorted(declarations, key=lambda item: item.qualified_name)
+    declarations_by_name = {
+        declaration.qualified_name: declaration for declaration in ordered_declarations
+    }
+    declarations_by_short_name = {
+        declaration.qualified_name.rsplit(".", 1)[-1]: declaration
+        for declaration in ordered_declarations
+    }
+    stale_entries = sorted(set(registry) - set(declarations_by_name))
+    if stale_entries:
+        raise EvidenceError(
+            "Registered slots-policy exception(s) no longer exist in source: "
+            + ", ".join(stale_entries)
+        )
+
+    inventory: list[dict[str, Any]] = []
+    unprotected: list[ClassDeclaration] = []
+    for declaration in ordered_declarations:
+        entry: dict[str, Any] = {
+            "qualified_name": declaration.qualified_name,
+            "source_path": declaration.source_path,
+            "line": declaration.line,
+        }
+        exception_reason = registry.get(declaration.qualified_name)
+        if exception_reason is not None:
+            entry.update(
+                classification="registered-exception", exception_reason=exception_reason
+            )
+        elif declaration.has_own_slots:
+            entry["classification"] = "slot-protected"
+        elif _is_inherited_slot_protected(declaration, declarations_by_short_name):
+            entry["classification"] = "inherited-slot-protected"
+        else:
+            unprotected.append(declaration)
+            continue
+        inventory.append(entry)
+
+    if unprotected:
+        locations = "\n".join(
+            f"  - {item.qualified_name} ({item.source_path}:{item.line})"
+            for item in unprotected
+        )
+        raise EvidenceError(
+            "Unregistered instance-__dict__ class(es) in slots-policy inventory:\n"
+            + locations
+        )
+    return inventory
+
+
+def _measure_instance(instance: object) -> dict[str, Any]:
+    """Return deliberate, environment-labeled instance memory evidence."""
+    return {
+        "has_instance_dict": hasattr(instance, "__dict__"),
+        "instance_size_bytes": sys.getsizeof(instance),
+    }
+
+
+def _slots_measurements(
+    source_root: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Instantiate registered and representative classes without exposing internals."""
+    source_root_text = str(source_root.resolve())
+    if source_root_text not in sys.path:
+        sys.path.insert(0, source_root_text)
+    importlib.invalidate_caches()
+    core = importlib.import_module(CORE_MODULE_NAME)
+
+    registered_instances = {
+        "fast_fsm.core.CompiledFuncCondition": core.CompiledFuncCondition(
+            lambda **_kwargs: True
+        ),
+        "fast_fsm.core.TransitionError": core.TransitionError(
+            core.TransitionResult(False)
+        ),
+    }
+    registered = [
+        {
+            "qualified_name": qualified_name,
+            "exception_reason": REGISTERED_SLOTS_EXCEPTIONS[qualified_name],
+            **_measure_instance(instance),
+        }
+        for qualified_name, instance in sorted(registered_instances.items())
+    ]
+    representatives = [
+        {
+            "qualified_name": "fast_fsm.core.State",
+            **_measure_instance(core.State("slots-policy")),
+        },
+        {
+            "qualified_name": "fast_fsm.core.TransitionResult",
+            **_measure_instance(core.TransitionResult(True)),
+        },
+    ]
+    return registered, representatives
+
+
+def slots_policy(source_root: Path | None = None) -> dict[str, Any]:
+    """Produce a complete static and measured slots-policy inventory."""
+    resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
+    declarations = collect_class_declarations(resolved_source_root)
+    inventory = validate_slots_inventory(declarations)
+    registered, representatives = _slots_measurements(resolved_source_root)
+    return {
+        "inventory": inventory,
+        "registered_exceptions": registered,
+        "representative_measurements": representatives,
+        "measurement_environment": {
+            "implementation": sys.implementation.name,
+            "python_version": sys.version.split()[0],
+        },
+    }
+
+
 def _emit(payload: dict[str, Any], as_json: bool) -> None:
     """Write deterministic CLI output without exposing the caller environment."""
     if as_json:
@@ -243,6 +495,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="wheel archive to inspect",
     )
     verify_wheel_parser.add_argument("--json", action="store_true")
+
+    slots_policy_parser = commands.add_parser(
+        "slots-policy", help="recursively audit source classes against the slots policy"
+    )
+    slots_policy_parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=REPOSITORY_ROOT / "src",
+        help="source directory containing the fast_fsm package (default: repository src)",
+    )
+    slots_policy_parser.add_argument("--json", action="store_true")
     return parser
 
 
@@ -255,6 +518,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit(verify_source(parsed.source_root), parsed.json)
         elif parsed.command == "verify-wheel":
             _emit(verify_wheels(parsed.wheel), parsed.json)
+        elif parsed.command == "slots-policy":
+            _emit(slots_policy(parsed.source_root), parsed.json)
         else:  # pragma: no cover - argparse constrains this branch.
             parser.error(f"Unknown command: {parsed.command}")
     except EvidenceError as error:
