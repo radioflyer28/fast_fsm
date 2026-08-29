@@ -588,6 +588,16 @@ def _render_field_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=True)
 
 
+def _python_major_minor(version: Any) -> str:
+    """Return a fail-closed major.minor identity from an exact Python version."""
+    if not isinstance(version, str):
+        raise EvidenceError("Manifest has malformed toolchain.python identity.")
+    components = version.split(".")
+    if len(components) != 3 or not all(component.isdigit() for component in components):
+        raise EvidenceError("Manifest has malformed toolchain.python identity.")
+    return f"{int(components[0])}.{int(components[1])}"
+
+
 def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Return fields whose equality defines evidence freshness.
 
@@ -597,6 +607,9 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """
     stable = json.loads(serialize_manifest(manifest))
     stable.pop("measurement_environment", None)
+    toolchain = stable.get("toolchain")
+    if isinstance(toolchain, dict) and "python" in toolchain:
+        toolchain["python"] = _python_major_minor(toolchain["python"])
     return stable
 
 
