@@ -65,10 +65,14 @@ Defined in `pytest.ini`:
 
 ### Guidelines
 
-1. **Use composition, not inheritance.** Do not subclass `StateMachine` or
-   `State` in tests — create instances and call methods. This is required
-   for compatibility with the mypyc-compiled build (compiled classes cannot
-   be subclassed from interpreted Python).
+1. **Prefer composition, with a deliberate state-subclass exception.** Do not
+   subclass `StateMachine` or `AsyncStateMachine` in tests; create instances
+   and call methods because machine types are closed compiled types. `State`,
+   `CallbackState`, `DeclarativeState`, and `AsyncDeclarativeState` are
+   supported interpreted-subclass hooks through
+   `@mypyc_attr(allow_interpreted_subclasses=True)`. Use a minimal local
+   subclass when testing behavior that depends on a state subclass hook, and
+   run it in both pure and compiled modes.
 2. **No logic mocking.** Never mock `trigger()`, `check()`, or state
    callbacks. Mock the *environment* (clock, RNG, I/O), not the logic
    being tested.

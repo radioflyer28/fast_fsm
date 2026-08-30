@@ -173,8 +173,9 @@ always returns a chronological defensive `list` copy.
 
 Fast FSM uses [mypyc](https://mypyc.readthedocs.io/) to compile
 performance-critical modules to C extensions. Compilation is **selective** —
-only hot-path modules are compiled; modules that users subclass remain
-interpreted.
+only hot-path modules are compiled. The open `State` hierarchy remains a
+supported interpreted-subclass boundary through an explicit mypyc compatibility
+decorator, while the machine types remain closed compiled types.
 
 ### Compilation Boundary
 
@@ -201,9 +202,13 @@ source in `src/fast_fsm/`.
   Compilation is an optimization, not a requirement.
 - `conditions.py` MUST stay uncompiled — compiling it would break
   every user who writes a custom `Condition` subclass.
-- Tests MUST use composition (create instances, call methods), not
-  inheritance of `State` or `StateMachine`, to stay compatible with
-  the compiled build.
+- Use composition for `StateMachine` and `AsyncStateMachine`; they are closed
+  compiled types and are not supported subclassing surfaces.
+- `State`, `CallbackState`, `DeclarativeState`, and `AsyncDeclarativeState`
+  intentionally support interpreted subclasses through
+  `@mypyc_attr(allow_interpreted_subclasses=True)`. Tests for a state subclass
+  hook may use a minimal local subclass and must run in both pure and compiled
+  contexts; unrelated tests should still prefer composition.
 - `core.py` remains the one mypyc compilation unit and
   `mypy-extensions` remains the sole runtime dependency. Phase 16 adds only
   private seams: no public export or existing public signature is removed.
