@@ -5,11 +5,11 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 16
 current_phase_name: Canonical Graph & Dispatch Invariants
 status: planning
-stopped_at: Phase 15 complete, ready to plan Phase 16
-last_updated: "2026-08-30T02:21:35.759Z"
+stopped_at: Phase 16 context gathered
+last_updated: "2026-08-30T02:26:38.263Z"
 last_activity: 2026-08-29
 last_activity_desc: Phase 15 complete, transitioned to Phase 16
-state_head: 9c67de57eecfe5690ad6350ca58687d4c56983d6
+state_head: 582bf0fbf842b7164b61c2ce1cfcf54cb63bf5e7
 progress:
   total_phases: 6
   completed_phases: 1
@@ -98,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-29T21:59:09.654Z
-Stopped at: Phase 15 complete, ready to plan Phase 16
-Resume file: None
+Last session: 2026-08-30T02:26:38.220Z
+Stopped at: Phase 16 context gathered
+Resume file: .planning/phases/16-canonical-graph-dispatch-invariants/16-CONTEXT.md
