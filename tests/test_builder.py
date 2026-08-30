@@ -174,6 +174,23 @@ def builder_staging_fingerprint(builder):
     )
 
 
+def _make_supported_wrapper_cycle(shape):
+    """Build one private supported-wrapper cycle for builder rejection tests."""
+    if shape == "negated":
+        condition = NegatedCondition(AlwaysTrue())
+        condition._inner = condition
+    elif shape == "and":
+        condition = AndCondition(AlwaysTrue())
+        condition.conditions = (condition,)
+    elif shape == "or":
+        condition = OrCondition(AlwaysTrue())
+        condition.conditions = (condition,)
+    else:
+        condition = NotCondition(AlwaysTrue())
+        condition.condition = condition
+    return condition
+
+
 # ---------------------------------------------------------------------------
 # FSMBuilder basics
 # ---------------------------------------------------------------------------
@@ -1541,3 +1558,86 @@ class TestFSMBuilderAsyncPreflight:
 
         assert builder.machine_type is AsyncStateMachine
         assert isinstance(builder.build(), AsyncStateMachine)
+
+    @pytest.mark.parametrize("shape", ("negated", "and", "or", "not"))
+    @pytest.mark.parametrize("async_mode", (None, False, True))
+    def test_every_builder_mode_rejects_every_cycle_before_transition_staging(
+        self, shape, async_mode
+    ):
+        builder = FSMBuilder(State("start"), async_mode=async_mode)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.add_transition(
+                "go", "start", "finish", _make_supported_wrapper_cycle(shape)
+            )
+
+        assert builder_staging_fingerprint(builder) == before
+
+    @pytest.mark.parametrize("shape", ("negated", "and", "or", "not"))
+    @pytest.mark.parametrize("async_mode", (None, False, True))
+    def test_every_builder_mode_rejects_every_cycle_before_state_staging(
+        self, shape, async_mode
+    ):
+        cycle = _make_supported_wrapper_cycle(shape)
+
+        class CyclicDeclarativeState(DeclarativeState):
+            @transition("go", condition=cycle)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"), async_mode=async_mode)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.add_state(CyclicDeclarativeState("cyclic"))
+
+        assert builder_staging_fingerprint(builder) == before
+
+    @pytest.mark.parametrize("async_mode", (None, False, True))
+    def test_async_handler_does_not_hide_later_declarative_guard_cycle(
+        self, async_mode
+    ):
+        cycle = _make_supported_wrapper_cycle("not")
+
+        class MixedDeclarativeState(DeclarativeState):
+            @transition("async-handler")
+            async def a_async_handler(self, *args, **kwargs):
+                return True
+
+            @transition("cycle-guard", condition=cycle)
+            def z_cycle_guard(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"), async_mode=async_mode)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.add_state(MixedDeclarativeState("mixed"))
+
+        assert builder_staging_fingerprint(builder) == before
+
+    @pytest.mark.parametrize("async_mode", (None, False, True))
+    def test_build_preflight_validates_all_handlers_after_classification(
+        self, async_mode
+    ):
+        guard = NotCondition(AlwaysTrue())
+
+        class MixedDeclarativeState(DeclarativeState):
+            @transition("async-handler")
+            async def a_async_handler(self, *args, **kwargs):
+                return True
+
+            @transition("cycle-guard", condition=guard)
+            def z_cycle_guard(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"), async_mode=async_mode)
+        builder.add_state(MixedDeclarativeState("mixed"))
+        guard.condition = guard
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.build()
+
+        assert builder_staging_fingerprint(builder) == before

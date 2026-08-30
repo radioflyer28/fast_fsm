@@ -2933,11 +2933,14 @@ class FSMBuilder:
         logger_name = machine_kwargs.get("name", "FSM")
         self._logger = logging.getLogger(f"fast_fsm.builder.{logger_name}")
 
+        # Validate every initial declarative guard regardless of selected mode.
+        # Auto mode additionally uses the complete traversal for classification.
+        detected_type = self._detect_async_requirements(initial_state)
+
         # Determine machine type
         if async_mode is None:
-            # Auto-detect based on initial state
             self._auto_detect = True
-            self._machine_type = self._detect_async_requirements(initial_state)
+            self._machine_type = detected_type
             self._logger.debug(
                 "Builder: Auto-detected %s mode based on initial state",
                 "async" if self._machine_type == AsyncStateMachine else "sync",
@@ -2975,30 +2978,31 @@ class FSMBuilder:
         Returns:
             AsyncStateMachine if async support needed, StateMachine otherwise
         """
+        async_required = False
         for item in states_or_conditions:
             # Check for AsyncDeclarativeState
             if isinstance(item, AsyncDeclarativeState):
-                return AsyncStateMachine
+                async_required = True
 
             # Check direct and nested built-in condition wrappers through the
             # canonical graph classifier used by runtime dispatch.
             if isinstance(item, Condition) and StateMachine._contains_async_requirement(
                 item
             ):
-                return AsyncStateMachine
+                async_required = True
 
             # Check DeclarativeState for async handlers
             if isinstance(item, DeclarativeState):
                 for handler_info in item._handlers.values():
                     if handler_info.get("is_async", False):
-                        return AsyncStateMachine
+                        async_required = True
                     condition = handler_info.get("condition")
                     if isinstance(
                         condition, Condition
                     ) and StateMachine._contains_async_requirement(condition):
-                        return AsyncStateMachine
+                        async_required = True
 
-        return StateMachine
+        return AsyncStateMachine if async_required else StateMachine
 
     def add_state(self, state: State) -> "FSMBuilder":
         """Add a state to the builder with async detection"""
@@ -3013,9 +3017,11 @@ class FSMBuilder:
                 f"Builder already contains a different State object named '{state.name}'"
             )
 
+        # Validate the complete candidate graph in every mode before publishing
+        # staging. Explicit modes ignore the classification but not validation.
+        detected_type = self._detect_async_requirements(state)
         required_type = self._machine_type
         if self._auto_detect:
-            detected_type = self._detect_async_requirements(state)
             if (
                 detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
@@ -3065,9 +3071,11 @@ class FSMBuilder:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
                 )
+        # Validate a supported guard graph before changing staging in auto and
+        # explicit modes alike. Only auto mode consumes its async classification.
+        detected_type = self._detect_async_requirements(condition)
         required_type = self._machine_type
-        if condition and self._auto_detect:
-            detected_type = self._detect_async_requirements(condition)
+        if self._auto_detect:
             if (
                 detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
@@ -3185,33 +3193,44 @@ class FSMBuilder:
         return self
 
     def _preflight_async_requirements(self) -> Optional[str]:
-        """Describe the first staged async requirement before candidate allocation."""
+        """Validate all staged graphs and describe their first async requirement."""
+        first_requirement: Optional[str] = None
         for state in self._states.values():
             if isinstance(state, AsyncDeclarativeState):
-                return f"AsyncDeclarativeState '{state.name}'"
+                if first_requirement is None:
+                    first_requirement = f"AsyncDeclarativeState '{state.name}'"
             if isinstance(state, DeclarativeState):
                 for trigger, handler_info in state._handlers.items():
                     if handler_info.get("is_async", False):
-                        return f"declarative handler for trigger '{trigger}'"
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative handler for trigger '{trigger}'"
+                            )
                     condition = handler_info.get("condition")
                     if isinstance(
                         condition, Condition
                     ) and StateMachine._contains_async_requirement(condition):
-                        return f"declarative condition for trigger '{trigger}'"
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative condition for trigger '{trigger}'"
+                            )
 
         for trigger, _, _, condition in self._transitions:
             if isinstance(
                 condition, Condition
             ) and StateMachine._contains_async_requirement(condition):
-                return f"transition '{trigger}' condition"
+                if first_requirement is None:
+                    first_requirement = f"transition '{trigger}' condition"
 
         if self._enter_async_callbacks:
             state_name, _ = self._enter_async_callbacks[0]
-            return f"on_enter_async callback for '{state_name}'"
+            if first_requirement is None:
+                first_requirement = f"on_enter_async callback for '{state_name}'"
         if self._exit_async_callbacks:
             state_name, _ = self._exit_async_callbacks[0]
-            return f"on_exit_async callback for '{state_name}'"
-        return None
+            if first_requirement is None:
+                first_requirement = f"on_exit_async callback for '{state_name}'"
+        return first_requirement
 
     def build(self) -> Union[StateMachine, AsyncStateMachine]:
         """Build and return the final state machine"""
