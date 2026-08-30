@@ -1,6 +1,6 @@
 ---
 phase: 16-canonical-graph-dispatch-invariants
-reviewed: 2026-08-30T17:03:33Z
+reviewed: 2026-08-30T19:10:01Z
 depth: standard
 files_reviewed: 17
 files_reviewed_list:
@@ -22,176 +22,105 @@ files_reviewed_list:
   - tests/test_safety_kwargs.py
   - tools/phase16_isolated_verify.py
 findings:
-  critical: 5
-  warning: 1
+  critical: 2
+  warning: 0
   info: 0
-  total: 6
+  total: 2
 status: issues_found
 ---
 
 # Phase 16: Code Review Report
 
-**Reviewed:** 2026-08-30T17:03:33Z
+**Reviewed:** 2026-08-30T19:10:01Z
 **Depth:** standard
 **Files Reviewed:** 17
 **Status:** issues_found
 
 ## Summary
 
-The three preceding cycle-two findings are fixed on their covered paths. The
-24 focused subclass, temporary-file, malformed-percentage, and migration cases
-passed in both asserted-pure and freshly compiled exports. An independent
-asserted-pure baseline check also reproduced the committed 1,129/1,129 tests
-and 96.21% / 94.57% total / `core.py` coverage.
+The four findings from the preceding review are fixed on their named paths.
+The exact `CompiledFuncCondition`, inherited `FuncCondition`, and overridden
+`check()` cases now select or reject the correct machine type; failed auto
+builds publish neither their candidate nor its transient type; manifest
+publication stays on a no-follow descriptor after parent/leaf swaps and fails
+closed without the required platform primitives; and the new-file mode probe
+does not mutate process-global `umask`. The focused 14-test asserted-pure
+selection passed, and an independent asserted-pure baseline check reproduced
+1,175/1,175 tests with 96.37% total coverage and 94.85% `core.py` coverage.
+The component-level release evidence is internally consistent and does not
+claim an unobserved monolithic-wrapper exit.
 
-The final adversarial pass nevertheless found five blocker-tier gaps. Builder
-classification still bypasses an async `FuncCondition.check()` override even
-though runtime evaluation now honors it; first-time manifest publication skips
-generated-value validation; the 1,129-test floor can be silently rewritten;
-the destination leaf is resolved through an in-repository symlink; and
-`quick_build()` still uses value equality and discards supplied state objects.
-The new temporary-file path also changes a normal repository manifest from
-mode `0644` to `0600`.
-
-The intentional dynamic `Any` casts at the mypyc awaitability boundary remain
-runtime-required and are not findings.
+The review is not clean. The async classifier still misses inspectable async
+callable objects, so both auto and explicit-sync builders choose invalid modes
+in fresh pure and compiled reproductions. The review also reproduced a separate
+pure/compiled contract split: `CompiledFuncCondition` is documented as an
+interpreted-subclass surface, works that way in pure mode, but crashes at
+construction under the compiled artifact.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Builder async classification still bypasses a `FuncCondition` subclass override
+### CR-01: Async callable objects still bypass builder mode classification
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:1680-1684`
+**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:1735-1750,3175-3189,3403-3417`
 
-**Issue:** Runtime async evaluation now correctly distinguishes the exact
-built-in `FuncCondition` from public subclasses, but
-`_contains_async_requirement()` still applies `isinstance(current,
-FuncCondition)` and inspects only `current.func`. A subclass whose stored
-function is synchronous but whose effective `check()` override is declared
-with `async def` is therefore classified as synchronous. In fresh asserted-pure
-and compiled reproductions, an auto-mode `FSMBuilder` returned
-`StateMachine`, not `AsyncStateMachine`; explicit-sync preflight likewise does
-not reject the async requirement. This leaves the repaired awaitable runtime
-path unreachable through the builder's promised auto-detection contract.
+**Issue:** The repaired classifier calls `asyncio.iscoroutinefunction()` on
+the stored callable object itself. Python returns `False` for an instance whose
+`__call__` method is declared with `async def`, even though invoking that object
+returns a coroutine. This affects exact `FuncCondition(AsyncCallable())`, exact
+`CompiledFuncCondition(AsyncCallable())`, and a callable object supplied
+directly as a builder guard. In fresh asserted-pure and freshly compiled
+reproductions, auto mode reported and built `StateMachine`; explicit-sync mode
+also accepted the condition. Async runtime evaluation is already capable of
+awaiting the resulting coroutine, so detection and execution disagree and
+GRAF-05/D-11 remain unsatisfied for a documented “any callable” guard shape.
 
-**Fix:** Mirror the exact-type split used by the evaluator. Inspect `.func`
-only when `type(current) is FuncCondition`; for a subclass, inspect its
-effective bound/type-level `check` method with `asyncio.iscoroutinefunction`.
-Retain explicit `force_async()` for dynamically returned awaitables that cannot
-be detected without executing user code. Add pure and compiled regressions for
-auto and explicit-sync builders using an `async def check()` override, plus the
-existing reject/raise/awaitable runtime cases.
+**Fix:** Centralize callable-hook classification and test both the callable and
+its effective `__call__` method without executing user code, for example:
 
-### CR-02: First-time publication skips validation of the generated manifest
+```python
+def _is_async_callable(value: object) -> bool:
+    return asyncio.iscoroutinefunction(value) or asyncio.iscoroutinefunction(
+        getattr(value, "__call__", None)
+    )
+```
 
-**Classification:** BLOCKER
+Use that helper for stored `.func` leaves and direct/declarative callable
+guards in both incremental detection and build preflight. Add pure and compiled
+auto-mode, explicit-sync, and awaited-dispatch regressions for callable
+instances wrapped by both public function-condition types and supplied
+directly.
 
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:286-293`
-
-**Issue:** `_validate_coverage_floor()` returns immediately when the output
-does not already exist, before `_coverage_values(generated)` runs. A direct
-reproduction published a first-time manifest containing `NaN` coverage even
-though the new parser correctly rejects the same generated value when an old
-manifest exists. A new or custom `--manifest-output` can therefore bypass all
-strict number, finite/range, and required-field validation and establish an
-invalid baseline.
-
-**Fix:** Parse and validate the generated manifest unconditionally before the
-missing-existing-file branch. Use strict JSON loading that rejects non-standard
-constants, catch `OverflowError` from oversized JSON integers, and add
-first-write tests for `NaN`, infinities, booleans, strings, missing fields, and
-out-of-range values. Each failure must leave the destination absent.
-
-### CR-03: Baseline publication does not protect the 1,129-test floor
+### CR-02: `CompiledFuncCondition`'s documented subclass contract crashes when compiled
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:228-307`
+**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:329-386`
+**Related contract:** `/Users/akriz/code/fast_fsm/.specify/memory/spr-core-api.md:45`
 
-**Issue:** The publication preflight extracts and compares only coverage. The
-tracked manifest records 1,129 collected and 1,129 passed tests at
-`evidence/release-baseline.json:67-72`, but a reproduction replaced that
-baseline with a generated 1/1-test manifest when its coverage values remained
-96.21% / 94.57%. A subsequent read-only check then compares against the newly
-lowered file, so the lost test inventory is normalized rather than blocked.
+**Issue:** Both the class docstring and the current SPR state that
+`CompiledFuncCondition` can be subclassed from interpreted Python. A minimal
+inherited subclass constructs and runs in asserted-pure mode, but the same
+class against a freshly built native extension fails in the inherited
+constructor with `TypeError: fast_fsm.core.CompiledFuncCondition object
+expected; got __main__.InheritedCompiled`. This is a public artifact-mode crash,
+and it also means the new classifier's pure-mode inherited-compiled leaf falls
+outside the promised compiled/pure equivalence.
 
-**Fix:** Parse the complete durable quality floor before replacement. Require
-strict non-boolean integer counts, zero failures/errors, and generated
-`collected`/`passed` values no lower than the existing manifest. Extend the
-separately reviewed migration schema if intentional test-floor reductions are
-allowed. Add destination-byte-preservation tests for lower, malformed,
-negative, boolean, and inconsistent test counts.
-
-### CR-04: Resolving the destination leaf follows an in-repository symlink
-
-**Classification:** BLOCKER
-
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:212-225`
-
-**Issue:** `_manifest_output()` calls `.resolve()` on the complete output path.
-Although an external symlink target is rejected by the root check, a symlink to
-another file inside the repository is accepted and converted to that target
-path. `_export_manifest_atomically()` then replaces the unrelated target while
-leaving the requested manifest path as a symlink. A temporary-root
-reproduction overwrote `victim.json` through
-`evidence/release-baseline.json -> ../victim.json`. The unpredictable temporary
-name fixes the old temporary-symlink attack but does not provide no-follow
-semantics for the destination itself.
-
-**Fix:** Resolve and validate the parent directory, not the destination leaf.
-Use `lstat()` to reject an existing symlink (or atomically replace the lexical
-symlink itself without reading through it), and keep validation and replacement
-anchored to the same checked directory. Add in-root and out-of-root destination
-symlink tests proving the victim bytes never change.
-
-### CR-05: `quick_build()` still violates canonical state identity
-
-**Classification:** BLOCKER
-
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:643-667`
-
-**Issue:** `quick_build()` converts every `State` supplied through `states=` to
-only its name and then creates a new base `State`, discarding the caller's
-identity and any subclass behavior. It also excludes the initial object with
-`state_obj != initial_obj` instead of identity. With a supported initial
-`State` subclass whose distinct instances compare equal, an asserted-pure
-reproduction skipped the generated target state and failed construction with
-`ValueError: target state 'b' is not registered`. This is the same identity
-class of defect fixed in `FSMBuilder.build()`, and it contradicts the Phase 16
-canonical-convenience-constructor contract.
-
-**Fix:** Build the convenience registry from exact supplied objects. Preserve
-each `State` in `states=`, create base states only for string endpoints that do
-not yet have an object, reject different objects with the same name, and skip
-only `state_obj is initial_obj`. Add pure and compiled tests for a callback or
-custom state supplied via `states=`, an equal-comparing initial subclass, and
-same-name identity conflicts.
-
-## Warnings
-
-### WR-01: Atomic replacement silently narrows repository file permissions
-
-**Classification:** WARNING
-
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:332-345`
-
-**Issue:** `NamedTemporaryFile` creates the temporary with mode `0600`, and
-`os.replace()` transfers that mode to the destination. A reproduction starting
-with a normal `0644` manifest ended with `0600`. The content is correct, but
-other users and automation sharing the checkout can unexpectedly lose read
-access after a successful baseline refresh.
-
-**Fix:** Determine the intended final mode before publication and apply it to
-the open temporary descriptor with `os.fchmod()` before the file `fsync` and
-replace. Preserve an existing regular destination's mode; use an explicit
-repository-file default that respects the process umask for a first write. Add
-tests for existing and first-write permissions alongside cleanup assertions.
+**Fix:** Make the contract explicit and identical in both artifacts. If this is
+an intended subclass surface, use a mypyc-supported interpreted-subclass
+boundary and add a pure/compiled construction, auto-detection, explicit-sync,
+and dispatch matrix. If it is intentionally sealed, remove the subclassability
+claims from the class documentation and SPR, reject subclass creation
+consistently in pure mode, and direct users to the already supported
+interpreted `FuncCondition` subclass surface. Do not leave the current
+pure-only behavior.
 
 ---
 
-_Reviewed: 2026-08-30T17:03:33Z_
+_Reviewed: 2026-08-30T19:10:01Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
