@@ -15,7 +15,6 @@ Key design principles:
 import logging
 import time
 from collections import deque
-from contextvars import ContextVar
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple, cast, overload
 from dataclasses import dataclass
 import asyncio
@@ -24,21 +23,71 @@ from .conditions import Condition, FuncCondition, AsyncCondition, NegatedConditi
 
 
 # The machine-owned dispatch seam evaluates a declarative decorator guard before
-# invoking state policy. This context suppresses only the base declarative
-# class's duplicate evaluation for one exact source/trigger/target tuple.
-_prepared_declarative_guard: ContextVar[Optional[Tuple[int, str, int]]] = ContextVar(
-    "fast_fsm_prepared_declarative_guard", default=None
-)
+# invoking state policy. The per-task marker suppresses only the base
+# declarative class's duplicate evaluation for one exact source/trigger/target
+# tuple. A marker is restored after each dispatch so nested policy calls retain
+# the outer state safely in both pure Python and mypyc builds.
+_prepared_declarative_guards: Dict[Optional[int], Tuple[int, str, int]] = {}
+
+
+def _prepared_guard_scope_key() -> Optional[int]:
+    """Return a task-local key, or the synchronous dispatch scope key."""
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        return None
+    return id(task) if task is not None else None
+
+
+def _set_prepared_declarative_guard(
+    source_state: "State", trigger: str, to_state: "State"
+) -> Tuple[Optional[int], Optional[Tuple[int, str, int]]]:
+    """Mark one dispatch guard as prepared and return its restoration token."""
+    scope_key = _prepared_guard_scope_key()
+    previous = _prepared_declarative_guards.get(scope_key)
+    _prepared_declarative_guards[scope_key] = (
+        id(source_state),
+        trigger,
+        id(to_state),
+    )
+    return scope_key, previous
+
+
+def _reset_prepared_declarative_guard(
+    scope_key: Optional[int], previous: Optional[Tuple[int, str, int]]
+) -> None:
+    """Restore the task-local marker after one policy callback returns."""
+    if previous is None:
+        del _prepared_declarative_guards[scope_key]
+    else:
+        _prepared_declarative_guards[scope_key] = previous
 
 
 def _has_prepared_declarative_guard(
     source_state: "State", trigger: str, to_state: "State"
 ) -> bool:
     """Return whether this base declarative check already ran in machine dispatch."""
-    return _prepared_declarative_guard.get() == (
+    return _prepared_declarative_guards.get(_prepared_guard_scope_key()) == (
         id(source_state),
         trigger,
         id(to_state),
+    )
+
+
+def _reject_sync_awaitable(awaitable: Any) -> None:
+    """Close a newly created coroutine before rejecting it in sync dispatch."""
+    close = getattr(awaitable, "close", None)
+    if callable(close):
+        close()
+    raise TypeError("Async condition requires AsyncStateMachine and trigger_async()")
+
+
+def _is_awaitable(value: Any) -> bool:
+    """Recognize coroutine, Future, and custom ``__await__`` protocol values."""
+    return (
+        asyncio.iscoroutine(value)
+        or asyncio.isfuture(value)
+        or hasattr(value, "__await__")
     )
 
 
@@ -1360,14 +1409,22 @@ class StateMachine:
         source_state = cast(DeclarativeState, self._current_state)
         try:
             assert prepared.condition_kwargs is not None
+            condition_result: Any
             if isinstance(condition, Condition):
                 condition_result = self._evaluate_condition_sync(
                     condition, prepared.args, prepared.condition_kwargs
                 )
             elif callable(condition):
+                if asyncio.iscoroutinefunction(condition):
+                    raise TypeError(
+                        "Async declarative condition requires AsyncStateMachine and "
+                        "trigger_async()"
+                    )
                 condition_result = condition(
                     *prepared.args, **prepared.condition_kwargs
                 )
+                if _is_awaitable(condition_result):
+                    _reject_sync_awaitable(condition_result)
             else:
                 condition_result = bool(condition)
             source_state._logger.debug(
@@ -1400,6 +1457,7 @@ class StateMachine:
         source_state = cast(DeclarativeState, self._current_state)
         try:
             assert prepared.condition_kwargs is not None
+            condition_result: Any
             if isinstance(condition, Condition):
                 condition_result = await self._evaluate_condition_async(
                     condition, prepared.args, prepared.condition_kwargs
@@ -1408,6 +1466,8 @@ class StateMachine:
                 condition_result = condition(
                     *prepared.args, **prepared.condition_kwargs
                 )
+                if _is_awaitable(condition_result):
+                    condition_result = await condition_result
             else:
                 condition_result = bool(condition)
             source_state._logger.debug(
@@ -1437,16 +1497,15 @@ class StateMachine:
         source_state = self._current_state
         if not isinstance(source_state, DeclarativeState):
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
-
-        token = _prepared_declarative_guard.set(
-            (id(source_state), trigger, id(to_state))
+        scope_key, previous = _set_prepared_declarative_guard(
+            source_state, trigger, to_state
         )
         try:
             # Preserve the public subclass hook. DeclarativeState itself sees
             # the narrow context and skips only its duplicate decorator guard.
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         finally:
-            _prepared_declarative_guard.reset(token)
+            _reset_prepared_declarative_guard(scope_key, previous)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1522,7 +1581,13 @@ class StateMachine:
                 completed[current_id] = (
                     any(completed[id(child)] for child in children)
                     if children
-                    else isinstance(current, AsyncCondition)
+                    else (
+                        isinstance(current, AsyncCondition)
+                        or (
+                            isinstance(current, FuncCondition)
+                            and asyncio.iscoroutinefunction(current.func)
+                        )
+                    )
                 )
                 active.remove(current_id)
                 continue
@@ -1556,7 +1621,7 @@ class StateMachine:
             completed = set()
         entered: set[int] = set()
         stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
-        result = False
+        result: Any = False
 
         try:
             while stack:
@@ -1597,6 +1662,8 @@ class StateMachine:
                         )
                     else:
                         result = current.check(*args, **kwargs)
+                        if _is_awaitable(result):
+                            _reject_sync_awaitable(result)
                         active.remove(current_id)
                 elif action == "negate":
                     result = not result
@@ -1638,7 +1705,7 @@ class StateMachine:
             completed = set()
         entered: set[int] = set()
         stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
-        result = False
+        result: Any = False
 
         try:
             while stack:
@@ -1678,6 +1745,8 @@ class StateMachine:
                         active.remove(current_id)
                     else:
                         result = current.check(*args, **kwargs)
+                        if _is_awaitable(result):
+                            result = await cast(Any, result)
                         active.remove(current_id)
                 elif action == "negate":
                     result = not result
@@ -2346,9 +2415,8 @@ class AsyncStateMachine(StateMachine):
                     trigger, to_state, *args, **kwargs
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
-
-        token = _prepared_declarative_guard.set(
-            (id(source_state), trigger, id(to_state))
+        scope_key, previous = _set_prepared_declarative_guard(
+            source_state, trigger, to_state
         )
         try:
             if hasattr(source_state, "can_transition_async"):
@@ -2357,7 +2425,7 @@ class AsyncStateMachine(StateMachine):
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         finally:
-            _prepared_declarative_guard.reset(token)
+            _reset_prepared_declarative_guard(scope_key, previous)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -2747,6 +2815,7 @@ class DeclarativeState(State):
             # Evaluate decorator condition if present
             if condition:
                 try:
+                    condition_result: Any
                     # Handle different condition types
                     if isinstance(condition, AsyncCondition):
                         # For sync context, we can't handle async conditions properly
@@ -2760,7 +2829,14 @@ class DeclarativeState(State):
                     elif isinstance(condition, Condition):
                         condition_result = condition.check(*args, **kwargs)
                     elif callable(condition):
+                        if asyncio.iscoroutinefunction(condition):
+                            raise TypeError(
+                                "Async declarative condition requires "
+                                "AsyncStateMachine and trigger_async()"
+                            )
                         condition_result = condition(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            _reject_sync_awaitable(condition_result)
                     else:
                         condition_result = bool(condition)
 
@@ -2824,6 +2900,7 @@ class AsyncDeclarativeState(DeclarativeState):
             # Evaluate decorator condition if present
             if condition:
                 try:
+                    condition_result: Any
                     # Handle async conditions
                     if isinstance(condition, AsyncCondition):
                         condition_result = await condition.check_async(*args, **kwargs)
@@ -2831,6 +2908,8 @@ class AsyncDeclarativeState(DeclarativeState):
                         condition_result = condition.check(*args, **kwargs)
                     elif callable(condition):
                         condition_result = condition(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            condition_result = await condition_result
                     else:
                         condition_result = bool(condition)
 
@@ -2990,6 +3069,8 @@ class FSMBuilder:
                 item
             ):
                 async_required = True
+            elif callable(item) and asyncio.iscoroutinefunction(item):
+                async_required = True
 
             # Check DeclarativeState for async handlers
             if isinstance(item, DeclarativeState):
@@ -3000,6 +3081,8 @@ class FSMBuilder:
                     if isinstance(
                         condition, Condition
                     ) and StateMachine._contains_async_requirement(condition):
+                        async_required = True
+                    elif callable(condition) and asyncio.iscoroutinefunction(condition):
                         async_required = True
 
         return AsyncStateMachine if async_required else StateMachine
@@ -3214,11 +3297,19 @@ class FSMBuilder:
                             first_requirement = (
                                 f"declarative condition for trigger '{trigger}'"
                             )
+                    elif callable(condition) and asyncio.iscoroutinefunction(condition):
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative condition for trigger '{trigger}'"
+                            )
 
         for trigger, _, _, condition in self._transitions:
             if isinstance(
                 condition, Condition
             ) and StateMachine._contains_async_requirement(condition):
+                if first_requirement is None:
+                    first_requirement = f"transition '{trigger}' condition"
+            elif callable(condition) and asyncio.iscoroutinefunction(condition):
                 if first_requirement is None:
                     first_requirement = f"transition '{trigger}' condition"
 

@@ -1641,3 +1641,122 @@ class TestFSMBuilderAsyncPreflight:
             builder.build()
 
         assert builder_staging_fingerprint(builder) == before
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_kind", ("sync", "async"))
+    @pytest.mark.parametrize("outcome", ("false", "true", "raise"))
+    async def test_async_callable_declarative_guards_are_awaited_once_per_can_do(
+        self, handler_kind, outcome, recwarn
+    ):
+        guard_calls = []
+
+        async def guard(*args, **kwargs):
+            guard_calls.append((args, kwargs))
+            if outcome == "raise":
+                raise RuntimeError("async guard boom")
+            return outcome == "true"
+
+        if handler_kind == "sync":
+
+            class GuardedState(DeclarativeState):
+                @transition(
+                    "go", from_state="source", to_state="target", condition=guard
+                )
+                def handle_go(self, *args, **kwargs):
+                    return True
+
+        else:
+
+            class GuardedState(AsyncDeclarativeState):
+                @transition(
+                    "go", from_state="source", to_state="target", condition=guard
+                )
+                async def handle_go(self, *args, **kwargs):
+                    return True
+
+        source = GuardedState("source")
+        target = State("target")
+        builder = FSMBuilder(source)
+        builder.add_state(target)
+        builder.add_transition("go", "source", "target")
+
+        assert builder.machine_type is AsyncStateMachine
+        machine = builder.build()
+        expected = outcome == "true"
+        assert await machine.can_trigger_async("go") is expected
+        assert (await machine.trigger_async("go")).success is expected
+        assert len(guard_calls) == 2
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.parametrize("handler_kind", ("sync", "async"))
+    def test_explicit_sync_builder_rejects_async_callable_declarative_guard(
+        self, handler_kind, recwarn
+    ):
+        async def guard(*args, **kwargs):
+            return True
+
+        if handler_kind == "sync":
+
+            class GuardedState(DeclarativeState):
+                @transition("go", condition=guard)
+                def handle_go(self, *args, **kwargs):
+                    return True
+
+        else:
+
+            class GuardedState(AsyncDeclarativeState):
+                @transition("go", condition=guard)
+                async def handle_go(self, *args, **kwargs):
+                    return True
+
+        builder = FSMBuilder(GuardedState("source"), async_mode=False)
+
+        with pytest.raises(RuntimeError, match="explicit sync"):
+            builder.build()
+
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.parametrize("handler_kind", ("sync", "async"))
+    def test_sync_machine_rejects_async_callable_declarative_guard_without_calling_it(
+        self, handler_kind, recwarn
+    ):
+        guard_calls = []
+
+        async def guard(*args, **kwargs):
+            guard_calls.append((args, kwargs))
+            return True
+
+        if handler_kind == "sync":
+
+            class GuardedState(DeclarativeState):
+                @transition(
+                    "go", from_state="source", to_state="target", condition=guard
+                )
+                def handle_go(self, *args, **kwargs):
+                    return True
+
+        else:
+
+            class GuardedState(AsyncDeclarativeState):
+                @transition(
+                    "go", from_state="source", to_state="target", condition=guard
+                )
+                async def handle_go(self, *args, **kwargs):
+                    return True
+
+        source = GuardedState("source")
+        target = State("target")
+        machine = StateMachine(source)
+        machine.add_state(target)
+        machine.add_transition("go", source, target)
+
+        assert not machine.can_trigger("go")
+        assert not machine.trigger("go").success
+        assert guard_calls == []
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
