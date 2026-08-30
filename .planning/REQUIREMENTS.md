@@ -15,7 +15,7 @@
 - [x] **REL-05**: A clean checkout passes formatting, lint, stable type compatibility, full tests, Sphinx HTML, and doctests with one documented test baseline.
 - [x] **REL-06**: Release-producing build tools are reproducibly pinned, and compatibility does not depend solely on the pre-release `ty` checker.
 - [ ] **REL-07**: CI verifies installed pure and compiled artifacts rather than relying only on imports from the source checkout.
-- [ ] **REL-08**: The slots policy documents and measures any deliberate exception such as `CompiledFuncCondition`, so memory claims match shipped behavior.
+- [x] **REL-08**: The slots policy documents and measures any deliberate exception such as `CompiledFuncCondition`, so memory claims match shipped behavior.
 
 ### Graph and Dispatch Invariants
 
@@ -70,7 +70,7 @@
 ### Verification and Performance
 
 - [ ] **TEST-01**: One parameterized conformance suite exercises equivalent sync, async, builder, declarative, pure-source, and compiled behavior for the hardened contracts.
-- [ ] **TEST-02**: Pure-Python verification proves that no stale `.so` or `.pyd` shadows `core.py` and records meaningful source coverage.
+- [x] **TEST-02**: Pure-Python verification proves that no stale `.so` or `.pyd` shadows `core.py` and records meaningful source coverage.
 - [ ] **TEST-03**: Compiled-wheel verification runs substantive behavior tests on supported native targets rather than a smoke import alone.
 - [ ] **TEST-04**: Release verification asserts installed module origin, metadata version, architecture, semantic parity, and intended artifact type.
 - [ ] **TEST-05**: Every performance-sensitive `core.py` phase measures compiled and pure-Python overhead before its design is frozen.
@@ -116,7 +116,7 @@
 | REL-05 | Phase 15 | Complete |
 | REL-06 | Phase 15 | Complete |
 | REL-07 | Phase 20 | Pending |
-| REL-08 | Phase 15 | Pending |
+| REL-08 | Phase 15 | Complete |
 | GRAF-01 | Phase 16 | Pending |
 | GRAF-02 | Phase 16 | Pending |
 | GRAF-03 | Phase 16 | Pending |
@@ -153,7 +153,7 @@
 | OUT-04 | Phase 19 | Pending |
 | OUT-05 | Phase 19 | Pending |
 | TEST-01 | Phase 20 | Pending |
-| TEST-02 | Phase 15 | Pending |
+| TEST-02 | Phase 15 | Complete |
 | TEST-03 | Phase 20 | Pending |
 | TEST-04 | Phase 20 | Pending |
 | TEST-05 | Phase 20 | Pending |

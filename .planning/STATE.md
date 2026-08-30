@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
-current_phase: 15
-current_phase_name: Release Baseline & Evidence Harness
-status: executing
-stopped_at: Completed 15-05-PLAN.md
-last_updated: "2026-08-29T21:59:09.663Z"
+current_phase: 16
+current_phase_name: Canonical Graph & Dispatch Invariants
+status: planning
+stopped_at: Phase 15 complete, ready to plan Phase 16
+last_updated: "2026-08-30T02:21:35.759Z"
 last_activity: 2026-08-29
-last_activity_desc: Approved requirements mapped to the v0.3.0 roadmap
-state_head: beca82ae2099c107fbf4f317e61968c0f3d8c1bb
+last_activity_desc: Phase 15 complete, transitioned to Phase 16
+state_head: 9c67de57eecfe5690ad6350ca58687d4c56983d6
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 9
   completed_plans: 9
-  percent: 0
+  percent: 17
 ---
 
 # State: Fast FSM
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 15 (Release Baseline & Evidence Harness) — EXECUTING
-Plan: 4 of 6
-Status: Ready to execute
-Last activity: 2026-08-29 — Phase 15 execution started
+Phase: 16 — Canonical Graph & Dispatch Invariants
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-29 — Phase 15 complete, transitioned to Phase 16
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -40,7 +40,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 9
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -49,6 +49,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 15–20 | 0 | TBD | — |
+| 15 | 9 | - | - |
 
 **Recent Trend:** No v0.3.0 plans completed yet.
 **Per-Plan Metrics:**
@@ -98,5 +99,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-08-29T21:59:09.654Z
-Stopped at: Completed 15-05-PLAN.md
+Stopped at: Phase 15 complete, ready to plan Phase 16
 Resume file: None

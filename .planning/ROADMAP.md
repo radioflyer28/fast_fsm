@@ -52,7 +52,7 @@
 
 **Milestone Goal:** Make Fast FSM release-auditable, internally consistent, and safe by default while preserving its public symbols, single mypyc compilation unit, one runtime dependency, and compiled throughput floor.
 
-- [ ] **Phase 15: Release Baseline & Evidence Harness** — establish trustworthy version, quality, pure-source, and toolchain evidence
+- [x] **Phase 15: Release Baseline & Evidence Harness** — establish trustworthy version, quality, pure-source, and toolchain evidence (completed 2026-08-29)
 - [ ] **Phase 16: Canonical Graph & Dispatch Invariants** — make construction, builders, guards, declarative handlers, and history internally consistent
 - [ ] **Phase 17: Atomic Transition Lifecycle** — expose one truthful pre-commit, commit, and post-commit contract across sync and async machines
 - [ ] **Phase 18: Safe Ownership & Concurrency** — reject reentry and serialize independent callers with exception-safe per-machine ownership
@@ -186,7 +186,7 @@
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 15. Release Baseline & Evidence Harness | v0.3.0 | 9/9 | In Progress|  |
+| 15. Release Baseline & Evidence Harness | v0.3.0 | 9/9 | Complete    | 2026-08-29 |
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 0/TBD | Not started | - |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 0/TBD | Not started | - |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 0/TBD | Not started | - |
