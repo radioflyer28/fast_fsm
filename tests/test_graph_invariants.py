@@ -188,7 +188,11 @@ def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> 
 
     with pytest.raises(TypeError):
         machine.add_bidirectional_transition(
-            "go", "back", idle, running, condition2=object()  # type: ignore[arg-type]
+            "go",
+            "back",
+            idle,
+            running,
+            condition2=object(),  # type: ignore[arg-type]
         )
     assert graph_fingerprint(machine) == before
 
@@ -198,7 +202,11 @@ def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> 
     emergency_before = machine._graph_version
     machine.add_emergency_transition("stop", idle)
     assert machine._graph_version == emergency_before + 1
-    assert {row.from_state for row in machine._graph_snapshot().transitions if row.trigger == "stop"} == {
+    assert {
+        row.from_state
+        for row in machine._graph_snapshot().transitions
+        if row.trigger == "stop"
+    } == {
         idle,
         running,
     }
