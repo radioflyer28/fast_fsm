@@ -1508,7 +1508,30 @@ def run_audit(
         # code can inspect meta_path but cannot extend the selected source set.
         allowed_snapshot = _mapping_proxy(dict(allowed))
 
-        class PureSourceFinder(_base):
+        class FrozenFinderType(_AUDIT_TYPE(_base)):
+            __slots__ = ()
+
+            def __new__(metaclass, name, bases, namespace, **kwargs):
+                namespace["_audit_finder_frozen"] = False
+                cls = super().__new__(metaclass, name, bases, namespace, **kwargs)
+                _AUDIT_TYPE.__setattr__(cls, "_audit_finder_frozen", True)
+                return cls
+
+            def __setattr__(cls, name, value):
+                if _AUDIT_TYPE_GETATTRIBUTE(cls, "__dict__").get(
+                    "_audit_finder_frozen", False
+                ):
+                    raise _runtime_error("Pure source finder class is immutable")
+                return super().__setattr__(name, value)
+
+            def __delattr__(cls, name):
+                if _AUDIT_TYPE_GETATTRIBUTE(cls, "__dict__").get(
+                    "_audit_finder_frozen", False
+                ):
+                    raise _runtime_error("Pure source finder class is immutable")
+                return super().__delattr__(name)
+
+        class PureSourceFinder(_base, metaclass=FrozenFinderType):
             __slots__ = ()
 
             def __setattr__(self, name, value):
