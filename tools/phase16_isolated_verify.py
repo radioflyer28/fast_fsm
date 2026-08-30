@@ -274,37 +274,101 @@ def _coverage_percentage(value: object) -> float:
     return round(percentage, 2)
 
 
-def _validate_coverage_floor_migration(
+def _test_count(value: object) -> int:
+    """Validate one durable test-count field without accepting booleans."""
+    if type(value) is not int or value < 0:
+        raise ValueError("test count must be a non-negative JSON integer")
+    return value
+
+
+def _test_values(manifest_path: Path) -> dict[str, int]:
+    """Load durable successful-test evidence from one evidence manifest."""
+    manifest = _strict_json_object(manifest_path, label="test baseline manifest")
+    try:
+        quality_baseline = manifest["quality_baseline"]
+        if not isinstance(quality_baseline, dict):
+            raise TypeError("quality_baseline must be an object")
+        tests = quality_baseline["tests"]
+        if not isinstance(tests, dict):
+            raise TypeError("tests must be an object")
+        values = {
+            field: _test_count(tests[field])
+            for field in ("collected", "passed", "failed", "errors")
+        }
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise VerificationError(
+            f"invalid test baseline manifest: {manifest_path}"
+        ) from exc
+    if values["collected"] <= 0 or values["passed"] != values["collected"]:
+        raise VerificationError(f"invalid test baseline manifest: {manifest_path}")
+    if values["failed"] != 0 or values["errors"] != 0:
+        raise VerificationError(f"invalid test baseline manifest: {manifest_path}")
+    return values
+
+
+def _quality_floor_values(manifest_path: Path) -> dict[str, dict[str, object]]:
+    """Load the complete durable coverage and successful-test floor."""
+    return {
+        "coverage": _coverage_values(manifest_path),
+        "tests": _test_values(manifest_path),
+    }
+
+
+def _migration_quality_floor(
+    migration_path: Path, record: dict[str, object], section: str
+) -> dict[str, dict[str, object]]:
+    """Validate one exact quality-floor snapshot from a reviewed migration."""
+    try:
+        snapshot = record[section]
+        if not isinstance(snapshot, dict):
+            raise TypeError("migration snapshot must be an object")
+        coverage = snapshot["coverage"]
+        tests = snapshot["tests"]
+        if not isinstance(coverage, dict) or not isinstance(tests, dict):
+            raise TypeError("migration coverage and tests must be objects")
+        return {
+            "coverage": {
+                field: _coverage_percentage(coverage[field])
+                for field in ("total_percent", "core_percent")
+            },
+            "tests": {
+                field: _test_count(tests[field])
+                for field in ("collected", "passed", "failed", "errors")
+            },
+        }
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise VerificationError(
+            f"invalid quality-floor migration record: {migration_path}"
+        ) from exc
+
+
+def _validate_quality_floor_migration(
     migration_path: Path,
-    previous: dict[str, float],
-    replacement: dict[str, float],
+    previous: dict[str, dict[str, object]],
+    replacement: dict[str, dict[str, object]],
 ) -> None:
-    """Require an explicit, separately reviewed record for a lower floor."""
+    """Require an exact, separately reviewed record for a lower quality floor."""
     migration = _strict_json_object(
-        migration_path, label="coverage-floor migration record"
+        migration_path, label="quality-floor migration record"
     )
     try:
-        record = migration["coverage_floor_migration"]
-        if migration["schema_version"] != 1:
+        record = migration["quality_floor_migration"]
+        if not isinstance(record, dict) or migration["schema_version"] != 2:
             raise ValueError("unsupported schema")
         reviewed = (record["reason"], record["reviewed_by"], record["reviewed_at"])
         if not all(isinstance(value, str) and value.strip() for value in reviewed):
             raise ValueError("missing review metadata")
-        expected_previous = {
-            field: _coverage_percentage(record["previous"][field])
-            for field in ("total_percent", "core_percent")
-        }
-        expected_replacement = {
-            field: _coverage_percentage(record["replacement"][field])
-            for field in ("total_percent", "core_percent")
-        }
-    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise VerificationError(
-            f"invalid coverage-floor migration record: {migration_path}"
+            f"invalid quality-floor migration record: {migration_path}"
         ) from exc
+    expected_previous = _migration_quality_floor(migration_path, record, "previous")
+    expected_replacement = _migration_quality_floor(
+        migration_path, record, "replacement"
+    )
     if expected_previous != previous or expected_replacement != replacement:
         raise VerificationError(
-            "coverage-floor migration record does not match the existing and "
+            "quality-floor migration record does not match the existing and "
             "generated manifests"
         )
 
@@ -312,27 +376,43 @@ def _validate_coverage_floor_migration(
 def _validate_coverage_floor(
     existing: Path, generated: Path, migration_path: Path | None = None
 ) -> None:
-    """Fail closed before a baseline write lowers durable coverage evidence."""
+    """Fail closed before a baseline write lowers durable quality evidence."""
     # A first write establishes durable evidence, so it receives exactly the
     # same generated-manifest validation as a replacement write.
-    replacement = _coverage_values(generated)
+    replacement = _quality_floor_values(generated)
     if not existing.is_file():
         return
-    previous = _coverage_values(existing)
-    lowered = {
-        field: (previous[field], replacement[field])
-        for field in previous
-        if replacement[field] < previous[field]
+    previous = _quality_floor_values(existing)
+    lowered_coverage = {
+        field: (previous["coverage"][field], replacement["coverage"][field])
+        for field in previous["coverage"]
+        if replacement["coverage"][field] < previous["coverage"][field]
     }
-    if not lowered:
+    lowered_tests = {
+        field: (previous["tests"][field], replacement["tests"][field])
+        for field in ("collected", "passed")
+        if replacement["tests"][field] < previous["tests"][field]
+    }
+    if not lowered_coverage and not lowered_tests:
         return
     if migration_path is None:
-        rendered = ", ".join(
+        rendered_coverage = ", ".join(
             f"{field} {before:.2f}->{after:.2f}"
-            for field, (before, after) in sorted(lowered.items())
+            for field, (before, after) in sorted(lowered_coverage.items())
         )
-        raise VerificationError(f"coverage floor regression: {rendered}")
-    _validate_coverage_floor_migration(migration_path, previous, replacement)
+        rendered_tests = ", ".join(
+            f"{field} {before}->{after}"
+            for field, (before, after) in sorted(lowered_tests.items())
+        )
+        if rendered_coverage and not rendered_tests:
+            raise VerificationError(f"coverage floor regression: {rendered_coverage}")
+        if rendered_tests and not rendered_coverage:
+            raise VerificationError(f"test floor regression: {rendered_tests}")
+        raise VerificationError(
+            "quality floor regression: "
+            f"coverage [{rendered_coverage}]; tests [{rendered_tests}]"
+        )
+    _validate_quality_floor_migration(migration_path, previous, replacement)
 
 
 def _coverage_floor_migration(value: str) -> Path:

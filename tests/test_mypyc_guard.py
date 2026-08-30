@@ -328,7 +328,16 @@ def _load_phase16_runner():
     return runner
 
 
-def _write_coverage_manifest(path: Path, total: object, core: object) -> None:
+def _write_coverage_manifest(
+    path: Path,
+    total: object,
+    core: object,
+    *,
+    collected: object = 1129,
+    passed: object = 1129,
+    failed: object = 0,
+    errors: object = 0,
+) -> None:
     path.write_text(
         json.dumps(
             {
@@ -336,7 +345,13 @@ def _write_coverage_manifest(path: Path, total: object, core: object) -> None:
                     "coverage": {
                         "total_percent": total,
                         "core_percent": core,
-                    }
+                    },
+                    "tests": {
+                        "collected": collected,
+                        "passed": passed,
+                        "failed": failed,
+                        "errors": errors,
+                    },
                 }
             }
         ),
@@ -530,22 +545,28 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.15, 94.49)
     record = {
-        "schema_version": 1,
-        "coverage_floor_migration": {
-            "previous": {"total_percent": 96.16, "core_percent": 94.50},
-            "replacement": {"total_percent": 96.15, "core_percent": 94.49},
+        "schema_version": 2,
+        "quality_floor_migration": {
+            "previous": {
+                "coverage": {"total_percent": 96.16, "core_percent": 94.50},
+                "tests": {"collected": 1129, "passed": 1129, "failed": 0, "errors": 0},
+            },
+            "replacement": {
+                "coverage": {"total_percent": 96.15, "core_percent": 94.49},
+                "tests": {"collected": 1129, "passed": 1129, "failed": 0, "errors": 0},
+            },
             "reason": "intentional future coverage migration",
             "reviewed_by": "maintainer",
             "reviewed_at": "2026-08-30T00:00:00Z",
         },
     }
-    record["coverage_floor_migration"][section][field] = invalid
+    record["quality_floor_migration"][section]["coverage"][field] = invalid
     migration.write_text(json.dumps(record), encoding="utf-8")
     original = destination.read_bytes()
     monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(
-        runner.VerificationError, match="invalid coverage-floor migration"
+        runner.VerificationError, match="invalid quality-floor migration"
     ):
         runner._export_manifest_atomically(
             generated, "evidence/release-baseline.json", migration
@@ -571,10 +592,26 @@ def test_phase16_coverage_floor_migration_requires_explicit_review_data(
     migration.write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "coverage_floor_migration": {
-                    "previous": {"total_percent": 96.08, "core_percent": 94.27},
-                    "replacement": {"total_percent": 96.07, "core_percent": 94.26},
+                "schema_version": 2,
+                "quality_floor_migration": {
+                    "previous": {
+                        "coverage": {"total_percent": 96.08, "core_percent": 94.27},
+                        "tests": {
+                            "collected": 1129,
+                            "passed": 1129,
+                            "failed": 0,
+                            "errors": 0,
+                        },
+                    },
+                    "replacement": {
+                        "coverage": {"total_percent": 96.07, "core_percent": 94.26},
+                        "tests": {
+                            "collected": 1129,
+                            "passed": 1129,
+                            "failed": 0,
+                            "errors": 0,
+                        },
+                    },
                     "reason": "intentional future coverage migration",
                     "reviewed_by": "maintainer",
                     "reviewed_at": "2026-08-30T00:00:00Z",
@@ -585,3 +622,98 @@ def test_phase16_coverage_floor_migration_requires_explicit_review_data(
     )
 
     runner._validate_coverage_floor(baseline, generated, migration)
+
+
+@pytest.mark.parametrize(
+    "generated_counts",
+    (
+        {"collected": 1128, "passed": 1128},
+        {"collected": -1, "passed": -1},
+        {"collected": True, "passed": True},
+        {"collected": 1129, "passed": 1128},
+        {"failed": 1},
+        {"errors": 1},
+    ),
+)
+def test_phase16_baseline_write_rejects_invalid_or_lower_test_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, generated_counts: dict[str, object]
+) -> None:
+    """A malformed or reduced test inventory never replaces durable bytes."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.16, 94.50, **generated_counts)
+    original = destination.read_bytes()
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(runner.VerificationError):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.read_bytes() == original
+
+
+def test_phase16_first_baseline_write_rejects_invalid_test_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A first write cannot establish a malformed zero-test baseline."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50, collected=0, passed=0)
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(runner.VerificationError, match="invalid test baseline"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert not destination.exists()
+
+
+def test_phase16_quality_floor_migration_allows_reviewed_test_reduction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An intentional lower test floor requires an exact reviewed migration."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    migration = tmp_path / "quality-floor-migration.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.16, 94.50, collected=1128, passed=1128)
+    migration.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "quality_floor_migration": {
+                    "previous": {
+                        "coverage": {"total_percent": 96.16, "core_percent": 94.50},
+                        "tests": {
+                            "collected": 1129,
+                            "passed": 1129,
+                            "failed": 0,
+                            "errors": 0,
+                        },
+                    },
+                    "replacement": {
+                        "coverage": {"total_percent": 96.16, "core_percent": 94.50},
+                        "tests": {
+                            "collected": 1128,
+                            "passed": 1128,
+                            "failed": 0,
+                            "errors": 0,
+                        },
+                    },
+                    "reason": "intentional reviewed test-suite migration",
+                    "reviewed_by": "maintainer",
+                    "reviewed_at": "2026-08-30T00:00:00Z",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    runner._export_manifest_atomically(
+        generated, "evidence/release-baseline.json", migration
+    )
+
+    assert destination.read_bytes() == generated.read_bytes()
