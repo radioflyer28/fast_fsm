@@ -541,10 +541,24 @@ def _mutation_root_names(target: ast.expr) -> set[str]:
         return _mutation_root_names(target.value)
     if not isinstance(target, (ast.Attribute, ast.Subscript)):
         return set()
-    root: ast.expr = target
-    while isinstance(root, (ast.Attribute, ast.Subscript)):
-        root = root.value
-    return {root.id} if isinstance(root, ast.Name) else set()
+    return _reference_root_names(target.value)
+
+
+def _reference_root_names(expression: ast.expr) -> set[str]:
+    """Return names whose objects are reached by a qualified runtime expression."""
+    if isinstance(expression, ast.Name):
+        return {expression.id}
+    if isinstance(expression, (ast.Attribute, ast.Subscript)):
+        return _reference_root_names(expression.value)
+    if (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == "vars"
+        and len(expression.args) == 1
+        and not expression.keywords
+    ):
+        return _reference_root_names(expression.args[0])
+    return set()
 
 
 def _target_mutation_roots(targets: Iterable[ast.expr]) -> set[str]:
@@ -563,6 +577,33 @@ def _is_imported_binding(references: frozenset[str], module_name: str) -> bool:
     )
 
 
+_BUILTIN_MUTATOR_REFERENCES = frozenset({"builtins.setattr", "builtins.delattr"})
+
+
+def _expression_references(
+    expression: ast.expr,
+    environment: Mapping[str, frozenset[str]],
+) -> frozenset[str]:
+    """Resolve a dotted runtime expression through its reaching bindings."""
+    parts = _dotted_expression_parts(expression)
+    if not parts:
+        return frozenset()
+    bindings = environment.get(parts[0])
+    if bindings is not None:
+        return frozenset(".".join([binding, *parts[1:]]) for binding in bindings)
+    if len(parts) == 1 and parts[0] in {"setattr", "delattr"}:
+        return frozenset({f"builtins.{parts[0]}"})
+    return frozenset()
+
+
+def _mutator_references(
+    expression: ast.expr,
+    environment: Mapping[str, frozenset[str]],
+) -> frozenset[str]:
+    """Return every reaching standard attribute-mutator identity."""
+    return _expression_references(expression, environment) & _BUILTIN_MUTATOR_REFERENCES
+
+
 def _reject_imported_binding_mutation(
     roots: Iterable[str],
     environment: Mapping[str, frozenset[str]],
@@ -578,55 +619,61 @@ def _reject_imported_binding_mutation(
             )
 
 
-def _expression_mutation_roots(expression: ast.expr) -> set[str]:
-    """Return roots passed to direct built-in attribute mutators in an expression."""
+def _expression_mutation_roots(
+    expression: ast.expr,
+    environment: Mapping[str, frozenset[str]],
+) -> set[str]:
+    """Return roots passed to a statically resolved standard attribute mutator."""
     roots: set[str] = set()
     for node in ast.walk(expression):
         if (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in {"setattr", "delattr"}
+            and _mutator_references(node.func, environment)
             and node.args
         ):
-            roots.update(_mutation_root_names(node.args[0]))
-            if isinstance(node.args[0], ast.Name):
-                roots.add(node.args[0].id)
+            roots.update(_reference_root_names(node.args[0]))
     return roots
 
 
-def _statement_mutation_roots(statement: ast.stmt) -> set[str]:
+def _statement_mutation_roots(
+    statement: ast.stmt,
+    environment: Mapping[str, frozenset[str]],
+) -> set[str]:
     """Return imported roots mutated by this statement without descending scopes."""
     if isinstance(statement, ast.Assign):
         return _target_mutation_roots(statement.targets) | _expression_mutation_roots(
-            statement.value
+            statement.value, environment
         )
     if isinstance(statement, ast.AnnAssign):
         roots = _mutation_root_names(statement.target)
         return roots | (
-            _expression_mutation_roots(statement.value)
+            _expression_mutation_roots(statement.value, environment)
             if statement.value is not None
             else set()
         )
     if isinstance(statement, ast.AugAssign):
         return _mutation_root_names(statement.target) | _expression_mutation_roots(
-            statement.value
+            statement.value, environment
         )
     if isinstance(statement, ast.Delete):
         return _target_mutation_roots(statement.targets)
     if isinstance(statement, ast.Expr):
-        return _expression_mutation_roots(statement.value)
+        return _expression_mutation_roots(statement.value, environment)
     if isinstance(statement, ast.If):
-        return _expression_mutation_roots(statement.test)
+        return _expression_mutation_roots(statement.test, environment)
     if isinstance(statement, ast.While):
-        return _expression_mutation_roots(statement.test)
+        return _expression_mutation_roots(statement.test, environment)
     if isinstance(statement, (ast.For, ast.AsyncFor)):
-        return _expression_mutation_roots(statement.iter)
+        return _expression_mutation_roots(statement.iter, environment)
     if isinstance(statement, (ast.With, ast.AsyncWith)):
         return set().union(
-            *(_expression_mutation_roots(item.context_expr) for item in statement.items)
+            *(
+                _expression_mutation_roots(item.context_expr, environment)
+                for item in statement.items
+            )
         )
     if isinstance(statement, ast.Match):
-        return _expression_mutation_roots(statement.subject)
+        return _expression_mutation_roots(statement.subject, environment)
     return set()
 
 
@@ -634,7 +681,14 @@ def _mutation_roots_in_statements(statements: Iterable[ast.stmt]) -> set[str]:
     """Collect attribute/subscript mutation roots without entering child scopes."""
     roots: set[str] = set()
     for statement in statements:
-        roots.update(_statement_mutation_roots(statement))
+        if isinstance(statement, ast.Assign):
+            roots.update(_target_mutation_roots(statement.targets))
+        elif isinstance(statement, ast.AnnAssign):
+            roots.update(_mutation_root_names(statement.target))
+        elif isinstance(statement, ast.AugAssign):
+            roots.update(_mutation_root_names(statement.target))
+        elif isinstance(statement, ast.Delete):
+            roots.update(_target_mutation_roots(statement.targets))
         if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
             roots.update(_mutation_roots_in_statements(statement.body))
             roots.update(_mutation_roots_in_statements(statement.orelse))
@@ -793,7 +847,7 @@ def _walk_module_statements(
         if named_expression_names:
             current = _unresolved_environment(current, named_expression_names)
         _reject_imported_binding_mutation(
-            _statement_mutation_roots(statement), current, module_name
+            _statement_mutation_roots(statement, current), current, module_name
         )
         if isinstance(statement, (ast.Import, ast.ImportFrom)):
             current = _apply_import_binding(statement, current, module_name)
@@ -803,12 +857,26 @@ def _walk_module_statements(
         elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             current = _unresolved_environment(current, {statement.name})
         elif isinstance(statement, ast.Assign):
+            mutator_aliases = _mutator_references(statement.value, current)
             current = _unresolved_environment(
                 current,
                 set().union(*(_target_names(target) for target in statement.targets)),
             )
+            if (
+                mutator_aliases
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+            ):
+                current[statement.targets[0].id] = mutator_aliases
         elif isinstance(statement, ast.AnnAssign):
+            mutator_aliases = (
+                _mutator_references(statement.value, current)
+                if statement.value is not None
+                else frozenset()
+            )
             current = _unresolved_environment(current, _target_names(statement.target))
+            if mutator_aliases and isinstance(statement.target, ast.Name):
+                current[statement.target.id] = mutator_aliases
         elif isinstance(statement, ast.AugAssign):
             current = _unresolved_environment(current, _target_names(statement.target))
         elif isinstance(statement, ast.Delete):
@@ -1165,6 +1233,211 @@ def validate_slots_inventory(
     return inventory
 
 
+_RUNTIME_LAYOUT_AUDIT_SCRIPT = r"""
+import importlib
+import importlib.abc
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+source_root = Path(sys.argv[1]).resolve()
+package_name = sys.argv[2]
+package_root = source_root / package_name
+if not package_root.is_dir():
+    raise RuntimeError(f"Package directory does not exist: {package_root}")
+if sys.implementation.name != "cpython":
+    raise RuntimeError("Runtime slots layout audit requires CPython")
+
+sys.path.insert(0, str(source_root))
+importlib.invalidate_caches()
+
+class PureSourceFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != package_name and not fullname.startswith(package_name + "."):
+            return None
+        relative_parts = fullname.split(".")[1:]
+        module_path = package_root.joinpath(*relative_parts)
+        package_init = module_path / "__init__.py"
+        if package_init.is_file():
+            return importlib.util.spec_from_file_location(
+                fullname,
+                package_init,
+                submodule_search_locations=[str(module_path)],
+            )
+        source_file = module_path.with_suffix(".py")
+        if source_file.is_file():
+            return importlib.util.spec_from_file_location(fullname, source_file)
+        return None
+
+sys.meta_path.insert(0, PureSourceFinder())
+
+def module_name_for(source_file):
+    parts = list(source_file.relative_to(source_root).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+module_names = sorted(
+    (module_name_for(source_file) for source_file in package_root.rglob("*.py")),
+    key=lambda name: (name.count("."), name),
+)
+modules = []
+for module_name in module_names:
+    module = importlib.import_module(module_name)
+    origin_text = getattr(module, "__file__", None)
+    if not origin_text:
+        raise RuntimeError(f"Imported module has no source origin: {module_name}")
+    origin = Path(origin_text).resolve()
+    try:
+        origin.relative_to(source_root)
+    except ValueError as error:
+        raise RuntimeError(
+            f"Imported module escaped selected source root: {module_name} -> {origin}"
+        ) from error
+    if origin.suffix != ".py":
+        raise RuntimeError(f"Imported module is not pure Python: {module_name} -> {origin}")
+    modules.append(module)
+
+layouts = {}
+seen = set()
+
+def collect_class(cls, module_name):
+    if getattr(cls, "__module__", None) != module_name:
+        return
+    if cls in seen:
+        return
+    seen.add(cls)
+    qualname = getattr(cls, "__qualname__", None)
+    if not isinstance(qualname, str) or not qualname or "<locals>" in qualname:
+        raise RuntimeError(f"Runtime class has an uncertain qualified name: {cls!r}")
+    dictoffset = getattr(cls, "__dictoffset__", None)
+    if isinstance(dictoffset, bool) or not isinstance(dictoffset, int):
+        raise RuntimeError(
+            f"Runtime class has an uncertain CPython dictionary layout: "
+            f"{module_name}.{qualname}"
+        )
+    qualified_name = f"{module_name}.{qualname}"
+    previous = layouts.get(qualified_name)
+    layout = {
+        "qualified_name": qualified_name,
+        "has_instance_dict": dictoffset != 0,
+        "dictoffset": dictoffset,
+    }
+    if previous is not None and previous != layout:
+        raise RuntimeError(f"Ambiguous runtime class layout: {qualified_name}")
+    layouts[qualified_name] = layout
+    for value in vars(cls).values():
+        if isinstance(value, type):
+            collect_class(value, module_name)
+
+for module in modules:
+    for value in vars(module).values():
+        if isinstance(value, type):
+            collect_class(value, module.__name__)
+
+print(json.dumps([layouts[name] for name in sorted(layouts)], sort_keys=True))
+"""
+
+
+def collect_runtime_class_layouts(source_root: Path) -> list[dict[str, Any]]:
+    """Load selected ``.py`` source in isolation and report CPython layouts."""
+    resolved_source_root = source_root.resolve()
+    package_root = resolved_source_root / PACKAGE_NAME
+    if not package_root.is_dir():
+        raise EvidenceError(f"Package directory does not exist: {package_root}")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _RUNTIME_LAYOUT_AUDIT_SCRIPT,
+            str(resolved_source_root),
+            PACKAGE_NAME,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode:
+        raise EvidenceError(
+            "Isolated runtime slots audit failed:\n" + completed.stderr.strip()
+        )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise EvidenceError("Runtime slots audit did not emit valid JSON.") from error
+    if not isinstance(payload, list):
+        raise EvidenceError("Runtime slots audit did not emit a class-layout list.")
+    layouts: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            raise EvidenceError("Runtime slots audit emitted a malformed class layout.")
+        qualified_name = entry.get("qualified_name")
+        has_instance_dict = entry.get("has_instance_dict")
+        dictoffset = entry.get("dictoffset")
+        if (
+            not isinstance(qualified_name, str)
+            or not qualified_name.startswith(f"{PACKAGE_NAME}.")
+            or not isinstance(has_instance_dict, bool)
+            or isinstance(dictoffset, bool)
+            or not isinstance(dictoffset, int)
+        ):
+            raise EvidenceError(
+                "Runtime slots audit emitted an uncertain class layout."
+            )
+        layouts.append(
+            {
+                "qualified_name": qualified_name,
+                "has_instance_dict": has_instance_dict,
+                "dictoffset": dictoffset,
+            }
+        )
+    if [entry["qualified_name"] for entry in layouts] != sorted(
+        entry["qualified_name"] for entry in layouts
+    ):
+        raise EvidenceError(
+            "Runtime slots audit emitted a non-deterministic layout order."
+        )
+    if len({entry["qualified_name"] for entry in layouts}) != len(layouts):
+        raise EvidenceError("Runtime slots audit emitted duplicate class layouts.")
+    return layouts
+
+
+def validate_runtime_slots_layouts(
+    declarations: Iterable[ClassDeclaration],
+    source_root: Path,
+    registry: Mapping[str, str] = REGISTERED_SLOTS_EXCEPTIONS,
+) -> list[dict[str, Any]]:
+    """Reconcile static classes with isolated actual layouts and fail closed."""
+    static_names = {declaration.qualified_name for declaration in declarations}
+    layouts = collect_runtime_class_layouts(source_root)
+    runtime_names = {str(entry["qualified_name"]) for entry in layouts}
+    missing_runtime = sorted(static_names - runtime_names)
+    extra_runtime = sorted(runtime_names - static_names)
+    if missing_runtime or extra_runtime:
+        details: list[str] = []
+        if missing_runtime:
+            details.append("missing runtime: " + ", ".join(missing_runtime))
+        if extra_runtime:
+            details.append("extra runtime: " + ", ".join(extra_runtime))
+        raise EvidenceError(
+            "Static and runtime slots-policy inventories do not reconcile: "
+            + "; ".join(details)
+        )
+    unexpected_dict = sorted(
+        str(entry["qualified_name"])
+        for entry in layouts
+        if entry["has_instance_dict"] and entry["qualified_name"] not in registry
+    )
+    if unexpected_dict:
+        raise EvidenceError(
+            "Unregistered runtime instance-__dict__ class(es) in slots-policy "
+            "inventory: " + ", ".join(unexpected_dict)
+        )
+    return layouts
+
+
 def _measure_instance(instance: object) -> dict[str, Any]:
     """Return deliberate, environment-labeled instance memory evidence."""
     return {
@@ -1213,13 +1486,15 @@ def _slots_measurements(
 
 
 def slots_policy(source_root: Path | None = None) -> dict[str, Any]:
-    """Produce a complete static and measured slots-policy inventory."""
+    """Produce a complete static, runtime-verified slots-policy inventory."""
     resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
     declarations = collect_class_declarations(resolved_source_root)
     inventory = validate_slots_inventory(declarations)
+    runtime_layouts = validate_runtime_slots_layouts(declarations, resolved_source_root)
     registered, representatives = _slots_measurements(resolved_source_root)
     return {
         "inventory": inventory,
+        "runtime_layouts": runtime_layouts,
         "registered_exceptions": registered,
         "representative_measurements": representatives,
         "measurement_environment": {
@@ -1269,6 +1544,9 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     performance_contract = stable.get("performance_contract")
     if isinstance(performance_contract, dict):
         performance_contract.pop("observation", None)
+    slots = stable.get("slots_policy")
+    if isinstance(slots, dict):
+        slots.pop("runtime_layouts", None)
     return stable
 
 
@@ -1715,6 +1993,7 @@ def _collect_manifest_after_preflight(
         },
         "slots_policy": {
             "inventory": slots["inventory"],
+            "runtime_layouts": slots["runtime_layouts"],
             "registered_exceptions": slots["registered_exceptions"],
             "measurements": slots["representative_measurements"],
         },

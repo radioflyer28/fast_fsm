@@ -27,7 +27,9 @@ from tools.release_evidence import (  # noqa: E402
     EvidenceError,
     compare_manifests,
     collect_class_declarations,
+    collect_runtime_class_layouts,
     serialize_manifest,
+    validate_runtime_slots_layouts,
     validate_slots_inventory,
     validate_manifest_regressions,
     validate_performance_observation,
@@ -944,6 +946,139 @@ def test_slots_policy_invalidates_loop_bindings_after_break(tmp_path: Path) -> N
 
     with pytest.raises(EvidenceError, match="fast_fsm.loop_break_policy.Child"):
         validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+@pytest.mark.parametrize(
+    ("filename", "mutation"),
+    [
+        (
+            "qualified_mutator_policy.py",
+            "import builtins\nbuiltins.setattr(abc, 'ABC', type('Ordinary', (), {}))\n",
+        ),
+        (
+            "vars_mutator_policy.py",
+            "vars(abc)['ABC'] = type('Ordinary', (), {})\n",
+        ),
+        (
+            "aliased_mutator_policy.py",
+            "from builtins import setattr as mutate\n"
+            "mutate(abc, 'ABC', type('Ordinary', (), {}))\n",
+        ),
+        (
+            "dict_view_mutator_policy.py",
+            "abc.__dict__['ABC'] = type('Ordinary', (), {})\n",
+        ),
+    ],
+)
+def test_slots_policy_rejects_indirect_imported_base_mutators(
+    tmp_path: Path, filename: str, mutation: str
+) -> None:
+    """Qualified, mapped, and aliased standard mutators all invalidate abc."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / filename).write_text(
+        "import abc\n" + mutation + "\nclass Child(abc.ABC):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "import builtins\nbuiltins.setattr(abc, 'ABC', type('Ordinary', (), {}))\n",
+        "vars(abc)['ABC'] = type('Ordinary', (), {})\n",
+        "from builtins import setattr as mutate\n"
+        "mutate(abc, 'ABC', type('Ordinary', (), {}))\n",
+    ],
+)
+def test_runtime_slots_layout_audit_catches_indirect_mutators_without_static_help(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Actual layout detects every indirect mutation if static analysis is incomplete."""
+    source_root = _copy_clean_source(tmp_path)
+    declarations = collect_class_declarations(source_root)
+    (source_root / "fast_fsm" / "runtime_indirect_policy.py").write_text(
+        "import abc\n" + mutation + "\nclass Child(abc.ABC):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    declarations.append(
+        release_evidence.ClassDeclaration(
+            qualified_name="fast_fsm.runtime_indirect_policy.Child",
+            source_path="src/fast_fsm/runtime_indirect_policy.py",
+            line=4,
+            base_references=("abc.ABC",),
+            has_own_slots=True,
+            slots_are_literal=True,
+            declares_instance_dict=False,
+        )
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.runtime_indirect_policy.Child"):
+        validate_runtime_slots_layouts(declarations, source_root)
+
+
+def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
+    tmp_path: Path,
+) -> None:
+    """Runtime layout checks catch a dict-bearing base static syntax cannot resolve."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_escape_policy.py").write_text(
+        "import abc\n"
+        "exec(\"abc.ABC = type('Ordinary', (), {})\")\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    declarations = collect_class_declarations(source_root)
+    static_inventory = validate_slots_inventory(declarations)
+
+    assert any(
+        entry["qualified_name"] == "fast_fsm.runtime_escape_policy.Child"
+        and entry["classification"] == "slot-protected"
+        for entry in static_inventory
+    )
+    with pytest.raises(EvidenceError, match="fast_fsm.runtime_escape_policy.Child"):
+        validate_runtime_slots_layouts(declarations, source_root)
+
+
+def test_runtime_slots_layout_audit_preserves_registered_exceptions(
+    tmp_path: Path,
+) -> None:
+    """Only the explicitly reviewed exception registry may retain dictionaries."""
+    source_root = _copy_clean_source(tmp_path)
+    declarations = collect_class_declarations(source_root)
+    layouts = validate_runtime_slots_layouts(declarations, source_root)
+    layouts_by_name = {entry["qualified_name"]: entry for entry in layouts}
+
+    assert set(REGISTERED_SLOTS_EXCEPTIONS) <= set(layouts_by_name)
+    assert all(
+        layouts_by_name[name]["has_instance_dict"]
+        for name in REGISTERED_SLOTS_EXCEPTIONS
+    )
+    assert all(
+        not entry["has_instance_dict"]
+        for name, entry in layouts_by_name.items()
+        if name not in REGISTERED_SLOTS_EXCEPTIONS
+    )
+
+
+def test_runtime_layout_inventory_uses_selected_pure_source(tmp_path: Path) -> None:
+    """The isolated layout loader reports classes from the passed source root."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_layout_policy.py").write_text(
+        "class RuntimeOnly:\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    layouts = collect_runtime_class_layouts(source_root)
+
+    assert any(
+        entry["qualified_name"] == "fast_fsm.runtime_layout_policy.RuntimeOnly"
+        and entry["has_instance_dict"] is False
+        for entry in layouts
+    )
 
 
 def _manifest_fixture() -> dict[str, object]:
