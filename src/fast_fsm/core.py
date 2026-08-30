@@ -1338,7 +1338,7 @@ class StateMachine:
                 continue
             if key.startswith("_"):
                 self._logger.debug(
-                    "%s: Skipping private kwarg for condition", self._name
+                    "%s: Skipping private kwarg '%s' for condition", self._name, key
                 )
                 continue
             if len(safe_kwargs) == 50:
