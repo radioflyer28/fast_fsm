@@ -1485,29 +1485,32 @@ class StateMachine:
         """Detect nested async leaves while rejecting active wrapper cycles."""
         active: set[int] = set()
         completed: Dict[int, bool] = {}
+        stack: List[Tuple[Condition, bool]] = [(condition, False)]
 
-        def visit(current: Condition) -> bool:
+        while stack:
+            current, leaving = stack.pop()
             current_id = id(current)
+            if leaving:
+                children = StateMachine._condition_children(current)
+                completed[current_id] = (
+                    any(completed[id(child)] for child in children)
+                    if children
+                    else isinstance(current, AsyncCondition)
+                )
+                active.remove(current_id)
+                continue
+
             if current_id in active:
                 raise ValueError("supported condition wrapper cycle detected")
             if current_id in completed:
-                return completed[current_id]
-            active.add(current_id)
-            try:
-                children = StateMachine._condition_children(current)
-                if children:
-                    result = False
-                    for child in children:
-                        if visit(child):
-                            result = True
-                else:
-                    result = isinstance(current, AsyncCondition)
-                completed[current_id] = result
-                return result
-            finally:
-                active.remove(current_id)
+                continue
 
-        return visit(condition)
+            active.add(current_id)
+            stack.append((current, True))
+            for child in reversed(StateMachine._condition_children(current)):
+                stack.append((child, False))
+
+        return completed[id(condition)]
 
     def _evaluate_condition_sync(
         self,
@@ -1524,41 +1527,72 @@ class StateMachine:
             active = set()
         if completed is None:
             completed = set()
-        condition_id = id(condition)
-        if condition_id in active:
-            raise ValueError("supported condition wrapper cycle detected")
-        active.add(condition_id)
+        entered: set[int] = set()
+        stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
+        result = False
+
         try:
-            condition_type = type(condition)
-            children = self._condition_children(condition)
-            if condition_type is NegatedCondition or condition_type is NotCondition:
-                result = not self._evaluate_condition_sync(
-                    children[0], args, kwargs, active, completed
-                )
-            elif condition_type is AndCondition:
-                result = all(
-                    self._evaluate_condition_sync(
-                        child, args, kwargs, active, completed
-                    )
-                    for child in children
-                )
-            elif condition_type is OrCondition:
-                result = any(
-                    self._evaluate_condition_sync(
-                        child, args, kwargs, active, completed
-                    )
-                    for child in children
-                )
-            elif isinstance(condition, AsyncCondition):
-                raise TypeError(
-                    "AsyncCondition requires AsyncStateMachine and trigger_async()"
-                )
-            else:
-                result = condition.check(*args, **kwargs)
+            while stack:
+                action, current, child_index = stack.pop()
+                current_id = id(current)
+
+                if action == "evaluate":
+                    if current_id in active:
+                        raise ValueError("supported condition wrapper cycle detected")
+                    active.add(current_id)
+                    entered.add(current_id)
+                    condition_type = type(current)
+                    children = self._condition_children(current)
+
+                    if (
+                        condition_type is NegatedCondition
+                        or condition_type is NotCondition
+                    ):
+                        stack.append(("negate", current, 0))
+                        stack.append(("evaluate", children[0], 0))
+                    elif condition_type is AndCondition:
+                        if children:
+                            stack.append(("and", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = True
+                            active.remove(current_id)
+                    elif condition_type is OrCondition:
+                        if children:
+                            stack.append(("or", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = False
+                            active.remove(current_id)
+                    elif isinstance(current, AsyncCondition):
+                        raise TypeError(
+                            "AsyncCondition requires AsyncStateMachine and trigger_async()"
+                        )
+                    else:
+                        result = current.check(*args, **kwargs)
+                        active.remove(current_id)
+                elif action == "negate":
+                    result = not result
+                    active.remove(current_id)
+                elif action == "and":
+                    children = self._condition_children(current)
+                    if not result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("and", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+                else:  # action == "or"
+                    children = self._condition_children(current)
+                    if result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("or", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+
             return result
         finally:
-            active.remove(condition_id)
-            completed.add(condition_id)
+            active.difference_update(entered)
+            completed.update(entered)
 
     async def _evaluate_condition_async(
         self,
@@ -1568,48 +1602,78 @@ class StateMachine:
         active: Optional[set[int]] = None,
         completed: Optional[set[int]] = None,
     ) -> bool:
-        """Recursively await async leaves through supported built-in wrappers."""
+        """Await async leaves through supported built-in wrappers iteratively."""
         from .condition_templates import AndCondition, NotCondition, OrCondition
 
         if active is None:
             active = set()
         if completed is None:
             completed = set()
-        condition_id = id(condition)
-        if condition_id in active:
-            raise ValueError("supported condition wrapper cycle detected")
-        active.add(condition_id)
+        entered: set[int] = set()
+        stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
+        result = False
+
         try:
-            condition_type = type(condition)
-            children = self._condition_children(condition)
-            if condition_type is NegatedCondition or condition_type is NotCondition:
-                result = not await self._evaluate_condition_async(
-                    children[0], args, kwargs, active, completed
-                )
-            elif condition_type is AndCondition:
-                result = True
-                for child in children:
-                    if not await self._evaluate_condition_async(
-                        child, args, kwargs, active, completed
+            while stack:
+                action, current, child_index = stack.pop()
+                current_id = id(current)
+
+                if action == "evaluate":
+                    if current_id in active:
+                        raise ValueError("supported condition wrapper cycle detected")
+                    active.add(current_id)
+                    entered.add(current_id)
+                    condition_type = type(current)
+                    children = self._condition_children(current)
+
+                    if (
+                        condition_type is NegatedCondition
+                        or condition_type is NotCondition
                     ):
-                        result = False
-                        break
-            elif condition_type is OrCondition:
-                result = False
-                for child in children:
-                    if await self._evaluate_condition_async(
-                        child, args, kwargs, active, completed
-                    ):
-                        result = True
-                        break
-            elif isinstance(condition, AsyncCondition):
-                result = await condition.check_async(*args, **kwargs)
-            else:
-                result = condition.check(*args, **kwargs)
+                        stack.append(("negate", current, 0))
+                        stack.append(("evaluate", children[0], 0))
+                    elif condition_type is AndCondition:
+                        if children:
+                            stack.append(("and", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = True
+                            active.remove(current_id)
+                    elif condition_type is OrCondition:
+                        if children:
+                            stack.append(("or", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = False
+                            active.remove(current_id)
+                    elif isinstance(current, AsyncCondition):
+                        result = await current.check_async(*args, **kwargs)
+                        active.remove(current_id)
+                    else:
+                        result = current.check(*args, **kwargs)
+                        active.remove(current_id)
+                elif action == "negate":
+                    result = not result
+                    active.remove(current_id)
+                elif action == "and":
+                    children = self._condition_children(current)
+                    if not result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("and", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+                else:  # action == "or"
+                    children = self._condition_children(current)
+                    if result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("or", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+
             return result
         finally:
-            active.remove(condition_id)
-            completed.add(condition_id)
+            active.difference_update(entered)
+            completed.update(entered)
 
     def force_state(self, state_name: str) -> None:
         """Force the machine into a named state, bypassing guard conditions.

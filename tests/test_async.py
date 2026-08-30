@@ -447,6 +447,33 @@ class TestAsyncWrapperEvaluation:
         assert await machine.can_trigger_async("go")
         assert (await machine.trigger_async("go")).success
 
+    def test_deep_sync_wrapper_graph_avoids_python_recursion_limit(self):
+        condition = AlwaysTrueCondition()
+        for _ in range(1_500):
+            condition = NotCondition(condition)
+
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="deep_sync_wrapper")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+
+        assert machine.can_trigger("go")
+        assert machine.trigger("go").success
+
+    @pytest.mark.asyncio
+    async def test_deep_async_wrapper_graph_avoids_python_recursion_limit(self):
+        leaf = RecordingAsyncCondition()
+        condition = leaf
+        for _ in range(1_500):
+            condition = NotCondition(condition)
+
+        machine = self._machine(condition)
+
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+        assert len(leaf.calls) == 2
+
     def test_sync_machine_rejects_nested_async_wrapper(self):
         initial = State("initial")
         target = State("target")
