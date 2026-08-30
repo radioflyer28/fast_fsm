@@ -1671,6 +1671,42 @@ class TestFSMBuilderPublication:
         assert machine.trigger("go").success
         assert calls == ["repair"]
 
+    @pytest.mark.parametrize("repair_to_async", (False, True))
+    def test_failed_auto_build_recomputes_and_publishes_current_machine_type(
+        self, repair_to_async
+    ):
+        """A failed auto candidate cannot persist its transient async choice."""
+
+        def sync_guard(*args, **kwargs):
+            return True
+
+        async def async_guard(*args, **kwargs):
+            return True
+
+        condition = FuncCondition(sync_guard)
+        builder = FSMBuilder(State("start"))
+        builder.add_transition("go", "start", "missing", condition)
+        before_failure = builder_staging_fingerprint(builder)
+
+        # Public callable-backed conditions are intentionally mutable. Force
+        # auto preflight to choose async, then fail later during graph wiring.
+        condition.func = async_guard
+        with pytest.raises(ValueError, match="not registered"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder.machine_type is StateMachine
+        assert builder_staging_fingerprint(builder) == before_failure
+
+        builder.add_state(State("missing"))
+        condition.func = async_guard if repair_to_async else sync_guard
+        machine = builder.build()
+
+        expected_type = AsyncStateMachine if repair_to_async else StateMachine
+        assert type(machine) is expected_type
+        assert builder.machine_type is expected_type
+        assert builder.build() is machine
+
 
 # ---------------------------------------------------------------------------
 # FSMBuilder async preflight

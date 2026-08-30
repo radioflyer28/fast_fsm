@@ -3429,18 +3429,24 @@ class FSMBuilder:
             return self._machine
 
         async_requirement = self._preflight_async_requirements()
+        candidate_type = self._machine_type
         if async_requirement is not None:
             if self._auto_detect:
-                self._machine_type = AsyncStateMachine
+                candidate_type = AsyncStateMachine
             elif self._machine_type == StateMachine:
                 raise RuntimeError(
                     "Cannot build explicit sync FSM with async requirement in "
                     f"{async_requirement}"
                 )
+        elif self._auto_detect:
+            # Auto mode must reflect the current staged graph on every build
+            # attempt. In particular, a public callable may have changed after
+            # it was staged or after an earlier failed candidate build.
+            candidate_type = StateMachine
 
         # Keep all construction local until every registration succeeds. A failed
         # candidate must not freeze staging or become observable through _machine.
-        candidate = self._machine_type(self._initial_state, **self._machine_kwargs)
+        candidate = candidate_type(self._initial_state, **self._machine_kwargs)
 
         # Add all states
         for state in self._states.values():
@@ -3504,6 +3510,7 @@ class FSMBuilder:
             len(self._transitions),
         )
 
+        self._machine_type = candidate_type
         self._machine = candidate
         return candidate
 
