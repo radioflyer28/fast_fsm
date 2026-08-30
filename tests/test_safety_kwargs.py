@@ -8,7 +8,15 @@ problematic context data passed through **kwargs in trigger() calls.
 import pytest
 import logging
 from unittest.mock import Mock
-from fast_fsm.core import AsyncStateMachine, StateMachine, State, CompiledFuncCondition
+from fast_fsm.core import (
+    AsyncDeclarativeState,
+    AsyncStateMachine,
+    CompiledFuncCondition,
+    DeclarativeState,
+    State,
+    StateMachine,
+    transition,
+)
 from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
 
 
@@ -282,6 +290,96 @@ class TestGuardContextParity:
         assert not machine.can_trigger("missing", payload="value")
         assert machine.trigger("go", payload="value").success
         assert calls == []
+
+
+class TestDeclarativeGuardContextParity:
+    """Decorator guards share preparation while handlers retain raw payloads."""
+
+    @staticmethod
+    def _raw_kwargs():
+        raw = {"_secret": object(), "x" * 101: object()}
+        raw.update({f"safe_{index}": object() for index in range(55)})
+        return raw
+
+    @staticmethod
+    def _assert_sanitized_calls(calls, marker, raw):
+        assert len(calls) == 2
+        first, second = calls
+        assert first[0] == (marker,)
+        assert second[0] == (marker,)
+        assert first[1] == second[1]
+        assert first[2] != second[2]
+        assert list(first[1]) == [f"safe_{index}" for index in range(50)]
+        assert "_secret" not in first[1]
+        assert "x" * 101 not in first[1]
+        assert list(raw) == [
+            "_secret",
+            "x" * 101,
+            *[f"safe_{index}" for index in range(55)],
+        ]
+
+    def test_sync_decorator_guard_sanitizes_can_and_trigger_only(self):
+        condition = RecordingCondition()
+
+        class Source(DeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.handler_kwargs = None
+
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            def handle_advance(self, *args, **kwargs):
+                self.handler_kwargs = kwargs
+                return True
+
+        marker = object()
+        raw = self._raw_kwargs()
+        source = Source("source")
+        target = State("target")
+        machine = StateMachine(source, name="sync_declarative_context")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+        assert machine.can_trigger("advance", marker, **raw)
+        assert machine.trigger("advance", marker, **raw).success
+        self._assert_sanitized_calls(condition.calls, marker, raw)
+        assert source.handler_kwargs == raw
+
+    @pytest.mark.asyncio
+    async def test_async_decorator_guard_sanitizes_can_and_trigger_only(self):
+        condition = RecordingAsyncCondition()
+
+        class Source(AsyncDeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.handler_kwargs = None
+
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            async def handle_advance(self, *args, **kwargs):
+                self.handler_kwargs = kwargs
+                return True
+
+        marker = object()
+        raw = self._raw_kwargs()
+        source = Source("source")
+        target = State("target")
+        machine = AsyncStateMachine(source, name="async_declarative_context")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+        assert await machine.can_trigger_async("advance", marker, **raw)
+        assert (await machine.trigger_async("advance", marker, **raw)).success
+        self._assert_sanitized_calls(condition.calls, marker, raw)
+        assert source.handler_kwargs == raw
 
 
 class TestConditionExceptionHandling:
