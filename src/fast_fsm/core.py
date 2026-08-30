@@ -628,42 +628,72 @@ class StateMachine:
                 ],
             )
         """
-        # Collect all state names from transitions
-        all_states = set()
+        # Collect exact supplied state objects first. String endpoints remain a
+        # convenience shorthand, but they must never replace caller-owned
+        # State identities or subclass behavior.
+        state_objects: Dict[str, State] = {}
+        unresolved_names: set[str] = set()
+
+        def register_supplied_state(state: State) -> None:
+            existing = state_objects.get(state.name)
+            if existing is not None and existing is not state:
+                raise ValueError(
+                    f"State name {state.name!r} was supplied with different objects"
+                )
+            state_objects[state.name] = state
+
+        def collect_state(value: Union[str, State]) -> None:
+            if isinstance(value, State):
+                register_supplied_state(value)
+            elif isinstance(value, str):
+                unresolved_names.add(value)
+            else:
+                raise TypeError(
+                    "quick_build state endpoints must be strings or State objects, "
+                    f"got {type(value).__name__}"
+                )
+
         if isinstance(initial_state, str):
-            all_states.add(initial_state)
+            unresolved_names.add(initial_state)
+        else:
+            register_supplied_state(initial_state)
 
         for trigger, from_state, to_state in transitions:
             if isinstance(from_state, list):
-                all_states.update(from_state)
+                for source_state in from_state:
+                    collect_state(source_state)
             else:
-                all_states.add(from_state)
-            all_states.add(to_state)
+                collect_state(from_state)
+            collect_state(to_state)
 
-        # Add additional states
+        # Add additional state identities or deferred string shorthand.
         if states:
             for state in states:
                 if isinstance(state, str):
-                    all_states.add(state)
+                    unresolved_names.add(state)
+                elif isinstance(state, State):
+                    register_supplied_state(state)
                 else:
-                    all_states.add(state.name)
+                    raise TypeError(
+                        "quick_build states must contain strings or State objects, "
+                        f"got {type(state).__name__}"
+                    )
 
-        # Create state objects
-        state_objects = {}
-        for state_name in all_states:
-            state_objects[state_name] = State(state_name)
+        # Create only the string endpoints that are still unresolved.
+        for state_name in unresolved_names:
+            if state_name not in state_objects:
+                state_objects[state_name] = State(state_name)
 
         # Handle initial state
         if isinstance(initial_state, str):
             initial_obj = state_objects[initial_state]
         else:
             initial_obj = initial_state
-            state_objects[initial_state.name] = initial_state
 
         # Create FSM
         fsm = cls(initial_obj, name=name)
         for state_obj in state_objects.values():
-            if state_obj != initial_obj:
+            if state_obj is not initial_obj:
                 fsm.add_state(state_obj)
 
         # Add transitions

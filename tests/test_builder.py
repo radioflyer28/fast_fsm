@@ -673,6 +673,58 @@ class TestConvenienceFunctions:
         assert fsm.current_state is initial
         assert fsm._states["idle"] is initial
 
+    def test_quick_build_preserves_custom_state_supplied_in_states(self):
+        """Convenience construction retains a supplied state callback object."""
+
+        entered = []
+
+        class CallbackState(State):
+            def on_enter(self, from_state, trigger, *args, **kwargs):
+                entered.append((from_state, trigger))
+
+        target = CallbackState("target")
+        fsm = StateMachine.quick_build(
+            "initial",
+            [("go", "initial", "target")],
+            states=[target],
+        )
+
+        assert fsm._states["target"] is target
+        assert fsm.trigger("go").success
+        assert entered == [(fsm._states["initial"], "go")]
+
+    def test_quick_build_uses_identity_when_states_compare_equal(self):
+        """Equal-comparing state subclasses never cause a canonical state skip."""
+
+        class EqualState(State):
+            def __eq__(self, other):
+                return isinstance(other, State)
+
+        initial = EqualState("initial")
+        target = EqualState("target")
+        fsm = StateMachine.quick_build(
+            initial,
+            [("go", "initial", "target")],
+            states=[target],
+        )
+
+        assert fsm._states["initial"] is initial
+        assert fsm._states["target"] is target
+        assert fsm.trigger("go").success
+
+    def test_quick_build_rejects_different_objects_with_the_same_name(self):
+        """Name collisions do not silently discard one supplied State object."""
+
+        first = State("target")
+        second = State("target")
+
+        with pytest.raises(ValueError, match="different objects"):
+            StateMachine.quick_build(
+                State("initial"),
+                [("go", "initial", "target")],
+                states=[first, second],
+            )
+
 
 # ---------------------------------------------------------------------------
 # DeclarativeState gap coverage
