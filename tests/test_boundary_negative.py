@@ -87,12 +87,16 @@ class TestStateMachineConstruction:
         assert fsm.triggers == []
 
     def test_add_state_already_exists(self):
-        """Adding a state with a duplicate name — behaviour depends on impl."""
+        """A same-name foreign state cannot replace the canonical registry object."""
         fsm = StateMachine(State("a"), name="dup")
-        fsm.add_state(State("b"))
-        # Adding 'b' again — should overwrite silently (dict-based)
-        fsm.add_state(State("b"))
+        canonical = State("b")
+        fsm.add_state(canonical)
+        before = fsm._graph_snapshot()
+        with pytest.raises(ValueError, match="already registered"):
+            fsm.add_state(State("b"))
         assert fsm.states.count("b") == 1
+        assert fsm._states["b"] is canonical
+        assert fsm._graph_snapshot() == before
 
     def test_from_states_no_args_raises(self):
         with pytest.raises(ValueError, match="At least one state name"):

@@ -10,10 +10,9 @@
 - `trigger()` returns `TransitionResult(success, from_state, to_state, trigger, error)`; never raises by default.
 - `safe_trigger()` wraps `trigger()` in try/except; never raises under any circumstance.
 - `add_transition(trigger, from_state, to_state, condition=None, *, unless=None)` — `unless=` is a negation shorthand, mutually exclusive with `condition=`.
+- Ordinary transition endpoints resolve through `_resolve_canonical_state()` before mutation: unknown names, foreign same-name objects, null, and unsupported endpoints fail without creating buckets. `_normalize_transition_request()` materializes/validates all sources, target, guards, and duplicate canonical sources; `_commit_transition_plan()` writes only a complete plan and advances graph version once iff its final topology changes.
 - `from_state` accepts a string, `State` object, or list of either; fan-out to multiple sources in one call.
-- `add_bidirectional_transition(t1, t2, s1, s2, c1, c2)` registers two directed transitions; thin convenience wrapper, no special internal representation.
-- `add_emergency_transition(trigger, to_state)` fans from all current states to one target.
-- `add_transitions(list_of_tuples)` batch-registers `(trigger, from, to)` tuples.
+- `add_bidirectional_transition(t1, t2, s1, s2, c1, c2)`, `add_emergency_transition(trigger, to_state)`, and `add_transitions(list_of_tuples)` preflight complete prepared plans and then make one all-or-nothing graph commit/version advance; an invalid later entry/leg leaves no prefix mutation.
 - `StateMachine.from_transitions(transitions, initial_state)` classmethod builds a machine from a flat list.
 - `is_in(state)` — O(1) identity/name check against `_current_state`.
 - `can_trigger(trigger)` — evaluates guard condition synchronously before committing; use for pre-flight checks.

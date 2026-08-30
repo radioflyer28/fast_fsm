@@ -128,6 +128,16 @@ class _GraphSnapshot:
     transitions: Tuple[_GraphTransition, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedTransition:
+    """Fully validated private transition request awaiting one graph commit."""
+
+    trigger: str
+    sources: Tuple["State", ...]
+    target: "State"
+    condition: Optional[Condition]
+
+
 @mypyc_attr(native_class=False)
 class CompiledFuncCondition(Condition):
     """A mypyc-compiled wrapper around a callable for use as a transition guard.
@@ -719,7 +729,31 @@ class StateMachine:
             transitions,
         )
 
-    def add_transition(
+    def _resolve_canonical_state(self, state: Union[str, State], *, role: str) -> State:
+        """Resolve a transition endpoint to its exact registered State object."""
+        if isinstance(state, str):
+            canonical = self._states.get(state)
+            if canonical is None:
+                raise ValueError(
+                    f"{role} state {state!r} is not registered; "
+                    "add it with add_state() before adding transitions."
+                )
+            return canonical
+        if isinstance(state, State):
+            canonical = self._states.get(state.name)
+            if canonical is None:
+                raise ValueError(f"{role} state {state.name!r} is not registered")
+            if canonical is not state:
+                raise ValueError(
+                    f"{role} state {state.name!r} is not the canonical registered object"
+                )
+            return canonical
+        raise ValueError(
+            f"{role} state must be a registered state name or State object, "
+            f"got {type(state).__name__}"
+        )
+
+    def _normalize_transition_request(
         self,
         trigger: str,
         from_state: Union[str, State, List[Union[str, State]]],
@@ -727,55 +761,32 @@ class StateMachine:
         condition: Optional[Union[Condition, Callable[..., bool]]] = None,
         *,
         unless: Optional[Union[Condition, Callable[..., bool]]] = None,
-    ) -> None:
-        """
-        Add a transition to the state machine.
-
-        Performance: O(1) - Direct dictionary insertion, no loops
-        Memory: +~64 bytes per transition (dict entry overhead)
-
-        Args:
-            trigger: Event that triggers the transition
-            from_state: Source state(s) - can be string, state object, or list
-            to_state: Target state - can be string or state object
-            condition: Optional condition - can be Condition or callable function.
-                      Callable functions receive (*args, **kwargs) from trigger calls.
-                      :class:`~fast_fsm.AsyncCondition` instances are **not** allowed
-                      on a sync ``StateMachine`` — use :class:`AsyncStateMachine` instead.
-            unless: Negation shorthand — the transition is allowed when this
-                    condition is **False**.  Mutually exclusive with ``condition``.
-                    Same :class:`~fast_fsm.AsyncCondition` restriction applies.
-        """
-        # Normalize inputs
-        if not isinstance(from_state, list):
-            from_state = [from_state]
-
-        # Convert to state names
-        from_names = []
-        for state in from_state:
-            if isinstance(state, State):
-                from_names.append(state.name)
-            else:
-                from_names.append(state)
-
-        to_name = to_state.name if isinstance(to_state, State) else to_state
-        if isinstance(to_state, str):
-            to_state_obj = self._states.get(to_name)
-            if to_state_obj is None:
-                raise ValueError(
-                    f"Target state '{to_name}' not found. "
-                    "Add it with add_state() before adding transitions."
-                )
+    ) -> _PreparedTransition:
+        """Materialize and validate a complete transition request without writing."""
+        raw_sources: List[Union[str, State]]
+        if isinstance(from_state, list):
+            raw_sources = list(from_state)
         else:
-            to_state_obj = to_state
+            raw_sources = [from_state]
+        if not raw_sources:
+            raise ValueError("transition source list cannot be empty")
 
-        # unless= and condition= are mutually exclusive
+        sources: List[State] = []
+        source_names: set[str] = set()
+        for raw_source in raw_sources:
+            source = self._resolve_canonical_state(raw_source, role="source")
+            if source.name in source_names:
+                raise ValueError(
+                    f"duplicate canonical source state {source.name!r} in one request"
+                )
+            source_names.add(source.name)
+            sources.append(source)
+        target = self._resolve_canonical_state(to_state, role="target")
+
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
             )
-
-        # AsyncCondition requires AsyncStateMachine — check before any wrapping
         if not isinstance(self, AsyncStateMachine):
             if isinstance(condition, AsyncCondition):
                 raise TypeError(
@@ -789,8 +800,6 @@ class StateMachine:
                     "cannot be used with a sync StateMachine via 'unless='. "
                     "Use AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
                 )
-
-        # Resolve unless= into a NegatedCondition
         if unless is not None:
             if isinstance(unless, Condition):
                 condition = NegatedCondition(unless)
@@ -800,40 +809,55 @@ class StateMachine:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
                 )
-
-        # Normalize condition - wrap functions in FuncCondition for consistency
-        normalized_condition = None
-        if condition is not None:
-            if isinstance(condition, Condition):
-                normalized_condition = condition
-            elif callable(condition):
-                # Wrap function in FuncCondition for consistent interface
-                normalized_condition = FuncCondition(condition)
-            else:
-                raise TypeError(
-                    f"Condition must be Condition or callable, got {type(condition)}"
-                )
-
-        # Add transitions for each source state.  Full canonical endpoint
-        # normalization is intentionally centralised in the following task; this
-        # preserves existing input compatibility for its preparatory tests.
-        topology_changed = False
-        for from_state_name in from_names:
-            if from_state_name not in self._transitions:
-                self._transitions[from_state_name] = {}
-            existing = self._transitions[from_state_name].get(trigger)
-            if (
-                existing is not None
-                and existing.to_state is to_state_obj
-                and existing.condition is normalized_condition
-            ):
-                continue
-            self._transitions[from_state_name][trigger] = TransitionEntry(
-                to_state_obj, normalized_condition
+        if condition is None:
+            normalized_condition: Optional[Condition] = None
+        elif isinstance(condition, Condition):
+            normalized_condition = condition
+        elif callable(condition):
+            normalized_condition = FuncCondition(condition)
+        else:
+            raise TypeError(
+                f"Condition must be Condition or callable, got {type(condition)}"
             )
-            topology_changed = True
-        if topology_changed:
-            self._graph_version += 1
+        return _PreparedTransition(
+            trigger, tuple(sources), target, normalized_condition
+        )
+
+    def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
+        """Commit a complete validated topology plan and advance once if changed."""
+        final_entries: Dict[Tuple[str, str], Tuple[State, Optional[Condition]]] = {}
+        for plan in plans:
+            for source in plan.sources:
+                final_entries[(source.name, plan.trigger)] = (
+                    plan.target,
+                    plan.condition,
+                )
+        changed = any(
+            (existing := self._transitions[source_name].get(trigger)) is None
+            or existing.to_state is not target
+            or existing.condition is not guard
+            for (source_name, trigger), (target, guard) in final_entries.items()
+        )
+        if not changed:
+            return
+        for (source_name, trigger), (target, guard) in final_entries.items():
+            self._transitions[source_name][trigger] = TransitionEntry(target, guard)
+        self._graph_version += 1
+
+    def add_transition(
+        self,
+        trigger: str,
+        from_state: Union[str, State, List[Union[str, State]]],
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, Callable[..., bool]]] = None,
+        *,
+        unless: Optional[Union[Condition, Callable[..., bool]]] = None,
+    ) -> None:
+        """Add a validated, canonical transition in one topology operation."""
+        prepared = self._normalize_transition_request(
+            trigger, from_state, to_state, condition, unless=unless
+        )
+        self._commit_transition_plan((prepared,))
 
     def add_transitions(
         self,
@@ -872,12 +896,20 @@ class StateMachine:
                 ('reset', 'stopped', 'idle',    None),   # explicit None == no guard
             ])
         """
+        prepared: List[_PreparedTransition] = []
         for entry in transitions:
+            if len(entry) not in (3, 4):
+                raise ValueError("each transition entry must contain 3 or 4 items")
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
             condition: Optional[Union[Condition, Callable[..., bool]]] = (
                 rest[0] if rest else None
             )
-            self.add_transition(trigger, from_state, to_state, condition)
+            prepared.append(
+                self._normalize_transition_request(
+                    trigger, from_state, to_state, condition
+                )
+            )
+        self._commit_transition_plan(tuple(prepared))
 
     def add_bidirectional_transition(
         self,
@@ -914,8 +946,13 @@ class StateMachine:
             fsm.add_bidirectional_transition('open', 'close', 'closed', 'open',
                                              unless1=is_locked)
         """
-        self.add_transition(trigger1, state1, state2, condition1, unless=unless1)
-        self.add_transition(trigger2, state2, state1, condition2, unless=unless2)
+        first = self._normalize_transition_request(
+            trigger1, state1, state2, condition1, unless=unless1
+        )
+        second = self._normalize_transition_request(
+            trigger2, state2, state1, condition2, unless=unless2
+        )
+        self._commit_transition_plan((first, second))
 
     def add_emergency_transition(
         self,
@@ -944,8 +981,14 @@ class StateMachine:
             # With negation shorthand:
             fsm.add_emergency_transition('fallback', 'safe', unless=is_safe)
         """
-        all_states: List[Union[str, State]] = list(self._states.keys())
-        self.add_transition(trigger, all_states, to_state, condition, unless=unless)
+        prepared = self._normalize_transition_request(
+            trigger,
+            list(self._states.values()),
+            to_state,
+            condition,
+            unless=unless,
+        )
+        self._commit_transition_plan((prepared,))
 
     @property
     def name(self) -> str:
