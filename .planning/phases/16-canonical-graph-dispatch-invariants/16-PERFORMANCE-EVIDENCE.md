@@ -169,3 +169,31 @@ This is source-tree proof only. It does not make an installed-wheel or
 publication-parity claim (Phase 20), publish a topology format (FUTR-05), or
 define Phase 17 lifecycle, Phase 18 ownership, or Phase 19 diagnostics/output
 contracts.
+
+## Review-Remediation Parity Evidence
+
+- Collected: 2026-08-30
+- Committed source tree: `233fb65` (`docs(16): WR-03 correct builder architecture example`), with the refreshed release manifest overlaid for the final read-only check.
+- Isolation: `tools/phase16_isolated_verify.py` exported a fresh temporary
+  checkout for every context. Pure contexts asserted
+  `src/fast_fsm/core.py`; compiled contexts built and asserted the native
+  `fast_fsm.core` extension. No developer native shadow was imported or
+  removed.
+
+The review remediation added `tests/test_boundary_negative.py` to both the
+Phase 16 fixed inventory and the identical pure/compiled semantic command.
+The following final command passed:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase16
+```
+
+It passed the expanded semantic matrix in both asserted origins, the compiled
+trigger/history performance cases, and the asserted-pure release gate
+(formatting, lint, mypy, full tests, Sphinx HTML/doctests, and freshness).
+The regenerated pure release baseline independently passed in a second
+temporary checkout with 1,007/1,007 tests passing, 96.08% total source
+coverage, and 94.27% `core.py` coverage. The compiled performance contract
+remains the existing 200,000 `trigger()` operations/second floor, which its
+native test cases passed; timings remain environment-labelled rather than a
+new policy threshold.
