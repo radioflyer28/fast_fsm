@@ -290,6 +290,9 @@ def test_phase16_runner_has_fail_closed_isolation_guards() -> None:
         "_validate_child_command",
         "baseline-write",
         "manifest-output",
+        "NamedTemporaryFile",
+        "copyfileobj",
+        "fsync",
         "os.replace",
     ):
         assert required in source
@@ -355,6 +358,55 @@ def test_phase16_baseline_write_refuses_lower_coverage_before_replacement(
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
     assert destination.read_bytes() == original
+
+
+def test_phase16_baseline_write_does_not_follow_legacy_temp_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale predictable temp symlink cannot write outside the destination."""
+    runner = _load_phase16_runner()
+    destination_dir = tmp_path / "evidence"
+    destination_dir.mkdir()
+    destination = destination_dir / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    victim = tmp_path / "victim.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    victim.write_bytes(b"do not overwrite")
+    legacy_temporary = destination.with_name(f".{destination.name}.phase16-tmp")
+    legacy_temporary.symlink_to(victim)
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.read_bytes() == generated.read_bytes()
+    assert victim.read_bytes() == b"do not overwrite"
+    assert legacy_temporary.is_symlink()
+    assert legacy_temporary.resolve() == victim
+
+
+def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed replace leaves neither a partial destination nor a temp file."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    original = destination.read_bytes()
+    before = {path.name for path in tmp_path.iterdir()}
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    def fail_replace(source: Path, target: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(runner.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.read_bytes() == original
+    assert {path.name for path in tmp_path.iterdir()} == before
 
 
 def test_phase16_coverage_floor_migration_requires_explicit_review_data(

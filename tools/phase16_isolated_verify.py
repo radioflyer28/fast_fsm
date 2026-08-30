@@ -307,14 +307,37 @@ def _coverage_floor_migration(value: str) -> Path:
 def _export_manifest_atomically(
     generated: Path, output: str, migration_path: Path | None = None
 ) -> None:
+    """Publish a validated generated manifest without following temp symlinks."""
     if not generated.is_file():
         raise VerificationError("baseline-write did not generate release-baseline.json")
     destination = _manifest_output(output)
     _validate_coverage_floor(destination, generated, migration_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.phase16-tmp")
-    shutil.copyfile(generated, temporary)
-    os.replace(temporary, destination)
+    temporary: Path | None = None
+    try:
+        # NamedTemporaryFile uses an unpredictable O_EXCL name in the resolved
+        # destination directory. Unlike the former predictable sibling name,
+        # it neither opens nor replaces a pre-positioned symlink.
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary = Path(temporary_file.name)
+            with generated.open("rb") as generated_file:
+                shutil.copyfileobj(generated_file, temporary_file)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary, destination)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _suite_mode(args: argparse.Namespace) -> int:
