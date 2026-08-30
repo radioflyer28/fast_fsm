@@ -132,16 +132,16 @@ def _assert_origin(source_tree: Path, build_mode: str, env: dict[str, str]) -> N
 
 
 def _validate_child_command(command: Sequence[str], source_tree: Path) -> None:
+    """Validate a trusted task command's shape and prepared working directory.
+
+    Task mode runs arbitrary verifier commands with the temporary checkout as
+    their initial working directory. It is not an OS sandbox and does not claim
+    to confine a trusted command that deliberately selects another path.
+    """
     if not command:
         raise VerificationError("task mode requires a command after '--'")
     if command[0].startswith("-"):
         raise VerificationError("task command must begin with an executable")
-    for token in command:
-        path = Path(token)
-        if path.is_absolute() or ".." in path.parts:
-            raise VerificationError(
-                f"task command may not reference outside the temporary repository: {token!r}"
-            )
     if not source_tree.resolve().is_dir():
         raise VerificationError("temporary repository path could not be resolved")
 

@@ -23,6 +23,7 @@ for full rationale.
 """
 
 import ast
+import importlib.util
 from pathlib import Path
 
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
@@ -289,3 +290,14 @@ def test_phase16_runner_has_fail_closed_isolation_guards() -> None:
         "os.replace",
     ):
         assert required in source
+
+
+def test_phase16_runner_treats_task_commands_as_trusted(tmp_path: Path) -> None:
+    """Task mode selects an initial cwd but deliberately is not a sandbox."""
+    spec = importlib.util.spec_from_file_location("phase16_runner", PHASE16_RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+
+    runner._validate_child_command(("sh", "-c", "cd /tmp && true"), tmp_path)
