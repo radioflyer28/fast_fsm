@@ -295,10 +295,14 @@ def test_phase16_runner_has_fail_closed_isolation_guards() -> None:
         "isfinite",
         "baseline-write",
         "manifest-output",
-        "NamedTemporaryFile",
+        "MANIFEST_DESCRIPTOR_SUPPORT",
+        "_open_manifest_parent",
+        "O_NOFOLLOW",
+        "src_dir_fd",
+        "dst_dir_fd",
         "copyfileobj",
         "fsync",
-        "os.replace",
+        "os.rename",
     ):
         assert required in source
 
