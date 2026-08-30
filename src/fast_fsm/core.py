@@ -642,16 +642,13 @@ class StateMachine:
                 )
             state_objects[state.name] = state
 
-        def collect_state(value: Union[str, State]) -> None:
-            if isinstance(value, State):
-                register_supplied_state(value)
-            elif isinstance(value, str):
-                unresolved_names.add(value)
-            else:
+        def collect_state(value: str) -> None:
+            if not isinstance(value, str):
                 raise TypeError(
-                    "quick_build state endpoints must be strings or State objects, "
+                    "quick_build state endpoints must be strings, "
                     f"got {type(value).__name__}"
                 )
+            unresolved_names.add(value)
 
         if isinstance(initial_state, str):
             unresolved_names.add(initial_state)
