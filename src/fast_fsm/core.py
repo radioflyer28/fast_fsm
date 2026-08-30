@@ -14,7 +14,7 @@ Key design principles:
 
 import logging
 import time
-from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
+from typing import Optional, Dict, Any, Callable, List, Union, Tuple, cast, overload
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
@@ -175,9 +175,9 @@ class CompiledFuncCondition(Condition):
     :class:`~fast_fsm.FuncCondition` as a base when subclassing is needed.
 
     Args:
-        func: Any callable ``(**kwargs) -> bool``.  Receives the same sanitised
-            keyword arguments as every other condition (private ``_``-prefixed
-            keys stripped, capped at 50 items).
+        func: Any callable ``(*args, **kwargs) -> bool``. Receives the same
+            positional and sanitised keyword arguments as every other condition
+            (private ``_``-prefixed keys stripped, capped at 50 items).
         name: Human-readable label.  Defaults to ``func.__name__`` when
             available, otherwise ``"compiled_func"``.
         description: Optional longer description.
@@ -203,9 +203,9 @@ class CompiledFuncCondition(Condition):
         super().__init__(resolved_name, description)
         self.func: Callable[..., bool] = func
 
-    def check(self, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> bool:
         """Call the wrapped function and return its result."""
-        return self.func(**kwargs)
+        return self.func(*args, **kwargs)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -829,6 +829,16 @@ class StateMachine:
             raise TypeError(
                 f"Condition must be Condition or callable, got {type(condition)}"
             )
+        if normalized_condition is not None:
+            has_async_requirement = self._contains_async_requirement(
+                normalized_condition
+            )
+            if not isinstance(self, AsyncStateMachine) and has_async_requirement:
+                raise TypeError(
+                    "AsyncCondition nested in a supported condition wrapper "
+                    "cannot be used with a sync StateMachine. Use "
+                    "AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
+                )
         return _PreparedTransition(
             trigger, tuple(sources), target, normalized_condition
         )
@@ -1259,7 +1269,9 @@ class StateMachine:
         entry = prepared.entry
         if entry.condition:
             assert prepared.condition_kwargs is not None
-            if not entry.condition.check(*prepared.args, **prepared.condition_kwargs):
+            if not self._evaluate_condition_sync(
+                entry.condition, prepared.args, prepared.condition_kwargs
+            ):
                 return False
 
         return self._current_state.can_transition(
@@ -1334,6 +1346,151 @@ class StateMachine:
             safe_kwargs[key] = value
 
         return safe_kwargs
+
+    def _condition_children(self, condition: Condition) -> Tuple[Condition, ...]:
+        """Return only the supported private built-in wrapper child edges."""
+        from .condition_templates import AndCondition, NotCondition, OrCondition
+
+        condition_type = type(condition)
+        if condition_type is NegatedCondition:
+            return (cast(NegatedCondition, condition)._inner,)
+        if condition_type is AndCondition:
+            return cast(AndCondition, condition).conditions
+        if condition_type is OrCondition:
+            return cast(OrCondition, condition).conditions
+        if condition_type is NotCondition:
+            return (cast(NotCondition, condition).condition,)
+        return ()
+
+    def _contains_async_requirement(self, condition: Condition) -> bool:
+        """Detect nested async leaves while rejecting active wrapper cycles."""
+        active: set[int] = set()
+        completed: Dict[int, bool] = {}
+
+        def visit(current: Condition) -> bool:
+            current_id = id(current)
+            if current_id in active:
+                raise ValueError("supported condition wrapper cycle detected")
+            if current_id in completed:
+                return completed[current_id]
+            active.add(current_id)
+            try:
+                children = self._condition_children(current)
+                if children:
+                    result = False
+                    for child in children:
+                        if visit(child):
+                            result = True
+                else:
+                    result = isinstance(current, AsyncCondition)
+                completed[current_id] = result
+                return result
+            finally:
+                active.remove(current_id)
+
+        return visit(condition)
+
+    def _evaluate_condition_sync(
+        self,
+        condition: Condition,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        active: Optional[set[int]] = None,
+        completed: Optional[set[int]] = None,
+    ) -> bool:
+        """Evaluate supported wrappers synchronously without hiding async leaves."""
+        from .condition_templates import AndCondition, NotCondition, OrCondition
+
+        if active is None:
+            active = set()
+        if completed is None:
+            completed = set()
+        condition_id = id(condition)
+        if condition_id in active:
+            raise ValueError("supported condition wrapper cycle detected")
+        active.add(condition_id)
+        try:
+            condition_type = type(condition)
+            children = self._condition_children(condition)
+            if condition_type is NegatedCondition or condition_type is NotCondition:
+                result = not self._evaluate_condition_sync(
+                    children[0], args, kwargs, active, completed
+                )
+            elif condition_type is AndCondition:
+                result = all(
+                    self._evaluate_condition_sync(
+                        child, args, kwargs, active, completed
+                    )
+                    for child in children
+                )
+            elif condition_type is OrCondition:
+                result = any(
+                    self._evaluate_condition_sync(
+                        child, args, kwargs, active, completed
+                    )
+                    for child in children
+                )
+            elif isinstance(condition, AsyncCondition):
+                raise TypeError(
+                    "AsyncCondition requires AsyncStateMachine and trigger_async()"
+                )
+            else:
+                result = condition.check(*args, **kwargs)
+            return result
+        finally:
+            active.remove(condition_id)
+            completed.add(condition_id)
+
+    async def _evaluate_condition_async(
+        self,
+        condition: Condition,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        active: Optional[set[int]] = None,
+        completed: Optional[set[int]] = None,
+    ) -> bool:
+        """Recursively await async leaves through supported built-in wrappers."""
+        from .condition_templates import AndCondition, NotCondition, OrCondition
+
+        if active is None:
+            active = set()
+        if completed is None:
+            completed = set()
+        condition_id = id(condition)
+        if condition_id in active:
+            raise ValueError("supported condition wrapper cycle detected")
+        active.add(condition_id)
+        try:
+            condition_type = type(condition)
+            children = self._condition_children(condition)
+            if condition_type is NegatedCondition or condition_type is NotCondition:
+                result = not await self._evaluate_condition_async(
+                    children[0], args, kwargs, active, completed
+                )
+            elif condition_type is AndCondition:
+                result = True
+                for child in children:
+                    if not await self._evaluate_condition_async(
+                        child, args, kwargs, active, completed
+                    ):
+                        result = False
+                        break
+            elif condition_type is OrCondition:
+                result = False
+                for child in children:
+                    if await self._evaluate_condition_async(
+                        child, args, kwargs, active, completed
+                    ):
+                        result = True
+                        break
+            elif isinstance(condition, AsyncCondition):
+                result = await condition.check_async(*args, **kwargs)
+            else:
+                result = condition.check(*args, **kwargs)
+            return result
+        finally:
+            active.remove(condition_id)
+            completed.add(condition_id)
 
     def force_state(self, state_name: str) -> None:
         """Force the machine into a named state, bypassing guard conditions.
@@ -1670,8 +1827,8 @@ class StateMachine:
             )
             try:
                 assert prepared.condition_kwargs is not None
-                condition_result = condition.check(
-                    *prepared.args, **prepared.condition_kwargs
+                condition_result = self._evaluate_condition_sync(
+                    condition, prepared.args, prepared.condition_kwargs
                 )
                 self._logger.debug(
                     "%s: Condition '%s' result: %s",
@@ -1932,14 +2089,10 @@ class AsyncStateMachine(StateMachine):
 
         if condition:
             assert prepared.condition_kwargs is not None
-            if isinstance(condition, AsyncCondition):
-                if not await condition.check_async(
-                    *prepared.args, **prepared.condition_kwargs
-                ):
-                    return False
-            else:
-                if not condition.check(*prepared.args, **prepared.condition_kwargs):
-                    return False
+            if not await self._evaluate_condition_async(
+                condition, prepared.args, prepared.condition_kwargs
+            ):
+                return False
 
         # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
         if hasattr(self._current_state, "can_transition_async"):
@@ -1988,14 +2141,9 @@ class AsyncStateMachine(StateMachine):
             )
             try:
                 assert prepared.condition_kwargs is not None
-                if isinstance(condition, AsyncCondition):
-                    condition_result = await condition.check_async(
-                        *prepared.args, **prepared.condition_kwargs
-                    )
-                else:
-                    condition_result = condition.check(
-                        *prepared.args, **prepared.condition_kwargs
-                    )
+                condition_result = await self._evaluate_condition_async(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
 
                 self._logger.debug(
                     "%s: Condition '%s' result: %s",

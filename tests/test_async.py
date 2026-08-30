@@ -389,6 +389,24 @@ class TestAsyncWrapperEvaluation:
         with pytest.raises(ValueError, match="cycle"):
             machine.add_transition("go", initial, target, factory())
 
+    @pytest.mark.parametrize(
+        "factory",
+        [make_negated_cycle, make_and_cycle, make_or_cycle, make_not_cycle],
+    )
+    def test_async_sibling_does_not_hide_a_supported_wrapper_cycle(self, factory):
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="hidden_async_cycle")
+        machine.add_state(target)
+
+        with pytest.raises(ValueError, match="cycle"):
+            machine.add_transition(
+                "go",
+                initial,
+                target,
+                AndCondition(RecordingAsyncCondition(), factory()),
+            )
+
     @pytest.mark.asyncio
     async def test_shared_condition_dag_is_accepted_and_awaited(self):
         machine = self._machine(make_shared_condition_dag())
