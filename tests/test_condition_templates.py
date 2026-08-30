@@ -27,7 +27,7 @@ from fast_fsm.condition_templates import (
     TimeoutCondition,
     ValueInSetCondition,
 )
-from fast_fsm.conditions import FuncCondition, NegatedCondition
+from fast_fsm.conditions import Condition, FuncCondition, NegatedCondition
 from fast_fsm.core import AsyncStateMachine, FSMBuilder, State, StateMachine
 
 
@@ -275,6 +275,118 @@ class TestNotCondition:
         c = NotCondition(inner)
         assert c.check(x=5) is True  # NOT (5 > 10) => True
         assert c.check(x=20) is False  # NOT (20 > 10) => False
+
+
+class RecordingCondition(Condition):
+    """Test-only leaf that records positional identity and keyword values."""
+
+    def __init__(self, result=True):
+        super().__init__("recording", "records guard context")
+        self.result = result
+        self.calls = []
+
+    def check(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.result
+
+
+class ShortCircuitCondition(Condition):
+    """Test-only leaf that makes evaluation order observable."""
+
+    def __init__(self, result):
+        super().__init__("short_circuit", "records short-circuit evaluation")
+        self.result = result
+        self.calls = 0
+
+    def check(self, *args, **kwargs):
+        self.calls += 1
+        return self.result
+
+
+class TestPositionalConditionForwarding:
+    """Built-in wrappers preserve the two-channel guard calling convention."""
+
+    @staticmethod
+    def _assert_context(condition, first, second, payload):
+        args, kwargs = condition.calls[-1]
+        assert args[0] is first
+        assert args[1] is second
+        assert kwargs["payload"] is payload
+
+    def test_direct_func_and_negated_conditions_forward_positional_context(self):
+        first = object()
+        second = object()
+        payload = object()
+        captured = []
+
+        def callable_guard(*args, **kwargs):
+            captured.append((args, kwargs))
+            return True
+
+        assert FuncCondition(callable_guard).check(first, second, payload=payload)
+        assert (
+            NegatedCondition(FuncCondition(callable_guard)).check(
+                first, second, payload=payload
+            )
+            is False
+        )
+        assert captured[0][0][0] is first
+        assert captured[0][0][1] is second
+        assert captured[0][1]["payload"] is payload
+        assert captured[1][0][0] is first
+        assert captured[1][0][1] is second
+        assert captured[1][1]["payload"] is payload
+
+    def test_and_or_and_not_forward_positional_context_to_every_leaf(self):
+        first = object()
+        second = object()
+        payload = object()
+        and_left = RecordingCondition(True)
+        and_right = RecordingCondition(True)
+        or_left = RecordingCondition(False)
+        or_right = RecordingCondition(True)
+        not_inner = RecordingCondition(False)
+
+        assert AndCondition(and_left, and_right).check(first, second, payload=payload)
+        assert OrCondition(or_left, or_right).check(first, second, payload=payload)
+        assert NotCondition(not_inner).check(first, second, payload=payload)
+
+        for condition in (and_left, and_right, or_left, or_right, not_inner):
+            self._assert_context(condition, first, second, payload)
+
+    def test_and_or_short_circuit_without_evaluating_later_leaves(self):
+        first = object()
+        false_left = ShortCircuitCondition(False)
+        skipped_and = ShortCircuitCondition(True)
+        true_left = ShortCircuitCondition(True)
+        skipped_or = ShortCircuitCondition(False)
+
+        assert not AndCondition(false_left, skipped_and).check(first, mode="and")
+        assert OrCondition(true_left, skipped_or).check(first, mode="or")
+
+        assert false_left.calls == 1
+        assert skipped_and.calls == 0
+        assert true_left.calls == 1
+        assert skipped_or.calls == 0
+
+    def test_legacy_kwargs_only_condition_calls_remain_compatible(self):
+        condition = FuncCondition(lambda **kwargs: kwargs["allowed"])
+
+        assert condition.check(allowed=True)
+        assert not condition.check(allowed=False)
+
+    def test_builtin_leaf_templates_accept_positional_context(self):
+        marker = object()
+
+        assert AlwaysCondition().check(marker)
+        assert not NeverCondition().check(marker)
+        assert KeyExistsCondition("key").check(marker, key="value")
+        assert ValueInSetCondition("key", {"value"}).check(marker, key="value")
+        assert RegexCondition("key", "value").check(marker, key="value")
+        assert ComparisonCondition("key", "==", "value").check(marker, key="value")
+        assert TimeoutCondition(10.0).check(marker)
+        assert CooldownCondition(10.0).check(marker)
+        assert isinstance(ElapsedCondition(10.0).check(marker), bool)
 
 
 # ---------------------------------------------------------------------------
