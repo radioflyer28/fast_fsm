@@ -264,3 +264,57 @@ The asserted-pure baseline contains 1,067/1,067 passing tests, 96.16% total
 source coverage, and 94.50% `core.py` coverage. Those values exceed the prior
 96.08% total and 94.27% core floors; the subsequent read-only check verifies
 that no fresh collection can change the committed manifest.
+
+## Review-Fix Cycle 2 — Critical Manifest and Guard Corrections
+
+- Collected: 2026-08-30
+- Source commits: `0b92c25` (CR-01), `cdc8974` (CR-02), and `c68bab2`
+  (CR-03), before the refreshed manifest was committed.
+- Isolation: every import-bearing command created a fresh temporary archive
+  from committed `HEAD`. Pure contexts asserted `src/fast_fsm/core.py` before
+  tests; compiled contexts built and asserted the native
+  `fast_fsm.core.cpython-312-darwin.so` extension. The developer checkout's
+  native shadows were neither imported nor removed.
+
+The async evaluator now retains the direct callable fast path only for the
+exact built-in `FuncCondition`; public subclasses use their effective `check()`
+method at a dynamic boundary so an override may reject, raise, or return an
+awaitable under both interpreter and mypyc dispatch. The manifest publisher
+uses an unpredictable exclusive same-directory temporary file, flushes and
+fsyncs it before replacement, and cleans it up on all failure paths. Coverage
+parsing now accepts only JSON `int`/`float` values that are non-boolean, finite,
+and within the raw inclusive 0–100 range; the same rule applies to existing,
+generated, and reviewed migration manifests before rounding or replacement.
+
+| Evidence | Asserted pure | Asserted compiled |
+| --- | ---: | ---: |
+| CR-01 direct/machine subclass regressions (reject, raise, awaitable) | 7 passed | 7 passed |
+| CR-02 predictable-symlink victim/replace-cleanup regressions | 4 passed | 4 passed |
+| CR-03 malformed existing/generated/migration manifests and byte preservation | 59 passed | 59 passed |
+| Full Phase 16 semantic matrix | passed | passed |
+| Compiled trigger/history performance selection | n/a | 3 passed; existing ≥200,000 ops/s contract held |
+
+The first full suite intentionally stopped at the read-only freshness check:
+the expanded regression set changed the evidence observation from 1,067 to
+1,129 passing tests and raised coverage from 96.16% / 94.50% to 96.21% /
+94.57% (total / `core.py`). Its pure and compiled semantic matrices and the
+compiled performance selection had already passed. Only after those semantic
+and static gates, `task typecheck-mypy`, and advisory `task typecheck-ty` exited
+successfully was the manifest regenerated through the isolated write command:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite baseline-check
+uv run python tools/phase16_isolated_verify.py --mode task --build-mode pure \
+  --include evidence/release-baseline.json -- task release-gate
+```
+
+The refreshed manifest records 1,129/1,129 tests, 96.21% total source
+coverage, 94.57% `core.py` coverage, and a local pure `trigger()` observation
+of 682,293.08 ops/s. Its independent asserted-pure freshness check and the
+full pure release gate both passed (source-origin preflight, Ruff format/lint,
+mypy, all tests, Sphinx HTML/doctests, and baseline freshness). Mypy reported
+no source issues. Ty exited successfully with two non-blocking
+redundant-`Any`-cast diagnostics at the intentionally dynamic mypyc
+awaitability boundaries.
