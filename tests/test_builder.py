@@ -1381,6 +1381,29 @@ class TestFSMBuilderPublication:
             (),
         )
 
+    def test_publication_uses_identity_when_states_compare_equal(self):
+        """Distinct state objects remain distinct despite custom equality."""
+
+        class EqualComparingState(State):
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, State)
+
+        initial = EqualComparingState("initial")
+        distinct = EqualComparingState("distinct")
+        same_name = EqualComparingState("initial")
+
+        assert initial == distinct
+        builder = FSMBuilder(initial)
+        builder.add_state(distinct)
+
+        with pytest.raises(ValueError, match="different State object"):
+            builder.add_state(same_name)
+
+        machine = builder.build()
+        assert machine._states == {"initial": initial, "distinct": distinct}
+        assert machine._states["initial"] is initial
+        assert machine._states["distinct"] is distinct
+
     def test_invalid_initial_or_staged_state_is_rejected_before_materialization(self):
         with pytest.raises(TypeError):
             FSMBuilder(None)

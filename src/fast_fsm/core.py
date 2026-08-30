@@ -3366,7 +3366,7 @@ class FSMBuilder:
 
         # Add all states
         for state in self._states.values():
-            if state != self._initial_state:  # Initial state already added
+            if state is not self._initial_state:  # Initial state already added
                 candidate.add_state(state)
 
         # Add all transitions
