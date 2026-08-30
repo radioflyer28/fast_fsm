@@ -1,6 +1,6 @@
 ---
 phase: 15-release-baseline-evidence-harness
-reviewed: 2026-08-30T01:43:45Z
+reviewed: 2026-08-30T01:57:38Z
 depth: standard
 files_reviewed: 25
 files_reviewed_list:
@@ -39,40 +39,35 @@ status: clean
 
 # Phase 15: Code Review Report
 
-**Reviewed:** 2026-08-30T01:43:45Z  
+**Reviewed:** 2026-08-30T01:57:38Z  
 **Depth:** standard  
 **Files Reviewed:** 25  
 **Status:** clean
 
 ## Summary
 
-The convergence audit reviewed the original Phase 15 scope through `1c1d092`,
-the iteration-thirteen fix report, the staged-source runtime boundary, frozen
-source finder, auditability preflight, captured primitive/import/path/serializer
-state, raw CPython layout access, source-root and `sys.modules` confinement,
-static/runtime reconciliation, manifest freshness, and every prior review
-contract. The assessment uses the documented Phase 15 trust boundary: repository
-source is audited build input whose dynamic and audit-state-introspection features
-must fail closed, not OS-level hostile code requiring a general Python sandbox.
+The convergence re-review inspected the original Phase 15 scope through
+`75d149b`, the iteration-fourteen fix report, the authoritative Python 3.10 CI
+root cause, the parameter-level version guard, supported-version collection and
+execution behavior, and every previously clean Phase 15 contract.
 
-The child now receives a fresh tree containing only resolved selected `.py`
-files. Legacy bytecode and native siblings are absent, the finder has no writable
-instance policy and a frozen class, and marker regressions fail before artifact
-initializers execute. Ordinary dynamic execution, frame inspection, native
-introspection, and direct type/object mutation routes are rejected by preflight;
-trusted audit state is function-local and captured before selected imports.
-External provenance, selected import keys, primitive/meta-path/path integrity,
-lying metaclasses, nested types/re-exports, registered exceptions, runtime-layout
-freshness, and all earlier wheel/workflow/benchmark/preflight/portability/docs
-contracts pass their focused tests.
+The TryStar fixture is now the only guarded parameter. In an isolated locked
+Python 3.10.14 environment, the focused test produced two passed loop/control-
+flow cases and one skipped TryStar case with the explicit reason `except* requires
+Python 3.11`; no 3.11-only source reached the 3.10 host parser. Under Python
+3.12, all three parameters passed, retaining `ast.TryStar` traversal coverage.
+This directly resolves the failure observed in exact-SHA run `33286413513`
+without weakening Python 3.10 coverage or skipping the whole test.
 
-The focused isolation/layout suite, full release-evidence module, production
-slots-policy command, and complete suite passed. The tracked manifest records
-879 collected and 879 passing tests, and the production audit reconciles all 31
-class layouts with instance dictionaries only for `CompiledFuncCondition` and
-`TransitionError`. All reviewed files meet quality standards. No Critical,
-Warning, or Info issues remain. `uv.lock` remains excluded by the generated-lock-
-file review policy.
+The complete release-evidence module and canonical full suite passed. The tracked
+baseline remains correct at 879 collected and 879 passing tests because its
+canonical Python 3.12 inventory did not change. Staged-source isolation, frozen
+finder and auditability contracts, runtime/static layout reconciliation, wheel
+identity, workflow pins/permissions, benchmark validation, preflight ordering,
+portable artifact handling, and documentation execution retain their prior clean
+assessment. No adjacent supported-version regression or remaining Critical,
+Warning, or Info issue was found. `uv.lock` remains excluded by the generated-
+lock-file review policy.
 
 ## Narrative Findings (AI reviewer)
 
@@ -80,6 +75,6 @@ No findings.
 
 ---
 
-_Reviewed: 2026-08-30T01:43:45Z_  
+_Reviewed: 2026-08-30T01:57:38Z_  
 _Reviewer: the agent (gsd-code-reviewer)_  
 _Depth: standard_

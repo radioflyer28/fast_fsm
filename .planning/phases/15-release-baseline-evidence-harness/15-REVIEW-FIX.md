@@ -1,86 +1,59 @@
 ---
 phase: 15
-fixed_at: 2026-08-30T01:34:00Z
+fixed_at: 2026-08-30T02:01:00Z
 review_path: .planning/phases/15-release-baseline-evidence-harness/15-REVIEW.md
-iteration: 13
-cycle: staged-source-audit-boundary
-findings_in_scope: 2
-fixed: 2
+iteration: 14
+cycle: python-310-trystar-fixture-portability
+findings_in_scope: 1
+fixed: 1
 skipped: 0
 status: all_fixed
 ---
 
 # Phase 15: Code Review Fix Report
 
-**Fixed at:** 2026-08-30T01:34:00Z  
-**Source review:** `.planning/phases/15-release-baseline-evidence-harness/15-REVIEW.md`  
-**Cycle:** staged-source-audit-boundary (iteration 13)
+**Fixed at:** 2026-08-30T02:01:00Z
+**Source review:** `.planning/phases/15-release-baseline-evidence-harness/15-REVIEW.md`
+**Cycle:** python-310-trystar-fixture-portability (iteration 14)
 
 **Summary:**
 
-- Findings in scope: 2
-- Fixed: 2
+- Findings in scope: 1
+- Fixed: 1
 - Skipped: 0
 
 ## Fixed Issues
 
-### CR-01: Selected source can mutate the authoritative finder before a denied artifact executes
+### CR-01: An unguarded `except*` fixture breaks every supported Python 3.10 test job
 
-**Files modified:** `tools/release_evidence.py`, `tests/test_release_evidence.py`  
-**Commits:** `730094d`, `1c1d092`
+**Files modified:** `tests/test_release_evidence.py`
+**Commit:** `75d149b`
 
-**Applied fix:** The runtime auditor now copies only selected `fast_fsm/**/*.py`
-files into a fresh temporary source root before launching the child process. The
-original root is never supplied to that child or added to its import path, so
-legacy bytecode and native siblings cannot be selected. The authoritative finder
-holds its mapping-proxy policy and loader references in closure state, has no
-instance dictionary, rejects instance mutation, and has a frozen finder class.
-The regression attempts to read/mutate/restore finder policy before importing a
-marker-writing sibling `.pyc`; it fails before the marker can execute.
-
-### CR-02: Captured audit references remain mutable through selected-code caller frames
-
-**Files modified:** `tools/release_evidence.py`, `tests/test_release_evidence.py`  
-**Commit:** `730094d`
-
-**Applied fix:** Trusted builtins, import machinery, paths, serializer, and raw
-type access are now captured as `run_audit` function defaults and locals before
-selected imports; no module-global `_AUDIT_*` references remain. A documented
-pre-execution AST auditability contract fails closed for dynamic execution,
-`sys._getframe`, `inspect` frame APIs, `ctypes`, and direct type/object mutation
-primitives that could bypass the audit boundary. The caller-frame `_AUDIT_VARS`
-attack is rejected before its dynamic dictionary-bearing class can run.
-
-### Evidence refresh
-
-**Files modified:** `evidence/release-baseline.json`  
-**Commit:** `3ef4e69`
-
-**Applied fix:** Regenerated from a clean committed pure-source worktree. The
-baseline records 879/879 tests; only the expected test inventory and volatile,
-environment-labelled benchmark observation changed.
+**Applied fix:** Converted only the `TryStar`/`except*` parameter into a
+parameter-level `pytest.mark.skipif(sys.version_info < (3, 11))` fixture with a
+stable test id. The loop, while/else, and ordinary control-flow parameters remain
+unconditional, so Python 3.10 still exercises the portable analyzer paths while
+never hands 3.11-only grammar to `ast.parse`.
 
 ## Verification
 
-Focused finder-policy/legacy-bytecode/caller-frame regressions and the full
-`tests/test_release_evidence.py` suite passed, as did Ruff formatting and lint,
-mypy for `tools/release_evidence.py`, and generated-script parse checks in the
-isolated review worktree.
+Verification ran in the isolated review worktree, then the final release gate
+ran from a detached clean pure-source worktree after locked sync and immediate
+source preflight:
 
-The final authoritative gate ran in a second fresh detached clean worktree after
-`FAST_FSM_BUILD_MODE=pure uv sync --locked --all-groups` and immediate source
-preflight:
-
+- `uv run --python 3.10 pytest tests/test_release_evidence.py -q -k
+  'recurses_through_module_loops_and_try_star' -rs` — 2 passed, 1 skipped
+  (`except* requires Python 3.11`)
+- Default Python 3.12 full suite — passed; `879 tests collected`
+- Ruff formatting and lint for the modified test — passed
 - `FAST_FSM_BUILD_MODE=pure task release-gate` — passed
-- `pytest tests/ -x -q` — 879 passed
-- Ruff, mypy, strict Sphinx HTML, and doctests — passed
-- `task release-baseline-check` — passed without rewriting evidence (879/879,
-  95.75% total coverage)
+- Read-only evidence remained fresh; no baseline rewrite was needed because the
+  canonical Python 3.12 inventory remained 879 tests.
 
 This report is intentionally uncommitted for the review workflow to own.
 
 ---
 
-_Fixed: 2026-08-30T01:34:00Z_  
-_Fixer: gsd-code-fixer_  
-_Cycle: staged-source-audit-boundary / iteration 13_
+_Fixed: 2026-08-30T02:01:00Z_
+_Fixer: gsd-code-fixer_
+_Cycle: python-310-trystar-fixture-portability / iteration 14_
