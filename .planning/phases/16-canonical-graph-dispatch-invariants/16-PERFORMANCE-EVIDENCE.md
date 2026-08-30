@@ -318,3 +318,43 @@ mypy, all tests, Sphinx HTML/doctests, and baseline freshness). Mypy reported
 no source issues. Ty exited successfully with two non-blocking
 redundant-`Any`-cast diagnostics at the intentionally dynamic mypyc
 awaitability boundaries.
+
+## Review-Fix Cycle 3 — Full Gate Evidence
+
+- Collected: 2026-08-30
+- Source commits: `1fbf93a` (CR-01), `c380603` (CR-02), `7085c43`
+  (CR-03), `8ccf6b2` (CR-04), `bc058d9` / `13c02ca` / `1babec8` /
+  `c96eff2` / `2fe4af4` (CR-05 follow-through), and `1bad2f0` (WR-01).
+- Context: source changes were committed in the isolated review-fix worktree.
+  Every import-bearing check exported a fresh archive; pure runs asserted
+  `src/fast_fsm/core.py` and compiled runs built and asserted the temporary
+  native extension. No checkout-native shadow was used as test evidence.
+
+The manifest publisher now validates the generated JSON before *every* write,
+including the first destination, rejects non-finite constants and malformed
+test counters, rejects leaf symlinks without resolving the destination, and
+restores either the prior mode or the repository umask-derived mode before
+atomic replacement. Its durable floor tracks coverage and strict collected /
+passed / failed / errors counts together, with a reviewed schema-v2 migration
+record required for an intentional reduction.
+
+After the strict writer and an independent read-only check both passed, the
+final manifest records 1,164/1,164 pure tests, 96.29% total source coverage,
+and 94.71% `core.py` coverage. The final suite completed with an explicit
+`PHASE16_FULL_SUITE_EXIT=0`:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite baseline-check
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+task typecheck-ty
+```
+
+That final suite passed fresh pure and compiled semantic matrices, the compiled
+performance selection (3 tests), and the asserted-pure release gate: source
+origin, Ruff format/lint, mypy, 1,164 tests, Sphinx HTML/doctests, and
+baseline freshness. Mypy passed without errors. Ty exited 0 with only its two
+pre-existing redundant-`Any`-cast advisory diagnostics at the dynamic
+awaitability boundaries.
