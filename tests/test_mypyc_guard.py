@@ -301,3 +301,10 @@ def test_phase16_runner_treats_task_commands_as_trusted(tmp_path: Path) -> None:
     spec.loader.exec_module(runner)
 
     runner._validate_child_command(("sh", "-c", "cd /tmp && true"), tmp_path)
+
+
+def test_phase16_runner_covers_boundary_negative_in_both_modes() -> None:
+    """Changed boundary behavior belongs in the canonical parity command."""
+    source = PHASE16_RUNNER.read_text(encoding="utf-8")
+
+    assert source.count('"tests/test_boundary_negative.py"') == 2
