@@ -10,11 +10,13 @@ asserts the module origin before handing control to a semantic command.
 from __future__ import annotations
 
 import argparse
+import errno
 import io
 import json
 import math
 import os
 from pathlib import Path
+import secrets
 import shutil
 import stat
 import subprocess
@@ -44,6 +46,17 @@ PHASE16_INVENTORY = (
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+)
+MANIFEST_DESCRIPTOR_SUPPORT = (
+    all(
+        hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_CREAT", "O_EXCL")
+    )
+    and all(
+        operation in os.supports_dir_fd
+        for operation in (os.open, os.stat, os.mkdir, os.rename, os.unlink)
+    )
+    and hasattr(os, "fchmod")
+    and hasattr(os, "fsync")
 )
 
 
@@ -211,21 +224,81 @@ def _run_suite_command(
 
 
 def _manifest_output(value: str) -> Path:
+    """Return one lexical repository destination without resolving its parent."""
     candidate = Path(value)
     if candidate.is_absolute() or ".." in candidate.parts or not candidate.name:
         raise VerificationError(
             f"manifest output must be repository-relative: {value!r}"
         )
-    # Resolve only the parent. Resolving the complete destination would follow
-    # a final symlink and make an atomic replacement overwrite its target.
-    parent = (ROOT / candidate).parent.resolve()
+    return ROOT / candidate
+
+
+def _require_manifest_descriptor_support() -> None:
+    """Reject publication when the platform lacks no-follow descriptor primitives."""
+    if not MANIFEST_DESCRIPTOR_SUPPORT:
+        raise VerificationError(
+            "secure manifest publication requires no-follow directory-descriptor "
+            "operations on this platform"
+        )
+
+
+def _same_directory(left: os.stat_result, right: os.stat_result) -> bool:
+    """Compare stable directory identity without relying on a pathname."""
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _open_manifest_parent(destination: Path) -> tuple[int, str]:
+    """Anchor a repository-relative destination below one no-follow root fd."""
+    _require_manifest_descriptor_support()
     try:
-        parent.relative_to(ROOT)
+        relative = destination.relative_to(ROOT)
     except ValueError as exc:
         raise VerificationError(
-            f"manifest output escapes repository root: {value!r}"
+            f"manifest output escapes repository root: {destination}"
         ) from exc
-    return parent / candidate.name
+    if not relative.name or ".." in relative.parts:
+        raise VerificationError(f"invalid manifest output: {destination}")
+
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        parent_fd = os.open(ROOT, flags)
+    except OSError as exc:
+        raise VerificationError(
+            "could not open repository root without following links"
+        ) from exc
+    try:
+        root_stat = os.stat(ROOT, follow_symlinks=False)
+        if not _same_directory(os.fstat(parent_fd), root_stat):
+            raise VerificationError(
+                "repository root changed while opening manifest output"
+            )
+
+        # Every descent starts from the repository descriptor and refuses a
+        # symlink. The resulting descriptor therefore remains beneath this
+        # exact root even if a lexical parent is renamed and replaced later.
+        for component in relative.parent.parts:
+            if component in ("", "."):
+                continue
+            try:
+                child_fd = os.open(component, flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, 0o755, dir_fd=parent_fd)
+                    child_fd = os.open(component, flags, dir_fd=parent_fd)
+                except OSError as exc:
+                    raise VerificationError(
+                        f"could not create manifest directory: {component!r}"
+                    ) from exc
+            except OSError as exc:
+                raise VerificationError(
+                    f"could not open manifest directory without following links: {component!r}"
+                ) from exc
+            os.close(parent_fd)
+            parent_fd = child_fd
+        return parent_fd, relative.name
+    except BaseException:
+        os.close(parent_fd)
+        raise
 
 
 def _reject_json_constant(value: str) -> object:
@@ -233,28 +306,34 @@ def _reject_json_constant(value: str) -> object:
     raise ValueError(f"non-standard JSON constant: {value}")
 
 
-def _strict_json_object(manifest_path: Path, *, label: str) -> dict[str, object]:
-    """Load one manifest as a strict JSON object without permissive constants."""
+def _strict_json_bytes(contents: bytes, *, label: str) -> dict[str, object]:
+    """Decode strict manifest bytes without permissive JSON constants."""
     try:
         manifest = json.loads(
-            manifest_path.read_text(encoding="utf-8"),
+            contents.decode("utf-8"),
             parse_constant=_reject_json_constant,
         )
-    except (
-        OSError,
-        OverflowError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as exc:
-        raise VerificationError(f"invalid {label}: {manifest_path}") from exc
+    except (UnicodeDecodeError, OverflowError, ValueError, json.JSONDecodeError) as exc:
+        raise VerificationError(f"invalid {label}") from exc
     if not isinstance(manifest, dict):
-        raise VerificationError(f"invalid {label}: {manifest_path}")
+        raise VerificationError(f"invalid {label}")
     return manifest
 
 
-def _coverage_values(manifest_path: Path) -> dict[str, float]:
-    """Load the two durable coverage floors from one evidence manifest."""
-    manifest = _strict_json_object(manifest_path, label="coverage baseline manifest")
+def _strict_json_object(manifest_path: Path, *, label: str) -> dict[str, object]:
+    """Load one manifest as a strict JSON object without permissive constants."""
+    try:
+        contents = manifest_path.read_bytes()
+    except OSError as exc:
+        raise VerificationError(f"invalid {label}: {manifest_path}") from exc
+    try:
+        return _strict_json_bytes(contents, label=f"{label}: {manifest_path}")
+    except VerificationError as exc:
+        raise VerificationError(f"invalid {label}: {manifest_path}") from exc
+
+
+def _coverage_values_from_manifest(manifest: dict[str, object]) -> dict[str, float]:
+    """Extract the two durable coverage floors from one decoded manifest."""
     try:
         coverage = manifest["quality_baseline"]["coverage"]
         return {
@@ -262,9 +341,14 @@ def _coverage_values(manifest_path: Path) -> dict[str, float]:
             for field in ("total_percent", "core_percent")
         }
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise VerificationError(
-            f"invalid coverage baseline manifest: {manifest_path}"
-        ) from exc
+        raise VerificationError("invalid coverage baseline manifest") from exc
+
+
+def _coverage_values(manifest_path: Path) -> dict[str, float]:
+    """Load the two durable coverage floors from one evidence manifest."""
+    return _coverage_values_from_manifest(
+        _strict_json_object(manifest_path, label="coverage baseline manifest")
+    )
 
 
 def _coverage_percentage(value: object) -> float:
@@ -284,9 +368,8 @@ def _test_count(value: object) -> int:
     return value
 
 
-def _test_values(manifest_path: Path) -> dict[str, int]:
-    """Load durable successful-test evidence from one evidence manifest."""
-    manifest = _strict_json_object(manifest_path, label="test baseline manifest")
+def _test_values_from_manifest(manifest: dict[str, object]) -> dict[str, int]:
+    """Extract durable successful-test evidence from one decoded manifest."""
     try:
         quality_baseline = manifest["quality_baseline"]
         if not isinstance(quality_baseline, dict):
@@ -299,14 +382,19 @@ def _test_values(manifest_path: Path) -> dict[str, int]:
             for field in ("collected", "passed", "failed", "errors")
         }
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise VerificationError(
-            f"invalid test baseline manifest: {manifest_path}"
-        ) from exc
+        raise VerificationError("invalid test baseline manifest") from exc
     if values["collected"] <= 0 or values["passed"] != values["collected"]:
-        raise VerificationError(f"invalid test baseline manifest: {manifest_path}")
+        raise VerificationError("invalid test baseline manifest")
     if values["failed"] != 0 or values["errors"] != 0:
-        raise VerificationError(f"invalid test baseline manifest: {manifest_path}")
+        raise VerificationError("invalid test baseline manifest")
     return values
+
+
+def _test_values(manifest_path: Path) -> dict[str, int]:
+    """Load durable successful-test evidence from one evidence manifest."""
+    return _test_values_from_manifest(
+        _strict_json_object(manifest_path, label="test baseline manifest")
+    )
 
 
 def _quality_floor_values(manifest_path: Path) -> dict[str, dict[str, object]]:
@@ -314,6 +402,15 @@ def _quality_floor_values(manifest_path: Path) -> dict[str, dict[str, object]]:
     return {
         "coverage": _coverage_values(manifest_path),
         "tests": _test_values(manifest_path),
+    }
+
+
+def _quality_floor_values_from_bytes(contents: bytes) -> dict[str, dict[str, object]]:
+    """Validate an anchored existing-manifest snapshot before replacement."""
+    manifest = _strict_json_bytes(contents, label="coverage baseline manifest")
+    return {
+        "coverage": _coverage_values_from_manifest(manifest),
+        "tests": _test_values_from_manifest(manifest),
     }
 
 
@@ -376,16 +473,17 @@ def _validate_quality_floor_migration(
         )
 
 
-def _validate_coverage_floor(
-    existing: Path, generated: Path, migration_path: Path | None = None
+def _validate_quality_floor(
+    previous: dict[str, dict[str, object]] | None,
+    generated: Path,
+    migration_path: Path | None = None,
 ) -> None:
     """Fail closed before a baseline write lowers durable quality evidence."""
     # A first write establishes durable evidence, so it receives exactly the
     # same generated-manifest validation as a replacement write.
     replacement = _quality_floor_values(generated)
-    if not existing.is_file():
+    if previous is None:
         return
-    previous = _quality_floor_values(existing)
     lowered_coverage = {
         field: (previous["coverage"][field], replacement["coverage"][field])
         for field in previous["coverage"]
@@ -418,6 +516,14 @@ def _validate_coverage_floor(
     _validate_quality_floor_migration(migration_path, previous, replacement)
 
 
+def _validate_coverage_floor(
+    existing: Path, generated: Path, migration_path: Path | None = None
+) -> None:
+    """Validate a path-backed floor for direct tests and migration tooling."""
+    previous = _quality_floor_values(existing) if existing.is_file() else None
+    _validate_quality_floor(previous, generated, migration_path)
+
+
 def _coverage_floor_migration(value: str) -> Path:
     """Resolve one explicit migration record without accepting an absent path."""
     migration = _manifest_output(value)
@@ -426,19 +532,50 @@ def _coverage_floor_migration(value: str) -> Path:
     return migration
 
 
-def _manifest_destination_mode(destination: Path) -> int | None:
-    """Return an existing regular file's mode without following leaf links."""
+def _manifest_destination_snapshot(
+    parent_fd: int, name: str
+) -> tuple[int | None, bytes | None]:
+    """Read one regular leaf through the anchored parent without following links."""
     try:
-        existing = destination.lstat()
+        file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
     except FileNotFoundError:
-        return None
-    if stat.S_ISLNK(existing.st_mode):
-        raise VerificationError(f"manifest output must not be a symlink: {destination}")
-    if not stat.S_ISREG(existing.st_mode):
-        raise VerificationError(
-            f"manifest output must be a regular file: {destination}"
-        )
-    return stat.S_IMODE(existing.st_mode)
+        return None, None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise VerificationError(
+                f"manifest output must not be a symlink: {name}"
+            ) from exc
+        raise VerificationError(f"could not open manifest output: {name}") from exc
+    try:
+        existing = os.fstat(file_fd)
+        if not stat.S_ISREG(existing.st_mode):
+            raise VerificationError(f"manifest output must be a regular file: {name}")
+        with os.fdopen(file_fd, "rb", closefd=False) as existing_file:
+            return stat.S_IMODE(existing.st_mode), existing_file.read()
+    finally:
+        os.close(file_fd)
+
+
+def _new_manifest_temporary(parent_fd: int, destination_name: str) -> tuple[str, int]:
+    """Reserve one private same-directory temporary through the anchored fd."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for _ in range(128):
+        temporary_name = f".{destination_name}.{secrets.token_hex(16)}.tmp"
+        try:
+            temporary_fd = os.open(temporary_name, flags, 0o600, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        return temporary_name, temporary_fd
+    raise VerificationError("could not reserve a private manifest temporary file")
+
+
+def _fsync_manifest_directory(parent_fd: int) -> None:
+    """Persist the directory rename when the platform permits directory fsync."""
+    try:
+        os.fsync(parent_fd)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.ENOTSUP):
+            raise
 
 
 def _repository_file_mode() -> int:
@@ -457,41 +594,53 @@ def _export_manifest_atomically(
     if not generated.is_file():
         raise VerificationError("baseline-write did not generate release-baseline.json")
     destination = _manifest_output(output)
-    existing_mode = _manifest_destination_mode(destination)
-    _validate_coverage_floor(destination, generated, migration_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    intended_mode = (
-        existing_mode if existing_mode is not None else _repository_file_mode()
-    )
-    temporary: Path | None = None
+    parent_fd, destination_name = _open_manifest_parent(destination)
+    temporary_name: str | None = None
+    temporary_fd: int | None = None
     try:
-        # NamedTemporaryFile uses an unpredictable O_EXCL name in the resolved
-        # destination directory. Unlike the former predictable sibling name,
-        # it neither opens nor replaces a pre-positioned symlink.
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_file:
-            temporary = Path(temporary_file.name)
+        existing_mode, existing_contents = _manifest_destination_snapshot(
+            parent_fd, destination_name
+        )
+        previous = (
+            _quality_floor_values_from_bytes(existing_contents)
+            if existing_contents is not None
+            else None
+        )
+        _validate_quality_floor(previous, generated, migration_path)
+        intended_mode = (
+            existing_mode if existing_mode is not None else _repository_file_mode()
+        )
+        temporary_name, temporary_fd = _new_manifest_temporary(
+            parent_fd, destination_name
+        )
+        with os.fdopen(temporary_fd, "wb", closefd=False) as temporary_file:
             with generated.open("rb") as generated_file:
                 shutil.copyfileobj(generated_file, temporary_file)
-            os.fchmod(temporary_file.fileno(), intended_mode)
             temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        # ``os.replace`` never follows a final destination symlink. If another
-        # process races the checked leaf into a link, this replaces the link
-        # itself rather than modifying its target.
-        os.replace(temporary, destination)
-        temporary = None
+        os.fchmod(temporary_fd, intended_mode)
+        os.fsync(temporary_fd)
+        os.close(temporary_fd)
+        temporary_fd = None
+        # Rename is anchored to the descriptor opened beneath ROOT. If a
+        # lexical parent is swapped after validation, this still publishes in
+        # the original directory and cannot redirect through the replacement.
+        os.rename(
+            temporary_name,
+            destination_name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        temporary_name = None
+        _fsync_manifest_directory(parent_fd)
     finally:
-        if temporary is not None:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        if temporary_name is not None:
             try:
-                temporary.unlink()
+                os.unlink(temporary_name, dir_fd=parent_fd)
             except FileNotFoundError:
                 pass
+        os.close(parent_fd)
 
 
 def _suite_mode(args: argparse.Namespace) -> int:

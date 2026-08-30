@@ -360,17 +360,27 @@ def _write_coverage_manifest(
     )
 
 
+def _manifest_destination(
+    runner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Create a real repository-relative manifest destination for the runner."""
+    source_root = tmp_path / "repo"
+    destination = source_root / "evidence" / "release-baseline.json"
+    destination.parent.mkdir(parents=True)
+    monkeypatch.setattr(runner, "ROOT", source_root)
+    return destination
+
+
 def test_phase16_baseline_write_refuses_lower_coverage_before_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An isolated write cannot redefine an existing coverage floor downward."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(destination, 96.08, 94.27)
     _write_coverage_manifest(generated, 96.07, 94.26)
     original = destination.read_bytes()
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(runner.VerificationError, match="coverage floor regression"):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
@@ -383,16 +393,13 @@ def test_phase16_baseline_write_does_not_follow_legacy_temp_symlink(
 ) -> None:
     """A stale predictable temp symlink cannot write outside the destination."""
     runner = _load_phase16_runner()
-    destination_dir = tmp_path / "evidence"
-    destination_dir.mkdir()
-    destination = destination_dir / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     victim = tmp_path / "victim.json"
     _write_coverage_manifest(generated, 96.16, 94.50)
     victim.write_bytes(b"do not overwrite")
     legacy_temporary = destination.with_name(f".{destination.name}.phase16-tmp")
     legacy_temporary.symlink_to(victim)
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
@@ -445,14 +452,14 @@ def test_phase16_baseline_write_replaces_a_raced_destination_link(
     _write_coverage_manifest(generated, 96.16, 94.50)
     victim.write_bytes(b"do not overwrite")
     monkeypatch.setattr(runner, "ROOT", source_root)
-    original_replace = runner.os.replace
+    original_rename = runner.os.rename
 
-    def replace_after_leaf_swap(source: Path, target: Path) -> None:
-        target.unlink()
-        target.symlink_to(victim)
-        original_replace(source, target)
+    def rename_after_leaf_swap(source, target, **kwargs) -> None:
+        destination.unlink()
+        destination.symlink_to(victim)
+        original_rename(source, target, **kwargs)
 
-    monkeypatch.setattr(runner.os, "replace", replace_after_leaf_swap)
+    monkeypatch.setattr(runner.os, "rename", rename_after_leaf_swap)
 
     runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
@@ -461,17 +468,86 @@ def test_phase16_baseline_write_replaces_a_raced_destination_link(
     assert victim.read_bytes() == b"do not overwrite"
 
 
+def test_phase16_baseline_write_anchors_parent_after_lexical_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A renamed parent cannot redirect descriptor-relative publication outside ROOT."""
+    runner = _load_phase16_runner()
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
+    source_root = runner.ROOT
+    generated = tmp_path / "generated.json"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_destination = outside_dir / "release-baseline.json"
+    anchored_parent = source_root / "anchored-evidence"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.17, 94.51)
+    destination.chmod(0o640)
+    outside_destination.write_bytes(b"outside directory must not change")
+    outside_before = {path.name: path.read_bytes() for path in outside_dir.iterdir()}
+    original_open = runner.os.open
+    swapped = False
+
+    def open_then_swap(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        opened = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == "evidence" and dir_fd is not None and not swapped:
+            swapped = True
+            destination.parent.rename(anchored_parent)
+            destination.parent.symlink_to(outside_dir, target_is_directory=True)
+        return opened
+
+    monkeypatch.setattr(runner.os, "open", open_then_swap)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    anchored_destination = anchored_parent / destination.name
+    assert swapped
+    assert anchored_destination.read_bytes() == generated.read_bytes()
+    assert stat.S_IMODE(anchored_destination.stat().st_mode) == 0o640
+    assert {
+        path.name: path.read_bytes() for path in outside_dir.iterdir()
+    } == outside_before
+    assert not any(
+        path.name.startswith(".release-baseline.json.")
+        for path in anchored_parent.iterdir()
+    )
+
+    # Cleanup restores the lexical repository layout without touching outside.
+    destination.parent.unlink()
+    anchored_parent.rename(destination.parent)
+    assert destination.read_bytes() == generated.read_bytes()
+    assert {
+        path.name: path.read_bytes() for path in outside_dir.iterdir()
+    } == outside_before
+
+
+def test_phase16_baseline_write_fails_closed_without_descriptor_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Publication refuses a platform that cannot anchor its target directory."""
+    runner = _load_phase16_runner()
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    monkeypatch.setattr(runner, "MANIFEST_DESCRIPTOR_SUPPORT", False)
+
+    with pytest.raises(runner.VerificationError, match="directory-descriptor"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert not destination.exists()
+
+
 def test_phase16_baseline_write_preserves_existing_regular_file_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Atomic publication retains the repository mode of an existing manifest."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.17, 94.51)
     destination.chmod(0o640)
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
@@ -484,13 +560,12 @@ def test_phase16_first_baseline_write_uses_umask_derived_mode(
 ) -> None:
     """New manifests use the normal repository-file mode, not tempfile 0600."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(generated, 96.16, 94.50)
     current_umask = runner.os.umask(0)
     runner.os.umask(current_umask)
     expected_mode = 0o666 & ~current_umask
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
@@ -503,24 +578,23 @@ def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(
 ) -> None:
     """A failed replace leaves neither a partial destination nor a temp file."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.16, 94.50)
     original = destination.read_bytes()
-    before = {path.name for path in tmp_path.iterdir()}
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+    before = {path.name for path in destination.parent.iterdir()}
 
-    def fail_replace(source: Path, target: Path) -> None:
-        raise OSError("simulated replace failure")
+    def fail_rename(source, target, **kwargs) -> None:
+        raise OSError("simulated rename failure")
 
-    monkeypatch.setattr(runner.os, "replace", fail_replace)
+    monkeypatch.setattr(runner.os, "rename", fail_rename)
 
-    with pytest.raises(OSError, match="simulated replace failure"):
+    with pytest.raises(OSError, match="simulated rename failure"):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
     assert destination.read_bytes() == original
-    assert {path.name for path in tmp_path.iterdir()} == before
+    assert {path.name for path in destination.parent.iterdir()} == before
 
 
 @pytest.mark.parametrize(
@@ -543,7 +617,7 @@ def test_phase16_baseline_write_rejects_invalid_coverage_without_replacement(
 ) -> None:
     """Invalid existing or generated percentages never replace destination bytes."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     if invalid_role == "existing":
         _write_coverage_manifest(destination, invalid, 94.50)
@@ -552,7 +626,6 @@ def test_phase16_baseline_write_rejects_invalid_coverage_without_replacement(
         _write_coverage_manifest(destination, 96.16, 94.50)
         _write_coverage_manifest(generated, invalid, 94.50)
     original = destination.read_bytes()
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(runner.VerificationError, match="invalid coverage baseline"):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
@@ -579,10 +652,9 @@ def test_phase16_first_baseline_write_rejects_invalid_generated_coverage(
 ) -> None:
     """A first write validates generated evidence and leaves no destination."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     generated.write_text(generated_contents, encoding="utf-8")
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(runner.VerificationError, match="invalid coverage baseline"):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
@@ -595,10 +667,9 @@ def test_phase16_first_baseline_write_catches_json_overflow(
 ) -> None:
     """An oversized JSON number cannot establish a first durable baseline."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(generated, 96.16, 94.50)
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     def raise_overflow(*args, **kwargs):
         raise OverflowError("integer string conversion limit exceeded")
@@ -636,7 +707,7 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
 ) -> None:
     """Migration coverage uses the same strict validation before replacement."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     migration = tmp_path / "coverage-floor-migration.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
@@ -660,7 +731,6 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
     record["quality_floor_migration"][section]["coverage"][field] = invalid
     migration.write_text(json.dumps(record), encoding="utf-8")
     original = destination.read_bytes()
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(
         runner.VerificationError, match="invalid quality-floor migration"
@@ -737,12 +807,11 @@ def test_phase16_baseline_write_rejects_invalid_or_lower_test_floor(
 ) -> None:
     """A malformed or reduced test inventory never replaces durable bytes."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.16, 94.50, **generated_counts)
     original = destination.read_bytes()
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(runner.VerificationError):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
@@ -755,10 +824,9 @@ def test_phase16_first_baseline_write_rejects_invalid_test_floor(
 ) -> None:
     """A first write cannot establish a malformed zero-test baseline."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(generated, 96.16, 94.50, collected=0, passed=0)
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
 
     with pytest.raises(runner.VerificationError, match="invalid test baseline"):
         runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
@@ -771,7 +839,7 @@ def test_phase16_quality_floor_migration_allows_reviewed_test_reduction(
 ) -> None:
     """An intentional lower test floor requires an exact reviewed migration."""
     runner = _load_phase16_runner()
-    destination = tmp_path / "release-baseline.json"
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     migration = tmp_path / "quality-floor-migration.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
@@ -807,8 +875,6 @@ def test_phase16_quality_floor_migration_allows_reviewed_test_reduction(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
-
     runner._export_manifest_atomically(
         generated, "evidence/release-baseline.json", migration
     )
