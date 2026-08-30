@@ -288,6 +288,8 @@ def test_phase16_runner_has_fail_closed_isolation_guards() -> None:
         "FAST_FSM_BUILD_MODE",
         "_native_artifacts",
         "_validate_child_command",
+        "_coverage_percentage",
+        "isfinite",
         "baseline-write",
         "manifest-output",
         "NamedTemporaryFile",
@@ -326,7 +328,7 @@ def _load_phase16_runner():
     return runner
 
 
-def _write_coverage_manifest(path: Path, total: float, core: float) -> None:
+def _write_coverage_manifest(path: Path, total: object, core: object) -> None:
     path.write_text(
         json.dumps(
             {
@@ -407,6 +409,98 @@ def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(
 
     assert destination.read_bytes() == original
     assert {path.name for path in tmp_path.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+        False,
+        "96.16",
+        None,
+        -0.01,
+        100.01,
+    ),
+)
+@pytest.mark.parametrize("invalid_role", ("existing", "generated"))
+def test_phase16_baseline_write_rejects_invalid_coverage_without_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: object, invalid_role: str
+) -> None:
+    """Invalid existing or generated percentages never replace destination bytes."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    if invalid_role == "existing":
+        _write_coverage_manifest(destination, invalid, 94.50)
+        _write_coverage_manifest(generated, 96.16, 94.50)
+    else:
+        _write_coverage_manifest(destination, 96.16, 94.50)
+        _write_coverage_manifest(generated, invalid, 94.50)
+    original = destination.read_bytes()
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(runner.VerificationError, match="invalid coverage baseline"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+        False,
+        "96.16",
+        None,
+        -0.01,
+        100.01,
+    ),
+)
+@pytest.mark.parametrize("section", ("previous", "replacement"))
+@pytest.mark.parametrize("field", ("total_percent", "core_percent"))
+def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: object,
+    section: str,
+    field: str,
+) -> None:
+    """Migration coverage uses the same strict validation before replacement."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    migration = tmp_path / "coverage-floor-migration.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.15, 94.49)
+    record = {
+        "schema_version": 1,
+        "coverage_floor_migration": {
+            "previous": {"total_percent": 96.16, "core_percent": 94.50},
+            "replacement": {"total_percent": 96.15, "core_percent": 94.49},
+            "reason": "intentional future coverage migration",
+            "reviewed_by": "maintainer",
+            "reviewed_at": "2026-08-30T00:00:00Z",
+        },
+    }
+    record["coverage_floor_migration"][section][field] = invalid
+    migration.write_text(json.dumps(record), encoding="utf-8")
+    original = destination.read_bytes()
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(
+        runner.VerificationError, match="invalid coverage-floor migration"
+    ):
+        runner._export_manifest_atomically(
+            generated, "evidence/release-baseline.json", migration
+        )
+
+    assert destination.read_bytes() == original
 
 
 def test_phase16_coverage_floor_migration_requires_explicit_review_data(

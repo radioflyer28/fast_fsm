@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -230,13 +231,23 @@ def _coverage_values(manifest_path: Path) -> dict[str, float]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         coverage = manifest["quality_baseline"]["coverage"]
         return {
-            field: round(float(coverage[field]), 2)
+            field: _coverage_percentage(coverage[field])
             for field in ("total_percent", "core_percent")
         }
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise VerificationError(
             f"invalid coverage baseline manifest: {manifest_path}"
         ) from exc
+
+
+def _coverage_percentage(value: object) -> float:
+    """Validate one JSON coverage percentage before rounding or comparison."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("coverage percentage must be a JSON number")
+    percentage = float(value)
+    if not math.isfinite(percentage) or not 0.0 <= percentage <= 100.0:
+        raise ValueError("coverage percentage must be finite and between 0 and 100")
+    return round(percentage, 2)
 
 
 def _validate_coverage_floor_migration(
@@ -254,11 +265,11 @@ def _validate_coverage_floor_migration(
         if not all(isinstance(value, str) and value.strip() for value in reviewed):
             raise ValueError("missing review metadata")
         expected_previous = {
-            field: round(float(record["previous"][field]), 2)
+            field: _coverage_percentage(record["previous"][field])
             for field in ("total_percent", "core_percent")
         }
         expected_replacement = {
-            field: round(float(record["replacement"][field]), 2)
+            field: _coverage_percentage(record["replacement"][field])
             for field in ("total_percent", "core_percent")
         }
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
