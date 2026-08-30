@@ -6,6 +6,9 @@
 # Full test suite (merge gate)
 uv run pytest tests/ -x -q
 
+# Phase 16 source-tree parity, origin, performance, and pure release gate
+uv run python tools/phase16_isolated_verify.py --suite phase16
+
 # Single test file
 uv run pytest tests/test_basic_functionality.py -x -q
 
@@ -22,8 +25,13 @@ uv run python benchmarks/benchmark_fast_fsm.py
 ```text
 tests/
 ├── test_basic_functionality.py     # Core FSM: states, transitions, errors
-├── test_advanced_functionality.py  # Builder, callbacks, introspection
-├── test_safety_kwargs.py           # Kwargs sanitization, exception handling
+├── test_graph_invariants.py         # Canonical registry, atomicity, snapshots
+├── test_builder.py                  # Builder lifecycle and declarative dispatch
+├── test_async.py                    # Async guards, dispatch, and history parity
+├── test_advanced_functionality.py  # History, callbacks, introspection
+├── test_safety_kwargs.py            # Guard-context sanitization
+├── test_condition_templates.py      # Built-in wrapper behavior
+├── test_mypyc_guard.py              # One compiled-core boundary and public API
 ├── test_validation.py              # Validation module: validators, scoring, export
 ├── test_performance_benchmarks.py  # Throughput and memory thresholds
 └── test_readme_examples.py         # Verify README code samples work
@@ -36,10 +44,10 @@ then the full suite once before merge.
 
 | Source file changed | Primary test files |
 |---------------------|-------------------|
-| `core.py` | `test_basic_functionality.py`, `test_advanced_functionality.py` |
+| `core.py` | `test_basic_functionality.py`, `test_graph_invariants.py`, `test_builder.py`, `test_async.py`, `test_advanced_functionality.py`, `test_mypyc_guard.py` |
 | `validation.py` | `test_validation.py` |
-| `conditions.py` | `test_safety_kwargs.py` |
-| `condition_templates.py` | `test_safety_kwargs.py` |
+| `conditions.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
+| `condition_templates.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
 | README / examples | `test_readme_examples.py` |
 | Performance-sensitive | `test_performance_benchmarks.py` |
 
@@ -154,6 +162,61 @@ extension shadow before importing and leaves every file untouched. If a stale
 artifact is intentional to remove, first review the exact reported path and
 then explicitly remove only that artifact; rerun `task pure-source-check` to
 prove the cleanup. Never use broad cleanup commands for this procedure.
+
+## Phase 16 Canonical-Graph Verification
+
+Phase 16 uses
+[`tools/phase16_isolated_verify.py`](../../tools/phase16_isolated_verify.py)
+as its source-tree authority. The helper exports committed `HEAD` into fresh
+temporary repositories, overlays only its fixed Phase 16 inventory from the
+working tree, selects `FAST_FSM_BUILD_MODE` before locked setup, and asserts
+the imported `fast_fsm.core` origin before semantic tests begin. It never
+imports from, deletes, or treats a developer checkout's native shadows as
+clean pure-source evidence.
+
+Use task mode for a narrow check whose changed files are explicitly included:
+
+```bash
+uv run python tools/phase16_isolated_verify.py \
+  --mode task --build-mode pure \
+  --include src/fast_fsm/core.py \
+  --include tests/test_graph_invariants.py -- \
+  uv run pytest tests/test_graph_invariants.py -x -q
+```
+
+The final Phase 16 gate is deliberately broader:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+```
+
+That suite runs the same graph/builder/async/guard/declarative/history/mypyc
+semantic matrix against asserted pure `.py` and freshly built native origins,
+runs compiled trigger and history performance cases, and runs both the
+read-only baseline freshness check and full pure release gate. Compiled
+`trigger()` must remain at or above 200,000 operations per second. Exact
+counts, timing, origin, toolchain, and hardware observations are
+environment-labelled evidence in the
+[Phase 16 performance record](../../.planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md)
+and [`evidence/release-baseline.json`](../../evidence/release-baseline.json),
+not durable prose claims.
+
+The focused conformance families cover these Phase 16 behaviors:
+
+| Family | Contract exercised |
+|--------|--------------------|
+| Registry and graph | Exact-object idempotence, foreign same-name rejection, complete preflight, deterministic immutable internal snapshot, declared initial state, and topology-only versioning. |
+| Builder | Identity-safe staging, publish-on-success freeze, repeated build identity, repair after failure, recursive async preflight, and authoritative force modes. |
+| Guard context | Shared sync/async can/do preparation, positional forwarding, filter-then-cap copied keyword context, wrapper short-circuiting, cycles, and shared DAGs. |
+| Declarative dispatch | Canonical source/trigger/target matching and exactly-once invocation without asserting Phase 17 lifecycle/failure ordering. |
+| History | Positive non-boolean capacity validation, bounded `deque` FIFO eviction, disabled fast path, clone/reset behavior, and defensive public copies. |
+
+The private graph snapshot is single-owner structural data only. Lifecycle and
+callback-failure semantics remain Phase 17 work; ownership/locking is Phase
+18; diagnostic consumers, budgets, and safe output are Phase 19; installed
+artifact parity is Phase 20; a public topology format remains FUTR-05. Do not
+extend Phase 16 tests or documentation to imply those contracts.
 
 ## Type-Checking Authority
 

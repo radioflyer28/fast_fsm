@@ -57,11 +57,46 @@ Core data structures (all O(1) lookup):
 | Attribute | Type | Purpose |
 |-----------|------|---------|
 | `_states` | `dict[str, State]` | Name → State |
-| `_transitions` | `dict[str, dict[str, tuple]]` | `trigger → {from_state → (to_state, condition)}` |
+| `_transitions` | `dict[str, dict[str, TransitionEntry]]` | `from_state → {trigger → (to_state, condition)}` |
+| `_initial_state` | `State` | Declared construction identity |
 | `_current_state` | `State` | Active state reference |
+| `_graph_version` | `int` | Monotonic successful-topology version |
 
-`trigger()` is a single dictionary lookup into `_transitions`, then a
-dictionary lookup by the current state name. No scanning, no iteration.
+`trigger()` is a dictionary lookup by the current-state name, then a
+dictionary lookup by trigger. No topology scanning is on the dispatch path.
+
+### Canonical Topology and Private Graph Projection
+
+`_states` is the authoritative canonical registry. State names use ordinary
+Python string equality: registering the same object again is an idempotent
+no-op, but a different object with the same name is rejected with
+`ValueError`. Every ordinary transition endpoint is resolved through that
+registry before topology is changed; a foreign `State` with the right name is
+not interchangeable with the canonical object.
+
+`add_transition()`, batch addition, bidirectional addition, and emergency
+addition first materialise and validate their complete request. Invalid,
+duplicate, or foreign endpoints therefore leave the registry, transitions,
+current state, and graph version unchanged. Successful compound operations
+make one atomic topology commit. Convenience constructors may register their
+declared state set while constructing a machine, but ordinary transition
+addition never creates an endpoint implicitly.
+
+The machine retains its declared `_initial_state` separately from the mutable
+current state. `_graph_version` starts at the constructor baseline and is
+monotonic only across successful topology changes; movement of the current
+state and idempotent registrations/replacements do not advance it. The
+private `_graph_snapshot()` tool seam returns a fresh, tuple-backed
+`_GraphSnapshot` containing that version, name, declared initial state, and
+deterministically name/trigger-sorted canonical state and transition rows.
+It deliberately retains canonical `State`/`Condition` identities while making
+its own structure immutable.
+
+This graph snapshot is an internal, single-owner tool contract rather than a
+public serialization format or concurrency promise. It does not change the
+public `snapshot()` or `to_dict()` roles. Phase 18 owns concurrent topology
+ownership, Phase 19 owns snapshot consumers and diagnostic budgets, and
+FUTR-05 owns any public topology format.
 
 ### Condition System
 
@@ -71,13 +106,26 @@ Condition (ABC, __slots__)
 └── AsyncCondition         # async check() — requires AsyncStateMachine
 ```
 
-All conditions accept `**kwargs` in `check()`. Functions passed to
-`FSMBuilder.add_transition()` are auto-wrapped in `FuncCondition`.
+All built-in conditions accept and forward `*args, **kwargs` in `check()`.
+Functions passed to `FSMBuilder.add_transition()` are auto-wrapped in
+`FuncCondition`. For guarded work, `can_trigger()`, `trigger()`,
+`can_trigger_async()`, and `trigger_async()` share one private preparation
+seam: positional arguments remain unchanged, while a fresh keyword mapping
+filters private, non-string, and overlong keys before retaining the first 50
+safe insertion-ordered keys. Built-in `NegatedCondition`, `AndCondition`,
+`OrCondition`, and `NotCondition` propagate that prepared context unchanged
+and preserve their normal short-circuit semantics.
+
+The private wrapper classifier recognises only those built-in edges. It is
+used by both runtime evaluation and builder preflight, recursively awaits
+async leaves in the async evaluator, rejects active wrapper cycles, and
+accepts acyclic shared DAGs. This is intentionally not a new public wrapper
+protocol.
 
 ### FSMBuilder
 
-Fluent builder that auto-detects whether any condition is `AsyncCondition`
-and returns the appropriate machine type:
+The fluent builder stages identity-canonical `State` objects, auto-detects
+supported nested async requirements, and returns the appropriate machine type:
 
 ```python
 fsm = (
@@ -89,6 +137,30 @@ fsm = (
     .build()  # → StateMachine or AsyncStateMachine
 )
 ```
+
+`build()` creates and wires a local candidate and publishes its cached machine
+only after every step succeeds. That successful cache is also the freeze
+marker: repeated builds return the same object, while every later mutator,
+callback registrar, and force-mode selector raises `RuntimeError`. A failed
+build leaves the staging area mutable and repairable. Explicit async/sync
+selection remains authoritative; explicit sync rejects a detected async
+requirement before allocating a candidate.
+
+### Declarative Dispatch and History Boundaries
+
+Ordinary sync and async dispatch resolve a declarative handler by canonical
+source state, trigger, and target metadata, then invoke the selected handler
+exactly once through one private invocation seam. Compatibility
+`handle_event*()` paths delegate to that seam instead of creating a second
+dispatch route. Phase 16 intentionally does not promise a handler's
+callback-relative order, commit placement, failure/cancellation result, or
+history-on-failure behavior; Phase 17 owns that lifecycle contract.
+
+History is disabled with `None` and has no buffer allocation on the normal
+path. `enable_history(max_entries)` accepts only positive, non-boolean
+integers and replaces storage only after validation; enabled history uses
+`deque(maxlen=...)` for O(1) FIFO eviction. The public `history` property
+always returns a chronological defensive `list` copy.
 
 ## mypyc Selective Compilation
 
@@ -125,6 +197,9 @@ source in `src/fast_fsm/`.
 - Tests MUST use composition (create instances, call methods), not
   inheritance of `State` or `StateMachine`, to stay compatible with
   the compiled build.
+- `core.py` remains the one mypyc compilation unit and
+  `mypy-extensions` remains the sole runtime dependency. Phase 16 adds only
+  private seams: no public export or existing public signature is removed.
 
 ## Performance Architecture
 
