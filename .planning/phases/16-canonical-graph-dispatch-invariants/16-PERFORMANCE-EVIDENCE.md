@@ -197,3 +197,39 @@ coverage, and 94.27% `core.py` coverage. The compiled performance contract
 remains the existing 200,000 `trigger()` operations/second floor, which its
 native test cases passed; timings remain environment-labelled rather than a
 new policy threshold.
+
+## Review-Fix Iteration 2 Evidence
+
+- Collected: 2026-08-30
+- Source commits: `d63e6c5` (CR-01), `8c804ce` (CR-02), and `c2d0c22`
+  (CR-03).
+- Verification environment: the isolated review-fix worktree. Every
+  origin-sensitive command then exported its own fresh temporary repository;
+  pure contexts asserted `src/fast_fsm/core.py`, while compiled contexts built
+  and asserted the native `fast_fsm.core` extension. No developer native
+  shadow was imported or removed.
+
+The remediation preserves overridden declarative policy hooks after canonical
+guard preparation, validates every supported graph before builder staging in
+every mode, and classifies/awaits asynchronous callable guards. Focused pure
+and compiled regression contexts passed the 16 combined CR-01/CR-03 cases,
+including reject/raise/`super()` policies and true/false/raising callable
+guards with exact-once and no-`RuntimeWarning` assertions.
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite baseline-check
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+task typecheck-ty
+```
+
+The refreshed pure baseline and its separate freshness check passed with
+1,053/1,053 tests, 95.68% total source coverage, and 93.75% `core.py`
+coverage. The canonical Phase 16 suite also passed its identical semantic
+matrix in fresh pure and compiled origins, the compiled performance/history
+tests (including the existing 200,000 `trigger()` operations/second floor),
+and the asserted-pure release gate: source-origin preflight, Ruff format/lint,
+mypy, full tests, Sphinx HTML/doctests, and baseline freshness. The standalone
+blocking mypy and advisory ty checks both passed.
