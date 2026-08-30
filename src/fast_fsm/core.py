@@ -15,11 +15,31 @@ Key design principles:
 import logging
 import time
 from collections import deque
+from contextvars import ContextVar
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple, cast, overload
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
 from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
+
+
+# The machine-owned dispatch seam evaluates a declarative decorator guard before
+# invoking state policy. This context suppresses only the base declarative
+# class's duplicate evaluation for one exact source/trigger/target tuple.
+_prepared_declarative_guard: ContextVar[Optional[Tuple[int, str, int]]] = ContextVar(
+    "fast_fsm_prepared_declarative_guard", default=None
+)
+
+
+def _has_prepared_declarative_guard(
+    source_state: "State", trigger: str, to_state: "State"
+) -> bool:
+    """Return whether this base declarative check already ran in machine dispatch."""
+    return _prepared_declarative_guard.get() == (
+        id(source_state),
+        trigger,
+        id(to_state),
+    )
 
 
 @mypyc_attr(native_class=False)
@@ -1413,13 +1433,20 @@ class StateMachine:
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> bool:
-        """Run custom state policy without re-evaluating a prepared guard."""
+        """Run effective sync state policy without re-evaluating its base guard."""
         source_state = self._current_state
-        if isinstance(source_state, DeclarativeState):
-            return State.can_transition(
-                source_state, trigger, to_state, *args, **kwargs
-            )
-        return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        if not isinstance(source_state, DeclarativeState):
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+
+        token = _prepared_declarative_guard.set(
+            (id(source_state), trigger, id(to_state))
+        )
+        try:
+            # Preserve the public subclass hook. DeclarativeState itself sees
+            # the narrow context and skips only its duplicate decorator guard.
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        finally:
+            _prepared_declarative_guard.reset(token)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2300,18 +2327,37 @@ class AsyncStateMachine(StateMachine):
         if not await self._evaluate_declarative_condition_async(prepared):
             return False
 
-        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
-        if isinstance(self._current_state, DeclarativeState):
-            return self._can_transition_after_declarative_guard(
-                trigger, entry.to_state, args, kwargs
-            )
-        if hasattr(self._current_state, "can_transition_async"):
-            return await self._current_state.can_transition_async(
-                trigger, entry.to_state, *args, **kwargs
-            )
-        return self._current_state.can_transition(
-            trigger, entry.to_state, *args, **kwargs
+        return await self._can_transition_after_declarative_guard_async(
+            trigger, entry.to_state, args, kwargs
         )
+
+    async def _can_transition_after_declarative_guard_async(
+        self,
+        trigger: str,
+        to_state: State,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> bool:
+        """Run effective async policy while suppressing only a prepared base guard."""
+        source_state = self._current_state
+        if not isinstance(source_state, DeclarativeState):
+            if hasattr(source_state, "can_transition_async"):
+                return await source_state.can_transition_async(
+                    trigger, to_state, *args, **kwargs
+                )
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+
+        token = _prepared_declarative_guard.set(
+            (id(source_state), trigger, id(to_state))
+        )
+        try:
+            if hasattr(source_state, "can_transition_async"):
+                return await source_state.can_transition_async(
+                    trigger, to_state, *args, **kwargs
+                )
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        finally:
+            _prepared_declarative_guard.reset(token)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -2406,20 +2452,9 @@ class AsyncStateMachine(StateMachine):
             current_name,
             trigger,
         )
-        # Declarative guards have already run through the machine-owned seam.
-        if isinstance(self._current_state, DeclarativeState):
-            can_proceed = self._can_transition_after_declarative_guard(
-                trigger, to_state, args, kwargs
-            )
-        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
-        elif hasattr(self._current_state, "can_transition_async"):
-            can_proceed = await self._current_state.can_transition_async(
-                trigger, to_state, *args, **kwargs
-            )
-        else:
-            can_proceed = self._current_state.can_transition(
-                trigger, to_state, *args, **kwargs
-            )
+        can_proceed = await self._can_transition_after_declarative_guard_async(
+            trigger, to_state, args, kwargs
+        )
         if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
@@ -2700,8 +2735,12 @@ class DeclarativeState(State):
         Enhanced transition validation with condition support.
         Checks both decorator conditions and custom logic.
         """
-        # Check if we have a handler for this trigger
-        if trigger in self._handlers:
+        # Machine-owned dispatch has already evaluated the decorator guard when
+        # its private context matches this exact request; direct state use keeps
+        # the legacy guard evaluation.
+        if trigger in self._handlers and not _has_prepared_declarative_guard(
+            self, trigger, to_state
+        ):
             handler_info = self._handlers[trigger]
             condition = handler_info.get("condition")
 
@@ -2774,8 +2813,11 @@ class AsyncDeclarativeState(DeclarativeState):
         """
         Async version of can_transition with async condition support.
         """
-        # Check if we have a handler for this trigger
-        if trigger in self._handlers:
+        # The matching machine-owned dispatch path has already evaluated the
+        # decorator guard. Keep direct calls backward-compatible.
+        if trigger in self._handlers and not _has_prepared_declarative_guard(
+            self, trigger, to_state
+        ):
             handler_info = self._handlers[trigger]
             condition = handler_info.get("condition")
 

@@ -874,6 +874,101 @@ class TestAsyncDeclarativeStateGaps:
         assert isinstance(result, TransitionResult)
 
 
+class TestDeclarativePolicyCompatibility:
+    """Ordinary dispatch must retain the effective subclass policy hook."""
+
+    @pytest.mark.parametrize("policy", ("reject", "raise", "super"))
+    def test_sync_policy_override_runs_once_after_prepared_guard(self, policy):
+        guard_calls = []
+
+        def guard(*args, **kwargs):
+            guard_calls.append((args, kwargs))
+            return True
+
+        class PolicyState(DeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.policy_calls = 0
+
+            @transition("go", from_state="source", to_state="target", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+            def can_transition(self, trigger, to_state, *args, **kwargs):
+                self.policy_calls += 1
+                if policy == "reject":
+                    return False
+                if policy == "raise":
+                    raise RuntimeError("sync policy boom")
+                return super().can_transition(trigger, to_state, *args, **kwargs)
+
+        source = PolicyState("source")
+        target = State("target")
+        machine = StateMachine(source)
+        machine.add_state(target)
+        machine.add_transition("go", source, target)
+
+        if policy == "raise":
+            with pytest.raises(RuntimeError, match="sync policy boom"):
+                machine.can_trigger("go")
+            with pytest.raises(RuntimeError, match="sync policy boom"):
+                machine.trigger("go")
+        else:
+            expected = policy == "super"
+            assert machine.can_trigger("go") is expected
+            assert machine.trigger("go").success is expected
+
+        assert source.policy_calls == 2
+        assert len(guard_calls) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("policy", ("reject", "raise", "super"))
+    async def test_async_policy_override_runs_once_after_prepared_guard(self, policy):
+        guard_calls = []
+
+        def guard(*args, **kwargs):
+            guard_calls.append((args, kwargs))
+            return True
+
+        class PolicyState(AsyncDeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.policy_calls = 0
+
+            @transition("go", from_state="source", to_state="target", condition=guard)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+            async def can_transition_async(self, trigger, to_state, *args, **kwargs):
+                self.policy_calls += 1
+                if policy == "reject":
+                    return False
+                if policy == "raise":
+                    raise RuntimeError("async policy boom")
+                return await super().can_transition_async(
+                    trigger, to_state, *args, **kwargs
+                )
+
+        source = PolicyState("source")
+        target = State("target")
+        machine = AsyncStateMachine(source)
+        machine.add_state(target)
+        machine.add_transition("go", source, target)
+
+        if policy == "raise":
+            with pytest.raises(RuntimeError, match="async policy boom"):
+                await machine.can_trigger_async("go")
+            with pytest.raises(RuntimeError, match="async policy boom"):
+                await machine.trigger_async("go")
+        else:
+            expected = policy == "super"
+            assert await machine.can_trigger_async("go") is expected
+            assert (await machine.trigger_async("go")).success is expected
+
+        assert source.policy_calls == 2
+        assert len(guard_calls) == 2
+
+
 # ---------------------------------------------------------------------------
 # FSMBuilder gap coverage
 # ---------------------------------------------------------------------------
