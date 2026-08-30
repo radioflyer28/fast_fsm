@@ -12,6 +12,7 @@ from fast_fsm.conditions import AsyncCondition, Condition, NegatedCondition
 from fast_fsm.core import (
     AsyncStateMachine,
     CompiledFuncCondition,
+    FSMBuilder,
     State,
     StateMachine,
 )
@@ -787,3 +788,33 @@ class TestAsyncHistory:
         assert h[0].to_state == "running"
         assert h[1].from_state == "running"
         assert h[1].to_state == "done"
+
+
+# ---------------------------------------------------------------------------
+# FSMBuilder nested async materialization
+# ---------------------------------------------------------------------------
+
+
+class TestAsyncBuilderPreflight:
+    """Builder preflight must choose an await-capable machine for nested leaves."""
+
+    @pytest.mark.asyncio
+    async def test_builder_awaits_nested_async_leaf_after_auto_selection(self):
+        leaf = AlwaysAsyncCondition()
+        builder = FSMBuilder(State("idle"))
+        builder.add_state(State("running"))
+        builder.add_transition(
+            "start",
+            "idle",
+            "running",
+            OrCondition(
+                NeverAsyncCondition(), AndCondition(AlwaysTrueCondition(), leaf)
+            ),
+        )
+
+        machine = builder.build()
+
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("start")
+        assert (await machine.trigger_async("start")).success
+        assert leaf.call_count == 2

@@ -7,7 +7,13 @@ All tests use real components — no mocking.
 
 import pytest
 
-from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
+from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
+from fast_fsm.conditions import (
+    AsyncCondition,
+    Condition,
+    FuncCondition,
+    NegatedCondition,
+)
 from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
@@ -761,32 +767,35 @@ class TestAsyncDeclarativeStateGaps:
 class TestFSMBuilderGaps:
     """Cover uncovered FSMBuilder paths."""
 
-    def test_force_sync_with_async_state_warns(self):
+    def test_force_sync_with_async_state_rejects_at_build(self):
         builder = FSMBuilder(AsyncDeclarativeState("async_s"))
         builder.force_sync()
-        fsm = builder.build()
-        assert isinstance(fsm, StateMachine)
-        assert not isinstance(fsm, AsyncStateMachine)
+        with pytest.raises(RuntimeError, match="explicit sync.*AsyncDeclarativeState"):
+            builder.build()
 
     def test_force_sync_with_async_condition_raises_at_build(self):
-        """After force_sync(), build() must raise TypeError for AsyncCondition."""
+        """After force_sync(), preflight must reject AsyncCondition before build."""
         builder = FSMBuilder(State("a"))
         builder.add_state(State("b"))
         builder.add_transition("go", "a", "b", SimpleAsyncCondition())
         builder.force_sync()
-        with pytest.raises(TypeError, match="AsyncCondition"):
+        with pytest.raises(RuntimeError, match="explicit sync.*condition"):
             builder.build()
 
-    def test_add_state_explicit_sync_warns_async_state(self):
+    def test_add_state_explicit_sync_rejects_async_state_at_build(self):
         builder = FSMBuilder(State("a"), async_mode=False)
         builder.add_state(AsyncDeclarativeState("async_s"))
         assert not builder.is_async
+        with pytest.raises(RuntimeError, match="explicit sync.*AsyncDeclarativeState"):
+            builder.build()
 
-    def test_add_transition_explicit_sync_warns_async_condition(self):
+    def test_add_transition_explicit_sync_rejects_async_condition_at_build(self):
         builder = FSMBuilder(State("a"), async_mode=False)
         builder.add_state(State("b"))
         builder.add_transition("go", "a", "b", SimpleAsyncCondition())
         assert not builder.is_async
+        with pytest.raises(RuntimeError, match="explicit sync.*condition"):
+            builder.build()
 
     def test_build_with_list_from_state(self):
         a = State("a")
@@ -1012,19 +1021,16 @@ class TestFSMBuilderCallbacks:
         assert sync_calls == [1]
         assert async_calls == [1]
 
-    # ---- async callbacks ignored on explicit sync machine ----------------------
+    # ---- async callbacks reject explicit sync machine --------------------------
 
-    def test_async_callbacks_ignored_on_explicit_sync_no_raise(self):
+    def test_async_callbacks_rejected_on_explicit_sync(self):
         async def cb(*a, **k):
             pass
 
         builder = self._two_state_builder(async_mode=False)
         builder.on_enter_async("b", cb)
-        fsm = builder.build()
-        assert isinstance(fsm, StateMachine)
-        assert not isinstance(fsm, AsyncStateMachine)
-        # Sync transition still works fine
-        assert fsm.trigger("go").success
+        with pytest.raises(RuntimeError, match="explicit sync.*async callback"):
+            builder.build()
 
 
 # ---------------------------------------------------------------------------
@@ -1156,3 +1162,130 @@ class TestFSMBuilderPublication:
 
         assert machine.trigger("go").success
         assert calls == ["repair"]
+
+
+# ---------------------------------------------------------------------------
+# FSMBuilder async preflight
+# ---------------------------------------------------------------------------
+
+
+class TestFSMBuilderAsyncPreflight:
+    """D-11 builder mode selection before candidate publication."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        (
+            lambda: NegatedCondition(ConfigurableAsyncCondition(result=False)),
+            lambda: AndCondition(AlwaysTrue(), ConfigurableAsyncCondition(result=True)),
+            lambda: OrCondition(AlwaysFalse(), ConfigurableAsyncCondition(result=True)),
+            lambda: NotCondition(ConfigurableAsyncCondition(result=False)),
+        ),
+    )
+    async def test_auto_detects_nested_async_wrappers_and_executes_them(self, factory):
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish", factory())
+
+        assert builder.machine_type is AsyncStateMachine
+        machine = builder.build()
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+
+    def test_unless_async_condition_uses_nested_preflight(self):
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go", "start", "finish", unless=ConfigurableAsyncCondition(result=False)
+        )
+
+        assert builder.machine_type is AsyncStateMachine
+        assert isinstance(builder.build(), AsyncStateMachine)
+
+    def test_auto_detects_declarative_async_handler_and_nested_guard(self):
+        class DecoratedState(DeclarativeState):
+            @transition("go", condition=NotCondition(ConfigurableAsyncCondition(False)))
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(DecoratedState("start"))
+
+        assert builder.machine_type is AsyncStateMachine
+        assert isinstance(builder.build(), AsyncStateMachine)
+
+    def test_explicit_async_remains_authoritative_without_async_staging(self):
+        builder = FSMBuilder(State("start"), async_mode=True)
+
+        assert builder.machine_type is AsyncStateMachine
+        assert isinstance(builder.build(), AsyncStateMachine)
+
+    def test_explicit_sync_rejects_nested_async_before_publication_and_can_repair(self):
+        builder = FSMBuilder(State("start"), async_mode=False)
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go",
+            "start",
+            "finish",
+            AndCondition(AlwaysTrue(), ConfigurableAsyncCondition()),
+        )
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(RuntimeError, match="explicit sync.*condition"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder_staging_fingerprint(builder) == before
+        builder.force_async()
+        assert isinstance(builder.build(), AsyncStateMachine)
+
+    @pytest.mark.asyncio
+    async def test_explicit_sync_rejects_queued_async_callbacks_without_dropping_them(
+        self,
+    ):
+        calls = []
+
+        async def callback(*args, **kwargs):
+            calls.append("called")
+
+        builder = FSMBuilder(State("start"), async_mode=False)
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish")
+        builder.on_enter_async("finish", callback)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(RuntimeError, match="explicit sync.*async callback"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder_staging_fingerprint(builder) == before
+        builder.force_async()
+        machine = builder.build()
+        assert (await machine.trigger_async("go")).success
+        assert calls == ["called"]
+
+    def test_wrapper_cycle_rejects_without_freezing_staging(self):
+        cycle = NotCondition(AlwaysTrue())
+        cycle.condition = cycle
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish", cycle)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder_staging_fingerprint(builder) == before
+
+    def test_shared_dag_and_deep_nesting_terminate_and_select_async(self):
+        shared = ConfigurableAsyncCondition()
+        condition = AndCondition(shared, OrCondition(AlwaysFalse(), shared))
+        for _ in range(24):
+            condition = NotCondition(NotCondition(condition))
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish", condition)
+
+        assert builder.machine_type is AsyncStateMachine
+        assert isinstance(builder.build(), AsyncStateMachine)
