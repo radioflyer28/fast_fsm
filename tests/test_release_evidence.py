@@ -723,7 +723,7 @@ def test_slots_policy_excludes_only_main_and_type_checking_bodies(
             "        pass\n",
             "WhileConditional",
         ),
-        (
+        pytest.param(
             "try:\n"
             "    class TryStarConditional:\n"
             "        pass\n"
@@ -731,6 +731,11 @@ def test_slots_policy_excludes_only_main_and_type_checking_bodies(
             "    class ExceptStarConditional:\n"
             "        pass\n",
             "TryStarConditional",
+            marks=pytest.mark.skipif(
+                sys.version_info < (3, 11),
+                reason="except* requires Python 3.11",
+            ),
+            id="try-star-python-311-plus",
         ),
     ],
 )
