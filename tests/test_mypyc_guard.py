@@ -25,8 +25,10 @@ for full rationale.
 import ast
 import importlib.util
 import json
+import os
 from pathlib import Path
 import stat
+import threading
 
 import pytest
 
@@ -555,22 +557,76 @@ def test_phase16_baseline_write_preserves_existing_regular_file_mode(
     assert destination.read_bytes() == generated.read_bytes()
 
 
-def test_phase16_first_baseline_write_uses_umask_derived_mode(
+def test_phase16_first_baseline_write_uses_default_mode_without_mutating_umask(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """New manifests use the normal repository-file mode, not tempfile 0600."""
+    """New manifests use the ambient mode without changing process umask."""
     runner = _load_phase16_runner()
     destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
     _write_coverage_manifest(generated, 96.16, 94.50)
-    current_umask = runner.os.umask(0)
-    runner.os.umask(current_umask)
-    expected_mode = 0o666 & ~current_umask
+    mode_probe = destination.parent / "default-mode-probe"
+    mode_probe_fd = os.open(mode_probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    os.close(mode_probe_fd)
+    expected_mode = stat.S_IMODE(mode_probe.stat().st_mode)
+    mode_probe.unlink()
+
+    def forbid_umask(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("manifest publication must not mutate process umask")
+
+    monkeypatch.setattr(runner.os, "umask", forbid_umask)
 
     runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
 
     assert stat.S_IMODE(destination.stat().st_mode) == expected_mode
     assert destination.read_bytes() == generated.read_bytes()
+
+
+def test_phase16_baseline_write_does_not_weaken_concurrent_file_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent file creation keeps the ambient mode while a manifest publishes."""
+    runner = _load_phase16_runner()
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+
+    mode_probe = destination.parent / "default-mode-probe"
+    mode_probe_fd = os.open(mode_probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    os.close(mode_probe_fd)
+    expected_mode = stat.S_IMODE(mode_probe.stat().st_mode)
+    mode_probe.unlink()
+
+    concurrent_file = destination.parent / "concurrent-file"
+    start_concurrent_creation = threading.Event()
+
+    def create_concurrent_file() -> None:
+        assert start_concurrent_creation.wait(timeout=5)
+        concurrent_fd = os.open(
+            concurrent_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666
+        )
+        os.close(concurrent_fd)
+
+    worker = threading.Thread(target=create_concurrent_file)
+    worker.start()
+    original_new_manifest_temporary = runner._new_manifest_temporary
+
+    def create_then_reserve(parent_fd: int, destination_name: str) -> tuple[str, int]:
+        start_concurrent_creation.set()
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        return original_new_manifest_temporary(parent_fd, destination_name)
+
+    def forbid_umask(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("manifest publication must not mutate process umask")
+
+    monkeypatch.setattr(runner, "_new_manifest_temporary", create_then_reserve)
+    monkeypatch.setattr(runner.os, "umask", forbid_umask)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert stat.S_IMODE(destination.stat().st_mode) == expected_mode
+    assert stat.S_IMODE(concurrent_file.stat().st_mode) == expected_mode
 
 
 def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(

@@ -569,6 +569,23 @@ def _new_manifest_temporary(parent_fd: int, destination_name: str) -> tuple[str,
     raise VerificationError("could not reserve a private manifest temporary file")
 
 
+def _manifest_new_file_mode(parent_fd: int, destination_name: str) -> int:
+    """Read the caller's normal file mode through an exclusive anchored probe."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    for _ in range(128):
+        probe_name = f".{destination_name}.{secrets.token_hex(16)}.mode-probe"
+        try:
+            probe_fd = os.open(probe_name, flags, 0o666, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        try:
+            return stat.S_IMODE(os.fstat(probe_fd).st_mode)
+        finally:
+            os.close(probe_fd)
+            os.unlink(probe_name, dir_fd=parent_fd)
+    raise VerificationError("could not reserve a manifest mode probe")
+
+
 def _fsync_manifest_directory(parent_fd: int) -> None:
     """Persist the directory rename when the platform permits directory fsync."""
     try:
@@ -576,15 +593,6 @@ def _fsync_manifest_directory(parent_fd: int) -> None:
     except OSError as exc:
         if exc.errno not in (errno.EINVAL, errno.ENOTSUP):
             raise
-
-
-def _repository_file_mode() -> int:
-    """Return the normal repository-file mode derived from the active umask."""
-    current_umask = os.umask(0)
-    try:
-        return 0o666 & ~current_umask
-    finally:
-        os.umask(current_umask)
 
 
 def _export_manifest_atomically(
@@ -608,7 +616,9 @@ def _export_manifest_atomically(
         )
         _validate_quality_floor(previous, generated, migration_path)
         intended_mode = (
-            existing_mode if existing_mode is not None else _repository_file_mode()
+            existing_mode
+            if existing_mode is not None
+            else _manifest_new_file_mode(parent_fd, destination_name)
         )
         temporary_name, temporary_fd = _new_manifest_temporary(
             parent_fd, destination_name
@@ -617,6 +627,9 @@ def _export_manifest_atomically(
             with generated.open("rb") as generated_file:
                 shutil.copyfileobj(generated_file, temporary_file)
             temporary_file.flush()
+        # The mode probe has captured the caller's normal creation mode
+        # without mutating process-global umask. Existing destinations retain
+        # their reviewed mode, while payload temporary contents stay private.
         os.fchmod(temporary_fd, intended_mode)
         os.fsync(temporary_fd)
         os.close(temporary_fd)
