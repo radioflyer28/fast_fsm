@@ -28,6 +28,9 @@
 - `reset()` calls `force_state(initial_state_name)`; fires callbacks even when already in initial state.
 - `initial_state_name` read-only property returns the name of the state passed to `__init__`; stored in `_initial_state` slot.
 - `snapshot()` returns `{"state": current_state_name, "version": 1}`; JSON-serialisable, safe to pickle.
+- Private `_graph_snapshot()` is a fresh tuple-backed `_GraphSnapshot` for internal tools only; it retains canonical State/Condition identities while structurally freezing rows/collections. It has machine name, declared initial State, deterministic sorted states/transitions, and the process-local `_graph_version`; it is not a public serialization compatibility promise.
+- State registration is exact-identity canonical: the same object is idempotent, while a different object with an already-registered name raises `ValueError` before mutation; null/non-State registration raises `TypeError`.
+- `_graph_version` starts at `0` after constructor baseline registration, changes only after a successful topology change (not a same-object registration, exact transition replacement, or current-state movement), and is copied by `clone()` before its independent lineage diverges.
 - `restore(snapshot)` validates version/type then calls `force_state(snapshot["state"])`; raises `ValueError` for bad version or non-string state, `KeyError` for unregistered state.
 - `clone()` returns a new instance of the same class with identical topology (shared `State` and `TransitionEntry` objects, independent inner transition dicts), current state at initial, empty listener lists; per-state callbacks are shallow-copied.
 - `on_enter(state_name, fn)` registers a per-state callback fired after `State.on_enter` and before `on_enter_state` listeners. Signature: `fn(from_state, trigger, **kwargs)`. Multiple callbacks fire in registration order.

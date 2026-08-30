@@ -102,6 +102,32 @@ class TransitionEntry:
         self.condition: Optional[Condition] = condition
 
 
+@dataclass(frozen=True, slots=True)
+class _GraphTransition:
+    """Immutable private projection of one canonical transition edge."""
+
+    from_state: "State"
+    trigger: str
+    to_state: "State"
+    condition: Optional[Condition]
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphSnapshot:
+    """Immutable private projection of a machine's canonical topology.
+
+    This is intentionally not a public serialization format.  Its tuples prevent
+    callers from replacing structural rows while retaining identity-bearing State
+    and Condition references for internal analysis tools.
+    """
+
+    name: str
+    initial_state: "State"
+    graph_version: int
+    states: Tuple["State", ...]
+    transitions: Tuple[_GraphTransition, ...]
+
+
 @mypyc_attr(native_class=False)
 class CompiledFuncCondition(Condition):
     """A mypyc-compiled wrapper around a callable for use as a transition guard.
@@ -276,6 +302,7 @@ class StateMachine:
         "_current_state",
         "_states",
         "_transitions",
+        "_graph_version",
         "_logger",
         "_before_listeners",
         "_on_exit_listeners",
@@ -307,11 +334,17 @@ class StateMachine:
             name: Human-readable name for this state machine
             logger_name: Name of the logger to use (defaults to 'fast_fsm.{name}')
         """
+        if not isinstance(initial_state, State):
+            raise TypeError(
+                "initial_state must be a State instance, "
+                f"got {type(initial_state).__name__}"
+            )
         self._name = name
         self._initial_state = initial_state
         self._current_state = initial_state
-        self._states: Dict[str, State] = {initial_state.name: initial_state}
+        self._states: Dict[str, State] = {}
         self._transitions: Dict[str, Dict[str, TransitionEntry]] = {}
+        self._graph_version = 0
 
         # Use name-based logger if not specified
         if logger_name is None:
@@ -631,11 +664,27 @@ class StateMachine:
             return []
         return list(self._history)
 
-    def _register_state(self, state: State) -> None:
-        """Register a state and initialize its transition table"""
+    def _register_state(self, state: State) -> bool:
+        """Register an exact state identity and initialize its transition table.
+
+        Returns ``True`` only when the registry gains a new canonical object.
+        Re-registering the same object is a safe no-op; a distinct object with the
+        same name is rejected before either topology dictionary changes.
+        """
+        if not isinstance(state, State):
+            raise TypeError(
+                f"state must be a State instance, got {type(state).__name__}"
+            )
+        existing = self._states.get(state.name)
+        if existing is not None:
+            if existing is state:
+                return False
+            raise ValueError(
+                f"State name {state.name!r} is already registered with a different object"
+            )
         self._states[state.name] = state
-        if state.name not in self._transitions:
-            self._transitions[state.name] = {}
+        self._transitions[state.name] = {}
+        return True
 
     def add_state(self, state: State) -> None:
         """
@@ -644,7 +693,31 @@ class StateMachine:
         Performance: O(1) - Constant time state registration
         Memory: +~32 bytes per state (slots optimization)
         """
-        self._register_state(state)
+        if self._register_state(state):
+            self._graph_version += 1
+
+    def _graph_snapshot(self) -> _GraphSnapshot:
+        """Return a fresh, deterministically ordered, immutable topology view.
+
+        The private snapshot intentionally leaves the public ``snapshot()`` and
+        ``to_dict()`` schemas untouched.  It is assembled from the authoritative
+        dictionaries on demand, so no stale cached structural view can escape.
+        """
+        states = tuple(state for _, state in sorted(self._states.items()))
+        transitions = tuple(
+            _GraphTransition(
+                self._states[from_name], trigger, entry.to_state, entry.condition
+            )
+            for from_name, entries in sorted(self._transitions.items())
+            for trigger, entry in sorted(entries.items())
+        )
+        return _GraphSnapshot(
+            self._name,
+            self._initial_state,
+            self._graph_version,
+            states,
+            transitions,
+        )
 
     def add_transition(
         self,
@@ -741,14 +814,26 @@ class StateMachine:
                     f"Condition must be Condition or callable, got {type(condition)}"
                 )
 
-        # Add transitions for each source state
+        # Add transitions for each source state.  Full canonical endpoint
+        # normalization is intentionally centralised in the following task; this
+        # preserves existing input compatibility for its preparatory tests.
+        topology_changed = False
         for from_state_name in from_names:
             if from_state_name not in self._transitions:
                 self._transitions[from_state_name] = {}
-
+            existing = self._transitions[from_state_name].get(trigger)
+            if (
+                existing is not None
+                and existing.to_state is to_state_obj
+                and existing.condition is normalized_condition
+            ):
+                continue
             self._transitions[from_state_name][trigger] = TransitionEntry(
                 to_state_obj, normalized_condition
             )
+            topology_changed = True
+        if topology_changed:
+            self._graph_version += 1
 
     def add_transitions(
         self,
@@ -1292,6 +1377,7 @@ class StateMachine:
             state_name: dict(triggers)
             for state_name, triggers in self._transitions.items()
         }
+        new_fsm._graph_version = self._graph_version
         # current_state is already _initial_state from __init__ — correct.
         # Per-state callbacks are copied (shallow copy of each list).
         new_fsm._state_exit_callbacks = {
