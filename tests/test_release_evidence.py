@@ -1020,7 +1020,8 @@ def test_runtime_slots_layout_audit_catches_indirect_mutators_without_static_hel
         EvidenceError,
         match=(
             "fast_fsm.runtime_indirect_policy.Child|"
-            "Runtime type has a mismatched claimed owner"
+            "Runtime type has a mismatched claimed owner|"
+            "Pre-execution external class binding changed: abc.ABC"
         ),
     ):
         validate_runtime_slots_layouts(declarations, source_root)
@@ -1050,7 +1051,8 @@ def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
         EvidenceError,
         match=(
             "fast_fsm.runtime_escape_policy.Child|"
-            "Runtime type has a mismatched claimed owner"
+            "Runtime type has a mismatched claimed owner|"
+            "Pre-execution external class binding changed: abc.ABC"
         ),
     ):
         validate_runtime_slots_layouts(declarations, source_root)
@@ -1204,6 +1206,63 @@ def test_runtime_layout_audit_rejects_nested_post_snapshot_owner_forgery(
         EvidenceError, match="no pre-execution external class provenance"
     ):
         collect_runtime_class_layouts(source_root)
+
+
+@pytest.mark.parametrize(
+    ("primitive", "replacement"),
+    [
+        ("vars", "lambda obj: {}"),
+        ("isinstance", "lambda obj, cls: False"),
+        ("getattr", "lambda obj, name, default=None: default"),
+        ("type", "lambda obj: obj.__class__"),
+    ],
+)
+def test_runtime_layout_audit_rejects_tampered_enumeration_primitives(
+    tmp_path: Path, primitive: str, replacement: str
+) -> None:
+    """Selected source cannot replace a post-import audit primitive."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_primitive_tampering.py").write_text(
+        "import builtins\n\n"
+        "Escaped = type('Escaped', (), {})\n"
+        f'exec("builtins.{primitive} = {replacement}")\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match=rf"Audit primitive integrity changed: builtins\.{primitive}",
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_reads_raw_layout_beyond_lying_metaclass(
+    tmp_path: Path,
+) -> None:
+    """A metaclass cannot forge the CPython layout reported by the audit."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_lying_metaclass.py").write_text(
+        "class LyingMeta(type):\n"
+        "    def __getattribute__(cls, name):\n"
+        "        if name == '__dictoffset__':\n"
+        "            return 0\n"
+        "        return type.__getattribute__(cls, name)\n\n"
+        "class DictBase:\n"
+        "    pass\n\n"
+        "class Child(DictBase, metaclass=LyingMeta):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    layouts = collect_runtime_class_layouts(source_root)
+    child = next(
+        entry
+        for entry in layouts
+        if entry["qualified_name"] == "fast_fsm.runtime_lying_metaclass.Child"
+    )
+
+    assert child["has_instance_dict"] is True
+    assert child["dictoffset"] != 0
 
 
 def test_runtime_layout_audit_rejects_legacy_sourceless_project_import(
