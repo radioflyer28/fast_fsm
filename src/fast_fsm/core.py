@@ -2610,6 +2610,8 @@ class FSMBuilder:
             async_mode: Force async (True) or sync (False) mode, or auto-detect (None)
             **machine_kwargs: Arguments passed to StateMachine/AsyncStateMachine constructor
         """
+        if not isinstance(initial_state, State):
+            raise TypeError("initial_state must be a State instance")
         self._initial_state = initial_state
         self._machine_kwargs = machine_kwargs
         self._states: Dict[str, State] = {initial_state.name: initial_state}
@@ -2644,6 +2646,13 @@ class FSMBuilder:
         # We'll create the machine in build() to allow for re-evaluation
         self._machine = None
 
+    def _ensure_mutable(self) -> None:
+        """Raise when a successful build has published the immutable cache."""
+        if self._machine is not None:
+            raise RuntimeError(
+                "Cannot mutate builder; Cannot change machine type after build() has been called"
+            )
+
     def _detect_async_requirements(self, *states_or_conditions) -> type:
         """
         Detect if async FSM is required based on states and conditions.
@@ -2676,10 +2685,20 @@ class FSMBuilder:
 
     def add_state(self, state: State) -> "FSMBuilder":
         """Add a state to the builder with async detection"""
+        self._ensure_mutable()
+        if not isinstance(state, State):
+            raise TypeError("state must be a State instance")
+        registered = self._states.get(state.name)
+        if registered is not None:
+            if registered is state:
+                return self
+            raise ValueError(
+                f"Builder already contains a different State object named '{state.name}'"
+            )
         self._states[state.name] = state
 
         # Only upgrade if in auto-detect mode
-        if self._machine is None and self._auto_detect:
+        if self._auto_detect:
             required_type = self._detect_async_requirements(state)
             if (
                 required_type == AsyncStateMachine
@@ -2718,6 +2737,7 @@ class FSMBuilder:
             unless: Negation shorthand — allowed when this condition is False.
                     Mutually exclusive with ``condition``.
         """
+        self._ensure_mutable()
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
@@ -2734,7 +2754,7 @@ class FSMBuilder:
         self._transitions.append((trigger, from_state, to_state, condition))
 
         # Only upgrade if in auto-detect mode
-        if condition and self._machine is None and self._auto_detect:
+        if condition and self._auto_detect:
             required_type = self._detect_async_requirements(condition)
             if (
                 required_type == AsyncStateMachine
@@ -2769,6 +2789,7 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._enter_callbacks.append((state_name, callback))
         return self
 
@@ -2783,6 +2804,7 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._exit_callbacks.append((state_name, callback))
         return self
 
@@ -2802,12 +2824,9 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._enter_async_callbacks.append((state_name, callback))
-        if (
-            self._machine is None
-            and self._auto_detect
-            and self._machine_type == StateMachine
-        ):
+        if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
             self._logger.debug(
                 "Builder: Upgraded to async mode due to on_enter_async callback for '%s'",
@@ -2829,12 +2848,9 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._exit_async_callbacks.append((state_name, callback))
-        if (
-            self._machine is None
-            and self._auto_detect
-            and self._machine_type == StateMachine
-        ):
+        if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
             self._logger.debug(
                 "Builder: Upgraded to async mode due to on_exit_async callback for '%s'",
@@ -2844,22 +2860,14 @@ class FSMBuilder:
 
     def force_async(self) -> "FSMBuilder":
         """Force the builder to create an AsyncStateMachine"""
-        if self._machine is not None:
-            raise RuntimeError(
-                "Cannot change machine type after build() has been called"
-            )
-
+        self._ensure_mutable()
         self._machine_type = AsyncStateMachine
         self._logger.debug("Builder: Forced to async mode")
         return self
 
     def force_sync(self) -> "FSMBuilder":
         """Force the builder to create a regular StateMachine"""
-        if self._machine is not None:
-            raise RuntimeError(
-                "Cannot change machine type after build() has been called"
-            )
-
+        self._ensure_mutable()
         # Validate that sync mode is compatible
         for state in self._states.values():
             if isinstance(state, AsyncDeclarativeState):
@@ -2884,14 +2892,14 @@ class FSMBuilder:
         if self._machine is not None:
             return self._machine
 
-        # Create the appropriate machine type
-        self._machine = self._machine_type(self._initial_state, **self._machine_kwargs)
-        assert self._machine is not None  # Help mypy understand this is not None
+        # Keep all construction local until every registration succeeds. A failed
+        # candidate must not freeze staging or become observable through _machine.
+        candidate = self._machine_type(self._initial_state, **self._machine_kwargs)
 
         # Add all states
         for state in self._states.values():
             if state != self._initial_state:  # Initial state already added
-                self._machine.add_state(state)
+                candidate.add_state(state)
 
         # Add all transitions
         for trigger, from_state, to_state, condition in self._transitions:
@@ -2905,7 +2913,7 @@ class FSMBuilder:
                     self._states[name] if name in self._states else name
                     for name in from_state
                 ]
-                self._machine.add_transition(
+                candidate.add_transition(
                     trigger, from_state_list, to_state_obj, condition
                 )
             else:
@@ -2914,22 +2922,22 @@ class FSMBuilder:
                     if from_state in self._states
                     else from_state
                 )
-                self._machine.add_transition(
+                candidate.add_transition(
                     trigger, from_state_single, to_state_obj, condition
                 )
 
         # Wire per-state sync callbacks
         for state_name, cb in self._enter_callbacks:
-            self._machine.on_enter(state_name, cb)
+            candidate.on_enter(state_name, cb)
         for state_name, cb in self._exit_callbacks:
-            self._machine.on_exit(state_name, cb)
+            candidate.on_exit(state_name, cb)
 
         # Wire per-state async callbacks (AsyncStateMachine only)
-        if isinstance(self._machine, AsyncStateMachine):
+        if isinstance(candidate, AsyncStateMachine):
             for state_name, cb in self._enter_async_callbacks:
-                self._machine.on_enter_async(state_name, cb)
+                candidate.on_enter_async(state_name, cb)
             for state_name, cb in self._exit_async_callbacks:
-                self._machine.on_exit_async(state_name, cb)
+                candidate.on_exit_async(state_name, cb)
         elif self._enter_async_callbacks or self._exit_async_callbacks:
             self._logger.warning(
                 "Builder: %d async callback(s) registered but building sync machine — they will be ignored",
@@ -2939,18 +2947,19 @@ class FSMBuilder:
         # Log final machine type and stats
         machine_type_name = (
             "AsyncStateMachine"
-            if isinstance(self._machine, AsyncStateMachine)
+            if isinstance(candidate, AsyncStateMachine)
             else "StateMachine"
         )
         self._logger.info(
             "Builder: Created %s '%s' with %d states and %d transitions",
             machine_type_name,
-            self._machine.name,
+            candidate.name,
             len(self._states),
             len(self._transitions),
         )
 
-        return self._machine
+        self._machine = candidate
+        return candidate
 
     @property
     def machine_type(self) -> type:

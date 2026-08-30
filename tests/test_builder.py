@@ -1141,6 +1141,7 @@ class TestFSMBuilderPublication:
         calls = []
         builder = FSMBuilder(State("start"))
         builder.on_enter("repair", lambda *args, **kwargs: calls.append("repair"))
+        builder.add_transition("go", "start", "repair")
         before_failure = builder_staging_fingerprint(builder)
 
         with pytest.raises(ValueError, match="not registered"):
