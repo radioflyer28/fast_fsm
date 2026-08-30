@@ -466,7 +466,9 @@ class TestOrdinaryDeclarativeDispatch:
         assert source.invocations == 1
 
     @pytest.mark.parametrize("handler_result", [False, "invalid", "raise"])
-    def test_declarative_ordinary_invocation_only_for_phase17_outcomes(self, handler_result):
+    def test_declarative_ordinary_invocation_only_for_phase17_outcomes(
+        self, handler_result
+    ):
         source = DeclarativeInvocationCounter(result=handler_result)
         fsm = self._machine(source)
 

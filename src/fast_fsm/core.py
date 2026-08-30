@@ -1883,7 +1883,14 @@ class StateMachine:
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
 
-        return self._execute_transition(to_state, trigger, *args, **kwargs)
+        old_state = self._current_state
+        result = self._execute_transition(to_state, trigger, *args, **kwargs)
+        handler_info = _resolve_declarative_handler(old_state, trigger, to_state)
+        if handler_info is not None:
+            _invoke_declarative_handler(
+                old_state, handler_info, trigger, prepared.args, kwargs
+            )
+        return result
 
     def safe_trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -2210,6 +2217,12 @@ class AsyncStateMachine(StateMachine):
         old_state = self._current_state
         result = self._execute_transition(to_state, trigger, *args, **kwargs)
 
+        handler_info = _resolve_declarative_handler(old_state, trigger, to_state)
+        if handler_info is not None:
+            await _invoke_declarative_handler_async(
+                old_state, handler_info, trigger, prepared.args, kwargs
+            )
+
         # Fire async per-state exit callbacks (after all sync callbacks)
         _async_exit = self._state_exit_async_callbacks.get(old_state.name)
         if _async_exit:
@@ -2270,6 +2283,141 @@ def transition(
         return func
 
     return decorator
+
+
+def _metadata_matches_state(metadata: Any, state_name: str) -> bool:
+    """Return whether optional declarative metadata accepts one canonical name."""
+    if metadata is None:
+        return True
+    if isinstance(metadata, list):
+        return state_name in metadata
+    return metadata == state_name
+
+
+def _resolve_declarative_handler(
+    source_state: State, trigger: str, target_state: Optional[State]
+) -> Optional[Dict[str, Any]]:
+    """Find a handler by canonical source, trigger, and optional target metadata.
+
+    Ordinary machine dispatch always supplies both canonical endpoints.  The
+    compatibility helpers pass ``None`` for ``target_state`` because their
+    public signatures have never accepted a target; that keeps their legacy
+    direct-call behavior while sharing this resolver and invocation boundary.
+    """
+    if not isinstance(source_state, DeclarativeState):
+        return None
+    handler_info = source_state._handlers.get(trigger)
+    if handler_info is None:
+        return None
+    if not _metadata_matches_state(handler_info["from_state"], source_state.name):
+        return None
+    if target_state is not None and not _metadata_matches_state(
+        handler_info["to_state"], target_state.name
+    ):
+        return None
+    return handler_info
+
+
+def _normalize_declarative_handler_result(result: Any) -> TransitionResult:
+    """Preserve the compatibility helper's normalized handler result shape."""
+    if result is None:
+        return TransitionResult(True)
+    if isinstance(result, bool):
+        return TransitionResult(result)
+    if isinstance(result, TransitionResult):
+        return result
+    return TransitionResult(
+        True, error=f"Invalid return type from handler: {type(result)}"
+    )
+
+
+def _invoke_declarative_handler(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Invoke one resolved synchronous declarative handler exactly once."""
+    method = handler_info["method"]
+    method_name = method.__name__
+    logger = cast(DeclarativeState, source_state)._logger
+    logger.debug(
+        "State '%s': Executing handler '%s' for event '%s'",
+        source_state.name,
+        method_name,
+        event,
+    )
+    if handler_info["is_async"]:
+        logger.warning(
+            "State '%s': Async handler '%s' cannot be executed in sync context. "
+            "Use AsyncDeclarativeState for async methods.",
+            source_state.name,
+            method_name,
+        )
+        return TransitionResult(
+            False, error=f"Async handler '{method_name}' in sync context"
+        )
+    try:
+        result = _normalize_declarative_handler_result(method(*args, **kwargs))
+    except Exception as exc:  # broad catch isolates user handler failures
+        error_msg = f"Handler '{method_name}' raised exception: {exc}"
+        logger.warning("State '%s': %s", source_state.name, error_msg)
+        return TransitionResult(False, error=error_msg)
+    if result.success:
+        logger.debug(
+            "State '%s': Handler '%s' succeeded", source_state.name, method_name
+        )
+    else:
+        logger.debug(
+            "State '%s': Handler '%s' failed: %s",
+            source_state.name,
+            method_name,
+            result.error or "Unknown error",
+        )
+    return result
+
+
+async def _invoke_declarative_handler_async(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Invoke one resolved declarative handler through the async boundary once."""
+    method = handler_info["method"]
+    method_name = method.__name__
+    logger = cast(DeclarativeState, source_state)._logger
+    logger.debug(
+        "State '%s': Executing async handler '%s' for event '%s'",
+        source_state.name,
+        method_name,
+        event,
+    )
+    try:
+        raw_result = (
+            await method(*args, **kwargs)
+            if handler_info["is_async"]
+            else method(*args, **kwargs)
+        )
+        result = _normalize_declarative_handler_result(raw_result)
+    except Exception as exc:  # broad catch isolates user handler failures
+        error_msg = f"Async handler '{method_name}' raised exception: {exc}"
+        logger.warning("State '%s': %s", source_state.name, error_msg)
+        return TransitionResult(False, error=error_msg)
+    if result.success:
+        logger.debug(
+            "State '%s': Async handler '%s' succeeded", source_state.name, method_name
+        )
+    else:
+        logger.debug(
+            "State '%s': Async handler '%s' failed: %s",
+            source_state.name,
+            method_name,
+            result.error or "Unknown error",
+        )
+    return result
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -2384,63 +2532,9 @@ class DeclarativeState(State):
         """
         Enhanced event handling with full logging and async support.
         """
-        if event in self._handlers:
-            handler_info = self._handlers[event]
-            method = handler_info["method"]
-            method_name = method.__name__
-
-            self._logger.debug(
-                "State '%s': Executing handler '%s' for event '%s'",
-                self.name,
-                method_name,
-                event,
-            )
-
-            try:
-                # Handle async methods
-                if handler_info["is_async"]:
-                    self._logger.warning(
-                        "State '%s': Async handler '%s' cannot be executed in sync context. "
-                        "Use AsyncDeclarativeState for async methods.",
-                        self.name,
-                        method_name,
-                    )
-                    return TransitionResult(
-                        False, error=f"Async handler '{method_name}' in sync context"
-                    )
-
-                # Execute synchronous handler
-                result = method(*args, **kwargs)
-
-                # Normalize result
-                if result is None:
-                    result = TransitionResult(True)
-                elif isinstance(result, bool):
-                    result = TransitionResult(result)
-                elif not isinstance(result, TransitionResult):
-                    result = TransitionResult(
-                        True, error=f"Invalid return type from handler: {type(result)}"
-                    )
-
-                # Log result
-                if result.success:
-                    self._logger.debug(
-                        "State '%s': Handler '%s' succeeded", self.name, method_name
-                    )
-                else:
-                    self._logger.debug(
-                        "State '%s': Handler '%s' failed: %s",
-                        self.name,
-                        method_name,
-                        result.error or "Unknown error",
-                    )
-
-                return result
-
-            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
-                error_msg = f"Handler '{method_name}' raised exception: {e}"
-                self._logger.warning("State '%s': %s", self.name, error_msg)
-                return TransitionResult(False, error=error_msg)
+        handler_info = _resolve_declarative_handler(self, event, None)
+        if handler_info is not None:
+            return _invoke_declarative_handler(self, handler_info, event, args, kwargs)
 
         # Fallback to parent implementation
         return super().handle_event(event, *args, **kwargs)
@@ -2507,56 +2601,11 @@ class AsyncDeclarativeState(DeclarativeState):
         """
         Async version of handle_event that can execute both sync and async handlers.
         """
-        if event in self._handlers:
-            handler_info = self._handlers[event]
-            method = handler_info["method"]
-            method_name = method.__name__
-
-            self._logger.debug(
-                "State '%s': Executing async handler '%s' for event '%s'",
-                self.name,
-                method_name,
-                event,
+        handler_info = _resolve_declarative_handler(self, event, None)
+        if handler_info is not None:
+            return await _invoke_declarative_handler_async(
+                self, handler_info, event, args, kwargs
             )
-
-            try:
-                # Handle both async and sync methods
-                if handler_info["is_async"]:
-                    result = await method(*args, **kwargs)
-                else:
-                    result = method(*args, **kwargs)
-
-                # Normalize result
-                if result is None:
-                    result = TransitionResult(True)
-                elif isinstance(result, bool):
-                    result = TransitionResult(result)
-                elif not isinstance(result, TransitionResult):
-                    result = TransitionResult(
-                        True, error=f"Invalid return type from handler: {type(result)}"
-                    )
-
-                # Log result
-                if result.success:
-                    self._logger.debug(
-                        "State '%s': Async handler '%s' succeeded",
-                        self.name,
-                        method_name,
-                    )
-                else:
-                    self._logger.debug(
-                        "State '%s': Async handler '%s' failed: %s",
-                        self.name,
-                        method_name,
-                        result.error or "Unknown error",
-                    )
-
-                return result
-
-            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
-                error_msg = f"Async handler '{method_name}' raised exception: {e}"
-                self._logger.warning("State '%s': %s", self.name, error_msg)
-                return TransitionResult(False, error=error_msg)
 
         # Fallback to sync parent implementation
         return super().handle_event(event, *args, **kwargs)

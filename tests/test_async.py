@@ -13,7 +13,6 @@ from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
     CompiledFuncCondition,
-    DeclarativeState,
     FSMBuilder,
     State,
     StateMachine,
