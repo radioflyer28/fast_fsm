@@ -746,6 +746,11 @@ class TestConvenienceFunctions:
         with pytest.raises(TypeError):
             StateMachine.quick_build("initial", [("go", invalid_endpoint, "target")])
 
+    @pytest.mark.parametrize("invalid_target", [None, 1])
+    def test_quick_build_rejects_non_state_target_values(self, invalid_target):
+        with pytest.raises(TypeError):
+            StateMachine.quick_build("initial", [("go", "initial", invalid_target)])
+
     @pytest.mark.parametrize("invalid_state", [None, 1])
     def test_quick_build_rejects_non_state_entries(self, invalid_state):
         with pytest.raises(TypeError):
