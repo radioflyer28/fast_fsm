@@ -1104,7 +1104,9 @@ def test_runtime_layout_audit_rejects_foreign_module_spoofed_dynamic_type(
         encoding="utf-8",
     )
 
-    with pytest.raises(EvidenceError, match="unloaded claimed owner"):
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external module provenance"
+    ):
         collect_runtime_class_layouts(source_root)
 
 
@@ -1117,7 +1119,8 @@ def test_runtime_layout_audit_accepts_genuine_external_reexport(
         "from abc import ABC\n\n"
         "ReexportedABC = ABC\n\n"
         "class SourceOnly:\n"
-        "    __slots__ = ()\n",
+        "    __slots__ = ()\n"
+        "    NestedReexportedABC = ABC\n",
         encoding="utf-8",
     )
 
@@ -1141,7 +1144,65 @@ def test_runtime_layout_audit_rejects_nested_foreign_owner_spoof(
         encoding="utf-8",
     )
 
-    with pytest.raises(EvidenceError, match="unloaded claimed owner"):
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external module provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_post_snapshot_external_owner_forgery(
+    tmp_path: Path,
+) -> None:
+    """Selected source cannot create a class and install it into ``abc`` later."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_external_owner_forgery.py").write_text(
+        "import abc\n\n"
+        "Escaped = type('Escaped', (), {'__module__': 'abc'})\n"
+        "abc.Escaped = Escaped\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external class provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_selected_module_name_rebinding(
+    tmp_path: Path,
+) -> None:
+    """Selected module ownership is the immutable allowlisted import key."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_module_name_rebinding.py").write_text(
+        "Escaped = type('Escaped', (), {'__module__': __name__})\n"
+        "__name__ = 'external.alias'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match="Selected module identity changed: fast_fsm.runtime_module_name_rebinding",
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_nested_post_snapshot_owner_forgery(
+    tmp_path: Path,
+) -> None:
+    """Nested type-valued bindings use the same immutable provenance snapshot."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_nested_owner_forgery.py").write_text(
+        "import abc\n\n"
+        "class Container:\n"
+        "    __slots__ = ()\n\n"
+        "Container.Escaped = type('Escaped', (), {'__module__': 'abc'})\n"
+        "abc.Escaped = Container.Escaped\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external class provenance"
+    ):
         collect_runtime_class_layouts(source_root)
 
 
