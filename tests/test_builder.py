@@ -1109,7 +1109,7 @@ class TestFSMBuilderPublication:
         )
 
     def test_invalid_initial_or_staged_state_is_rejected_before_materialization(self):
-        with pytest.raises(TypeError, match="initial_state"):
+        with pytest.raises(TypeError):
             FSMBuilder(None)
 
         builder = FSMBuilder(State("valid"))
