@@ -725,6 +725,22 @@ class TestConvenienceFunctions:
                 states=[first, second],
             )
 
+    def test_quick_build_preserves_state_objects_in_transition_endpoints(self):
+        """Object endpoints, including list sources, retain their exact identities."""
+
+        initial = State("initial")
+        middle = State("middle")
+        target = State("target")
+        fsm = StateMachine.quick_build(
+            initial,
+            [("advance", [initial, middle], target)],
+        )
+
+        assert fsm._states["initial"] is initial
+        assert fsm._states["middle"] is middle
+        assert fsm._states["target"] is target
+        assert fsm.trigger("advance").success
+
     @pytest.mark.parametrize("invalid_endpoint", [None, 1])
     def test_quick_build_rejects_non_state_endpoint_values(self, invalid_endpoint):
         with pytest.raises(TypeError):

@@ -15,7 +15,7 @@ Key design principles:
 import logging
 import time
 from collections import deque
-from typing import Optional, Dict, Any, Callable, List, Union, Tuple, cast, overload
+from typing import Optional, Dict, Any, Callable, List, Sequence, Union, Tuple, cast, overload
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
@@ -601,7 +601,13 @@ class StateMachine:
     def quick_build(
         cls,
         initial_state: Union[str, State],
-        transitions: List[Tuple[str, str, str]],
+        transitions: Sequence[
+            Tuple[
+                str,
+                Union[str, State, List[Union[str, State]]],
+                Union[str, State],
+            ]
+        ],
         states: Optional[List[Union[str, State]]] = None,
         name: str = "FSM",
     ) -> "StateMachine":
@@ -610,7 +616,9 @@ class StateMachine:
 
         Args:
             initial_state: Initial state name or State object
-            transitions: List of (trigger, from_state, to_state) tuples
+            transitions: List of (trigger, from_state, to_state) tuples. State
+                endpoints may be strings or State objects; from_state may also
+                be a list of either form.
             states: Optional additional states to add
             name: Name for the state machine
 
@@ -642,13 +650,16 @@ class StateMachine:
                 )
             state_objects[state.name] = state
 
-        def collect_state(value: str) -> None:
-            if not isinstance(value, str):
+        def collect_state(value: Union[str, State]) -> None:
+            if isinstance(value, State):
+                register_supplied_state(value)
+            elif isinstance(value, str):
+                unresolved_names.add(value)
+            else:
                 raise TypeError(
-                    "quick_build state endpoints must be strings, "
+                    "quick_build state endpoints must be strings or State objects, "
                     f"got {type(value).__name__}"
                 )
-            unresolved_names.add(value)
 
         if isinstance(initial_state, str):
             unresolved_names.add(initial_state)
