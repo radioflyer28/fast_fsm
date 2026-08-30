@@ -19,14 +19,14 @@
 
 ### Graph and Dispatch Invariants
 
-- [ ] **GRAF-01**: A user cannot add a transition whose source or target is absent from the canonical state registry, and a rejected addition leaves the graph unchanged.
-- [ ] **GRAF-02**: A user cannot replace a registered state with a different object using the same name; idempotent registration of the same object remains safe.
-- [ ] **GRAF-03**: Runtime tools can consume one immutable graph snapshot containing canonical endpoints, declared initial state, deterministic ordering, and a graph version.
-- [ ] **GRAF-04**: After `FSMBuilder.build()`, every builder mutator fails immediately while repeated `build()` calls remain idempotent.
-- [ ] **GRAF-05**: `FSMBuilder` recursively detects asynchronous conditions through `unless=` and condition wrappers and builds the correct machine type.
-- [ ] **GRAF-06**: Guards receive positional arguments and one consistently sanitized keyword context across sync/async `can_trigger*()` and `trigger*()` paths.
-- [ ] **GRAF-07**: Declarative transition handlers execute exactly once during ordinary sync and async trigger dispatch.
-- [ ] **GRAF-08**: Shared internal resolution and dispatch seams keep sync, async, builder, and declarative behavior aligned without splitting the mypyc `core.py` compilation unit.
+- [x] **GRAF-01**: A user cannot add a transition whose source or target is absent from the canonical state registry, and a rejected addition leaves the graph unchanged.
+- [x] **GRAF-02**: A user cannot replace a registered state with a different object using the same name; idempotent registration of the same object remains safe.
+- [x] **GRAF-03**: Runtime tools can consume one immutable graph snapshot containing canonical endpoints, declared initial state, deterministic ordering, and a graph version.
+- [x] **GRAF-04**: After `FSMBuilder.build()`, every builder mutator fails immediately while repeated `build()` calls remain idempotent.
+- [x] **GRAF-05**: `FSMBuilder` recursively detects asynchronous conditions through `unless=` and condition wrappers and builds the correct machine type.
+- [x] **GRAF-06**: Guards receive positional arguments and one consistently sanitized keyword context across sync/async `can_trigger*()` and `trigger*()` paths.
+- [x] **GRAF-07**: Declarative transition handlers execute exactly once during ordinary sync and async trigger dispatch.
+- [x] **GRAF-08**: Shared internal resolution and dispatch seams keep sync, async, builder, and declarative behavior aligned without splitting the mypyc `core.py` compilation unit.
 
 ### Atomic Transition Lifecycle
 
@@ -36,7 +36,7 @@
 - [ ] **LIFE-04**: Each failed transition notifies failure observers exactly once without swallowing the callback exception or recursively re-entering failure handling.
 - [ ] **LIFE-05**: Transition history records only committed transitions and remains coherent when callbacks fail or async work is cancelled.
 - [ ] **LIFE-06**: Sync and async transitions expose equivalent state, result, callback-order, guard-context, and failure semantics.
-- [ ] **LIFE-07**: History rejects non-positive capacities and uses O(1) bounded eviction while preserving copy-on-read behavior.
+- [x] **LIFE-07**: History rejects non-positive capacities and uses O(1) bounded eviction while preserving copy-on-read behavior.
 
 ### Ownership and Concurrency
 
@@ -117,21 +117,21 @@
 | REL-06 | Phase 15 | Complete |
 | REL-07 | Phase 20 | Pending |
 | REL-08 | Phase 15 | Complete |
-| GRAF-01 | Phase 16 | Pending |
-| GRAF-02 | Phase 16 | Pending |
-| GRAF-03 | Phase 16 | Pending |
-| GRAF-04 | Phase 16 | Pending |
-| GRAF-05 | Phase 16 | Pending |
-| GRAF-06 | Phase 16 | Pending |
-| GRAF-07 | Phase 16 | Pending |
-| GRAF-08 | Phase 16 | Pending |
+| GRAF-01 | Phase 16 | Complete |
+| GRAF-02 | Phase 16 | Complete |
+| GRAF-03 | Phase 16 | Complete |
+| GRAF-04 | Phase 16 | Complete |
+| GRAF-05 | Phase 16 | Complete |
+| GRAF-06 | Phase 16 | Complete |
+| GRAF-07 | Phase 16 | Complete |
+| GRAF-08 | Phase 16 | Complete |
 | LIFE-01 | Phase 17 | Pending |
 | LIFE-02 | Phase 17 | Pending |
 | LIFE-03 | Phase 17 | Pending |
 | LIFE-04 | Phase 17 | Pending |
 | LIFE-05 | Phase 17 | Pending |
 | LIFE-06 | Phase 17 | Pending |
-| LIFE-07 | Phase 16 | Pending |
+| LIFE-07 | Phase 16 | Complete |
 | OWN-01 | Phase 18 | Pending |
 | OWN-02 | Phase 18 | Pending |
 | OWN-03 | Phase 18 | Pending |

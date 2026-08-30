@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 16
 current_phase_name: Canonical Graph & Dispatch Invariants
 status: executing
-stopped_at: Phase 16 context gathered
-last_updated: "2026-08-30T04:11:13.780Z"
+stopped_at: Completed 16-05-PLAN.md
+last_updated: "2026-08-30T13:44:26.649Z"
 last_activity: 2026-08-29
 last_activity_desc: Phase 15 complete, transitioned to Phase 16
-state_head: dc8fe4b73921e5faeeef9ee0ee7a2fa0e14c0ea1
+state_head: e68027ca177f060598e8924625b2bca27f32d510
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 14
-  completed_plans: 9
+  completed_plans: 14
   percent: 17
 ---
 
@@ -34,7 +34,7 @@ Plan: Not started
 Status: Ready to execute
 Last activity: 2026-08-29 — Phase 15 complete, transitioned to Phase 16
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██░░░░░░░░] 17%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 15 P01 | 16 min | 3 tasks | 7 files |
 | Phase 15 P02 | 29m | 3 tasks | 10 files |
 | Phase 15 P05 | 20m | 2 tasks | 1 files |
+| Phase 16 P05 | 12m | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 15]: Mypy is blocking while ty remains an independently visible advisory gate.
 - [Phase 15]: Accepted only a terminal 29-job Actions run whose head SHA equals the pushed Phase 15 branch.
 - [Phase 15]: Published the authorized v0.2.3 correction additively after unchanged URL, tag-ref, and asset checks.
+- [Phase 16]: Phase 16 evidence archives must explicitly overlay the complete source, test, documentation, and evidence inventory before origin proof.
+- [Phase 16]: Use helper-validated evidence interfaces and record environment-labelled pure/native measurements; compiled trigger floor remains 200000 ops/sec.
 
 ### Pending Todos
 
@@ -98,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-30T02:26:38.220Z
-Stopped at: Phase 16 context gathered
-Resume file: .planning/phases/16-canonical-graph-dispatch-invariants/16-CONTEXT.md
+Last session: 2026-08-30T13:44:26.619Z
+Stopped at: Completed 16-05-PLAN.md
+Resume file: None
