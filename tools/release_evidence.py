@@ -22,6 +22,7 @@ from packaging.version import InvalidVersion, Version
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1233,6 +1234,122 @@ def validate_slots_inventory(
     return inventory
 
 
+_RUNTIME_AUDIT_DENIED_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
+_RUNTIME_AUDIT_DENIED_MODULES = frozenset({"ctypes", "inspect"})
+
+
+def validate_runtime_auditability(source_root: Path) -> None:
+    """Reject source that can defeat the isolated runtime-layout audit.
+
+    The layout subprocess deliberately imports selected production source in
+    order to inspect CPython class layouts.  That makes dynamic execution and
+    frame inspection incompatible with an auditable boundary: they can reach
+    the audit runner or manufacture code after the preflight.  Production
+    source must therefore remain statically importable while this check is in
+    force.  It is intentionally fail-closed rather than trying to sandbox
+    Python's reflective execution features.
+    """
+    package_root = source_root.resolve() / PACKAGE_NAME
+    if not package_root.is_dir():
+        raise EvidenceError(f"Package directory does not exist: {package_root}")
+
+    for source_path in sorted(package_root.rglob("*.py")):
+        try:
+            tree = ast.parse(
+                source_path.read_text(encoding="utf-8"), filename=str(source_path)
+            )
+        except (OSError, SyntaxError) as error:
+            raise EvidenceError(
+                f"Runtime auditability preflight could not parse {source_path}: {error}"
+            ) from error
+        sys_aliases = {"sys"}
+        builtin_aliases = {"builtins"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "sys":
+                        sys_aliases.add(alias.asname or "sys")
+                    elif alias.name == "builtins":
+                        builtin_aliases.add(alias.asname or "builtins")
+        for node in ast.walk(tree):
+            denied: str | None = None
+            if isinstance(node, ast.Import):
+                if any(
+                    alias.name.split(".", 1)[0] in _RUNTIME_AUDIT_DENIED_MODULES
+                    for alias in node.names
+                ):
+                    denied = "frame/native introspection import"
+            elif isinstance(node, ast.ImportFrom):
+                if (
+                    node.module
+                    and node.module.split(".", 1)[0] in _RUNTIME_AUDIT_DENIED_MODULES
+                ):
+                    denied = "frame/native introspection import"
+                elif node.module == "sys" and any(
+                    alias.name == "_getframe" for alias in node.names
+                ):
+                    denied = "sys._getframe import"
+                elif node.module == "builtins" and any(
+                    alias.name in _RUNTIME_AUDIT_DENIED_BUILTINS for alias in node.names
+                ):
+                    denied = "dynamic execution import"
+            elif isinstance(node, ast.Call):
+                target = node.func
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id in _RUNTIME_AUDIT_DENIED_BUILTINS
+                ):
+                    denied = target.id
+                elif (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and (
+                        (target.value.id in sys_aliases and target.attr == "_getframe")
+                        or target.value.id in _RUNTIME_AUDIT_DENIED_MODULES
+                        or (
+                            target.value.id in builtin_aliases
+                            and target.attr in _RUNTIME_AUDIT_DENIED_BUILTINS
+                        )
+                    )
+                ):
+                    denied = f"{target.value.id}.{target.attr}"
+                elif (
+                    isinstance(target, ast.Name)
+                    and target.id == "getattr"
+                    and len(node.args) >= 2
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id in sys_aliases
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "_getframe"
+                ):
+                    denied = "sys._getframe"
+                elif (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id in {"type", "object"}
+                    and target.attr in {"__setattr__", "__delattr__"}
+                ):
+                    denied = f"{target.value.id}.{target.attr}"
+            elif (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in sys_aliases
+                and node.attr == "_getframe"
+            ):
+                denied = "sys._getframe"
+            if denied is not None:
+                relative_path = source_path.relative_to(
+                    source_root.resolve()
+                ).as_posix()
+                line = getattr(node, "lineno", "?")
+                raise EvidenceError(
+                    "Runtime auditability preflight denied "
+                    f"{denied} in {relative_path}:{line}. "
+                    "Selected production source may not use dynamic execution or "
+                    "audit-state introspection."
+                )
+
+
 _RUNTIME_LAYOUT_AUDIT_SCRIPT = r"""
 import abc
 import builtins
@@ -1247,490 +1364,538 @@ import types
 import typing
 from pathlib import Path
 
-_AUDIT_BUILTINS = builtins
-_AUDIT_VARS = builtins.vars
-_AUDIT_ISINSTANCE = builtins.isinstance
-_AUDIT_TYPE = builtins.type
-_AUDIT_GETATTR = builtins.getattr
-_AUDIT_SORTED = builtins.sorted
-_AUDIT_TUPLE = builtins.tuple
-_AUDIT_STR = builtins.str
-_AUDIT_INT = builtins.int
-_AUDIT_BOOL = builtins.bool
-_AUDIT_SET = builtins.set
-_AUDIT_RUNTIME_ERROR = builtins.RuntimeError
-_AUDIT_MODULE_NOT_FOUND_ERROR = builtins.ModuleNotFoundError
-_AUDIT_ATTRIBUTE_ERROR = builtins.AttributeError
-_AUDIT_TYPE_GETATTRIBUTE = builtins.type.__getattribute__
-_AUDIT_JSON_DUMPS = json.dumps
-_AUDIT_IMPORT_MODULE = importlib.import_module
-_AUDIT_SPEC_FROM_FILE_LOCATION = importlib.util.spec_from_file_location
-_AUDIT_SYS_MODULES = sys.modules
-_AUDIT_SYS_META_PATH = sys.meta_path
-_AUDIT_SYS_PATH = sys.path
-_AUDIT_SYS_STDOUT_WRITE = sys.stdout.write
-_AUDIT_MAPPING_PROXY_TYPE = types.MappingProxyType
-_AUDIT_PATH = Path
-_AUDIT_PATH_RESOLVE = Path.resolve
 
-
-def raw_class_attribute(
-    cls,
-    name,
-    _isinstance=_AUDIT_ISINSTANCE,
-    _type=_AUDIT_TYPE,
-    _type_getattribute=_AUDIT_TYPE_GETATTRIBUTE,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    if not _isinstance(cls, _type):
-        raise _runtime_error(f"Runtime layout target is not a class: {cls!r}")
-    return _type_getattribute(cls, name)
-
-
-def assert_audit_primitive_integrity(
-    _vars=_AUDIT_VARS,
-    _builtins=_AUDIT_BUILTINS,
+def run_audit(
+    source_root_text,
+    package_name_text,
+    _builtins=builtins,
     _json=json,
     _importlib=importlib,
     _importlib_util=importlib.util,
     _sys=sys,
     _types=types,
-    _type=_AUDIT_TYPE,
-    _type_getattribute=_AUDIT_TYPE_GETATTRIBUTE,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-    _builtin_bindings=(
-        ("vars", _AUDIT_VARS),
-        ("isinstance", _AUDIT_ISINSTANCE),
-        ("type", _AUDIT_TYPE),
-        ("getattr", _AUDIT_GETATTR),
-        ("sorted", _AUDIT_SORTED),
-        ("tuple", _AUDIT_TUPLE),
-        ("str", _AUDIT_STR),
-        ("int", _AUDIT_INT),
-        ("bool", _AUDIT_BOOL),
-        ("set", _AUDIT_SET),
-    ),
-    _module_bindings=(
-        (json, "dumps", _AUDIT_JSON_DUMPS),
-        (importlib, "import_module", _AUDIT_IMPORT_MODULE),
-        (importlib.util, "spec_from_file_location", _AUDIT_SPEC_FROM_FILE_LOCATION),
-        (sys, "modules", _AUDIT_SYS_MODULES),
-        (sys, "meta_path", _AUDIT_SYS_META_PATH),
-        (sys, "path", _AUDIT_SYS_PATH),
-        (types, "MappingProxyType", _AUDIT_MAPPING_PROXY_TYPE),
-    ),
+    _path=Path,
+    _meta_path_finder=importlib.abc.MetaPathFinder,
 ):
-    builtin_values = _vars(_builtins)
-    for name, expected in _builtin_bindings:
-        if builtin_values.get(name) is not expected:
-            raise _runtime_error(f"Audit primitive integrity changed: builtins.{name}")
-    for module, name, expected in _module_bindings:
-        if _vars(module).get(name) is not expected:
-            raise _runtime_error(
-                f"Audit primitive integrity changed: {module.__name__}.{name}"
-            )
-    if _type_getattribute(_type, "__getattribute__") is not _type_getattribute:
-        raise _runtime_error("Audit primitive integrity changed: type.__getattribute__")
+    _AUDIT_BUILTINS = _builtins
+    _AUDIT_VARS = _builtins.vars
+    _AUDIT_ISINSTANCE = _builtins.isinstance
+    _AUDIT_TYPE = _builtins.type
+    _AUDIT_GETATTR = _builtins.getattr
+    _AUDIT_SORTED = _builtins.sorted
+    _AUDIT_TUPLE = _builtins.tuple
+    _AUDIT_STR = _builtins.str
+    _AUDIT_INT = _builtins.int
+    _AUDIT_BOOL = _builtins.bool
+    _AUDIT_SET = _builtins.set
+    _AUDIT_RUNTIME_ERROR = _builtins.RuntimeError
+    _AUDIT_MODULE_NOT_FOUND_ERROR = _builtins.ModuleNotFoundError
+    _AUDIT_ATTRIBUTE_ERROR = _builtins.AttributeError
+    _AUDIT_TYPE_GETATTRIBUTE = _builtins.type.__getattribute__
+    _AUDIT_JSON_DUMPS = _json.dumps
+    _AUDIT_IMPORT_MODULE = _importlib.import_module
+    _AUDIT_SPEC_FROM_FILE_LOCATION = _importlib_util.spec_from_file_location
+    _AUDIT_SYS_MODULES = _sys.modules
+    _AUDIT_SYS_META_PATH = _sys.meta_path
+    _AUDIT_SYS_PATH = _sys.path
+    _AUDIT_SYS_STDOUT_WRITE = _sys.stdout.write
+    _AUDIT_MAPPING_PROXY_TYPE = _types.MappingProxyType
+    _AUDIT_PATH = _path
+    _AUDIT_PATH_RESOLVE = _path.resolve
 
 
-source_root = Path(sys.argv[1]).resolve()
-package_name = sys.argv[2]
-package_root = source_root / package_name
-if not package_root.is_dir():
-    raise RuntimeError(f"Package directory does not exist: {package_root}")
-if sys.implementation.name != "cpython":
-    raise RuntimeError("Runtime slots layout audit requires CPython")
-
-_AUDIT_SYS_PATH.insert(0, _AUDIT_STR(source_root))
-importlib.invalidate_caches()
-
-allowed_modules = {}
-for source_file in package_root.rglob("*.py"):
-    resolved = source_file.resolve()
-    try:
-        resolved.relative_to(source_root)
-    except ValueError as error:
-        raise RuntimeError(f"Selected source escaped source root: {source_file}") from error
-    parts = list(resolved.relative_to(source_root).with_suffix("").parts)
-    is_package = parts[-1] == "__init__"
-    if is_package:
-        parts.pop()
-    module_name = ".".join(parts)
-    if module_name != package_name and not module_name.startswith(package_name + "."):
-        raise RuntimeError(f"Selected source is outside project namespace: {resolved}")
-    previous = allowed_modules.get(module_name)
-    if previous is not None and previous != (resolved, is_package):
-        raise RuntimeError(f"Ambiguous selected source module: {module_name}")
-    allowed_modules[module_name] = (resolved, is_package)
-if package_name not in allowed_modules or not allowed_modules[package_name][1]:
-    raise RuntimeError(f"Selected source is missing package initializer: {package_name}")
-
-class PureSourceFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, allowed, spec_from_file_location, module_not_found_error, to_str):
-        self._allowed = allowed
-        self._spec_from_file_location = spec_from_file_location
-        self._module_not_found_error = module_not_found_error
-        self._to_str = to_str
-
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname != package_name and not fullname.startswith(package_name + "."):
-            return None
-        source = self._allowed.get(fullname)
-        if source is None:
-            raise self._module_not_found_error(
-                f"Pure source audit denied unselected project import: {fullname}",
-                name=fullname,
-            )
-        source_file, is_package = source
-        if is_package:
-            return self._spec_from_file_location(
-                fullname,
-                source_file,
-                submodule_search_locations=[self._to_str(source_file.parent)],
-            )
-        return self._spec_from_file_location(fullname, source_file)
-
-allowed_module_snapshot = _AUDIT_MAPPING_PROXY_TYPE(dict(allowed_modules))
-finder = PureSourceFinder(
-    allowed_module_snapshot,
-    _AUDIT_SPEC_FROM_FILE_LOCATION,
-    _AUDIT_MODULE_NOT_FOUND_ERROR,
-    _AUDIT_STR,
-)
-_AUDIT_SYS_META_PATH.insert(0, finder)
-_AUDIT_SYS_PATH_ENTRIES = _AUDIT_TUPLE(_AUDIT_SYS_PATH)
-_AUDIT_SYS_META_PATH_ENTRIES = _AUDIT_TUPLE(_AUDIT_SYS_META_PATH)
-
-for module_key in _AUDIT_TUPLE(_AUDIT_SYS_MODULES):
-    if module_key == package_name or module_key.startswith(package_name + "."):
-        raise RuntimeError(f"Selected project module was loaded before audit: {module_key}")
-
-external_module_records = {}
-external_class_records = {}
-
-def snapshot_external_class(module_key, binding_name, cls):
-    claimed_module_name = raw_class_attribute(cls, "__module__")
-    qualname = raw_class_attribute(cls, "__qualname__")
-    if claimed_module_name != module_key:
-        return
-    if not _AUDIT_ISINSTANCE(qualname, _AUDIT_STR) or not qualname or "<locals>" in qualname:
-        raise RuntimeError(
-            f"Pre-execution external class has an uncertain qualified name: "
-            f"{module_key}.{qualname!r}"
-        )
-    identity_key = (module_key, qualname)
-    previous = external_class_records.get(identity_key)
-    if previous is not None and previous[0] is not cls:
-        raise RuntimeError(
-            f"Ambiguous pre-execution external class identity: "
-            f"{module_key}.{qualname}"
-        )
-    if previous is None:
-        external_class_records[identity_key] = (cls, binding_name)
-
-
-for module_key in ("abc", "builtins", "collections", "importlib.metadata", "typing"):
-    module = _AUDIT_SYS_MODULES.get(module_key)
-    if module is None:
-        raise RuntimeError(
-            f"Required pre-execution external module is unavailable: {module_key}"
-        )
-    spec = _AUDIT_GETATTR(module, "__spec__", None)
-    if _AUDIT_GETATTR(spec, "name", None) != module_key:
-        raise RuntimeError(
-            f"Required pre-execution external module has uncertain identity: "
-            f"{module_key}"
-        )
-    external_module_records[module_key] = (module, spec)
-    for binding_name, value in _AUDIT_VARS(module).items():
-        if _AUDIT_ISINSTANCE(value, _AUDIT_TYPE):
-            snapshot_external_class(module_key, binding_name, value)
-
-external_module_snapshot = _AUDIT_MAPPING_PROXY_TYPE(dict(external_module_records))
-external_class_snapshot = _AUDIT_MAPPING_PROXY_TYPE(dict(external_class_records))
-
-
-def assert_external_snapshot_integrity(
-    external_modules=external_module_snapshot,
-    external_classes=external_class_snapshot,
-    _vars=_AUDIT_VARS,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    for (module_key, qualname), (expected, binding_name) in external_classes.items():
-        module, _ = external_modules[module_key]
-        if _vars(module).get(binding_name) is not expected:
-            raise _runtime_error(
-                f"Pre-execution external class binding changed: {module_key}.{qualname}"
-            )
-
-
-def assert_audit_import_state(
-    _assert_primitives=assert_audit_primitive_integrity,
-    _tuple=_AUDIT_TUPLE,
-    _sys_path=_AUDIT_SYS_PATH,
-    _sys_meta_path=_AUDIT_SYS_META_PATH,
-    _expected_path_entries=_AUDIT_SYS_PATH_ENTRIES,
-    _expected_meta_path_entries=_AUDIT_SYS_META_PATH_ENTRIES,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    _assert_primitives()
-    if _tuple(_sys_path) != _expected_path_entries:
-        raise _runtime_error("Audit import path changed after selected source execution")
-    if _tuple(_sys_meta_path) != _expected_meta_path_entries:
-        raise _runtime_error("Audit meta path changed after selected source execution")
-
-module_names = sorted(
-    allowed_modules,
-    key=lambda name: (name.count("."), name),
-)
-modules = {}
-
-def assert_selected_module_identity(
-    module_key,
-    module,
-    _sys_modules=_AUDIT_SYS_MODULES,
-    _getattr=_AUDIT_GETATTR,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    if _sys_modules.get(module_key) is not module:
-        raise _runtime_error(f"Selected module binding changed: {module_key}")
-    if _getattr(module, "__name__", None) != module_key:
-        raise _runtime_error(f"Selected module identity changed: {module_key}")
-    spec = _getattr(module, "__spec__", None)
-    if _getattr(spec, "name", None) != module_key:
-        raise _runtime_error(f"Selected module spec identity changed: {module_key}")
-
-
-for module_key in module_names:
-    assert_audit_import_state()
-    module = _AUDIT_IMPORT_MODULE(module_key)
-    assert_audit_import_state()
-    assert_selected_module_identity(module_key, module)
-    origin_text = _AUDIT_GETATTR(module, "__file__", None)
-    if not origin_text:
-        raise RuntimeError(f"Imported module has no source origin: {module_key}")
-    origin = _AUDIT_PATH_RESOLVE(_AUDIT_PATH(origin_text))
-    try:
-        origin.relative_to(source_root)
-    except ValueError as error:
-        raise RuntimeError(
-            f"Imported module escaped selected source root: {module_key} -> {origin}"
-        ) from error
-    if origin.suffix != ".py":
-        raise RuntimeError(f"Imported module is not pure Python: {module_key} -> {origin}")
-    expected_origin, _ = allowed_modules[module_key]
-    if origin != expected_origin:
-        raise RuntimeError(
-            f"Imported module did not use selected source: {module_key} -> {origin}"
-        )
-    modules[module_key] = module
-
-for module_key, module in modules.items():
-    assert_audit_import_state()
-    assert_selected_module_identity(module_key, module)
-
-assert_external_snapshot_integrity()
-
-for module_name, module in _AUDIT_SORTED(_AUDIT_TUPLE(_AUDIT_SYS_MODULES.items())):
-    if module_name != package_name and not module_name.startswith(package_name + "."):
-        continue
-    source = allowed_modules.get(module_name)
-    if source is None:
-        raise RuntimeError(f"Loaded unselected project module: {module_name}")
-    origin_text = _AUDIT_GETATTR(module, "__file__", None)
-    if not origin_text:
-        raise RuntimeError(f"Loaded project module has no source origin: {module_name}")
-    origin = _AUDIT_PATH_RESOLVE(_AUDIT_PATH(origin_text))
-    expected_origin, _ = source
-    if origin != expected_origin or origin.suffix != ".py":
-        raise RuntimeError(
-            f"Loaded project module did not use allowed selected .py source: "
-            f"{module_name} -> {origin}"
-        )
-
-layouts = {}
-seen = _AUDIT_SET()
-
-def resolve_class_qualname(
-    module,
-    module_key,
-    qualname,
-    binding_name,
-    _getattr=_AUDIT_GETATTR,
-    _attribute_error=_AUDIT_ATTRIBUTE_ERROR,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    resolved = module
-    for component in qualname.split("."):
-        try:
-            resolved = _getattr(resolved, component)
-        except _attribute_error as error:
-            raise _runtime_error(
-                f"Runtime type has an unresolvable claimed owner: {binding_name} -> "
-                f"{module_key}.{qualname}"
-            ) from error
-    return resolved
-
-
-def verify_external_reexport(
-    cls,
-    binding_name,
-    external_modules=external_module_snapshot,
-    external_classes=external_class_snapshot,
-    _raw_class_attribute=raw_class_attribute,
-    _isinstance=_AUDIT_ISINSTANCE,
-    _str=_AUDIT_STR,
-    _getattr=_AUDIT_GETATTR,
-    _sys_modules=_AUDIT_SYS_MODULES,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    claimed_module_name = _raw_class_attribute(cls, "__module__")
-    qualname = _raw_class_attribute(cls, "__qualname__")
-    if not _isinstance(claimed_module_name, _str) or not claimed_module_name:
-        raise _runtime_error(
-            f"Runtime type has an uncertain claimed owner: {binding_name}"
-        )
-    if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
-        raise _runtime_error(
-            f"Runtime type has an uncertain qualified name: {binding_name}"
-        )
-    record = external_modules.get(claimed_module_name)
-    if record is None:
-        raise _runtime_error(
-            f"Runtime type has no pre-execution external module provenance: "
-            f"{binding_name} -> "
-            f"{claimed_module_name}.{qualname}"
-        )
-    claimed_module, claimed_spec = record
-    if _sys_modules.get(claimed_module_name) is not claimed_module:
-        raise _runtime_error(
-            f"Runtime type external module binding changed: {binding_name} -> "
-            f"{claimed_module_name}.{qualname}"
-        )
-    if (
-        _getattr(claimed_module, "__name__", None) != claimed_module_name
-        or _getattr(claimed_module, "__spec__", None) is not claimed_spec
-        or _getattr(claimed_spec, "name", None) != claimed_module_name
+    def raw_class_attribute(
+        cls,
+        name,
+        _isinstance=_AUDIT_ISINSTANCE,
+        _type=_AUDIT_TYPE,
+        _type_getattribute=_AUDIT_TYPE_GETATTRIBUTE,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
     ):
-        raise _runtime_error(
-            f"Runtime type external module identity changed: {binding_name} -> "
-            f"{claimed_module_name}.{qualname}"
-        )
-    expected_record = external_classes.get((claimed_module_name, qualname))
-    if expected_record is None:
-        raise _runtime_error(
-            f"Runtime type has no pre-execution external class provenance: "
-            f"{binding_name} -> {claimed_module_name}.{qualname}"
-        )
-    expected, _ = expected_record
-    if expected is not cls:
-        raise _runtime_error(
-            f"Runtime type has mismatched pre-execution external provenance: "
-            f"{binding_name} -> "
-            f"{claimed_module_name}.{qualname}"
-        )
+        if not _isinstance(cls, _type):
+            raise _runtime_error(f"Runtime layout target is not a class: {cls!r}")
+        return _type_getattribute(cls, name)
 
 
-def collect_class(
-    cls,
-    module_key,
-    binding_name,
-    _raw_class_attribute=raw_class_attribute,
-    _isinstance=_AUDIT_ISINSTANCE,
-    _str=_AUDIT_STR,
-    _bool=_AUDIT_BOOL,
-    _int=_AUDIT_INT,
-    _vars=_AUDIT_VARS,
-    _type=_AUDIT_TYPE,
-    _runtime_error=_AUDIT_RUNTIME_ERROR,
-):
-    claimed_module_name = _raw_class_attribute(cls, "__module__")
-    if claimed_module_name != module_key:
-        if claimed_module_name in allowed_modules:
-            claimed_module = modules.get(claimed_module_name)
-            if claimed_module is None:
+    def assert_audit_primitive_integrity(
+        _vars=_AUDIT_VARS,
+        _builtins=_AUDIT_BUILTINS,
+        _json=_json,
+        _importlib=_importlib,
+        _importlib_util=_importlib_util,
+        _sys=_sys,
+        _types=_types,
+        _type=_AUDIT_TYPE,
+        _type_getattribute=_AUDIT_TYPE_GETATTRIBUTE,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+        _builtin_bindings=(
+            ("vars", _AUDIT_VARS),
+            ("isinstance", _AUDIT_ISINSTANCE),
+            ("type", _AUDIT_TYPE),
+            ("getattr", _AUDIT_GETATTR),
+            ("sorted", _AUDIT_SORTED),
+            ("tuple", _AUDIT_TUPLE),
+            ("str", _AUDIT_STR),
+            ("int", _AUDIT_INT),
+            ("bool", _AUDIT_BOOL),
+            ("set", _AUDIT_SET),
+        ),
+        _module_bindings=(
+            (_json, "dumps", _AUDIT_JSON_DUMPS),
+            (_importlib, "import_module", _AUDIT_IMPORT_MODULE),
+            (_importlib_util, "spec_from_file_location", _AUDIT_SPEC_FROM_FILE_LOCATION),
+            (_sys, "modules", _AUDIT_SYS_MODULES),
+            (_sys, "meta_path", _AUDIT_SYS_META_PATH),
+            (_sys, "path", _AUDIT_SYS_PATH),
+            (_types, "MappingProxyType", _AUDIT_MAPPING_PROXY_TYPE),
+        ),
+    ):
+        builtin_values = _vars(_builtins)
+        for name, expected in _builtin_bindings:
+            if builtin_values.get(name) is not expected:
+                raise _runtime_error(f"Audit primitive integrity changed: builtins.{name}")
+        for module, name, expected in _module_bindings:
+            if _vars(module).get(name) is not expected:
                 raise _runtime_error(
-                    f"Runtime type has an unavailable selected owner: {binding_name} -> "
-                    f"{claimed_module_name}"
+                    f"Audit primitive integrity changed: {module.__name__}.{name}"
                 )
-            assert_selected_module_identity(claimed_module_name, claimed_module)
-            qualname = _raw_class_attribute(cls, "__qualname__")
-            if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
-                raise _runtime_error(
-                    f"Runtime type has an uncertain qualified name: {binding_name}"
-                )
-            if (
-                resolve_class_qualname(
-                    claimed_module, claimed_module_name, qualname, binding_name
-                )
-                is not cls
-            ):
-                raise _runtime_error(
-                    f"Runtime type has a mismatched selected owner: {binding_name} -> "
-                    f"{claimed_module_name}.{qualname}"
-                )
+        if _type_getattribute(_type, "__getattribute__") is not _type_getattribute:
+            raise _runtime_error("Audit primitive integrity changed: type.__getattribute__")
+
+
+    source_root = _AUDIT_PATH(source_root_text).resolve()
+    package_name = package_name_text
+    package_root = source_root / package_name
+    if not package_root.is_dir():
+        raise RuntimeError(f"Package directory does not exist: {package_root}")
+    if _sys.implementation.name != "cpython":
+        raise RuntimeError("Runtime slots layout audit requires CPython")
+
+    _AUDIT_SYS_PATH.insert(0, _AUDIT_STR(source_root))
+    _importlib.invalidate_caches()
+
+    allowed_modules = {}
+    for source_file in package_root.rglob("*.py"):
+        resolved = source_file.resolve()
+        try:
+            resolved.relative_to(source_root)
+        except ValueError as error:
+            raise RuntimeError(f"Selected source escaped source root: {source_file}") from error
+        parts = list(resolved.relative_to(source_root).with_suffix("").parts)
+        is_package = parts[-1] == "__init__"
+        if is_package:
+            parts.pop()
+        module_name = ".".join(parts)
+        if module_name != package_name and not module_name.startswith(package_name + "."):
+            raise RuntimeError(f"Selected source is outside project namespace: {resolved}")
+        previous = allowed_modules.get(module_name)
+        if previous is not None and previous != (resolved, is_package):
+            raise RuntimeError(f"Ambiguous selected source module: {module_name}")
+        allowed_modules[module_name] = (resolved, is_package)
+    if package_name not in allowed_modules or not allowed_modules[package_name][1]:
+        raise RuntimeError(f"Selected source is missing package initializer: {package_name}")
+
+    def make_pure_source_finder(
+        allowed,
+        _mapping_proxy=_AUDIT_MAPPING_PROXY_TYPE,
+        _spec_from_file_location=_AUDIT_SPEC_FROM_FILE_LOCATION,
+        _module_not_found_error=_AUDIT_MODULE_NOT_FOUND_ERROR,
+        _to_str=_AUDIT_STR,
+        _base=_meta_path_finder,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        # Policy is a closure-held mapping proxy, not finder state.  Selected
+        # code can inspect meta_path but cannot extend the selected source set.
+        allowed_snapshot = _mapping_proxy(dict(allowed))
+
+        class PureSourceFinder(_base):
+            __slots__ = ()
+
+            def __setattr__(self, name, value):
+                raise _runtime_error("Pure source finder is immutable")
+
+            def __delattr__(self, name):
+                raise _runtime_error("Pure source finder is immutable")
+
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname != package_name and not fullname.startswith(package_name + "."):
+                    return None
+                source = allowed_snapshot.get(fullname)
+                if source is None:
+                    raise _module_not_found_error(
+                        f"Pure source audit denied unselected project import: {fullname}",
+                        name=fullname,
+                    )
+                source_file, is_package = source
+                if is_package:
+                    return _spec_from_file_location(
+                        fullname,
+                        source_file,
+                        submodule_search_locations=[_to_str(source_file.parent)],
+                    )
+                return _spec_from_file_location(fullname, source_file)
+
+        return PureSourceFinder(), allowed_snapshot
+
+    finder, allowed_module_snapshot = make_pure_source_finder(allowed_modules)
+    _AUDIT_SYS_META_PATH.insert(0, finder)
+    _AUDIT_SYS_PATH_ENTRIES = _AUDIT_TUPLE(_AUDIT_SYS_PATH)
+    _AUDIT_SYS_META_PATH_ENTRIES = _AUDIT_TUPLE(_AUDIT_SYS_META_PATH)
+
+    for module_key in _AUDIT_TUPLE(_AUDIT_SYS_MODULES):
+        if module_key == package_name or module_key.startswith(package_name + "."):
+            raise RuntimeError(f"Selected project module was loaded before audit: {module_key}")
+
+    external_module_records = {}
+    external_class_records = {}
+
+    def snapshot_external_class(module_key, binding_name, cls):
+        claimed_module_name = raw_class_attribute(cls, "__module__")
+        qualname = raw_class_attribute(cls, "__qualname__")
+        if claimed_module_name != module_key:
             return
-        verify_external_reexport(cls, binding_name)
-        return
-    if cls in seen:
-        return
-    seen.add(cls)
-    qualname = _raw_class_attribute(cls, "__qualname__")
-    if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
-        raise _runtime_error(f"Runtime class has an uncertain qualified name: {cls!r}")
-    dictoffset = _raw_class_attribute(cls, "__dictoffset__")
-    if _isinstance(dictoffset, _bool) or not _isinstance(dictoffset, _int):
-        raise _runtime_error(
-            f"Runtime class has an uncertain CPython dictionary layout: "
-            f"{module_key}.{qualname}"
-        )
-    qualified_name = f"{module_key}.{qualname}"
-    previous = layouts.get(qualified_name)
-    layout = {
-        "qualified_name": qualified_name,
-        "has_instance_dict": dictoffset != 0,
-        "dictoffset": dictoffset,
-    }
-    if previous is not None and previous != layout:
-        raise _runtime_error(f"Ambiguous runtime class layout: {qualified_name}")
-    layouts[qualified_name] = layout
-    for attribute_name, value in _raw_class_attribute(cls, "__dict__").items():
-        if _isinstance(value, _type):
-            collect_class(value, module_key, f"{binding_name}.{attribute_name}")
+        if not _AUDIT_ISINSTANCE(qualname, _AUDIT_STR) or not qualname or "<locals>" in qualname:
+            raise RuntimeError(
+                f"Pre-execution external class has an uncertain qualified name: "
+                f"{module_key}.{qualname!r}"
+            )
+        identity_key = (module_key, qualname)
+        previous = external_class_records.get(identity_key)
+        if previous is not None and previous[0] is not cls:
+            raise RuntimeError(
+                f"Ambiguous pre-execution external class identity: "
+                f"{module_key}.{qualname}"
+            )
+        if previous is None:
+            external_class_records[identity_key] = (cls, binding_name)
 
-for module_key, module in modules.items():
-    for binding_name, value in _AUDIT_VARS(module).items():
-        if _AUDIT_ISINSTANCE(value, _AUDIT_TYPE):
-            collect_class(value, module_key, f"{module_key}.{binding_name}")
 
-_AUDIT_SYS_STDOUT_WRITE(
-    _AUDIT_JSON_DUMPS(
-        [layouts[name] for name in _AUDIT_SORTED(layouts)], sort_keys=True
+    for module_key in ("abc", "builtins", "collections", "importlib.metadata", "typing"):
+        module = _AUDIT_SYS_MODULES.get(module_key)
+        if module is None:
+            raise RuntimeError(
+                f"Required pre-execution external module is unavailable: {module_key}"
+            )
+        spec = _AUDIT_GETATTR(module, "__spec__", None)
+        if _AUDIT_GETATTR(spec, "name", None) != module_key:
+            raise RuntimeError(
+                f"Required pre-execution external module has uncertain identity: "
+                f"{module_key}"
+            )
+        external_module_records[module_key] = (module, spec)
+        for binding_name, value in _AUDIT_VARS(module).items():
+            if _AUDIT_ISINSTANCE(value, _AUDIT_TYPE):
+                snapshot_external_class(module_key, binding_name, value)
+
+    external_module_snapshot = _AUDIT_MAPPING_PROXY_TYPE(dict(external_module_records))
+    external_class_snapshot = _AUDIT_MAPPING_PROXY_TYPE(dict(external_class_records))
+
+
+    def assert_external_snapshot_integrity(
+        external_modules=external_module_snapshot,
+        external_classes=external_class_snapshot,
+        _vars=_AUDIT_VARS,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        for (module_key, qualname), (expected, binding_name) in external_classes.items():
+            module, _ = external_modules[module_key]
+            if _vars(module).get(binding_name) is not expected:
+                raise _runtime_error(
+                    f"Pre-execution external class binding changed: {module_key}.{qualname}"
+                )
+
+
+    def assert_audit_import_state(
+        _assert_primitives=assert_audit_primitive_integrity,
+        _tuple=_AUDIT_TUPLE,
+        _sys_path=_AUDIT_SYS_PATH,
+        _sys_meta_path=_AUDIT_SYS_META_PATH,
+        _expected_path_entries=_AUDIT_SYS_PATH_ENTRIES,
+        _expected_meta_path_entries=_AUDIT_SYS_META_PATH_ENTRIES,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        _assert_primitives()
+        if _tuple(_sys_path) != _expected_path_entries:
+            raise _runtime_error("Audit import path changed after selected source execution")
+        if _tuple(_sys_meta_path) != _expected_meta_path_entries:
+            raise _runtime_error("Audit meta path changed after selected source execution")
+
+    module_names = sorted(
+        allowed_modules,
+        key=lambda name: (name.count("."), name),
     )
-    + "\n"
-)
+    modules = {}
+
+    def assert_selected_module_identity(
+        module_key,
+        module,
+        _sys_modules=_AUDIT_SYS_MODULES,
+        _getattr=_AUDIT_GETATTR,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        if _sys_modules.get(module_key) is not module:
+            raise _runtime_error(f"Selected module binding changed: {module_key}")
+        if _getattr(module, "__name__", None) != module_key:
+            raise _runtime_error(f"Selected module identity changed: {module_key}")
+        spec = _getattr(module, "__spec__", None)
+        if _getattr(spec, "name", None) != module_key:
+            raise _runtime_error(f"Selected module spec identity changed: {module_key}")
+
+
+    for module_key in module_names:
+        assert_audit_import_state()
+        module = _AUDIT_IMPORT_MODULE(module_key)
+        assert_audit_import_state()
+        assert_selected_module_identity(module_key, module)
+        origin_text = _AUDIT_GETATTR(module, "__file__", None)
+        if not origin_text:
+            raise RuntimeError(f"Imported module has no source origin: {module_key}")
+        origin = _AUDIT_PATH_RESOLVE(_AUDIT_PATH(origin_text))
+        try:
+            origin.relative_to(source_root)
+        except ValueError as error:
+            raise RuntimeError(
+                f"Imported module escaped selected source root: {module_key} -> {origin}"
+            ) from error
+        if origin.suffix != ".py":
+            raise RuntimeError(f"Imported module is not pure Python: {module_key} -> {origin}")
+        expected_origin, _ = allowed_modules[module_key]
+        if origin != expected_origin:
+            raise RuntimeError(
+                f"Imported module did not use selected source: {module_key} -> {origin}"
+            )
+        modules[module_key] = module
+
+    for module_key, module in modules.items():
+        assert_audit_import_state()
+        assert_selected_module_identity(module_key, module)
+
+    assert_external_snapshot_integrity()
+
+    for module_name, module in _AUDIT_SORTED(_AUDIT_TUPLE(_AUDIT_SYS_MODULES.items())):
+        if module_name != package_name and not module_name.startswith(package_name + "."):
+            continue
+        source = allowed_modules.get(module_name)
+        if source is None:
+            raise RuntimeError(f"Loaded unselected project module: {module_name}")
+        origin_text = _AUDIT_GETATTR(module, "__file__", None)
+        if not origin_text:
+            raise RuntimeError(f"Loaded project module has no source origin: {module_name}")
+        origin = _AUDIT_PATH_RESOLVE(_AUDIT_PATH(origin_text))
+        expected_origin, _ = source
+        if origin != expected_origin or origin.suffix != ".py":
+            raise RuntimeError(
+                f"Loaded project module did not use allowed selected .py source: "
+                f"{module_name} -> {origin}"
+            )
+
+    layouts = {}
+    seen = _AUDIT_SET()
+
+    def resolve_class_qualname(
+        module,
+        module_key,
+        qualname,
+        binding_name,
+        _getattr=_AUDIT_GETATTR,
+        _attribute_error=_AUDIT_ATTRIBUTE_ERROR,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        resolved = module
+        for component in qualname.split("."):
+            try:
+                resolved = _getattr(resolved, component)
+            except _attribute_error as error:
+                raise _runtime_error(
+                    f"Runtime type has an unresolvable claimed owner: {binding_name} -> "
+                    f"{module_key}.{qualname}"
+                ) from error
+        return resolved
+
+
+    def verify_external_reexport(
+        cls,
+        binding_name,
+        external_modules=external_module_snapshot,
+        external_classes=external_class_snapshot,
+        _raw_class_attribute=raw_class_attribute,
+        _isinstance=_AUDIT_ISINSTANCE,
+        _str=_AUDIT_STR,
+        _getattr=_AUDIT_GETATTR,
+        _sys_modules=_AUDIT_SYS_MODULES,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        claimed_module_name = _raw_class_attribute(cls, "__module__")
+        qualname = _raw_class_attribute(cls, "__qualname__")
+        if not _isinstance(claimed_module_name, _str) or not claimed_module_name:
+            raise _runtime_error(
+                f"Runtime type has an uncertain claimed owner: {binding_name}"
+            )
+        if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
+            raise _runtime_error(
+                f"Runtime type has an uncertain qualified name: {binding_name}"
+            )
+        record = external_modules.get(claimed_module_name)
+        if record is None:
+            raise _runtime_error(
+                f"Runtime type has no pre-execution external module provenance: "
+                f"{binding_name} -> "
+                f"{claimed_module_name}.{qualname}"
+            )
+        claimed_module, claimed_spec = record
+        if _sys_modules.get(claimed_module_name) is not claimed_module:
+            raise _runtime_error(
+                f"Runtime type external module binding changed: {binding_name} -> "
+                f"{claimed_module_name}.{qualname}"
+            )
+        if (
+            _getattr(claimed_module, "__name__", None) != claimed_module_name
+            or _getattr(claimed_module, "__spec__", None) is not claimed_spec
+            or _getattr(claimed_spec, "name", None) != claimed_module_name
+        ):
+            raise _runtime_error(
+                f"Runtime type external module identity changed: {binding_name} -> "
+                f"{claimed_module_name}.{qualname}"
+            )
+        expected_record = external_classes.get((claimed_module_name, qualname))
+        if expected_record is None:
+            raise _runtime_error(
+                f"Runtime type has no pre-execution external class provenance: "
+                f"{binding_name} -> {claimed_module_name}.{qualname}"
+            )
+        expected, _ = expected_record
+        if expected is not cls:
+            raise _runtime_error(
+                f"Runtime type has mismatched pre-execution external provenance: "
+                f"{binding_name} -> "
+                f"{claimed_module_name}.{qualname}"
+            )
+
+
+    def collect_class(
+        cls,
+        module_key,
+        binding_name,
+        _raw_class_attribute=raw_class_attribute,
+        _isinstance=_AUDIT_ISINSTANCE,
+        _str=_AUDIT_STR,
+        _bool=_AUDIT_BOOL,
+        _int=_AUDIT_INT,
+        _vars=_AUDIT_VARS,
+        _type=_AUDIT_TYPE,
+        _runtime_error=_AUDIT_RUNTIME_ERROR,
+    ):
+        claimed_module_name = _raw_class_attribute(cls, "__module__")
+        if claimed_module_name != module_key:
+            if claimed_module_name in allowed_modules:
+                claimed_module = modules.get(claimed_module_name)
+                if claimed_module is None:
+                    raise _runtime_error(
+                        f"Runtime type has an unavailable selected owner: {binding_name} -> "
+                        f"{claimed_module_name}"
+                    )
+                assert_selected_module_identity(claimed_module_name, claimed_module)
+                qualname = _raw_class_attribute(cls, "__qualname__")
+                if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
+                    raise _runtime_error(
+                        f"Runtime type has an uncertain qualified name: {binding_name}"
+                    )
+                if (
+                    resolve_class_qualname(
+                        claimed_module, claimed_module_name, qualname, binding_name
+                    )
+                    is not cls
+                ):
+                    raise _runtime_error(
+                        f"Runtime type has a mismatched selected owner: {binding_name} -> "
+                        f"{claimed_module_name}.{qualname}"
+                    )
+                return
+            verify_external_reexport(cls, binding_name)
+            return
+        if cls in seen:
+            return
+        seen.add(cls)
+        qualname = _raw_class_attribute(cls, "__qualname__")
+        if not _isinstance(qualname, _str) or not qualname or "<locals>" in qualname:
+            raise _runtime_error(f"Runtime class has an uncertain qualified name: {cls!r}")
+        dictoffset = _raw_class_attribute(cls, "__dictoffset__")
+        if _isinstance(dictoffset, _bool) or not _isinstance(dictoffset, _int):
+            raise _runtime_error(
+                f"Runtime class has an uncertain CPython dictionary layout: "
+                f"{module_key}.{qualname}"
+            )
+        qualified_name = f"{module_key}.{qualname}"
+        previous = layouts.get(qualified_name)
+        layout = {
+            "qualified_name": qualified_name,
+            "has_instance_dict": dictoffset != 0,
+            "dictoffset": dictoffset,
+        }
+        if previous is not None and previous != layout:
+            raise _runtime_error(f"Ambiguous runtime class layout: {qualified_name}")
+        layouts[qualified_name] = layout
+        for attribute_name, value in _raw_class_attribute(cls, "__dict__").items():
+            if _isinstance(value, _type):
+                collect_class(value, module_key, f"{binding_name}.{attribute_name}")
+
+    for module_key, module in modules.items():
+        for binding_name, value in _AUDIT_VARS(module).items():
+            if _AUDIT_ISINSTANCE(value, _AUDIT_TYPE):
+                collect_class(value, module_key, f"{module_key}.{binding_name}")
+
+    _AUDIT_SYS_STDOUT_WRITE(
+        _AUDIT_JSON_DUMPS(
+            [layouts[name] for name in _AUDIT_SORTED(layouts)], sort_keys=True
+        )
+        + "\n"
+    )
+
+
+run_audit(sys.argv[1], sys.argv[2])
 """
 
 
+def _stage_runtime_audit_source(source_root: Path, staged_root: Path) -> None:
+    """Copy exactly selected Python source into a fresh subprocess source root."""
+    resolved_source_root = source_root.resolve()
+    package_root = resolved_source_root / PACKAGE_NAME
+    for source_path in sorted(package_root.rglob("*.py")):
+        resolved_source_path = source_path.resolve()
+        try:
+            relative_path = resolved_source_path.relative_to(resolved_source_root)
+        except ValueError as error:
+            raise EvidenceError(
+                f"Selected source escaped source root: {source_path}"
+            ) from error
+        destination = staged_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(resolved_source_path, destination)
+
+
 def collect_runtime_class_layouts(source_root: Path) -> list[dict[str, Any]]:
-    """Load selected ``.py`` source in isolation and report CPython layouts."""
+    """Load a freshly staged selected ``.py`` tree and report CPython layouts."""
     resolved_source_root = source_root.resolve()
     package_root = resolved_source_root / PACKAGE_NAME
     if not package_root.is_dir():
         raise EvidenceError(f"Package directory does not exist: {package_root}")
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            _RUNTIME_LAYOUT_AUDIT_SCRIPT,
-            str(resolved_source_root),
-            PACKAGE_NAME,
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    validate_runtime_auditability(resolved_source_root)
+    with tempfile.TemporaryDirectory(prefix="fast-fsm-runtime-layout-") as temporary:
+        staged_source_root = Path(temporary) / "source"
+        _stage_runtime_audit_source(resolved_source_root, staged_source_root)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                _RUNTIME_LAYOUT_AUDIT_SCRIPT,
+                str(staged_source_root),
+                PACKAGE_NAME,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     if completed.returncode:
         raise EvidenceError(
             "Isolated runtime slots audit failed:\n" + completed.stderr.strip()

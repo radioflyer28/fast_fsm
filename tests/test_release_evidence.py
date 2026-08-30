@@ -1049,11 +1049,7 @@ def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
     )
     with pytest.raises(
         EvidenceError,
-        match=(
-            "fast_fsm.runtime_escape_policy.Child|"
-            "Runtime type has a mismatched claimed owner|"
-            "Pre-execution external class binding changed: abc.ABC"
-        ),
+        match=("Runtime auditability preflight denied exec"),
     ):
         validate_runtime_slots_layouts(declarations, source_root)
 
@@ -1225,7 +1221,7 @@ def test_runtime_layout_audit_rejects_tampered_enumeration_primitives(
     (source_root / "fast_fsm" / "runtime_primitive_tampering.py").write_text(
         "import builtins\n\n"
         "Escaped = type('Escaped', (), {})\n"
-        f'exec("builtins.{primitive} = {replacement}")\n',
+        f"builtins.{primitive} = {replacement}\n",
         encoding="utf-8",
     )
 
@@ -1292,6 +1288,68 @@ def test_runtime_layout_audit_rejects_legacy_sourceless_project_import(
         collect_runtime_class_layouts(source_root)
 
     assert not marker.exists()
+
+
+def test_runtime_layout_audit_stages_py_only_source_before_finder_mutation(
+    tmp_path: Path,
+) -> None:
+    """A finder-policy mutation cannot resurrect a sibling marker ``.pyc``."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "finder-mutation-pyc-executed"
+    shadow_source = tmp_path / "shadow.py"
+    shadow_source.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    py_compile.compile(
+        str(shadow_source), cfile=str(package_root / "shadow.pyc"), doraise=True
+    )
+    shadow_source.unlink()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\n"
+        "import sys\n\n"
+        "finder = next(\n"
+        "    item for item in sys.meta_path\n"
+        "    if item.__class__.__name__ == 'PureSourceFinder'\n"
+        ")\n"
+        "policy = finder._allowed\n"
+        "original = dict(policy)\n"
+        "try:\n"
+        "    policy['fast_fsm.shadow'] = (None, False)\n"
+        "    importlib.import_module('fast_fsm.shadow')\n"
+        "finally:\n"
+        "    policy.clear()\n"
+        "    policy.update(original)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="PureSourceFinder.*_allowed"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
+def test_runtime_layout_audit_rejects_caller_frame_audit_global_attack(
+    tmp_path: Path,
+) -> None:
+    """Frame inspection cannot replace the old ``_AUDIT_VARS`` global path."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_frame_attack.py").write_text(
+        "import sys\n\n"
+        "Escaped = type('Escaped', (), {})\n"
+        "caller = sys._getframe().f_back\n"
+        "caller.f_globals['_AUDIT_VARS'] = lambda object: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match="Runtime auditability preflight denied sys\\._getframe",
+    ):
+        collect_runtime_class_layouts(source_root)
 
 
 def test_runtime_layout_audit_rejects_native_only_project_import(
