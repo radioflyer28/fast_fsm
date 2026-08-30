@@ -1627,6 +1627,48 @@ class TestFSMBuilderAsyncPreflight:
         assert builder.machine_type is AsyncStateMachine
         assert isinstance(builder.build(), AsyncStateMachine)
 
+    @pytest.mark.asyncio
+    async def test_auto_detects_async_func_condition_subclass_check(self):
+        """Auto mode classifies the effective public subclass hook."""
+
+        class AsyncCheckFuncCondition(FuncCondition):
+            async def check(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go",
+            "start",
+            "finish",
+            AsyncCheckFuncCondition(lambda *args, **kwargs: False),
+        )
+
+        assert builder.machine_type is AsyncStateMachine
+        machine = builder.build()
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+
+    def test_explicit_sync_rejects_async_func_condition_subclass_check(self):
+        """Explicit sync fails before it can publish an unreachable async guard."""
+
+        class AsyncCheckFuncCondition(FuncCondition):
+            async def check(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"), async_mode=False)
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go",
+            "start",
+            "finish",
+            AsyncCheckFuncCondition(lambda *args, **kwargs: False),
+        )
+
+        with pytest.raises(RuntimeError, match="explicit sync.*condition"):
+            builder.build()
+
     def test_auto_detects_declarative_async_handler_and_nested_guard(self):
         class DecoratedState(DeclarativeState):
             @transition("go", condition=NotCondition(ConfigurableAsyncCondition(False)))

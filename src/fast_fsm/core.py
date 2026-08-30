@@ -1679,8 +1679,12 @@ class StateMachine:
                     else (
                         isinstance(current, AsyncCondition)
                         or (
-                            isinstance(current, FuncCondition)
+                            type(current) is FuncCondition
                             and asyncio.iscoroutinefunction(current.func)
+                        )
+                        or (
+                            type(current) is not FuncCondition
+                            and asyncio.iscoroutinefunction(current.check)
                         )
                     )
                 )
