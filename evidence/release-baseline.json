@@ -41,7 +41,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.057384,
+      "elapsed_seconds": 0.058486,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -51,24 +51,24 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 697062.97,
+      "ops_per_second": 683923.87,
       "warmup_operations": 2000
     }
   },
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 94.71,
-      "total_percent": 96.29
+      "core_percent": 94.85,
+      "total_percent": 96.37
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1164,
+      "collected": 1175,
       "errors": 0,
       "failed": 0,
-      "passed": 1164,
+      "passed": 1175,
       "skipped": 0
     }
   },
@@ -177,13 +177,13 @@
       },
       {
         "classification": "slot-protected",
-        "line": 2962,
+        "line": 2979,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 2373,
+        "line": 2390,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
@@ -202,13 +202,13 @@
       },
       {
         "classification": "slot-protected",
-        "line": 2830,
+        "line": 2847,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 3040,
+        "line": 3057,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },

@@ -358,3 +358,55 @@ origin, Ruff format/lint, mypy, 1,164 tests, Sphinx HTML/doctests, and
 baseline freshness. Mypy passed without errors. Ty exited 0 with only its two
 pre-existing redundant-`Any`-cast advisory diagnostics at the dynamic
 awaitability boundaries.
+
+## Review-Fix Cycle 3 — Iteration 2 Evidence
+
+- Collected: 2026-08-30
+- Source commits: `b5910ab` (CR-01 callable classification), `85eb72e`
+  (CR-03 atomic builder mode publication), `26a8f35` / `7ce6c33` (CR-02
+  descriptor-anchored manifest publication and its structural guard),
+  `449750f` (WR-01 no-global-umask publication), and `fc53c36` (CR-01
+  compiled sync-boundary follow-through).
+- Context: fixes were committed in the isolated review-fix worktree. Every
+  import-bearing semantic command exported a new temporary repository; pure
+  contexts asserted `src/fast_fsm/core.py`, and compiled contexts built and
+  asserted `fast_fsm.core.cpython-312-darwin.so`. Checkout-native shadows were
+  neither imported nor removed.
+
+The manifest publisher now anchors parent traversal, validation, temporary
+creation, rename, and directory fsync to a single no-follow descriptor below
+the repository root. Platforms without the required descriptor operations fail
+closed. The adversarial parent-swap regression proves that publication remains
+in the already-opened in-repository directory and leaves the outside victim
+directory unchanged. New files keep their payload at mode `0600` while an
+exclusive descriptor-anchored empty probe captures the caller's normal output
+mode without mutating process-global `umask`; a synchronized concurrent-file
+test covers that safety property.
+
+The first baseline write correctly failed closed, without changing the tracked
+manifest, when total coverage measured 96.28% below the reviewed 96.29% floor.
+Additional CR-01 runtime coverage exercised the exact compiled callable and an
+overridden asynchronous `check()` through sync dispatch; the latter now stays
+at the dynamic mypyc boundary long enough to close and reject the coroutine.
+The final write and independent read-only check passed with 1,175/1,175 tests,
+96.37% total source coverage, and 94.85% `core.py` coverage.
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+task typecheck-ty
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite baseline-check
+```
+
+Fresh pure and compiled semantic matrices passed, as did the compiled
+trigger/history selection (3 tests). Mypy passed with no errors. Ty exited 0
+with four advisory redundant-`Any`-cast diagnostics at the intentional dynamic
+awaitability boundaries. The asserted-pure release gate components also passed
+from a retained fresh export: source-origin preflight, Ruff format/lint, mypy,
+the full test suite, Sphinx HTML, three doctests, and a direct
+`release_evidence.py evidence --check --build-wheel` freshness check. The
+environment's 30-second command host cut off the monolithic task wrapper, so
+the evidence records its independently successful component exits rather than
+claiming an unobserved wrapper exit code.
