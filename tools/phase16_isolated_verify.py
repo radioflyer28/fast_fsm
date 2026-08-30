@@ -444,8 +444,10 @@ def _manifest_destination_mode(destination: Path) -> int | None:
 def _repository_file_mode() -> int:
     """Return the normal repository-file mode derived from the active umask."""
     current_umask = os.umask(0)
-    os.umask(current_umask)
-    return 0o666 & ~current_umask
+    try:
+        return 0o666 & ~current_umask
+    finally:
+        os.umask(current_umask)
 
 
 def _export_manifest_atomically(

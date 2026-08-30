@@ -26,6 +26,7 @@ import ast
 import importlib.util
 import json
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -458,6 +459,43 @@ def test_phase16_baseline_write_replaces_a_raced_destination_link(
     assert not destination.is_symlink()
     assert destination.read_bytes() == generated.read_bytes()
     assert victim.read_bytes() == b"do not overwrite"
+
+
+def test_phase16_baseline_write_preserves_existing_regular_file_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomic publication retains the repository mode of an existing manifest."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.17, 94.51)
+    destination.chmod(0o640)
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o640
+    assert destination.read_bytes() == generated.read_bytes()
+
+
+def test_phase16_first_baseline_write_uses_umask_derived_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """New manifests use the normal repository-file mode, not tempfile 0600."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    current_umask = runner.os.umask(0)
+    runner.os.umask(current_umask)
+    expected_mode = 0o666 & ~current_umask
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert stat.S_IMODE(destination.stat().st_mode) == expected_mode
+    assert destination.read_bytes() == generated.read_bytes()
 
 
 def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(
