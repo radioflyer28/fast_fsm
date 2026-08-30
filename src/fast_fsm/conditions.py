@@ -34,7 +34,7 @@ class Condition(ABC):
         self.description = description or name
 
     @abstractmethod
-    def check(self, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> bool:
         """
         Check if the condition is met.
 
@@ -87,9 +87,9 @@ class FuncCondition(Condition):
         super().__init__(name, description)
         self.func = func
 
-    def check(self, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> bool:
         """Check condition by calling the wrapped function"""
-        return self.func(**kwargs)
+        return self.func(*args, **kwargs)
 
 
 class NegatedCondition(Condition):
@@ -116,9 +116,9 @@ class NegatedCondition(Condition):
         super().__init__(f"not({inner})", f"Negation of: {inner.description}")
         self._inner = inner
 
-    def check(self, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> bool:
         """Return the inverse of the wrapped condition's result."""
-        return not self._inner.check(**kwargs)
+        return not self._inner.check(*args, **kwargs)
 
 
 class AsyncCondition(Condition):
@@ -132,7 +132,7 @@ class AsyncCondition(Condition):
     __slots__ = ()
 
     @abstractmethod
-    async def check_async(self, **kwargs: Any) -> bool:
+    async def check_async(self, *args: Any, **kwargs: Any) -> bool:
         """
         Asynchronously check if the condition is satisfied.
 
@@ -144,7 +144,7 @@ class AsyncCondition(Condition):
         """
         pass  # pragma: no cover
 
-    def check(self, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> bool:
         """
         Synchronous wrapper that runs the async check.
 
@@ -155,4 +155,4 @@ class AsyncCondition(Condition):
             RuntimeError: If called from within a running event loop
                 (use ``await condition.check_async()`` instead).
         """
-        return asyncio.run(self.check_async(**kwargs))
+        return asyncio.run(self.check_async(*args, **kwargs))
