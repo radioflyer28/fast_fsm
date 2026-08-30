@@ -26,6 +26,9 @@ import ast
 from pathlib import Path
 
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
+PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
+SETUP_PY = Path(__file__).parent.parent / "setup.py"
+PHASE16_RUNNER = Path(__file__).parent.parent / "tools" / "phase16_isolated_verify.py"
 
 # Classes that inherit (transitively) from State or ABC but are intentionally
 # sealed — not designed for user subclassing.  Exempt from the decorator
@@ -166,3 +169,123 @@ def test_known_classes_have_decorator() -> None:
             f"This decorator is required for mypyc-compiled classes that users "
             f"subclass from interpreted Python. See ADR-003."
         )
+
+
+def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
+    """The private graph records must keep the compiled core's slot boundary."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    for name, fields in {
+        "_GraphTransition": {"from_state", "trigger", "to_state", "condition"},
+        "_GraphSnapshot": {
+            "name",
+            "initial_state",
+            "graph_version",
+            "states",
+            "transitions",
+        },
+        "_PreparedTransition": {"trigger", "sources", "target", "condition"},
+    }.items():
+        node = classes.get(name)
+        assert node is not None, f"{name} must remain in the compiled core unit"
+        decorator = next(
+            (
+                item
+                for item in node.decorator_list
+                if isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Name)
+                and item.func.id == "dataclass"
+            ),
+            None,
+        )
+        assert decorator is not None, f"{name} must be a dataclass"
+        keywords = {
+            keyword.arg: keyword.value.value
+            for keyword in decorator.keywords
+            if isinstance(keyword.value, ast.Constant)
+        }
+        assert keywords.get("frozen") is True
+        assert keywords.get("slots") is True
+        assert {
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        } == fields
+
+
+def test_state_machine_graph_version_remains_in_slots() -> None:
+    """Graph topology versioning must not add a dynamic instance dictionary."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    state_machine = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
+    )
+    slots = next(
+        node.value
+        for node in state_machine.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(slots, ast.Tuple)
+    assert "_graph_version" in {
+        item.value for item in slots.elts if isinstance(item, ast.Constant)
+    }
+
+
+def test_private_graph_records_are_not_public_exports() -> None:
+    """The Phase 16 internal graph contract must not widen ``fast_fsm.__all__``."""
+    tree = ast.parse(
+        PACKAGE_INIT.read_text(encoding="utf-8"), filename=str(PACKAGE_INIT)
+    )
+    exported = next(
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(exported, ast.List)
+    names = {item.value for item in exported.elts if isinstance(item, ast.Constant)}
+    assert not {"_GraphTransition", "_GraphSnapshot", "_PreparedTransition"} & names
+
+
+def test_setup_keeps_core_as_the_only_mypyc_source() -> None:
+    """Selective compilation remains core.py-only even as private seams grow."""
+    tree = ast.parse(SETUP_PY.read_text(encoding="utf-8"), filename=str(SETUP_PY))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "mypycify"
+    ]
+    assert len(calls) == 1
+    assert isinstance(calls[0].args[0], ast.List)
+    assert [item.value for item in calls[0].args[0].elts] == ["src/fast_fsm/core.py"]
+
+
+def test_phase16_runner_has_fail_closed_isolation_guards() -> None:
+    """The helper keeps its explicit-overlay and asserted-origin safety seams."""
+    source = PHASE16_RUNNER.read_text(encoding="utf-8")
+    for required in (
+        "git",
+        "archive",
+        "_assert_relative_include",
+        "_overlay",
+        "_assert_origin",
+        "FAST_FSM_BUILD_MODE",
+        "_native_artifacts",
+        "_validate_child_command",
+        "baseline-write",
+        "manifest-output",
+        "os.replace",
+    ):
+        assert required in source

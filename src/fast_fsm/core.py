@@ -729,7 +729,7 @@ class StateMachine:
             transitions,
         )
 
-    def _resolve_canonical_state(self, state: Union[str, State], *, role: str) -> State:
+    def _resolve_canonical_state(self, state: Any, *, role: str) -> State:
         """Resolve a transition endpoint to its exact registered State object."""
         if isinstance(state, str):
             canonical = self._states.get(state)
@@ -763,7 +763,7 @@ class StateMachine:
         unless: Optional[Union[Condition, Callable[..., bool]]] = None,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
-        raw_sources: List[Union[str, State]]
+        raw_sources: List[Any]
         if isinstance(from_state, list):
             raw_sources = list(from_state)
         else:

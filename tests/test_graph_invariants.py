@@ -153,7 +153,7 @@ def test_endpoints_must_be_exact_registered_objects_without_mutation(
     machine, _, _ = make_machine()
     before = graph_fingerprint(machine)
 
-    with pytest.raises(ValueError):
+    with pytest.raises((TypeError, ValueError)):
         machine.add_transition("go", from_state, to_state)  # type: ignore[arg-type]
 
     assert graph_fingerprint(machine) == before

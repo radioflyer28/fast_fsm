@@ -34,6 +34,7 @@ PHASE16_INVENTORY = (
     "tests/test_condition_templates.py",
     "tests/test_advanced_functionality.py",
     "tests/test_mypyc_guard.py",
+    "tests/test_performance_benchmarks.py",
     ".specify/memory/spr-core-api.md",
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
 )
@@ -151,6 +152,7 @@ def _prepare_tree(
     env = os.environ.copy()
     env["FAST_FSM_BUILD_MODE"] = build_mode
     env.pop("PYTHONPATH", None)
+    env.pop("VIRTUAL_ENV", None)
     _export_head(source_tree, env)
     overlaid = _overlay(includes, source_tree)
     if build_mode == "pure":
@@ -201,6 +203,32 @@ def _run_suite_command(
         tempdir.cleanup()
 
 
+def _manifest_output(value: str) -> Path:
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise VerificationError(
+            f"manifest output must be repository-relative: {value!r}"
+        )
+    destination = (ROOT / candidate).resolve()
+    try:
+        destination.relative_to(ROOT)
+    except ValueError as exc:
+        raise VerificationError(
+            f"manifest output escapes repository root: {value!r}"
+        ) from exc
+    return destination
+
+
+def _export_manifest_atomically(generated: Path, output: str) -> None:
+    if not generated.is_file():
+        raise VerificationError("baseline-write did not generate release-baseline.json")
+    destination = _manifest_output(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.phase16-tmp")
+    shutil.copyfile(generated, temporary)
+    os.replace(temporary, destination)
+
+
 def _suite_mode(args: argparse.Namespace) -> int:
     if args.suite == "graph":
         command = (
@@ -231,10 +259,29 @@ def _suite_mode(args: argparse.Namespace) -> int:
             command=("task", "release-baseline-check"),
         )
     if args.suite == "baseline-write":
-        raise VerificationError(
-            "baseline-write is only supported through task mode with an explicit "
-            "destination; review and commit its generated manifest separately"
+        if args.manifest_output is None:
+            raise VerificationError(
+                "baseline-write requires --manifest-output REPOSITORY_RELATIVE_PATH"
+            )
+        tempdir, source_tree, env, _ = _prepare_tree(
+            build_mode="pure", includes=("tools/phase16_isolated_verify.py",)
         )
+        try:
+            status = _run(
+                ("task", "release-baseline-write"),
+                cwd=source_tree,
+                env=env,
+                check=False,
+            ).returncode
+            if status:
+                return status
+            _export_manifest_atomically(
+                source_tree / "evidence" / "release-baseline.json",
+                args.manifest_output,
+            )
+            return 0
+        finally:
+            tempdir.cleanup()
     if args.suite == "phase16":
         semantic = (
             "uv",
@@ -258,6 +305,23 @@ def _suite_mode(args: argparse.Namespace) -> int:
             )
             if status:
                 return status
+        performance = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_performance_benchmarks.py",
+            "-x",
+            "-q",
+            "-k",
+            "trigger or history",
+        )
+        status = _run_suite_command(
+            build_mode="compiled",
+            includes=("tools/phase16_isolated_verify.py", *PHASE16_INVENTORY),
+            command=performance,
+        )
+        if status:
+            return status
         return _run_suite_command(
             build_mode="pure",
             includes=("tools/phase16_isolated_verify.py", *PHASE16_INVENTORY),
@@ -271,6 +335,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("task",), default="task")
     parser.add_argument("--build-mode", choices=("pure", "compiled"))
     parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--manifest-output")
     parser.add_argument(
         "--suite", choices=("graph", "baseline-write", "baseline-check", "phase16")
     )
@@ -283,7 +348,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command[:1] == ["--"]:
         args.command = args.command[1:]
     if args.suite is not None:
-        if args.build_mode is not None or args.include or args.command:
+        if (
+            args.build_mode is not None
+            or args.include
+            or args.command
+            or (args.manifest_output is not None and args.suite != "baseline-write")
+        ):
             raise VerificationError("suite mode does not accept task-mode arguments")
         return _suite_mode(args)
     if args.build_mode is None:
