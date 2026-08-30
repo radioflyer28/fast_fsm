@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -211,18 +212,20 @@ def _run_suite_command(
 
 def _manifest_output(value: str) -> Path:
     candidate = Path(value)
-    if candidate.is_absolute() or ".." in candidate.parts:
+    if candidate.is_absolute() or ".." in candidate.parts or not candidate.name:
         raise VerificationError(
             f"manifest output must be repository-relative: {value!r}"
         )
-    destination = (ROOT / candidate).resolve()
+    # Resolve only the parent. Resolving the complete destination would follow
+    # a final symlink and make an atomic replacement overwrite its target.
+    parent = (ROOT / candidate).parent.resolve()
     try:
-        destination.relative_to(ROOT)
+        parent.relative_to(ROOT)
     except ValueError as exc:
         raise VerificationError(
             f"manifest output escapes repository root: {value!r}"
         ) from exc
-    return destination
+    return parent / candidate.name
 
 
 def _reject_json_constant(value: str) -> object:
@@ -423,6 +426,28 @@ def _coverage_floor_migration(value: str) -> Path:
     return migration
 
 
+def _manifest_destination_mode(destination: Path) -> int | None:
+    """Return an existing regular file's mode without following leaf links."""
+    try:
+        existing = destination.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(existing.st_mode):
+        raise VerificationError(f"manifest output must not be a symlink: {destination}")
+    if not stat.S_ISREG(existing.st_mode):
+        raise VerificationError(
+            f"manifest output must be a regular file: {destination}"
+        )
+    return stat.S_IMODE(existing.st_mode)
+
+
+def _repository_file_mode() -> int:
+    """Return the normal repository-file mode derived from the active umask."""
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    return 0o666 & ~current_umask
+
+
 def _export_manifest_atomically(
     generated: Path, output: str, migration_path: Path | None = None
 ) -> None:
@@ -430,8 +455,12 @@ def _export_manifest_atomically(
     if not generated.is_file():
         raise VerificationError("baseline-write did not generate release-baseline.json")
     destination = _manifest_output(output)
+    existing_mode = _manifest_destination_mode(destination)
     _validate_coverage_floor(destination, generated, migration_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    intended_mode = (
+        existing_mode if existing_mode is not None else _repository_file_mode()
+    )
     temporary: Path | None = None
     try:
         # NamedTemporaryFile uses an unpredictable O_EXCL name in the resolved
@@ -447,8 +476,12 @@ def _export_manifest_atomically(
             temporary = Path(temporary_file.name)
             with generated.open("rb") as generated_file:
                 shutil.copyfileobj(generated_file, temporary_file)
+            os.fchmod(temporary_file.fileno(), intended_mode)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
+        # ``os.replace`` never follows a final destination symlink. If another
+        # process races the checked leaf into a link, this replaces the link
+        # itself rather than modifying its target.
         os.replace(temporary, destination)
         temporary = None
     finally:

@@ -401,6 +401,65 @@ def test_phase16_baseline_write_does_not_follow_legacy_temp_symlink(
     assert legacy_temporary.resolve() == victim
 
 
+@pytest.mark.parametrize("victim_location", ("inside", "outside"))
+def test_phase16_baseline_write_rejects_destination_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, victim_location: str
+) -> None:
+    """A requested output link is rejected without touching either victim."""
+    runner = _load_phase16_runner()
+    source_root = tmp_path / "repo"
+    evidence_dir = source_root / "evidence"
+    evidence_dir.mkdir(parents=True)
+    destination = evidence_dir / "release-baseline.json"
+    victim = (
+        source_root / "victim.json"
+        if victim_location == "inside"
+        else tmp_path / "outside-victim.json"
+    )
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    victim.write_bytes(b"do not overwrite")
+    destination.symlink_to(victim)
+    monkeypatch.setattr(runner, "ROOT", source_root)
+
+    with pytest.raises(runner.VerificationError, match="must not be a symlink"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.is_symlink()
+    assert victim.read_bytes() == b"do not overwrite"
+
+
+def test_phase16_baseline_write_replaces_a_raced_destination_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A link swapped in after lstat is replaced, never followed to its victim."""
+    runner = _load_phase16_runner()
+    source_root = tmp_path / "repo"
+    evidence_dir = source_root / "evidence"
+    evidence_dir.mkdir(parents=True)
+    destination = evidence_dir / "release-baseline.json"
+    victim = source_root / "victim.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    victim.write_bytes(b"do not overwrite")
+    monkeypatch.setattr(runner, "ROOT", source_root)
+    original_replace = runner.os.replace
+
+    def replace_after_leaf_swap(source: Path, target: Path) -> None:
+        target.unlink()
+        target.symlink_to(victim)
+        original_replace(source, target)
+
+    monkeypatch.setattr(runner.os, "replace", replace_after_leaf_swap)
+
+    runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert not destination.is_symlink()
+    assert destination.read_bytes() == generated.read_bytes()
+    assert victim.read_bytes() == b"do not overwrite"
+
+
 def test_phase16_baseline_write_cleans_fresh_temp_after_replace_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
