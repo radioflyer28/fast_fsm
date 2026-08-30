@@ -1,6 +1,6 @@
 ---
 phase: 16
-fixed_at: 2026-08-30T15:25:00Z
+fixed_at: 2026-08-30T17:10:00Z
 review_path: .planning/phases/16-canonical-graph-dispatch-invariants/16-REVIEW.md
 iteration: 2
 findings_in_scope: 3
@@ -11,9 +11,9 @@ status: all_fixed
 
 # Phase 16: Code Review Fix Report
 
-**Fixed at:** 2026-08-30T15:25:00Z  
-**Source review:** `.planning/phases/16-canonical-graph-dispatch-invariants/16-REVIEW.md`  
-**Iteration:** 2
+**Fixed at:** 2026-08-30T17:10:00Z
+**Source review:** `.planning/phases/16-canonical-graph-dispatch-invariants/16-REVIEW.md`
+**Iteration:** cycle 2, iteration 2
 
 **Summary:**
 
@@ -23,58 +23,74 @@ status: all_fixed
 
 ## Fixed Issues
 
-### CR-01: Shared declarative dispatch bypasses subclass transition policy
+### CR-01: Async evaluation bypasses `FuncCondition` subclass overrides
 
-**Files modified:** `src/fast_fsm/core.py`, `tests/test_builder.py`  
-**Commit:** `d63e6c5`  
-**Applied fix:** Routed sync and async machine dispatch through the effective
-state policy hook after one prepared decorator-guard evaluation. The private,
-task-scoped marker suppresses only the base declarative duplicate guard, so
-rejecting, raising, and `super()` overrides run exactly once.
+**Status:** Fixed: requires human verification
+**Files modified:** `src/fast_fsm/core.py`, `tests/test_builder.py`, `tests/test_async.py`
+**Commit:** `0b92c25`
+**Applied fix:** Retained the direct wrapped-callable path only for the exact
+built-in `FuncCondition`. Public subclasses now invoke their effective
+`check()` override through the dynamic boundary and await an awaitable result.
+The pure and compiled regressions cover direct `AsyncDeclarativeState` policy
+and ordinary machine dispatch where the override rejects, raises, or returns
+an awaitable while the stored callable would otherwise accept.
 
-### CR-02: Builder cycle validation is still non-atomic and can be skipped
+### CR-02: Predictable atomic-write temporary follows symlinks and overwrites targets
 
-**Files modified:** `src/fast_fsm/core.py`, `tests/test_builder.py`  
-**Commit:** `8c804ce`  
-**Applied fix:** Separated complete graph validation from async classification.
-All auto and explicit builder modes now validate before state/transition staging,
-and preflight scans every handler/guard rather than returning after the first
-async requirement.
+**Status:** Fixed: requires human verification
+**Files modified:** `tools/phase16_isolated_verify.py`, `tests/test_mypyc_guard.py`
+**Commit:** `cdc8974`
+**Applied fix:** Replaced the predictable sibling filename with an
+unpredictable exclusive same-directory `NamedTemporaryFile`, copied through
+the opened descriptor, flushed and fsynced it, atomically replaced the
+destination, and cleaned the fresh temporary file on every failure path. The
+adversarial regression leaves the legacy symlink and its outside victim
+untouched; a replace-failure regression proves no temporary remains.
 
-### CR-03: Async callable decorator guards are never awaited and fail open
+### CR-03: Non-finite coverage values bypass the regression floor
 
-**Files modified:** `src/fast_fsm/core.py`, `tests/test_builder.py`  
-**Commit:** `c2d0c22`  
-**Applied fix:** Classified coroutine-function decorator guards, awaited
-callable results in async dispatch, and deterministically rejected them in
-sync dispatch without leaking an unawaited coroutine. Native-compatible
-condition-result typing keeps the same semantics in mypyc builds.
+**Status:** Fixed: requires human verification
+**Files modified:** `tools/phase16_isolated_verify.py`, `tests/test_mypyc_guard.py`
+**Commit:** `c68bab2`
+**Applied fix:** Coverage parsing now rejects booleans, non-numbers,
+`NaN`, both infinities, and raw values below 0 or above 100 before rounding or
+comparison. The exact validation is shared by existing, generated, and
+explicit migration manifests. Parameterized regressions preserve destination
+bytes for every rejected value in each path.
 
 ## Verification
 
-All verification ran in the isolated review-fix worktree. Origin-sensitive
-commands exported fresh temporary repositories and asserted `src/fast_fsm/core.py`
-for pure mode or a newly built native `fast_fsm.core` extension for compiled
-mode; developer native shadows were neither imported nor removed.
+Verification began in the isolated review-fix worktree and all import-bearing
+checks then ran from fresh temporary `HEAD` exports through
+`tools/phase16_isolated_verify.py`. Pure contexts asserted
+`src/fast_fsm/core.py`; compiled contexts built and asserted a native
+`fast_fsm.core` extension. No developer-checkout native shadow was imported,
+deleted, or used as evidence.
 
-- Focused combined CR-01/CR-03 regressions: 16 passed in both pure and compiled
-  contexts, covering rejecting, raising, and `super()` policy overrides plus
-  false/true/raising async callable guards with exactly-once/no-warning
-  assertions.
-- CR-02 regressions: 30 pure mode/shape cases passed, covering all explicit and
-  auto modes, four cycle shapes, unchanged staging, mixed ordering, and build
-  preflight.
-- `uv run python tools/phase16_isolated_verify.py --suite baseline-write --manifest-output evidence/release-baseline.json`
-  and a separate `--suite baseline-check` both passed: 1,053/1,053 pure tests,
-  95.68% total coverage, and 93.75% `core.py` coverage.
-- `uv run python tools/phase16_isolated_verify.py --suite phase16` passed the
-  pure and compiled semantic matrices, compiled performance/history checks,
-  and the asserted-pure release gate (source-origin check, Ruff, mypy, tests,
-  Sphinx HTML/doctests, and baseline freshness).
-- `task typecheck-mypy` and advisory `task typecheck-ty` both passed.
+- Tier 1 rereads, `git diff --check`, Ruff format/lint, and Python AST parsing
+  passed for every modified Python file.
+- CR-01 focused pure and compiled contexts each passed 7 regressions.
+- CR-02 focused pure and compiled contexts each passed 4 regressions,
+  including the pre-positioned-symlink victim and failure cleanup checks.
+- CR-03 focused pure and compiled contexts each passed 59 regressions covering
+  `NaN`, positive/negative infinity, booleans, non-numbers, and out-of-range
+  existing/generated/migration percentages with destination-byte preservation.
+- The pre-refresh full Phase 16 semantic suite passed in asserted pure and
+  compiled contexts; the compiled trigger/history performance selection passed
+  3 tests and retained its existing 200,000 ops/s floor. Its first release
+  check stopped only because the previous manifest was stale after the new
+  tests increased observations to 1,129 passing tests and 96.21% / 94.57%
+  total / `core.py` coverage.
+- After the semantic and type gates passed, the isolated baseline write and
+  independent baseline check passed with 1,129/1,129 tests, 96.21% total
+  coverage, and 94.57% `core.py` coverage. The evidence commit is `9f4c096`.
+- The final isolated pure release gate passed source-origin preflight, Ruff,
+  mypy, all tests, Sphinx HTML/doctests, and read-only baseline freshness.
+  `task typecheck-mypy` passed; advisory `task typecheck-ty` exited 0 with two
+  non-blocking redundant-`Any`-cast diagnostics at dynamic mypyc boundaries.
 
 ---
 
-_Fixed: 2026-08-30T15:25:00Z_  
-_Fixer: gsd-code-fixer_  
-_Iteration: 2_
+_Fixed: 2026-08-30T17:10:00Z_
+_Fixer: gsd-code-fixer_
+_Iteration: cycle 2, iteration 2_
