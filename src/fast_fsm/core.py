@@ -1347,7 +1347,8 @@ class StateMachine:
 
         return safe_kwargs
 
-    def _condition_children(self, condition: Condition) -> Tuple[Condition, ...]:
+    @staticmethod
+    def _condition_children(condition: Condition) -> Tuple[Condition, ...]:
         """Return only the supported private built-in wrapper child edges."""
         from .condition_templates import AndCondition, NotCondition, OrCondition
 
@@ -1362,7 +1363,8 @@ class StateMachine:
             return (cast(NotCondition, condition).condition,)
         return ()
 
-    def _contains_async_requirement(self, condition: Condition) -> bool:
+    @staticmethod
+    def _contains_async_requirement(condition: Condition) -> bool:
         """Detect nested async leaves while rejecting active wrapper cycles."""
         active: set[int] = set()
         completed: Dict[int, bool] = {}
@@ -1375,7 +1377,7 @@ class StateMachine:
                 return completed[current_id]
             active.add(current_id)
             try:
-                children = self._condition_children(current)
+                children = StateMachine._condition_children(current)
                 if children:
                     result = False
                     for child in children:
@@ -2668,8 +2670,11 @@ class FSMBuilder:
             if isinstance(item, AsyncDeclarativeState):
                 return AsyncStateMachine
 
-            # Check for AsyncCondition
-            if isinstance(item, AsyncCondition):
+            # Check direct and nested built-in condition wrappers through the
+            # canonical graph classifier used by runtime dispatch.
+            if isinstance(item, Condition) and StateMachine._contains_async_requirement(
+                item
+            ):
                 return AsyncStateMachine
 
             # Check DeclarativeState for async handlers
@@ -2678,7 +2683,9 @@ class FSMBuilder:
                     if handler_info.get("is_async", False):
                         return AsyncStateMachine
                     condition = handler_info.get("condition")
-                    if isinstance(condition, AsyncCondition):
+                    if isinstance(
+                        condition, Condition
+                    ) and StateMachine._contains_async_requirement(condition):
                         return AsyncStateMachine
 
         return StateMachine
@@ -2708,14 +2715,6 @@ class FSMBuilder:
                 self._logger.debug(
                     "Builder: Upgraded to async mode due to state '%s'", state.name
                 )
-        elif not self._auto_detect and self._machine_type == StateMachine:
-            # In explicit sync mode, warn about async components
-            if isinstance(state, AsyncDeclarativeState):
-                self._logger.warning(
-                    "Builder: AsyncDeclarativeState '%s' in explicit sync mode may have limited functionality",
-                    state.name,
-                )
-
         return self
 
     def add_transition(
@@ -2765,14 +2764,6 @@ class FSMBuilder:
                     "Builder: Upgraded to async mode due to async condition '%s'",
                     getattr(condition, "name", str(condition)),
                 )
-        elif condition and not self._auto_detect and self._machine_type == StateMachine:
-            # In explicit sync mode, warn about async conditions
-            if isinstance(condition, AsyncCondition):
-                self._logger.warning(
-                    "Builder: AsyncCondition '%s' in explicit sync mode will be rejected",
-                    getattr(condition, "name", str(condition)),
-                )
-
         return self
 
     def on_enter(self, state_name: str, callback: Any) -> "FSMBuilder":
@@ -2861,6 +2852,7 @@ class FSMBuilder:
     def force_async(self) -> "FSMBuilder":
         """Force the builder to create an AsyncStateMachine"""
         self._ensure_mutable()
+        self._auto_detect = False
         self._machine_type = AsyncStateMachine
         self._logger.debug("Builder: Forced to async mode")
         return self
@@ -2868,29 +2860,54 @@ class FSMBuilder:
     def force_sync(self) -> "FSMBuilder":
         """Force the builder to create a regular StateMachine"""
         self._ensure_mutable()
-        # Validate that sync mode is compatible
-        for state in self._states.values():
-            if isinstance(state, AsyncDeclarativeState):
-                self._logger.warning(
-                    "Builder: AsyncDeclarativeState '%s' in sync mode may have limited functionality",
-                    state.name,
-                )
-
-        for _, _, _, condition in self._transitions:
-            if isinstance(condition, AsyncCondition):
-                self._logger.warning(
-                    "Builder: AsyncCondition '%s' in sync mode will be rejected",
-                    getattr(condition, "name", str(condition)),
-                )
-
+        self._auto_detect = False
         self._machine_type = StateMachine
         self._logger.debug("Builder: Forced to sync mode")
         return self
+
+    def _preflight_async_requirements(self) -> Optional[str]:
+        """Describe the first staged async requirement before candidate allocation."""
+        for state in self._states.values():
+            if isinstance(state, AsyncDeclarativeState):
+                return f"AsyncDeclarativeState '{state.name}'"
+            if isinstance(state, DeclarativeState):
+                for trigger, handler_info in state._handlers.items():
+                    if handler_info.get("is_async", False):
+                        return f"declarative handler for trigger '{trigger}'"
+                    condition = handler_info.get("condition")
+                    if isinstance(
+                        condition, Condition
+                    ) and StateMachine._contains_async_requirement(condition):
+                        return f"declarative condition for trigger '{trigger}'"
+
+        for trigger, _, _, condition in self._transitions:
+            if isinstance(
+                condition, Condition
+            ) and StateMachine._contains_async_requirement(condition):
+                return f"transition '{trigger}' condition"
+
+        if self._enter_async_callbacks:
+            state_name, _ = self._enter_async_callbacks[0]
+            return f"on_enter_async callback for '{state_name}'"
+        if self._exit_async_callbacks:
+            state_name, _ = self._exit_async_callbacks[0]
+            return f"on_exit_async callback for '{state_name}'"
+        return None
 
     def build(self) -> Union[StateMachine, AsyncStateMachine]:
         """Build and return the final state machine"""
         if self._machine is not None:
             return self._machine
+
+        async_requirement = self._preflight_async_requirements()
+        if async_requirement is not None:
+            if self._auto_detect:
+                self._machine_type = AsyncStateMachine
+            elif self._machine_type == StateMachine:
+                raise RuntimeError(
+                    "Cannot build explicit sync FSM with async requirement in "
+                    f"{async_requirement}"
+                )
 
         # Keep all construction local until every registration succeeds. A failed
         # candidate must not freeze staging or become observable through _machine.

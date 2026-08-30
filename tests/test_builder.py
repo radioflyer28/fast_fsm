@@ -1266,10 +1266,10 @@ class TestFSMBuilderAsyncPreflight:
 
     def test_wrapper_cycle_rejects_without_freezing_staging(self):
         cycle = NotCondition(AlwaysTrue())
-        cycle.condition = cycle
         builder = FSMBuilder(State("start"))
         builder.add_state(State("finish"))
         builder.add_transition("go", "start", "finish", cycle)
+        cycle.condition = cycle
         before = builder_staging_fingerprint(builder)
 
         with pytest.raises(ValueError, match="cycle"):
