@@ -36,6 +36,9 @@ PHASE16_INVENTORY = (
     "tests/test_mypyc_guard.py",
     "tests/test_performance_benchmarks.py",
     ".specify/memory/spr-core-api.md",
+    "docs/dev/architecture.md",
+    "docs/dev/testing.md",
+    "evidence/release-baseline.json",
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
 )
 
@@ -264,7 +267,8 @@ def _suite_mode(args: argparse.Namespace) -> int:
                 "baseline-write requires --manifest-output REPOSITORY_RELATIVE_PATH"
             )
         tempdir, source_tree, env, _ = _prepare_tree(
-            build_mode="pure", includes=("tools/phase16_isolated_verify.py",)
+            build_mode="pure",
+            includes=("tools/phase16_isolated_verify.py", *PHASE16_INVENTORY),
         )
         try:
             status = _run(
