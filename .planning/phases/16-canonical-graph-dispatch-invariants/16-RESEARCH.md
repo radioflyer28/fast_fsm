@@ -599,24 +599,24 @@ For ASVS 5 taxonomy, the materially relevant themes are validation/business logi
 | A6 | Declarative from/to metadata participates in ordinary handler matching. | Declarative | Trigger-only matching could invoke a wrong handler if metadata and machine transition diverge. |
 | A7 | No new external package is required. | Standard Stack | A newly introduced dependency would require legitimacy audit and violate the current recommendation. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **How deep is snapshot immutability?**
    - What we know: D-06 requires canonical state objects and guards and says returned snapshot contents cannot be mutated through returned references. [VERIFIED: .planning/phases/16-canonical-graph-dispatch-invariants/16-CONTEXT.md:27-31,51-55]
    - What's unclear: User-extensible `State`/`Condition` objects are themselves mutable, so literal deep immutability is incompatible with returning canonical references. [ASSUMED]
-   - Recommendation: Lock structural immutability of snapshot records/collections and explicitly exclude mutation of the referenced runtime objects from the snapshot contract. [ASSUMED]
+   - **Selected answer:** Lock structural immutability of snapshot records/collections and explicitly exclude mutation of the referenced runtime objects from the snapshot contract. Canonical `State` and guard references remain identity-bearing; callers cannot replace snapshot fields or mutate its tuple collections. [ASSUMED]
 
 2. **What is the exact cycle failure contract?**
    - What we know: traversal must have identity-based cycle protection. [VERIFIED: .planning/phases/16-canonical-graph-dispatch-invariants/16-CONTEXT.md:33-36]
    - What's unclear: Context does not prescribe accept/ignore/reject behavior for an actual cyclic built-in wrapper graph. [ASSUMED]
-   - Recommendation: Reject at registration/build with `ValueError`; never silently classify it as synchronous. [ASSUMED]
+   - **Selected answer:** Reject an active supported-wrapper cycle at registration/build/evaluation with `ValueError`; never silently classify it as synchronous. Shared acyclic DAG references remain valid. [ASSUMED]
 
 3. **Does clone preserve graph version or begin a new version lineage?**
    - What we know: Version is per-machine and clone currently reproduces topology but disables history. [VERIFIED: .planning/phases/16-canonical-graph-dispatch-invariants/16-CONTEXT.md:27-31; src/fast_fsm/core.py:1264-1315]
    - What's unclear: Context gives discretion over starting value but does not mention clone lineage. [ASSUMED]
-   - Recommendation: Copy the source version because the clone's initial snapshot describes the same topology; later versions diverge independently. [ASSUMED]
+   - **Selected answer:** Copy the source graph version because the clone's initial snapshot describes the same topology; subsequent topology changes advance independent per-machine lineages. [ASSUMED]
 
-These are narrow planner decisions, not blockers; the recommendations are consistent with the locked outcomes. [ASSUMED]
+These planner decisions are resolved and are consistent with the locked outcomes. [ASSUMED]
 
 ## Sources
 
