@@ -95,6 +95,35 @@ class ExplodingAsyncCondition(AsyncCondition):
         raise RuntimeError("async boom")
 
 
+class DeclarativeInvocationCounter(DeclarativeState):
+    """Test-only declarative state that records ordinary-dispatch invocations."""
+
+    def __init__(self, name: str = "source", result=None):
+        super().__init__(name)
+        self.invocations = 0
+        self._result = result
+
+    @transition("advance", from_state="source", to_state="target")
+    def handle_advance(self, *args, **kwargs):
+        self.invocations += 1
+        if self._result == "raise":
+            raise RuntimeError("phase 17 owns handler failure semantics")
+        return self._result
+
+    @transition("前進⚡", from_state="source", to_state="target")
+    def handle_unicode_advance(self, *args, **kwargs):
+        self.invocations += 1
+        return self._result
+
+
+def _invoke_and_ignore_phase17_outcome(invoker):
+    """Exercise a handler without fixing Phase 17 lifecycle outcomes in this phase."""
+    try:
+        invoker()
+    except Exception:
+        pass
+
+
 def _machine_topology_fingerprint(machine):
     """Capture the identity-bearing topology that a builder publishes."""
     return (
@@ -360,6 +389,90 @@ class TestDeclarativeState:
         s = MyState("s1")
         assert not s.can_transition("go", State("target"))
         assert s.can_transition("go", State("target"), ok=True)
+
+
+class TestOrdinaryDeclarativeDispatch:
+    """Ordinary machine dispatch shares one declarative invocation boundary."""
+
+    @staticmethod
+    def _machine(source, target_name="target"):
+        target = State(target_name)
+        fsm = StateMachine(source, name="ordinary_declarative")
+        fsm.add_state(target)
+        fsm.add_transition("advance", source, target)
+        return fsm
+
+    def test_declarative_ordinary_exactly_once(self):
+        source = DeclarativeInvocationCounter(result=None)
+        fsm = self._machine(source)
+
+        result = fsm.trigger("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.parametrize("handler_result", [None, True, TransitionResult(True)])
+    def test_declarative_ordinary_success_normalization_parity(self, handler_result):
+        source = DeclarativeInvocationCounter(result=handler_result)
+        fsm = self._machine(source)
+
+        result = fsm.trigger("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    def test_declarative_ordinary_matches_unicode_canonical_metadata(self):
+        source = DeclarativeInvocationCounter(result=True)
+        target = State("target")
+        fsm = StateMachine(source, name="unicode_declarative")
+        fsm.add_state(target)
+        fsm.add_transition("前進⚡", source, target)
+
+        result = fsm.trigger("前進⚡")
+
+        assert result.success
+        assert source.invocations == 1
+
+    def test_declarative_ordinary_ignores_nonmatching_source_metadata(self):
+        source = DeclarativeInvocationCounter(name="wrong_source", result=True)
+        fsm = self._machine(source)
+
+        fsm.trigger("advance")
+
+        assert source.invocations == 0
+
+    def test_declarative_ordinary_ignores_nonmatching_target_metadata(self):
+        source = DeclarativeInvocationCounter(result=True)
+        fsm = self._machine(source, target_name="wrong_target")
+
+        fsm.trigger("advance")
+
+        assert source.invocations == 0
+
+    def test_declarative_ordinary_unknown_trigger_has_no_side_effect(self):
+        source = DeclarativeInvocationCounter(result=True)
+        fsm = self._machine(source)
+
+        fsm.trigger("missing")
+
+        assert source.invocations == 0
+
+    def test_declarative_handle_event_uses_the_same_handler_boundary(self):
+        source = DeclarativeInvocationCounter(result=True)
+
+        result = source.handle_event("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.parametrize("handler_result", [False, "invalid", "raise"])
+    def test_declarative_ordinary_invocation_only_for_phase17_outcomes(self, handler_result):
+        source = DeclarativeInvocationCounter(result=handler_result)
+        fsm = self._machine(source)
+
+        _invoke_and_ignore_phase17_outcome(lambda: fsm.trigger("advance"))
+
+        assert source.invocations == 1
 
 
 # ---------------------------------------------------------------------------

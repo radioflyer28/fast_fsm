@@ -10,11 +10,15 @@ import pytest
 from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
 from fast_fsm.conditions import AsyncCondition, Condition, NegatedCondition
 from fast_fsm.core import (
+    AsyncDeclarativeState,
     AsyncStateMachine,
     CompiledFuncCondition,
+    DeclarativeState,
     FSMBuilder,
     State,
     StateMachine,
+    TransitionResult,
+    transition,
 )
 
 
@@ -38,6 +42,35 @@ class RejectingState(State):
 
     def can_transition(self, trigger, to_state, *args, **kwargs):
         return False
+
+
+class AsyncDeclarativeInvocationCounter(AsyncDeclarativeState):
+    """Test-only async declarative state that records ordinary dispatch."""
+
+    def __init__(self, name: str = "source", result=None):
+        super().__init__(name)
+        self.invocations = 0
+        self._result = result
+
+    @transition("advance", from_state="source", to_state="target")
+    async def handle_advance(self, *args, **kwargs):
+        self.invocations += 1
+        if self._result == "raise":
+            raise RuntimeError("phase 17 owns handler failure semantics")
+        return self._result
+
+    @transition("前進⚡", from_state="source", to_state="target")
+    async def handle_unicode_advance(self, *args, **kwargs):
+        self.invocations += 1
+        return self._result
+
+
+async def _invoke_and_ignore_phase17_outcome(invoker):
+    """Exercise a handler without fixing Phase 17 lifecycle outcomes in this phase."""
+    try:
+        await invoker()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +795,102 @@ class TestAsyncPerStateCallbacks:
         # Original has no async enter callback for running
         await fsm.trigger_async("start")
         assert log == []  # not fired on original
+
+
+class TestAsyncOrdinaryDeclarativeDispatch:
+    """Async ordinary dispatch shares the declarative invocation boundary."""
+
+    @staticmethod
+    def _machine(source, target_name="target"):
+        target = State(target_name)
+        fsm = AsyncStateMachine(source, name="async_ordinary_declarative")
+        fsm.add_state(target)
+        fsm.add_transition("advance", source, target)
+        return fsm
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_ordinary_exactly_once(self):
+        source = AsyncDeclarativeInvocationCounter(result=None)
+        fsm = self._machine(source)
+
+        result = await fsm.trigger_async("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_result", [None, True, TransitionResult(True)])
+    async def test_async_declarative_ordinary_success_normalization_parity(
+        self, handler_result
+    ):
+        source = AsyncDeclarativeInvocationCounter(result=handler_result)
+        fsm = self._machine(source)
+
+        result = await fsm.trigger_async("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_ordinary_matches_unicode_canonical_metadata(self):
+        source = AsyncDeclarativeInvocationCounter(result=True)
+        target = State("target")
+        fsm = AsyncStateMachine(source, name="async_unicode_declarative")
+        fsm.add_state(target)
+        fsm.add_transition("前進⚡", source, target)
+
+        result = await fsm.trigger_async("前進⚡")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_ordinary_ignores_nonmatching_source_metadata(self):
+        source = AsyncDeclarativeInvocationCounter(name="wrong_source", result=True)
+        fsm = self._machine(source)
+
+        await fsm.trigger_async("advance")
+
+        assert source.invocations == 0
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_ordinary_ignores_nonmatching_target_metadata(self):
+        source = AsyncDeclarativeInvocationCounter(result=True)
+        fsm = self._machine(source, target_name="wrong_target")
+
+        await fsm.trigger_async("advance")
+
+        assert source.invocations == 0
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_ordinary_unknown_trigger_has_no_side_effect(self):
+        source = AsyncDeclarativeInvocationCounter(result=True)
+        fsm = self._machine(source)
+
+        await fsm.trigger_async("missing")
+
+        assert source.invocations == 0
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_handle_event_uses_the_same_handler_boundary(self):
+        source = AsyncDeclarativeInvocationCounter(result=True)
+
+        result = await source.handle_event_async("advance")
+
+        assert result.success
+        assert source.invocations == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_result", [False, "invalid", "raise"])
+    async def test_async_declarative_ordinary_invocation_only_for_phase17_outcomes(
+        self, handler_result
+    ):
+        source = AsyncDeclarativeInvocationCounter(result=handler_result)
+        fsm = self._machine(source)
+
+        await _invoke_and_ignore_phase17_outcome(lambda: fsm.trigger_async("advance"))
+
+        assert source.invocations == 1
 
 
 class TestAsyncHistory:
