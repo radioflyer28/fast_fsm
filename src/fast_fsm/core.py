@@ -654,7 +654,7 @@ class StateMachine:
             "transitions": transitions,
         }
 
-    def enable_history(self, max_entries: int = 1000) -> None:
+    def enable_history(self, max_entries: Any = 1000) -> None:
         """Enable transition history recording.
 
         When enabled, every successful :meth:`trigger` call appends a
@@ -672,7 +672,7 @@ class StateMachine:
             TypeError: If ``max_entries`` is not a non-boolean integer.
             ValueError: If ``max_entries`` is zero or negative.
         """
-        if isinstance(max_entries, bool) or not isinstance(max_entries, int):
+        if type(max_entries) is bool or not isinstance(max_entries, int):
             raise TypeError("max_entries must be a positive integer")
         if max_entries <= 0:
             raise ValueError("max_entries must be a positive integer")
