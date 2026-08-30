@@ -681,8 +681,13 @@ class StateMachine:
             if isinstance(from_state, list):
                 for source_state in from_state:
                     collect_state(source_state)
-            else:
+            elif isinstance(from_state, (str, State)):
                 collect_state(from_state)
+            else:
+                raise TypeError(
+                    "quick_build source state must be a string, State, or list of either, "
+                    f"got {type(from_state).__name__}"
+                )
             collect_state(to_state)
 
         # Add additional state identities or deferred string shorthand.
