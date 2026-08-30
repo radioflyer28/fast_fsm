@@ -1828,7 +1828,10 @@ class StateMachine:
                             _reject_sync_awaitable(result)
                         active.remove(current_id)
                     else:
-                        result = current.check(*args, **kwargs)
+                        # Keep public condition subclasses at the dynamic
+                        # boundary so mypyc does not reject an awaitable
+                        # override before sync dispatch can close and reject it.
+                        result = cast(Any, current).check(*args, **kwargs)
                         if _is_awaitable(result):
                             _reject_sync_awaitable(result)
                         active.remove(current_id)

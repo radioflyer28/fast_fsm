@@ -541,6 +541,28 @@ class TestAsyncWrapperEvaluation:
         assert captured[0][0][0] is marker
         assert captured[0][1] == {"payload": "value"}
 
+    @pytest.mark.parametrize("shape", ("compiled", "override"))
+    def test_sync_runtime_rejects_callable_backed_awaitables(self, shape):
+        """Sync dispatch rejects both exact and overridden callable async hooks."""
+
+        async def async_guard(*args, **kwargs):
+            return True
+
+        if shape == "compiled":
+            condition = CompiledFuncCondition(async_guard)
+        else:
+
+            class AsyncCheckFuncCondition(FuncCondition):
+                async def check(self, *args, **kwargs):
+                    return True
+
+            condition = AsyncCheckFuncCondition(lambda *args, **kwargs: False)
+
+        machine = StateMachine(State("source"), name="sync_callable_awaitable")
+
+        with pytest.raises(TypeError, match="Async condition"):
+            machine._evaluate_condition_sync(condition, (), {})
+
 
 class TestAsyncFuncConditionSubclassPolicy:
     """Async entry guards honor public FuncCondition subclass overrides."""
