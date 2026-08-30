@@ -145,8 +145,10 @@ class _PreparedDispatch:
 
     entry: TransitionEntry
     current_name: str
+    trigger: str
     args: Tuple[Any, ...]
     condition_kwargs: Optional[Dict[str, Any]]
+    declarative_handler: Optional[Dict[str, Any]]
 
 
 @mypyc_attr(native_class=False)
@@ -1283,8 +1285,11 @@ class StateMachine:
             ):
                 return False
 
-        return self._current_state.can_transition(
-            trigger, entry.to_state, *args, **kwargs
+        if not self._evaluate_declarative_condition_sync(prepared):
+            return False
+
+        return self._can_transition_after_declarative_guard(
+            trigger, entry.to_state, args, kwargs
         )
 
     def _prepare_transition(
@@ -1308,10 +1313,113 @@ class StateMachine:
             return TransitionResult(
                 False, from_state=current_name, trigger=trigger, error=error_msg
             )
-        condition_kwargs = (
-            self._sanitize_condition_kwargs(kwargs) if entry.condition else None
+        declarative_handler = _resolve_declarative_handler(
+            self._current_state, trigger, entry.to_state
         )
-        return _PreparedDispatch(entry, current_name, args, condition_kwargs)
+        has_declarative_guard = bool(
+            declarative_handler and declarative_handler.get("condition")
+        )
+        condition_kwargs = (
+            self._sanitize_condition_kwargs(kwargs)
+            if entry.condition or has_declarative_guard
+            else None
+        )
+        return _PreparedDispatch(
+            entry, current_name, trigger, args, condition_kwargs, declarative_handler
+        )
+
+    def _evaluate_declarative_condition_sync(self, prepared: _PreparedDispatch) -> bool:
+        """Evaluate one resolved declarative guard through the sync guard seam."""
+        handler_info = prepared.declarative_handler
+        if handler_info is None:
+            return True
+        condition = handler_info.get("condition")
+        if not condition:
+            return True
+
+        source_state = cast(DeclarativeState, self._current_state)
+        try:
+            assert prepared.condition_kwargs is not None
+            if isinstance(condition, Condition):
+                condition_result = self._evaluate_condition_sync(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
+            elif callable(condition):
+                condition_result = condition(
+                    *prepared.args, **prepared.condition_kwargs
+                )
+            else:
+                condition_result = bool(condition)
+            source_state._logger.debug(
+                "State '%s': Condition check for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                condition_result,
+            )
+            return bool(condition_result)
+        except Exception as exc:  # broad catch isolates declarative guard failures
+            source_state._logger.warning(
+                "State '%s': Condition evaluation failed for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                exc,
+            )
+            return False
+
+    async def _evaluate_declarative_condition_async(
+        self, prepared: _PreparedDispatch
+    ) -> bool:
+        """Evaluate one resolved declarative guard through the async guard seam."""
+        handler_info = prepared.declarative_handler
+        if handler_info is None:
+            return True
+        condition = handler_info.get("condition")
+        if not condition:
+            return True
+
+        source_state = cast(DeclarativeState, self._current_state)
+        try:
+            assert prepared.condition_kwargs is not None
+            if isinstance(condition, Condition):
+                condition_result = await self._evaluate_condition_async(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
+            elif callable(condition):
+                condition_result = condition(
+                    *prepared.args, **prepared.condition_kwargs
+                )
+            else:
+                condition_result = bool(condition)
+            source_state._logger.debug(
+                "State '%s': Async condition check for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                condition_result,
+            )
+            return bool(condition_result)
+        except Exception as exc:  # broad catch isolates declarative guard failures
+            source_state._logger.warning(
+                "State '%s': Async condition evaluation failed for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                exc,
+            )
+            return False
+
+    def _can_transition_after_declarative_guard(
+        self,
+        trigger: str,
+        to_state: State,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> bool:
+        """Run custom state policy without re-evaluating a prepared guard."""
+        source_state = self._current_state
+        if isinstance(source_state, DeclarativeState):
+            return State.can_transition(
+                source_state, trigger, to_state, *args, **kwargs
+            )
+        return source_state.can_transition(trigger, to_state, *args, **kwargs)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1870,6 +1978,19 @@ class StateMachine:
                     False, from_state=current_name, trigger=trigger, error=error_msg
                 )
 
+        if not self._evaluate_declarative_condition_sync(prepared):
+            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, current_name, error_msg, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
+            return TransitionResult(
+                False, from_state=current_name, trigger=trigger, error=error_msg
+            )
+
         # Check if source state allows transition
         self._logger.debug(
             "%s: Checking if state '%s' allows transition '%s'",
@@ -1877,7 +1998,9 @@ class StateMachine:
             current_name,
             trigger,
         )
-        if not self._current_state.can_transition(trigger, to_state, *args, **kwargs):
+        if not self._can_transition_after_declarative_guard(
+            trigger, to_state, args, kwargs
+        ):
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             if self._on_failed_callbacks:
@@ -1892,7 +2015,7 @@ class StateMachine:
 
         old_state = self._current_state
         result = self._execute_transition(to_state, trigger, *args, **kwargs)
-        handler_info = _resolve_declarative_handler(old_state, trigger, to_state)
+        handler_info = prepared.declarative_handler
         if handler_info is not None:
             _invoke_declarative_handler(
                 old_state, handler_info, trigger, prepared.args, kwargs
@@ -2110,7 +2233,14 @@ class AsyncStateMachine(StateMachine):
             ):
                 return False
 
+        if not await self._evaluate_declarative_condition_async(prepared):
+            return False
+
         # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
+        if isinstance(self._current_state, DeclarativeState):
+            return self._can_transition_after_declarative_guard(
+                trigger, entry.to_state, args, kwargs
+            )
         if hasattr(self._current_state, "can_transition_async"):
             return await self._current_state.can_transition_async(
                 trigger, entry.to_state, *args, **kwargs
@@ -2192,6 +2322,19 @@ class AsyncStateMachine(StateMachine):
                     False, from_state=current_name, trigger=trigger, error=error_msg
                 )
 
+        if not await self._evaluate_declarative_condition_async(prepared):
+            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            if self._on_failed_callbacks:
+                for fn in self._on_failed_callbacks:
+                    try:
+                        fn(trigger, current_name, error_msg, **kwargs)
+                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+                        self._logger.error("on_failed callback error: %s", e)
+            return TransitionResult(
+                False, from_state=current_name, trigger=trigger, error=error_msg
+            )
+
         # Check if source state allows transition
         self._logger.debug(
             "%s: Checking if state '%s' allows transition '%s'",
@@ -2199,8 +2342,13 @@ class AsyncStateMachine(StateMachine):
             current_name,
             trigger,
         )
+        # Declarative guards have already run through the machine-owned seam.
+        if isinstance(self._current_state, DeclarativeState):
+            can_proceed = self._can_transition_after_declarative_guard(
+                trigger, to_state, args, kwargs
+            )
         # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
-        if hasattr(self._current_state, "can_transition_async"):
+        elif hasattr(self._current_state, "can_transition_async"):
             can_proceed = await self._current_state.can_transition_async(
                 trigger, to_state, *args, **kwargs
             )
@@ -2224,7 +2372,7 @@ class AsyncStateMachine(StateMachine):
         old_state = self._current_state
         result = self._execute_transition(to_state, trigger, *args, **kwargs)
 
-        handler_info = _resolve_declarative_handler(old_state, trigger, to_state)
+        handler_info = prepared.declarative_handler
         if handler_info is not None:
             await _invoke_declarative_handler_async(
                 old_state, handler_info, trigger, prepared.args, kwargs

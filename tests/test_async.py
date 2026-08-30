@@ -892,6 +892,53 @@ class TestAsyncOrdinaryDeclarativeDispatch:
         assert source.invocations == 1
 
 
+class TestAsyncDeclarativeWrapperGuards:
+    """Resolved decorator guards use the same recursive evaluator as entries."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "leaf_result"),
+        (
+            (lambda leaf: NegatedCondition(leaf), False),
+            (lambda leaf: AndCondition(leaf), True),
+            (lambda leaf: OrCondition(leaf), True),
+            (lambda leaf: NotCondition(leaf), False),
+        ),
+    )
+    async def test_nested_async_decorator_guard_awaits_for_can_and_trigger(
+        self, factory, leaf_result
+    ):
+        leaf = RecordingAsyncCondition(result=leaf_result)
+        condition = factory(leaf)
+
+        class Source(AsyncDeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.handler_calls = 0
+
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            async def handle_advance(self, *args, **kwargs):
+                self.handler_calls += 1
+                return True
+
+        source = Source("source")
+        target = State("target")
+        builder = FSMBuilder(source)
+        builder.add_state(target).add_transition("advance", "source", "target")
+
+        machine = builder.build()
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("advance")
+        assert (await machine.trigger_async("advance")).success
+        assert len(leaf.calls) == 2
+        assert source.handler_calls == 1
+
+
 class TestAsyncHistory:
     """HIST-07: AsyncStateMachine records to the same history buffer."""
 
