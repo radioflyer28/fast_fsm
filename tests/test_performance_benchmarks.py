@@ -444,7 +444,8 @@ class TestAdvancedPerformance:
 
         Uses the same minimal 2-state toggle FSM as test_trigger_min_throughput.
         Measures baseline (history disabled), then re-measures with history
-        enabled (max_entries=1000).  Asserts the ratio stays within 2×.
+        enabled with a capacity-one buffer so every measured append is a bounded
+        FIFO eviction.  Asserts the ratio stays within 2×.
 
         PERF-02 requirement: history-enabled throughput measured and documented.
         """
@@ -470,7 +471,7 @@ class TestAdvancedPerformance:
         baseline_ops = iterations / baseline_elapsed
 
         # --- History enabled ---
-        fsm.enable_history(max_entries=1000)
+        fsm.enable_history(max_entries=1)
 
         for _ in range(1000):
             fsm.trigger("toggle")
@@ -481,6 +482,8 @@ class TestAdvancedPerformance:
             fsm.trigger("toggle")
         history_elapsed = time.perf_counter() - start
         history_ops = iterations / history_elapsed
+
+        assert len(fsm.history) == 1
 
         ratio = baseline_ops / history_ops
 

@@ -1612,6 +1612,87 @@ class TestTransitionHistory:
         assert len(fsm.history) == 1
         fsm.enable_history(max_entries=10)  # replaces
         assert fsm.history == []
+        assert fsm._history.maxlen == 10
+
+    @pytest.mark.parametrize("capacity", [0, -1, -100])
+    def test_history_rejects_non_positive_capacity_without_mutation(self, capacity):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=3)
+        fsm.trigger("go")
+        previous_buffer = fsm._history
+        previous_records = fsm.history
+        previous_max_entries = fsm._history_max
+
+        with pytest.raises(ValueError):
+            fsm.enable_history(capacity)
+
+        assert fsm._history is previous_buffer
+        assert fsm.history == previous_records
+        assert fsm._history_max == previous_max_entries
+
+    @pytest.mark.parametrize("capacity", [True, None, 1.0, "1", object()])
+    def test_history_rejects_non_integer_capacity_without_mutation(self, capacity):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=3)
+        fsm.trigger("go")
+        previous_buffer = fsm._history
+        previous_records = fsm.history
+        previous_max_entries = fsm._history_max
+
+        with pytest.raises(TypeError):
+            fsm.enable_history(capacity)
+
+        assert fsm._history is previous_buffer
+        assert fsm.history == previous_records
+        assert fsm._history_max == previous_max_entries
+
+    def test_history_capacity_one_evicts_oldest_record_in_fifo_order(self):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=1)
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+
+        records = fsm.history
+        assert len(records) == 1
+        assert (records[0].from_state, records[0].to_state) == ("b", "c")
+
+    def test_history_fifo_overflow_preserves_chronological_timestamps(self):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=2)
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+        fsm.trigger("back")
+
+        records = fsm.history
+        assert [(record.from_state, record.to_state) for record in records] == [
+            ("b", "c"),
+            ("c", "a"),
+        ]
+        assert records[0].timestamp <= records[1].timestamp
+
+    def test_history_read_returns_a_distinct_defensive_list_each_time(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+
+        first = fsm.history
+        second = fsm.history
+        first.clear()
+
+        assert first is not second
+        assert len(second) == 1
+        assert len(fsm.history) == 1
+
+    def test_disabled_history_keeps_no_internal_buffer_after_transitions(self):
+        fsm = self._make_fsm()
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+
+        assert fsm._history is None
+        assert fsm.history == []
 
     def test_clone_does_not_inherit_history(self):
         fsm = self._make_fsm()

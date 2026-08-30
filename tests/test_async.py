@@ -917,6 +917,48 @@ class TestAsyncHistory:
         assert h[1].from_state == "running"
         assert h[1].to_state == "done"
 
+    @pytest.mark.asyncio
+    async def test_trigger_async_history_capacity_and_fifo_parity(self):
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        fsm = AsyncStateMachine(idle, name="async_hist_fifo")
+        fsm.add_state(running)
+        fsm.add_state(done)
+        fsm.add_transition("start", "idle", "running")
+        fsm.add_transition("finish", "running", "done")
+        fsm.add_transition("reset", "done", "idle")
+        fsm.enable_history(max_entries=2)
+
+        await fsm.trigger_async("start")
+        await fsm.trigger_async("finish")
+        await fsm.trigger_async("reset")
+
+        assert [(record.from_state, record.to_state) for record in fsm.history] == [
+            ("running", "done"),
+            ("done", "idle"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_trigger_async_history_invalid_capacity_preserves_buffer(self):
+        idle = State("idle")
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="async_hist_invalid")
+        fsm.add_state(running)
+        fsm.add_transition("start", "idle", "running")
+        fsm.enable_history(max_entries=2)
+        await fsm.trigger_async("start")
+        previous_buffer = fsm._history
+        previous_records = fsm.history
+        previous_max_entries = fsm._history_max
+
+        with pytest.raises(ValueError):
+            fsm.enable_history(0)
+
+        assert fsm._history is previous_buffer
+        assert fsm.history == previous_records
+        assert fsm._history_max == previous_max_entries
+
 
 # ---------------------------------------------------------------------------
 # FSMBuilder nested async materialization
