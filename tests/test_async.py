@@ -474,6 +474,45 @@ class TestAsyncWrapperEvaluation:
         assert (await machine.trigger_async("go")).success
         assert len(leaf.calls) == 2
 
+    def test_sync_wrapper_runtime_handles_empty_composites_and_late_cycle(self):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="sync_wrapper_edges")
+        machine.add_state(target)
+
+        assert machine._evaluate_condition_sync(AndCondition(), (), {})
+        assert not machine._evaluate_condition_sync(OrCondition(), (), {})
+        assert machine._evaluate_condition_sync(
+            OrCondition(NegatedCondition(AlwaysTrueCondition()), AlwaysTrueCondition()),
+            (),
+            {},
+        )
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            machine._evaluate_condition_sync(RecordingAsyncCondition(), (), {})
+
+        cycle = NotCondition(AlwaysTrueCondition())
+        machine.add_transition("go", initial, target, cycle)
+        cycle.condition = cycle
+
+        with pytest.raises(ValueError, match="cycle"):
+            machine.can_trigger("go")
+
+    @pytest.mark.asyncio
+    async def test_async_wrapper_runtime_handles_empty_composites_and_late_cycle(self):
+        assert await self._machine(AndCondition()).can_trigger_async("go")
+        assert not await self._machine(OrCondition()).can_trigger_async("go")
+
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="async_wrapper_edges")
+        machine.add_state(target)
+        cycle = NotCondition(AlwaysTrueCondition())
+        machine.add_transition("go", initial, target, cycle)
+        cycle.condition = cycle
+
+        with pytest.raises(ValueError, match="cycle"):
+            await machine.can_trigger_async("go")
+
     def test_sync_machine_rejects_nested_async_wrapper(self):
         initial = State("initial")
         target = State("target")

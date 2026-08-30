@@ -1329,6 +1329,20 @@ class TestFSMBuilderAsyncPreflight:
         assert builder.machine_type is AsyncStateMachine
         assert isinstance(builder.build(), AsyncStateMachine)
 
+    def test_add_state_upgrades_only_after_async_preflight_succeeds(self):
+        builder = FSMBuilder(State("start"))
+
+        builder.add_state(AsyncDeclarativeState("async"))
+
+        assert builder.machine_type is AsyncStateMachine
+
+    def test_callable_unless_is_normalized_before_staging(self):
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish", unless=lambda: False)
+
+        assert builder.build().trigger("go").success
+
     def test_explicit_async_remains_authoritative_without_async_staging(self):
         builder = FSMBuilder(State("start"), async_mode=True)
 

@@ -382,6 +382,94 @@ class TestDeclarativeGuardContextParity:
         assert source.handler_kwargs == raw
 
 
+class TestDeclarativeGuardEdgeCases:
+    """The shared declarative seam handles every supported guard shape."""
+
+    @staticmethod
+    def _sync_machine(condition):
+        class Source(DeclarativeState):
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            def handle_advance(self, *args, **kwargs):
+                return True
+
+        source = Source("source")
+        target = State("target")
+        machine = StateMachine(source, name="sync_declarative_guard_edge")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+        return machine
+
+    @staticmethod
+    def _async_machine(condition):
+        class Source(AsyncDeclarativeState):
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            async def handle_advance(self, *args, **kwargs):
+                return True
+
+        source = Source("source")
+        target = State("target")
+        machine = AsyncStateMachine(source, name="async_declarative_guard_edge")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+        return machine
+
+    @pytest.mark.parametrize(
+        "condition",
+        (
+            lambda *args, **kwargs: kwargs == {"allowed": "yes"},
+            object(),
+        ),
+    )
+    def test_sync_declarative_callable_and_truthy_guard_shapes(self, condition):
+        machine = self._sync_machine(condition)
+
+        assert machine.can_trigger("advance", allowed="yes")
+        assert machine.trigger("advance", allowed="yes").success
+
+    def test_sync_declarative_guard_exception_is_a_failed_transition(self):
+        def exploding_guard(*args, **kwargs):
+            raise ValueError("guard failed")
+
+        machine = self._sync_machine(exploding_guard)
+
+        assert not machine.can_trigger("advance")
+        assert not machine.trigger("advance").success
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "condition",
+        (
+            lambda *args, **kwargs: kwargs == {"allowed": "yes"},
+            object(),
+        ),
+    )
+    async def test_async_declarative_callable_and_truthy_guard_shapes(self, condition):
+        machine = self._async_machine(condition)
+
+        assert await machine.can_trigger_async("advance", allowed="yes")
+        assert (await machine.trigger_async("advance", allowed="yes")).success
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_guard_exception_is_a_failed_transition(self):
+        def exploding_guard(*args, **kwargs):
+            raise ValueError("guard failed")
+
+        machine = self._async_machine(exploding_guard)
+
+        assert not await machine.can_trigger_async("advance")
+        assert not (await machine.trigger_async("advance")).success
+
+
 class TestConditionExceptionHandling:
     """Test exception handling in conditions"""
 
