@@ -1,6 +1,6 @@
 ---
 phase: 16-canonical-graph-dispatch-invariants
-reviewed: 2026-08-30T13:54:27Z
+reviewed: 2026-08-30T15:36:12Z
 depth: standard
 files_reviewed: 17
 files_reviewed_list:
@@ -22,102 +22,80 @@ files_reviewed_list:
   - tests/test_safety_kwargs.py
   - tools/phase16_isolated_verify.py
 findings:
-  critical: 4
-  warning: 3
+  critical: 3
+  warning: 1
   info: 0
-  total: 7
+  total: 4
 status: issues_found
 ---
 
 # Phase 16: Code Review Report
 
-**Reviewed:** 2026-08-30T13:54:27Z
+**Reviewed:** 2026-08-30T15:36:12Z
 **Depth:** standard
 **Files Reviewed:** 17
 **Status:** issues_found
 
 ## Summary
 
-Phase 16 does not yet satisfy its canonical guard-dispatch contract. The ordinary transition-entry path uses the new shared classifier, evaluator, and sanitizer, but declarative decorator guards still use an independent state-owned path. That split produces two shipping blockers: nested async declarative guards are detected during builder preflight but not awaited at runtime, and declarative guards receive raw private/unbounded keyword data. Builder validation is also non-atomic, and recursive wrapper traversal remains vulnerable to valid deep graphs. The verification harness and architecture documentation contain three additional coverage/robustness defects.
+The three iteration-two findings are repaired on their covered ordinary-dispatch and builder-preflight paths: all 30 focused cases passed in both asserted-pure and freshly compiled contexts. The final pass nevertheless found two uncovered runtime correctness defects and one release-evidence policy regression. Direct `AsyncDeclarativeState` policy calls still use the old synchronous wrapper path, builder publication still uses value equality despite the locked identity contract, and the regenerated manifest lowers the committed coverage floor in a way that makes the read-only regression gate accept the regression. Contributor documentation also contradicts the compiled subclassing behavior the phase itself relies on.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Nested async declarative guards are detected but never recursively awaited
+### CR-01: Direct async declarative policy still executes wrapped async guards synchronously
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:2573-2579`
+**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:2904-2912`
 
-**Issue:** Builder detection recursively identifies async leaves in declarative handler metadata (`_detect_async_requirements()` at lines 2736-2745), so auto mode correctly selects `AsyncStateMachine`. Runtime evaluation does not use that same classifier/evaluator: `AsyncDeclarativeState.can_transition_async()` awaits only a direct `AsyncCondition`, then invokes every wrapped `Condition` synchronously via `condition.check()`. A supported wrapper such as `NotCondition(AsyncCondition(...))` therefore reaches `AsyncCondition.check()` inside the running event loop, attempts `asyncio.run()`, is caught as a failed guard, and leaves the machine in its source state. A direct reproduction selected `AsyncStateMachine` but returned `False`, left the state at `source`, and never called the async leaf (with a `RuntimeWarning` for the un-awaited coroutine). This violates GRAF-05 and the documented promise that builder preflight and runtime share one recursive classifier/evaluator.
+**Issue:** Ordinary `AsyncStateMachine.can_trigger_async()` and `trigger_async()` now use the machine-owned iterative evaluator, but the public `AsyncDeclarativeState.can_transition_async()` method still handles every non-direct `AsyncCondition` through `condition.check()`. A supported `NotCondition(AsyncCondition(...))`, `NegatedCondition`, `AndCondition`, `OrCondition`, or `FuncCondition` wrapping an async callable therefore reaches `asyncio.run()` from an active loop or returns an un-awaited coroutine. In an asserted-pure reproduction, `NotCondition` around an async leaf that returned `False` should have allowed the transition, but the method returned `False`, logged `asyncio.run() cannot be called from a running event loop`, and emitted `RuntimeWarning: coroutine ... was never awaited`. This contradicts the method's async-condition contract and leaves direct state policy behavior inconsistent with ordinary dispatch.
 
-**Fix:** Move declarative guard evaluation behind the machine-owned `_evaluate_condition_async()` seam (and the corresponding sync seam) after resolving the canonical handler. Do not call wrapper `.check()` directly from `AsyncDeclarativeState`. Add pure and compiled tests using each supported wrapper around an async leaf on `@transition(condition=...)`, asserting both `can_trigger_async()` and `trigger_async()` await the leaf and agree.
+**Fix:** Extract the iterative wrapper evaluator into a private helper that both machine dispatch and `AsyncDeclarativeState.can_transition_async()` can call, rather than invoking `Condition.check()` directly. Preserve short-circuiting and await any awaitable leaf result. Add direct-call pure and compiled regressions for all supported wrapper shapes plus `FuncCondition(async_callable)`, asserting correct results and no runtime warnings.
 
-### CR-02: Declarative decorator guards bypass keyword sanitization
-
-**Classification:** BLOCKER
-
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:2486-2512`
-
-**Issue:** `_prepare_transition()` sanitizes kwargs only when the canonical `TransitionEntry` itself has a condition (lines 1290-1314). Decorator conditions instead run later in `DeclarativeState.can_transition()` and `AsyncDeclarativeState.can_transition_async()` with the original raw `*args, **kwargs`. A reproduction with a declarative guard observed `{'safe': 1, '_secret': 2}` verbatim. Private, non-string, overlong, and over-budget keys therefore reach user guard code on both sync and async declarative paths, contradicting D-12 through D-14, GRAF-06, GRAF-08, and the architecture page's claim that all can/do paths share one prepared context. This is also an avoidable sensitive-data exposure boundary.
-
-**Fix:** Resolve the applicable declarative handler during `_prepare_transition()` (or extend the prepared dispatch object) and produce one sanitized fresh mapping whenever either the transition entry or its selected handler has a guard. Evaluate both through the same machine-owned sync/async helper. Keep raw kwargs only for callbacks/handlers. Add sync and async declarative tests with more than 50 valid keys plus private/overlong keys, and assert can/do receive equivalent fresh sanitized mappings while the handler still receives its intended raw payload.
-
-### CR-03: Failed builder validation leaves invalid state and transition staging behind
+### CR-02: Builder publication silently drops valid states whose objects compare equal
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:2749-2766`
+**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:3345-3348`
 
-**Issue:** `FSMBuilder.add_state()` inserts into `_states` before recursive async/cycle validation, and `add_transition()` appends to `_transitions` before that validation (lines 2809-2813). A supported wrapper cycle raises `ValueError` only after the mutation. In an asserted-pure reproduction, a failed `add_transition()` changed the staged transition count from 0 to 1 (`ValueError 0 1 True`). The caller cannot repair this through the public builder API; a later build retains the request that was explicitly rejected. A declarative state whose metadata contains a cycle has the same problem in `_states`. This violates the phase's validate-before-mutation and failed-build-repairability invariants and risks publishing topology the caller believes was rejected.
+**Issue:** Phase 16 locks canonical registration to exact object identity, but `FSMBuilder.build()` skips the initial state with `state != self._initial_state`. `State` is intentionally subclassable, so a valid state subclass may define equality independently of identity. An asserted-pure reproduction added two distinct-name state objects whose subclass returns `True` from `__eq__`; `build()` succeeded but returned a machine whose state list contained only the initial state, silently omitting the staged target. This violates D-01/GRAF-02 and the builder's publish-complete-or-fail contract.
 
-**Fix:** Normalize `unless`, run `_detect_async_requirements()`, and compute any machine-type upgrade into locals before mutating `_transitions`, `_states`, or `_machine_type`. Commit all staging changes only after validation succeeds. Add identity assertions that every supported cycle leaves the state registry, transition list, machine type, and cached machine exactly unchanged for both mutators.
+**Fix:** Use identity at publication:
 
-### CR-04: Valid deep condition graphs crash at Python's recursion limit
+```python
+for state in self._states.values():
+    if state is not self._initial_state:
+        candidate.add_state(state)
+```
+
+Add pure and compiled tests with a `State` subclass whose distinct instances compare equal, proving both differently named objects are registered and same-name identity conflicts retain the existing rejection semantics.
+
+### CR-03: Baseline refresh lowers and thereby bypasses the locked coverage regression floor
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:1376-1402`
+**File:** `/Users/akriz/code/fast_fsm/evidence/release-baseline.json:58-63`
 
-**Issue:** `_contains_async_requirement()` recursively visits every wrapper, and both runtime evaluators recursively descend the same graph (lines 1404-1504). A valid acyclic chain of 1,200 `NotCondition` nodes raises `RecursionError` during `add_transition()` in an asserted-pure checkout. Phase 16 explicitly treats adversarial depth as a high-severity denial-of-service threat and specifies iterative/guarded identity traversal; testing only 24 levels does not establish that mitigation. Valid supported graphs should either terminate deterministically or be rejected with a deliberate documented bound, not crash at an interpreter-global implementation limit.
+**Issue:** The iteration-two refresh changed total coverage from 96.08% to 95.68% and `core.py` coverage from 94.27% to 93.75%. Coverage is not an environment-only observation: inherited Phase 15 decision D-06 explicitly requires regressions to be blocked from the measured baseline, `validate_manifest_regressions()` treats both percentages as strict non-decreasing fields, and `docs/dev/testing.md` calls the check a regression gate. The Phase 16 helper's `baseline-write` path (`tools/phase16_isolated_verify.py:265-286`) regenerates and atomically replaces the manifest without comparing it to the prior committed floor; the subsequent check therefore compares against the newly lowered values and passes. This converts a real regression into a new accepted threshold and weakens the release gate rather than merely recording an allowed source/environment observation.
 
-**Fix:** Replace classifier recursion with an explicit stack and active/completed identity states. Implement runtime evaluation with explicit frames that preserve And/Or short-circuit order, or enforce a documented deterministic wrapper-depth limit before evaluation and raise a domain `ValueError`. Add pure/compiled tests above the Python recursion limit as well as deep cycles and shared DAGs.
+**Fix:** Restore coverage to at least 96.08% total and 94.27% for `core.py` with tests for the new declarative/builder branches, then regenerate the manifest. Also make the intentional Phase 16 baseline-export path validate the generated manifest against the existing tracked manifest before replacement, with an explicit separately reviewed migration mechanism if a future milestone deliberately changes a floor. Add a regression test proving `baseline-write` cannot silently lower either coverage field.
 
 ## Warnings
 
-### WR-01: Child-command validation does not contain commands to the temporary checkout
+### WR-01: Contributor guidance falsely prohibits supported `State` subclass tests
 
 **Classification:** WARNING
 
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:134-146`
+**File:** `/Users/akriz/code/fast_fsm/docs/dev/architecture.md:200-205`
 
-**Issue:** `_validate_child_command()` checks whether each argv token is itself an absolute or `..` path, but subprocesses can still escape through code strings, shell commands, environment-derived paths, symlinks, or executables that accept embedded paths. For example, `sh -c 'cd /absolute/path && ...'` passes because the complete code string is not an absolute `Path`. The helper and Phase 16 plan claim child commands cannot escape the temporary repository, which this check cannot guarantee.
+**Issue:** The guide says tests must not inherit from `State` because compiled classes cannot be subclassed from interpreted Python; `docs/dev/testing.md:68-71` repeats the rule. That is false for `State`, `CallbackState`, `DeclarativeState`, and `AsyncDeclarativeState`, which deliberately use `@mypyc_attr(allow_interpreted_subclasses=True)`. The iteration-two compatibility regressions themselves subclass `DeclarativeState`/`AsyncDeclarativeState` and pass against the freshly compiled extension. The blanket prohibition discourages the exact compiled compatibility coverage needed to catch CR-01 and CR-02 and contradicts the architecture guard.
 
-**Fix:** Treat arbitrary task commands as trusted and remove the containment claim, or execute them inside an actual OS/container sandbox with the temporary tree as the only writable mount. If task mode is meant only for fixed verification commands, replace arbitrary argv with an allowlisted suite/action selector.
-
-### WR-02: The compiled semantic parity suite omits a changed Phase 16 boundary test file
-
-**Classification:** WARNING
-
-**File:** `/Users/akriz/code/fast_fsm/tools/phase16_isolated_verify.py:26-43`
-
-**Issue:** `tests/test_boundary_negative.py` is a Phase 16 review/change file but is absent from `PHASE16_INVENTORY`, and the fixed `phase16` semantic command at lines 290-303 does not run it. The final pure release gate may cover the file, but no compiled run proves its canonical duplicate-state and negative-boundary semantics. The phase's primary parity harness can therefore pass while the native extension disagrees on changed boundary behavior.
-
-**Fix:** Add `tests/test_boundary_negative.py` to `PHASE16_INVENTORY` and to the semantic pytest tuple executed in both pure and compiled modes. Regenerate the recorded Phase 16 evidence after the expanded fixed suite passes.
-
-### WR-03: The documented FSMBuilder example cannot run against the actual API
-
-**Classification:** WARNING
-
-**File:** `/Users/akriz/code/fast_fsm/docs/dev/architecture.md:130-138`
-
-**Issue:** The example constructs `FSMBuilder("my_fsm")`, but the constructor requires an initial `State`; it then calls `.set_initial("idle")`, which does not exist. This is the central contributor-facing example in the section documenting the newly tightened builder contract, so it directs maintainers and agents to a nonexistent API.
-
-**Fix:** Use the actual constructor and fluent surface, for example `FSMBuilder(idle, name="my_fsm").add_state(running).add_transition(...).build()`, and add a documentation example check or doctest so public API examples cannot drift silently.
+**Fix:** Distinguish the supported state subclass surfaces from closed compiled classes such as `StateMachine`. Require pure/compiled parity tests for public subclass hooks, while retaining composition guidance where inheritance is not part of the public contract.
 
 ---
 
-_Reviewed: 2026-08-30T13:54:27Z_
+_Reviewed: 2026-08-30T15:36:12Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
