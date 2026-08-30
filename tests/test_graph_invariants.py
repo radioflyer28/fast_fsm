@@ -134,3 +134,71 @@ def test_clone_copies_graph_version_into_an_independent_lineage() -> None:
     clone.add_transition("back", running, idle)
     assert clone._graph_version == machine._graph_version + 1
     assert machine._graph_snapshot().transitions != clone._graph_snapshot().transitions
+
+
+@pytest.mark.parametrize(
+    ("from_state", "to_state"),
+    [
+        ("unknown", "running"),
+        ("idle", "unknown"),
+        (State("idle"), "running"),
+        ("idle", State("running")),
+        (None, "running"),
+        ("idle", None),
+    ],
+)
+def test_endpoints_must_be_exact_registered_objects_without_mutation(
+    from_state: object, to_state: object
+) -> None:
+    machine, _, _ = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(ValueError):
+        machine.add_transition("go", from_state, to_state)  # type: ignore[arg-type]
+
+    assert graph_fingerprint(machine) == before
+
+
+def test_multi_source_and_batch_validation_are_atomic() -> None:
+    machine, idle, running = make_machine()
+    before = graph_fingerprint(machine)
+
+    invalid_requests = (
+        lambda: machine.add_transition("go", [], running),
+        lambda: machine.add_transition("go", [idle, idle], running),
+        lambda: machine.add_transition("go", [idle, State("foreign")], running),
+        lambda: machine.add_transition("go", [idle, None], running),
+        lambda: machine.add_transition(
+            "go", idle, running, condition=lambda **_: True, unless=lambda **_: False
+        ),
+        lambda: machine.add_transitions(
+            [("go", idle, running), ("bad", "unknown", running)]
+        ),
+    )
+
+    for request in invalid_requests:
+        with pytest.raises(ValueError):
+            request()
+        assert graph_fingerprint(machine) == before
+
+
+def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> None:
+    machine, idle, running = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(TypeError):
+        machine.add_bidirectional_transition(
+            "go", "back", idle, running, condition2=object()  # type: ignore[arg-type]
+        )
+    assert graph_fingerprint(machine) == before
+
+    machine.add_bidirectional_transition("go", "back", idle, running)
+    assert machine._graph_version == before[2] + 1
+
+    emergency_before = machine._graph_version
+    machine.add_emergency_transition("stop", idle)
+    assert machine._graph_version == emergency_before + 1
+    assert {row.from_state for row in machine._graph_snapshot().transitions if row.trigger == "stop"} == {
+        idle,
+        running,
+    }
