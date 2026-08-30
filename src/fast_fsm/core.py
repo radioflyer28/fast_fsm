@@ -154,13 +154,13 @@ async def _evaluate_condition_async_iteratively(
                 elif isinstance(current, AsyncCondition):
                     result = await current.check_async(*args, **kwargs)
                     active.remove(current_id)
-                elif type(current) is FuncCondition:
+                elif condition_type in (FuncCondition, CompiledFuncCondition):
                     # ``FuncCondition.check`` is annotated to return ``bool``.
-                    # The exact built-in type may call its wrapped function
-                    # directly so mypyc can still observe and await an async
-                    # leaf. Public FuncCondition subclasses must instead use
-                    # their effective ``check`` override below.
-                    func = cast(Any, current.func)
+                    # The exact built-in callable wrappers call their stored
+                    # function directly so mypyc can still observe and await
+                    # an async leaf. Public FuncCondition subclasses must
+                    # instead use their effective ``check`` override below.
+                    func = cast(Any, getattr(current, "func"))
                     result = func(*args, **kwargs)
                     if _is_awaitable(result):
                         result = await cast(Any, result)
@@ -1727,21 +1727,30 @@ class StateMachine:
             current_id = id(current)
             if leaving:
                 children = StateMachine._condition_children(current)
-                completed[current_id] = (
-                    any(completed[id(child)] for child in children)
-                    if children
-                    else (
-                        isinstance(current, AsyncCondition)
-                        or (
-                            type(current) is FuncCondition
-                            and asyncio.iscoroutinefunction(current.func)
-                        )
-                        or (
-                            type(current) is not FuncCondition
-                            and asyncio.iscoroutinefunction(current.check)
-                        )
+                if children:
+                    completed[current_id] = any(
+                        completed[id(child)] for child in children
                     )
-                )
+                else:
+                    current_type = type(current)
+                    if current_type is FuncCondition:
+                        leaf_async = asyncio.iscoroutinefunction(
+                            cast(FuncCondition, current).func
+                        )
+                    elif current_type is CompiledFuncCondition:
+                        leaf_async = asyncio.iscoroutinefunction(
+                            cast(CompiledFuncCondition, current).func
+                        )
+                    elif (
+                        isinstance(current, FuncCondition)
+                        and current_type.check is FuncCondition.check
+                    ):
+                        leaf_async = asyncio.iscoroutinefunction(current.func)
+                    else:
+                        leaf_async = asyncio.iscoroutinefunction(current.check)
+                    completed[current_id] = (
+                        isinstance(current, AsyncCondition) or leaf_async
+                    )
                 active.remove(current_id)
                 continue
 
@@ -1813,6 +1822,11 @@ class StateMachine:
                         raise TypeError(
                             "AsyncCondition requires AsyncStateMachine and trigger_async()"
                         )
+                    elif condition_type in (FuncCondition, CompiledFuncCondition):
+                        result = cast(Any, getattr(current, "func"))(*args, **kwargs)
+                        if _is_awaitable(result):
+                            _reject_sync_awaitable(result)
+                        active.remove(current_id)
                     else:
                         result = current.check(*args, **kwargs)
                         if _is_awaitable(result):

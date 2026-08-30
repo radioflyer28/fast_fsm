@@ -17,6 +17,7 @@ from fast_fsm.conditions import (
 from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
+    CompiledFuncCondition,
     DeclarativeState,
     FSMBuilder,
     State,
@@ -1710,21 +1711,39 @@ class TestFSMBuilderAsyncPreflight:
         assert builder.machine_type is AsyncStateMachine
         assert isinstance(builder.build(), AsyncStateMachine)
 
-    @pytest.mark.asyncio
-    async def test_auto_detects_async_func_condition_subclass_check(self):
-        """Auto mode classifies the effective public subclass hook."""
+    @staticmethod
+    def _callable_backed_async_condition(shape):
+        """Return each supported callable-backed async condition shape."""
+
+        async def async_guard(*args, **kwargs):
+            return True
+
+        if shape == "compiled":
+            return CompiledFuncCondition(async_guard)
+        if shape == "inherited":
+
+            class InheritedFuncCondition(FuncCondition):
+                pass
+
+            return InheritedFuncCondition(async_guard)
 
         class AsyncCheckFuncCondition(FuncCondition):
             async def check(self, *args, **kwargs):
                 return True
 
+        return AsyncCheckFuncCondition(lambda *args, **kwargs: False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", ("compiled", "inherited", "override"))
+    async def test_auto_detects_callable_backed_async_conditions(self, shape):
+        """Auto mode follows each callable-backed condition's effective hook."""
         builder = FSMBuilder(State("start"))
         builder.add_state(State("finish"))
         builder.add_transition(
             "go",
             "start",
             "finish",
-            AsyncCheckFuncCondition(lambda *args, **kwargs: False),
+            self._callable_backed_async_condition(shape),
         )
 
         assert builder.machine_type is AsyncStateMachine
@@ -1733,20 +1752,16 @@ class TestFSMBuilderAsyncPreflight:
         assert await machine.can_trigger_async("go")
         assert (await machine.trigger_async("go")).success
 
-    def test_explicit_sync_rejects_async_func_condition_subclass_check(self):
-        """Explicit sync fails before it can publish an unreachable async guard."""
-
-        class AsyncCheckFuncCondition(FuncCondition):
-            async def check(self, *args, **kwargs):
-                return True
-
+    @pytest.mark.parametrize("shape", ("compiled", "inherited", "override"))
+    def test_explicit_sync_rejects_callable_backed_async_conditions(self, shape):
+        """Explicit sync rejects every detectable callable-backed async guard."""
         builder = FSMBuilder(State("start"), async_mode=False)
         builder.add_state(State("finish"))
         builder.add_transition(
             "go",
             "start",
             "finish",
-            AsyncCheckFuncCondition(lambda *args, **kwargs: False),
+            self._callable_backed_async_condition(shape),
         )
 
         with pytest.raises(RuntimeError, match="explicit sync.*condition"):
