@@ -1252,34 +1252,50 @@ if sys.implementation.name != "cpython":
 sys.path.insert(0, str(source_root))
 importlib.invalidate_caches()
 
+allowed_modules = {}
+for source_file in package_root.rglob("*.py"):
+    resolved = source_file.resolve()
+    try:
+        resolved.relative_to(source_root)
+    except ValueError as error:
+        raise RuntimeError(f"Selected source escaped source root: {source_file}") from error
+    parts = list(resolved.relative_to(source_root).with_suffix("").parts)
+    is_package = parts[-1] == "__init__"
+    if is_package:
+        parts.pop()
+    module_name = ".".join(parts)
+    if module_name != package_name and not module_name.startswith(package_name + "."):
+        raise RuntimeError(f"Selected source is outside project namespace: {resolved}")
+    previous = allowed_modules.get(module_name)
+    if previous is not None and previous != (resolved, is_package):
+        raise RuntimeError(f"Ambiguous selected source module: {module_name}")
+    allowed_modules[module_name] = (resolved, is_package)
+if package_name not in allowed_modules or not allowed_modules[package_name][1]:
+    raise RuntimeError(f"Selected source is missing package initializer: {package_name}")
+
 class PureSourceFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname != package_name and not fullname.startswith(package_name + "."):
             return None
-        relative_parts = fullname.split(".")[1:]
-        module_path = package_root.joinpath(*relative_parts)
-        package_init = module_path / "__init__.py"
-        if package_init.is_file():
+        source = allowed_modules.get(fullname)
+        if source is None:
+            raise ModuleNotFoundError(
+                f"Pure source audit denied unselected project import: {fullname}",
+                name=fullname,
+            )
+        source_file, is_package = source
+        if is_package:
             return importlib.util.spec_from_file_location(
                 fullname,
-                package_init,
-                submodule_search_locations=[str(module_path)],
+                source_file,
+                submodule_search_locations=[str(source_file.parent)],
             )
-        source_file = module_path.with_suffix(".py")
-        if source_file.is_file():
-            return importlib.util.spec_from_file_location(fullname, source_file)
-        return None
+        return importlib.util.spec_from_file_location(fullname, source_file)
 
 sys.meta_path.insert(0, PureSourceFinder())
 
-def module_name_for(source_file):
-    parts = list(source_file.relative_to(source_root).with_suffix("").parts)
-    if parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(parts)
-
 module_names = sorted(
-    (module_name_for(source_file) for source_file in package_root.rglob("*.py")),
+    allowed_modules,
     key=lambda name: (name.count("."), name),
 )
 modules = []
@@ -1297,7 +1313,29 @@ for module_name in module_names:
         ) from error
     if origin.suffix != ".py":
         raise RuntimeError(f"Imported module is not pure Python: {module_name} -> {origin}")
+    expected_origin, _ = allowed_modules[module_name]
+    if origin != expected_origin:
+        raise RuntimeError(
+            f"Imported module did not use selected source: {module_name} -> {origin}"
+        )
     modules.append(module)
+
+for module_name, module in sorted(tuple(sys.modules.items())):
+    if module_name != package_name and not module_name.startswith(package_name + "."):
+        continue
+    source = allowed_modules.get(module_name)
+    if source is None:
+        raise RuntimeError(f"Loaded unselected project module: {module_name}")
+    origin_text = getattr(module, "__file__", None)
+    if not origin_text:
+        raise RuntimeError(f"Loaded project module has no source origin: {module_name}")
+    origin = Path(origin_text).resolve()
+    expected_origin, _ = source
+    if origin != expected_origin or origin.suffix != ".py":
+        raise RuntimeError(
+            f"Loaded project module did not use allowed selected .py source: "
+            f"{module_name} -> {origin}"
+        )
 
 layouts = {}
 seen = set()
@@ -1529,6 +1567,92 @@ def _python_major_minor(version: Any) -> str:
     return f"{int(components[0])}.{int(components[1])}"
 
 
+def _ordered_layout_names(entries: Any, *, path: str) -> list[str]:
+    """Validate a deterministically ordered qualified-name evidence list."""
+    if not isinstance(entries, list):
+        raise EvidenceError(f"Manifest {path} must be a list.")
+    names: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping) or not isinstance(
+            entry.get("qualified_name"), str
+        ):
+            raise EvidenceError(
+                f"Manifest {path} contains an entry without a qualified_name."
+            )
+        names.append(str(entry["qualified_name"]))
+    if names != sorted(names):
+        raise EvidenceError(f"Manifest {path} must be sorted by qualified_name.")
+    if len(set(names)) != len(names):
+        raise EvidenceError(
+            f"Manifest {path} contains duplicate qualified_name entries."
+        )
+    return names
+
+
+def _normalize_runtime_layouts_for_comparison(slots: dict[str, Any]) -> None:
+    """Validate runtime layout evidence and remove only host-specific offsets."""
+    static_names = _ordered_layout_names(
+        slots.get("inventory"), path="slots_policy.inventory"
+    )
+    registry_names = _ordered_layout_names(
+        slots.get("registered_exceptions"),
+        path="slots_policy.registered_exceptions",
+    )
+    layouts = slots.get("runtime_layouts")
+    runtime_names = _ordered_layout_names(layouts, path="slots_policy.runtime_layouts")
+    if static_names != runtime_names:
+        missing = sorted(set(static_names) - set(runtime_names))
+        extra = sorted(set(runtime_names) - set(static_names))
+        details: list[str] = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if extra:
+            details.append("extra " + ", ".join(extra))
+        raise EvidenceError(
+            "Manifest slots_policy.runtime_layouts does not reconcile with "
+            "slots_policy.inventory: " + "; ".join(details)
+        )
+    if not set(registry_names) <= set(static_names):
+        stale = sorted(set(registry_names) - set(static_names))
+        raise EvidenceError(
+            "Manifest slots_policy.registered_exceptions has entries absent from "
+            "slots_policy.inventory: " + ", ".join(stale)
+        )
+    normalized_layouts: list[dict[str, Any]] = []
+    for entry in cast(list[Mapping[str, Any]], layouts):
+        qualified_name = str(entry["qualified_name"])
+        has_instance_dict = entry.get("has_instance_dict")
+        dictoffset = entry.get("dictoffset")
+        if not isinstance(has_instance_dict, bool):
+            raise EvidenceError(
+                "Manifest slots_policy.runtime_layouts has a non-boolean "
+                f"has_instance_dict for {qualified_name}."
+            )
+        if isinstance(dictoffset, bool) or not isinstance(dictoffset, int):
+            raise EvidenceError(
+                "Manifest slots_policy.runtime_layouts has an invalid dictoffset for "
+                f"{qualified_name}."
+            )
+        if has_instance_dict != (dictoffset != 0):
+            raise EvidenceError(
+                "Manifest slots_policy.runtime_layouts has contradictory dictionary "
+                f"layout evidence for {qualified_name}."
+            )
+        if has_instance_dict != (qualified_name in registry_names):
+            expectation = "registered" if has_instance_dict else "not registered"
+            raise EvidenceError(
+                "Manifest slots_policy.runtime_layouts has registry-inconsistent "
+                f"dictionary evidence for {qualified_name}: expected {expectation}."
+            )
+        normalized_layouts.append(
+            {
+                "qualified_name": qualified_name,
+                "has_instance_dict": has_instance_dict,
+            }
+        )
+    slots["runtime_layouts"] = normalized_layouts
+
+
 def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Return fields whose equality defines evidence freshness.
 
@@ -1546,7 +1670,7 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
         performance_contract.pop("observation", None)
     slots = stable.get("slots_policy")
     if isinstance(slots, dict):
-        slots.pop("runtime_layouts", None)
+        _normalize_runtime_layouts_for_comparison(slots)
     return stable
 
 

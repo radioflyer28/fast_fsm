@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import py_compile
 import re
 import shutil
 import subprocess
@@ -1081,6 +1082,85 @@ def test_runtime_layout_inventory_uses_selected_pure_source(tmp_path: Path) -> N
     )
 
 
+def test_runtime_layout_audit_rejects_legacy_sourceless_project_import(
+    tmp_path: Path,
+) -> None:
+    """A selected package cannot fall through to a legacy sibling ``.pyc``."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "legacy-pyc-executed"
+    shadow_source = tmp_path / "shadow.py"
+    shadow_source.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    py_compile.compile(
+        str(shadow_source), cfile=str(package_root / "shadow.pyc"), doraise=True
+    )
+    shadow_source.unlink()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\nimportlib.import_module('fast_fsm.shadow')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="denied unselected project import"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
+def test_runtime_layout_audit_rejects_native_only_project_import(
+    tmp_path: Path,
+) -> None:
+    """A selected package cannot fall through to a native-only sibling module."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "native-import-executed"
+    marker_literal = json.dumps(str(marker))
+    (source_root / "shadow.c").write_text(
+        "#include <Python.h>\n"
+        "#include <stdio.h>\n"
+        "static struct PyModuleDef shadow_module = {\n"
+        '    PyModuleDef_HEAD_INIT, "shadow", NULL, -1, NULL\n'
+        "};\n"
+        "PyMODINIT_FUNC PyInit_shadow(void) {\n"
+        f'    FILE *marker = fopen({marker_literal}, "w");\n'
+        '    if (marker != NULL) { fputs("executed", marker); fclose(marker); }\n'
+        "    return PyModule_Create(&shadow_module);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (source_root / "setup.py").write_text(
+        "from setuptools import Extension, setup\n"
+        "setup(ext_modules=[Extension('fast_fsm.shadow', ['shadow.c'])])\n",
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [sys.executable, "setup.py", "build_ext", "--inplace"],
+        cwd=source_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if build.returncode:
+        pytest.skip("A C compiler is unavailable for the native-only import fixture.")
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\n"
+        "from pathlib import Path\n"
+        "importlib.import_module('fast_fsm.shadow')\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="denied unselected project import"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
 def _manifest_fixture() -> dict[str, object]:
     """Return a complete minimal stable manifest for comparison coverage."""
     return {
@@ -1095,12 +1175,33 @@ def _manifest_fixture() -> dict[str, object]:
         "toolchain": {"python": "3.12.10", "uv": "0.12.6"},
         "artifact_evidence": {"wheels": []},
         "slots_policy": {
-            "inventory": [{"qualified_name": "fast_fsm.core.State"}],
+            "inventory": [
+                {"qualified_name": "fast_fsm.core.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.core.State"},
+                {"qualified_name": "fast_fsm.core.TransitionError"},
+            ],
             "registered_exceptions": [
                 {"qualified_name": "fast_fsm.core.CompiledFuncCondition"},
                 {"qualified_name": "fast_fsm.core.TransitionError"},
             ],
             "measurements": [],
+            "runtime_layouts": [
+                {
+                    "qualified_name": "fast_fsm.core.CompiledFuncCondition",
+                    "has_instance_dict": True,
+                    "dictoffset": -1,
+                },
+                {
+                    "qualified_name": "fast_fsm.core.State",
+                    "has_instance_dict": False,
+                    "dictoffset": 0,
+                },
+                {
+                    "qualified_name": "fast_fsm.core.TransitionError",
+                    "has_instance_dict": True,
+                    "dictoffset": 16,
+                },
+            ],
         },
         "performance_contract": {
             "compiled_trigger_ops_per_sec_min": 200000,
@@ -1157,10 +1258,14 @@ def test_manifest_comparison_reports_field_level_staleness(
         target = target[part]  # type: ignore[assignment,index]
     target[path[-1]] = replacement
 
-    differences = compare_manifests(expected, observed)
+    if path == ("slots_policy", "inventory"):
+        with pytest.raises(EvidenceError, match="runtime_layouts does not reconcile"):
+            compare_manifests(expected, observed)
+    else:
+        differences = compare_manifests(expected, observed)
 
-    assert differences
-    assert ".".join(path) in "\n".join(differences)
+        assert differences
+        assert ".".join(path) in "\n".join(differences)
 
 
 def test_manifest_freshness_accepts_same_minor_python_patches_without_mutation() -> (
@@ -1314,6 +1419,50 @@ def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> N
         )
 
     assert manifest_path.read_bytes() == original
+
+
+def test_manifest_runtime_layout_freshness_normalizes_only_dictoffset() -> None:
+    """Different nonzero CPython offsets retain the stable layout verdict."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["slots_policy"]["runtime_layouts"][0]["dictoffset"] = -48
+
+    assert compare_manifests(expected, observed) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (
+            lambda layouts: layouts.pop(),
+            "slots_policy.runtime_layouts does not reconcile",
+        ),
+        (
+            lambda layouts: layouts[1].update(has_instance_dict=True, dictoffset=1),
+            "registry-inconsistent.*fast_fsm.core.State",
+        ),
+    ],
+)
+def test_manifest_runtime_layout_staleness_does_not_rewrite_baseline(
+    tmp_path: Path,
+    mutation: object,
+    match: str,
+) -> None:
+    """Deleted or altered runtime evidence fails check mode without rewriting bytes."""
+    manifest_path = tmp_path / "release-baseline.json"
+    baseline = _manifest_fixture()
+    layouts = baseline["slots_policy"]["runtime_layouts"]
+    assert callable(mutation)
+    mutation(layouts)
+    manifest_path.write_text(serialize_manifest(baseline), encoding="utf-8")
+    before_check = manifest_path.read_bytes()
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.write_or_check_manifest(
+            _manifest_fixture(), manifest_path=manifest_path, write=False
+        )
+
+    assert manifest_path.read_bytes() == before_check
 
 
 def test_manifest_requires_a_valid_environment_labeled_benchmark_observation() -> None:
