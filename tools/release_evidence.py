@@ -1340,8 +1340,42 @@ for module_name, module in sorted(tuple(sys.modules.items())):
 layouts = {}
 seen = set()
 
-def collect_class(cls, module_name):
+def verify_external_reexport(cls, binding_name):
+    claimed_module_name = getattr(cls, "__module__", None)
+    qualname = getattr(cls, "__qualname__", None)
+    if not isinstance(claimed_module_name, str) or not claimed_module_name:
+        raise RuntimeError(
+            f"Runtime type has an uncertain claimed owner: {binding_name}"
+        )
+    if not isinstance(qualname, str) or not qualname or "<locals>" in qualname:
+        raise RuntimeError(
+            f"Runtime type has an uncertain qualified name: {binding_name}"
+        )
+    claimed_module = sys.modules.get(claimed_module_name)
+    if claimed_module is None:
+        raise RuntimeError(
+            f"Runtime type has an unloaded claimed owner: {binding_name} -> "
+            f"{claimed_module_name}.{qualname}"
+        )
+    resolved = claimed_module
+    for component in qualname.split("."):
+        try:
+            resolved = getattr(resolved, component)
+        except AttributeError as error:
+            raise RuntimeError(
+                f"Runtime type has an unresolvable claimed owner: {binding_name} -> "
+                f"{claimed_module_name}.{qualname}"
+            ) from error
+    if resolved is not cls:
+        raise RuntimeError(
+            f"Runtime type has a mismatched claimed owner: {binding_name} -> "
+            f"{claimed_module_name}.{qualname}"
+        )
+
+
+def collect_class(cls, module_name, binding_name):
     if getattr(cls, "__module__", None) != module_name:
+        verify_external_reexport(cls, binding_name)
         return
     if cls in seen:
         return
@@ -1365,14 +1399,14 @@ def collect_class(cls, module_name):
     if previous is not None and previous != layout:
         raise RuntimeError(f"Ambiguous runtime class layout: {qualified_name}")
     layouts[qualified_name] = layout
-    for value in vars(cls).values():
+    for attribute_name, value in vars(cls).items():
         if isinstance(value, type):
-            collect_class(value, module_name)
+            collect_class(value, module_name, f"{binding_name}.{attribute_name}")
 
 for module in modules:
-    for value in vars(module).values():
+    for binding_name, value in vars(module).items():
         if isinstance(value, type):
-            collect_class(value, module.__name__)
+            collect_class(value, module.__name__, f"{module.__name__}.{binding_name}")
 
 print(json.dumps([layouts[name] for name in sorted(layouts)], sort_keys=True))
 """

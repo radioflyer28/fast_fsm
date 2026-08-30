@@ -1016,7 +1016,13 @@ def test_runtime_slots_layout_audit_catches_indirect_mutators_without_static_hel
         )
     )
 
-    with pytest.raises(EvidenceError, match="fast_fsm.runtime_indirect_policy.Child"):
+    with pytest.raises(
+        EvidenceError,
+        match=(
+            "fast_fsm.runtime_indirect_policy.Child|"
+            "Runtime type has a mismatched claimed owner"
+        ),
+    ):
         validate_runtime_slots_layouts(declarations, source_root)
 
 
@@ -1040,7 +1046,13 @@ def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
         and entry["classification"] == "slot-protected"
         for entry in static_inventory
     )
-    with pytest.raises(EvidenceError, match="fast_fsm.runtime_escape_policy.Child"):
+    with pytest.raises(
+        EvidenceError,
+        match=(
+            "fast_fsm.runtime_escape_policy.Child|"
+            "Runtime type has a mismatched claimed owner"
+        ),
+    ):
         validate_runtime_slots_layouts(declarations, source_root)
 
 
@@ -1080,6 +1092,57 @@ def test_runtime_layout_inventory_uses_selected_pure_source(tmp_path: Path) -> N
         and entry["has_instance_dict"] is False
         for entry in layouts
     )
+
+
+def test_runtime_layout_audit_rejects_foreign_module_spoofed_dynamic_type(
+    tmp_path: Path,
+) -> None:
+    """A selected module cannot hide a dict-bearing dynamic class as external."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_owner_spoof.py").write_text(
+        "Escaped = type('Escaped', (), {'__module__': 'external.namespace'})\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="unloaded claimed owner"):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_accepts_genuine_external_reexport(
+    tmp_path: Path,
+) -> None:
+    """A re-export is skipped only after resolving its actual owner identity."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_owner_reexport.py").write_text(
+        "from abc import ABC\n\n"
+        "ReexportedABC = ABC\n\n"
+        "class SourceOnly:\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    declarations = collect_class_declarations(source_root)
+    layouts = validate_runtime_slots_layouts(declarations, source_root)
+    layout_names = {entry["qualified_name"] for entry in layouts}
+
+    assert "fast_fsm.runtime_owner_reexport.SourceOnly" in layout_names
+    assert "fast_fsm.runtime_owner_reexport.ReexportedABC" not in layout_names
+
+
+def test_runtime_layout_audit_rejects_nested_foreign_owner_spoof(
+    tmp_path: Path,
+) -> None:
+    """Recursive runtime inspection validates nested type-valued bindings too."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_nested_owner_spoof.py").write_text(
+        "class Container:\n"
+        "    __slots__ = ()\n"
+        "    Escaped = type('Escaped', (), {'__module__': 'external.namespace'})\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="unloaded claimed owner"):
+        collect_runtime_class_layouts(source_root)
 
 
 def test_runtime_layout_audit_rejects_legacy_sourceless_project_import(
