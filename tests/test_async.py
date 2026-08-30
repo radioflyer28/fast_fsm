@@ -7,9 +7,11 @@ FSMBuilder async auto-detection, and AsyncDeclarativeState.
 
 import pytest
 
-from fast_fsm.conditions import AsyncCondition, Condition
+from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
+from fast_fsm.conditions import AsyncCondition, Condition, NegatedCondition
 from fast_fsm.core import (
     AsyncStateMachine,
+    CompiledFuncCondition,
     State,
     StateMachine,
 )
@@ -101,13 +103,61 @@ class SyncCounter(Condition):
 class RecordingAsyncCondition(AsyncCondition):
     """Async guard fixture that captures positional and keyword context."""
 
-    def __init__(self):
+    def __init__(self, result=True):
         super().__init__("recording_async", "records async guard context")
+        self.result = result
         self.calls = []
 
     async def check_async(self, *args, **kwargs) -> bool:
         self.calls.append((args, kwargs, id(kwargs)))
-        return True
+        return self.result
+
+
+class ShortCircuitCondition(AsyncCondition):
+    """Async leaf whose counter proves short-circuit evaluation order."""
+
+    def __init__(self, result):
+        super().__init__("short_circuit_async", "counts async evaluation")
+        self.result = result
+        self.calls = 0
+
+    async def check_async(self, *args, **kwargs) -> bool:
+        self.calls += 1
+        return self.result
+
+
+def make_negated_cycle():
+    """Build a supported-wrapper cycle without exposing any public protocol."""
+    condition = NegatedCondition(AlwaysTrueCondition())
+    condition._inner = condition
+    return condition
+
+
+def make_and_cycle():
+    """Build an AndCondition self-cycle for deterministic rejection tests."""
+    condition = AndCondition(AlwaysTrueCondition())
+    condition.conditions = (condition,)
+    return condition
+
+
+def make_or_cycle():
+    """Build an OrCondition self-cycle for deterministic rejection tests."""
+    condition = OrCondition(AlwaysTrueCondition())
+    condition.conditions = (condition,)
+    return condition
+
+
+def make_not_cycle():
+    """Build a NotCondition self-cycle for deterministic rejection tests."""
+    condition = NotCondition(AlwaysTrueCondition())
+    condition.condition = condition
+    return condition
+
+
+def make_shared_condition_dag():
+    """Return an acyclic graph that reuses one async leaf twice."""
+    shared = RecordingAsyncCondition()
+    return AndCondition(shared, NotCondition(NegatedCondition(shared)))
 
 
 @pytest.fixture
@@ -270,6 +320,104 @@ class TestCanTriggerAsync:
         args, kwargs, _ = condition.calls[-1]
         assert args[0] is marker
         assert kwargs == {"safe": "visible"}
+
+
+class TestAsyncWrapperEvaluation:
+    """D-11/D-14 nested built-in wrapper behavior."""
+
+    @staticmethod
+    def _machine(condition):
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="async_wrapper")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+        return machine
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            lambda: NegatedCondition(RecordingAsyncCondition(result=False)),
+            lambda: AndCondition(RecordingAsyncCondition(), RecordingAsyncCondition()),
+            lambda: OrCondition(
+                RecordingAsyncCondition(result=False), RecordingAsyncCondition()
+            ),
+            lambda: NotCondition(RecordingAsyncCondition(result=False)),
+        ],
+    )
+    async def test_async_wrappers_await_nested_leaves_for_can_and_trigger(
+        self, factory
+    ):
+        condition = factory()
+        machine = self._machine(condition)
+        marker = object()
+        payload = object()
+
+        assert await machine.can_trigger_async("go", marker, payload=payload)
+        assert (await machine.trigger_async("go", marker, payload=payload)).success
+
+    @pytest.mark.asyncio
+    async def test_async_wrappers_preserve_short_circuit_order(self):
+        false_left = ShortCircuitCondition(False)
+        skipped_and = ShortCircuitCondition(True)
+        true_left = ShortCircuitCondition(True)
+        skipped_or = ShortCircuitCondition(False)
+
+        assert not await self._machine(
+            AndCondition(false_left, skipped_and)
+        ).can_trigger_async("go")
+        assert await self._machine(
+            OrCondition(true_left, skipped_or)
+        ).can_trigger_async("go")
+        assert false_left.calls == 1
+        assert skipped_and.calls == 0
+        assert true_left.calls == 1
+        assert skipped_or.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        [make_negated_cycle, make_and_cycle, make_or_cycle, make_not_cycle],
+    )
+    async def test_supported_wrapper_cycles_raise_value_error(self, factory):
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="async_cycle")
+        machine.add_state(target)
+
+        with pytest.raises(ValueError, match="cycle"):
+            machine.add_transition("go", initial, target, factory())
+
+    @pytest.mark.asyncio
+    async def test_shared_condition_dag_is_accepted_and_awaited(self):
+        machine = self._machine(make_shared_condition_dag())
+
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+
+    def test_sync_machine_rejects_nested_async_wrapper(self):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="sync_wrapper")
+        machine.add_state(target)
+
+        with pytest.raises(TypeError, match="AsyncCondition"):
+            machine.add_transition(
+                "go", initial, target, NegatedCondition(RecordingAsyncCondition())
+            )
+
+    def test_compiled_func_condition_forwards_positional_context(self):
+        captured = []
+        marker = object()
+
+        def guard(*args, **kwargs):
+            captured.append((args, kwargs))
+            return True
+
+        assert CompiledFuncCondition(guard).check(marker, payload="value")
+        assert captured[0][0][0] is marker
+        assert captured[0][1] == {"payload": "value"}
 
 
 # ---------------------------------------------------------------------------
