@@ -768,6 +768,52 @@ class TestAsyncDeclarativeStateGaps:
     """Cover uncovered paths in AsyncDeclarativeState."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        (
+            lambda: NegatedCondition(ConfigurableAsyncCondition(result=False)),
+            lambda: NotCondition(ConfigurableAsyncCondition(result=False)),
+            lambda: AndCondition(AlwaysTrue(), ConfigurableAsyncCondition(result=True)),
+            lambda: OrCondition(AlwaysFalse(), ConfigurableAsyncCondition(result=True)),
+        ),
+    )
+    async def test_direct_async_policy_awaits_supported_async_wrappers(
+        self, factory, recwarn
+    ):
+        """Direct async state policies use the machine's wrapper evaluator."""
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=factory())
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        state = MyState("source")
+
+        assert await state.can_transition_async("go", State("target"))
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.asyncio
+    async def test_direct_async_policy_awaits_async_func_condition(self, recwarn):
+        """FuncCondition leaves returning coroutines are awaited directly."""
+
+        async def guard(*args, **kwargs):
+            return True
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=FuncCondition(guard))
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        state = MyState("source")
+
+        assert await state.can_transition_async("go", State("target"))
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.asyncio
     async def test_can_transition_async_with_async_condition_pass(self):
         cond = ConfigurableAsyncCondition(result=True)
 

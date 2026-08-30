@@ -91,6 +91,95 @@ def _is_awaitable(value: Any) -> bool:
     )
 
 
+async def _evaluate_condition_async_iteratively(
+    condition: Condition,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> bool:
+    """Await supported condition wrappers without falling through to ``check``.
+
+    Both machine-owned dispatch and direct ``AsyncDeclarativeState`` policy
+    calls use this seam. Built-in wrapper traversal remains iterative so deep
+    condition graphs do not consume the Python call stack, and leaves may
+    return either an awaitable or an ordinary truthy result.
+    """
+    from .condition_templates import AndCondition, NotCondition, OrCondition
+
+    active: set[int] = set()
+    entered: set[int] = set()
+    stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
+    result: Any = False
+
+    try:
+        while stack:
+            action, current, child_index = stack.pop()
+            current_id = id(current)
+
+            if action == "evaluate":
+                if current_id in active:
+                    raise ValueError("supported condition wrapper cycle detected")
+                active.add(current_id)
+                entered.add(current_id)
+                condition_type = type(current)
+                children = StateMachine._condition_children(current)
+
+                if condition_type is NegatedCondition or condition_type is NotCondition:
+                    stack.append(("negate", current, 0))
+                    stack.append(("evaluate", children[0], 0))
+                elif condition_type is AndCondition:
+                    if children:
+                        stack.append(("and", current, 1))
+                        stack.append(("evaluate", children[0], 0))
+                    else:
+                        result = True
+                        active.remove(current_id)
+                elif condition_type is OrCondition:
+                    if children:
+                        stack.append(("or", current, 1))
+                        stack.append(("evaluate", children[0], 0))
+                    else:
+                        result = False
+                        active.remove(current_id)
+                elif isinstance(current, AsyncCondition):
+                    result = await current.check_async(*args, **kwargs)
+                    active.remove(current_id)
+                elif isinstance(current, FuncCondition):
+                    # ``FuncCondition.check`` is annotated to return ``bool``.
+                    # Calling the wrapped function directly keeps an async leaf
+                    # visible to mypyc long enough to await it.
+                    func = cast(Any, current.func)
+                    result = func(*args, **kwargs)
+                    if _is_awaitable(result):
+                        result = await cast(Any, result)
+                    active.remove(current_id)
+                else:
+                    result = current.check(*args, **kwargs)
+                    if _is_awaitable(result):
+                        result = await cast(Any, result)
+                    active.remove(current_id)
+            elif action == "negate":
+                result = not result
+                active.remove(current_id)
+            elif action == "and":
+                children = StateMachine._condition_children(current)
+                if not result or child_index == len(children):
+                    active.remove(current_id)
+                else:
+                    stack.append(("and", current, child_index + 1))
+                    stack.append(("evaluate", children[child_index], 0))
+            else:  # action == "or"
+                children = StateMachine._condition_children(current)
+                if result or child_index == len(children):
+                    active.remove(current_id)
+                else:
+                    stack.append(("or", current, child_index + 1))
+                    stack.append(("evaluate", children[child_index], 0))
+
+        return bool(result)
+    finally:
+        active.difference_update(entered)
+
+
 @mypyc_attr(native_class=False)
 class TransitionError(RuntimeError):
     """Raised by :meth:`TransitionResult.raise_if_failed` when a transition did not succeed.
@@ -1697,79 +1786,10 @@ class StateMachine:
         completed: Optional[set[int]] = None,
     ) -> bool:
         """Await async leaves through supported built-in wrappers iteratively."""
-        from .condition_templates import AndCondition, NotCondition, OrCondition
-
-        if active is None:
-            active = set()
-        if completed is None:
-            completed = set()
-        entered: set[int] = set()
-        stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
-        result: Any = False
-
-        try:
-            while stack:
-                action, current, child_index = stack.pop()
-                current_id = id(current)
-
-                if action == "evaluate":
-                    if current_id in active:
-                        raise ValueError("supported condition wrapper cycle detected")
-                    active.add(current_id)
-                    entered.add(current_id)
-                    condition_type = type(current)
-                    children = self._condition_children(current)
-
-                    if (
-                        condition_type is NegatedCondition
-                        or condition_type is NotCondition
-                    ):
-                        stack.append(("negate", current, 0))
-                        stack.append(("evaluate", children[0], 0))
-                    elif condition_type is AndCondition:
-                        if children:
-                            stack.append(("and", current, 1))
-                            stack.append(("evaluate", children[0], 0))
-                        else:
-                            result = True
-                            active.remove(current_id)
-                    elif condition_type is OrCondition:
-                        if children:
-                            stack.append(("or", current, 1))
-                            stack.append(("evaluate", children[0], 0))
-                        else:
-                            result = False
-                            active.remove(current_id)
-                    elif isinstance(current, AsyncCondition):
-                        result = await current.check_async(*args, **kwargs)
-                        active.remove(current_id)
-                    else:
-                        result = current.check(*args, **kwargs)
-                        if _is_awaitable(result):
-                            result = await cast(Any, result)
-                        active.remove(current_id)
-                elif action == "negate":
-                    result = not result
-                    active.remove(current_id)
-                elif action == "and":
-                    children = self._condition_children(current)
-                    if not result or child_index == len(children):
-                        active.remove(current_id)
-                    else:
-                        stack.append(("and", current, child_index + 1))
-                        stack.append(("evaluate", children[child_index], 0))
-                else:  # action == "or"
-                    children = self._condition_children(current)
-                    if result or child_index == len(children):
-                        active.remove(current_id)
-                    else:
-                        stack.append(("or", current, child_index + 1))
-                        stack.append(("evaluate", children[child_index], 0))
-
-            return result
-        finally:
-            active.difference_update(entered)
-            completed.update(entered)
+        # Retain the existing private signature, but keep traversal state inside
+        # the shared evaluator so direct async state-policy calls cannot diverge
+        # from machine-owned dispatch.
+        return await _evaluate_condition_async_iteratively(condition, args, kwargs)
 
     def force_state(self, state_name: str) -> None:
         """Force the machine into a named state, bypassing guard conditions.
@@ -2905,7 +2925,9 @@ class AsyncDeclarativeState(DeclarativeState):
                     if isinstance(condition, AsyncCondition):
                         condition_result = await condition.check_async(*args, **kwargs)
                     elif isinstance(condition, Condition):
-                        condition_result = condition.check(*args, **kwargs)
+                        condition_result = await _evaluate_condition_async_iteratively(
+                            condition, args, kwargs
+                        )
                     elif callable(condition):
                         condition_result = condition(*args, **kwargs)
                         if _is_awaitable(condition_result):
