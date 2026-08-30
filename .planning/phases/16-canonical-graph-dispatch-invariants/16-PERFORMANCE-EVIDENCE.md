@@ -86,3 +86,86 @@ helper was also corrected to overlay both Phase 16 maintainer guides and the
 baseline manifest during isolated collection. This closes the working-tree
 docs/evidence provenance gap without importing or deleting developer native
 shadows.
+
+## Final Pure/Compiled Parity and Freeze Gate
+
+- Collected: 2026-08-30
+- Exact committed source tree: `08e1bc1b3ec39775f5af1a191d4efeb4cd9e5832`
+  (`docs(16-05): record clean pure baseline evidence`)
+- Environment: CPython 3.12.10; arm64; macOS 26.5 arm64; `uv` 0.12.6.
+- Isolation: each mode exported that committed `HEAD` into its own temporary
+  archive and overlaid the inventory below. Pure mode asserted `.py` origin
+  before imports; compiled mode built native code successfully and asserted the
+  native module origin before imports. No developer native shadow was removed
+  or imported.
+
+### Blocking Commands
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+```
+
+The canonical suite passed its identical graph, builder, async, guard,
+condition-template, declarative/history, and mypyc semantic command in both
+asserted modes. It then passed the compiled trigger/history performance command
+and, in a separate asserted-pure archive, the full release gate: source-origin
+preflight, Ruff formatting/lint, mypy, all 985 tests, Sphinx HTML, Sphinx
+doctests, and read-only release-baseline freshness. The separate blocking mypy
+command also passed with no issues in six source files.
+
+| Mode | Asserted `fast_fsm.core` origin | Operations / warmup / repeats | Elapsed | Observed `trigger()` rate | Result |
+| --- | --- | --- | ---: | ---: | --- |
+| pure | `src/fast_fsm/core.py` | 100,000 / 1,000 / 1 | 0.134195 s | 745,186.56 ops/s | semantic suite + release gate passed |
+| compiled | `src/fast_fsm/core.cpython-312-darwin.so` | 100,000 / 1,000 / 1 | 0.104330 s | 958,497.84 ops/s | semantic/performance suite passed; ≥200,000 floor |
+
+The microbenchmark constructed the same two-state `quick_build()` toggle in
+each asserted context, performed the warmup, collected garbage, and timed only
+the alternating `trigger("toggle")` loop. Relative to the before-change local
+observation, the pure value is -12.49% and the compiled value is -9.10%; both
+remain environment-labelled observations rather than new policy values. The
+only durable performance contract is the compiled 200,000 ops/s floor, which
+the native performance tests and direct observation both clear.
+
+### Advisory Typecheck Evidence
+
+The advisory command was intentionally invoked through `subprocess.run` with
+captured stdout/stderr and `check=False`; it did not control task completion.
+
+```text
+command: task typecheck-ty
+exit status: 0
+stdout:
+All checks passed!
+
+stderr:
+task: [typecheck-ty] uv run ty check src/fast_fsm/
+WARN ty is pre-release software and not ready for production use. Expect to encounter bugs, missing features, and fatal errors.
+```
+
+### Overlay Inventory SHA-256
+
+```text
+288d6344e905b0724c87c33f8af39d87b09d2d1397e72d190e4971fb68318252  tools/phase16_isolated_verify.py
+a6a1affc32cb3dc7cbfdff87bbd8d00054f4ba5c7ffa3155beda0fc357ad984b  src/fast_fsm/core.py
+9c1cdafb6d9837b41e053a492d1706a43059828ba21b0bdc1813f10d6f9b489f  src/fast_fsm/conditions.py
+5e6f32fb96e9ccadc2235668a07ee78add09372d497fa22ae06e4cf09ff32a64  src/fast_fsm/condition_templates.py
+9055c4f3e64169254781f657d4612ee6983a423e5dbc00b1043c583346936e22  tests/test_graph_invariants.py
+bd3cfdd5532bbdc19f6cfa1a50010d535b32d336486e62244f1cb3c78e05484c  tests/test_builder.py
+37ff078106f2150d5bdf1bdea2273c2655e54463e86b817c77d216f4f56d7de8  tests/test_async.py
+b09ef1af5aef7982c7129ed05638a91a4ca9d247ec0d5f876c254f837cc2d310  tests/test_safety_kwargs.py
+fa0065fe6d7e487acb4e76d7cb6425ed8885858d64b99bb5bbe747e8e14ed806  tests/test_condition_templates.py
+1e87ca686e06d7cdf877fb7a375ffda77a360d061a53d927bdbc7641cfed2c5e  tests/test_advanced_functionality.py
+80843df82b821a661c657a996827ecac6959ccb595bc6b81a20655671f5fc8b6  tests/test_mypyc_guard.py
+0ec0e484cbdf436c3256da966b7517ce7b3b463005ce12196e51360918e92f8a  tests/test_performance_benchmarks.py
+c8c0a942628bbd95817fb8977fe2ab8fbc5c30221b0789881e4486f827a7f6af  .specify/memory/spr-core-api.md
+8a59b42ffb63cdc6cf46fd926440e0725e27cb4d1487a08eb30662c4b58fdb7a  docs/dev/architecture.md
+ee0d5cb49a57dddca17fcf8408bfa2fda157b1e897f0b6e3b7c8af3f84e45a13  docs/dev/testing.md
+1e34958020f064941581b186dc778b6760665e931250e1a0eb51956220eb7eb7  evidence/release-baseline.json
+2fa5c720a38ea04560b80ac02aa3c2363279a66e9b94062eedcb51c7c875b433  .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md
+```
+
+This is source-tree proof only. It does not make an installed-wheel or
+publication-parity claim (Phase 20), publish a topology format (FUTR-05), or
+define Phase 17 lifecycle, Phase 18 ownership, or Phase 19 diagnostics/output
+contracts.
