@@ -15,7 +15,18 @@ Key design principles:
 import logging
 import time
 from collections import deque
-from typing import Optional, Dict, Any, Callable, List, Sequence, Union, Tuple, cast, overload
+from typing import (
+    Optional,
+    Dict,
+    Any,
+    Callable,
+    List,
+    Sequence,
+    Union,
+    Tuple,
+    cast,
+    overload,
+)
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
