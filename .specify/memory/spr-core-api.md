@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-08-29 (measured slots-policy registry and release-evidence authority)
+**Updated**: 2026-08-30 (canonical graph and guard-context seams)
 
 - `StateMachine` and other hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited. The recursive `uv run python tools/release_evidence.py slots-policy --json` audit discovers every relevant `src/fast_fsm` class and fails on an unregistered or omitted exception.
 - Core operations (`trigger`, `can_trigger`, `add_state`, `add_transition`) are O(1) via direct dict lookup; compiled `trigger()` throughput target ≥ 200,000 ops/sec.
@@ -16,13 +16,14 @@
 - `StateMachine.from_transitions(transitions, initial_state)` classmethod builds a machine from a flat list.
 - `is_in(state)` — O(1) identity/name check against `_current_state`.
 - `can_trigger(trigger)` — evaluates guard condition synchronously before committing; use for pre-flight checks.
+- `can_trigger`, `trigger`, `can_trigger_async`, and `trigger_async` share `_prepare_transition()` for one fresh canonical transition lookup and guarded context preparation per public call. Missing and unconditional transitions do not allocate a guard mapping; guarded calls receive the original positional entries plus a fresh sanitized keyword mapping.
 - Listener protocol: objects with `on_exit_state`, `on_enter_state`, `after_transition` methods; registered via `add_listener(*listeners)`.
 - `AsyncStateMachine` subclasses `StateMachine`; adds `trigger_async` / `can_trigger_async` (auto-detect `AsyncCondition`), `on_enter_async(state_name, fn)` / `on_exit_async(state_name, fn)` for async per-state callbacks (async equivalents of `on_enter`/`on_exit`; fire AFTER sync callbacks, within the same `trigger_async` call; exceptions caught/logged). Declares `__slots__ = ("_state_enter_async_callbacks", "_state_exit_async_callbacks")` and overrides `__init__` and `clone()` to carry those two dicts. `FSMBuilder` auto-detects async requirement from states/conditions.
 - `FSMBuilder` fluent builder; auto-detects async requirement from states/conditions; `force_async()` / `force_sync()` override; `build()` is idempotent. Fluent per-state callback registration: `on_enter(state, cb)`, `on_exit(state, cb)`, `on_enter_async(state, cb)`, `on_exit_async(state, cb)` — all return `self`; async variants auto-upgrade auto-detect builder to `AsyncStateMachine`; async callbacks on explicit-sync machine are warned and ignored.
 - `CallbackState` extends `State` with `_on_enter` / `_on_exit` slots; use when state-level callbacks needed without losing slots optimisation.
 - `DeclarativeState` enables `@transition`-decorated methods on state classes; auto-discovers via `_discover_handlers()`.
 - mypyc compiles `core.py` only; `conditions.py` and `condition_templates.py` must stay interpreted (users subclass `Condition` from Python). ADR-003 records the selective compilation boundary and the two measured `native_class=False` slots-policy exceptions.
-- `_sanitize_condition_kwargs` strips private kwargs (leading `_`) and caps at 50 items before passing to conditions.
+- `_sanitize_condition_kwargs` filters private/dunder, non-string, and over-100-character keys before retaining the first 50 safe insertion-ordered entries. It copies the mapping but preserves retained value identity and never logs payload values.
 - `force_state(name)` sets `_current_state` directly without guard checks; fires full on_exit / on_enter / after_transition callback chain with synthetic trigger `"__force__"`; raises `KeyError` for unregistered state names.
 - `reset()` calls `force_state(initial_state_name)`; fires callbacks even when already in initial state.
 - `initial_state_name` read-only property returns the name of the state passed to `__init__`; stored in `_initial_state` slot.

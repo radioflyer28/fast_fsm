@@ -138,6 +138,16 @@ class _PreparedTransition:
     condition: Optional[Condition]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedDispatch:
+    """One fresh canonical lookup and optional guard context for dispatch."""
+
+    entry: TransitionEntry
+    current_name: str
+    args: Tuple[Any, ...]
+    condition_kwargs: Optional[Dict[str, Any]]
+
+
 @mypyc_attr(native_class=False)
 class CompiledFuncCondition(Condition):
     """A mypyc-compiled wrapper around a callable for use as a transition guard.
@@ -1242,24 +1252,45 @@ class StateMachine:
         Performance: O(1) - Direct dictionary lookup + condition check
         Use this for validation before expensive operations.
         """
-        current_name = self._current_state.name
-
-        if current_name not in self._transitions:
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
             return False
 
-        if trigger not in self._transitions[current_name]:
-            return False
-
-        entry = self._transitions[current_name][trigger]
-
+        entry = prepared.entry
         if entry.condition:
-            safe_kwargs = self._sanitize_condition_kwargs(kwargs)
-            if not entry.condition.check(*args, **safe_kwargs):
+            assert prepared.condition_kwargs is not None
+            if not entry.condition.check(*prepared.args, **prepared.condition_kwargs):
                 return False
 
         return self._current_state.can_transition(
             trigger, entry.to_state, *args, **kwargs
         )
+
+    def _prepare_transition(
+        self, trigger: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+    ) -> Union[_PreparedDispatch, TransitionResult]:
+        """Resolve one canonical transition and prepare its guard context.
+
+        Every public can/do path calls this once.  The direct dictionary lookup
+        keeps missing and unconditional transitions allocation-free with respect
+        to guard context, while a guarded transition gets one fresh sanitized
+        mapping for exactly that evaluation.
+        """
+        current_name = self._current_state.name
+        entries = self._transitions.get(current_name)
+        entry = entries.get(trigger) if entries is not None else None
+        if entry is None:
+            error_msg = (
+                f"No transition for trigger '{trigger}' from state '{current_name}'"
+            )
+            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            return TransitionResult(
+                False, from_state=current_name, trigger=trigger, error=error_msg
+            )
+        condition_kwargs = (
+            self._sanitize_condition_kwargs(kwargs) if entry.condition else None
+        )
+        return _PreparedDispatch(entry, current_name, args, condition_kwargs)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1274,36 +1305,32 @@ class StateMachine:
         Returns:
             Sanitized kwargs safe for condition evaluation
         """
-        # Default implementation: basic safety checks
-        safe_kwargs = {}
+        safe_kwargs: Dict[str, Any] = {}
 
-        # Limit to reasonable number of arguments to prevent memory issues
+        # Retain the established diagnostic only; values are never logged.
         if len(kwargs) > 50:
             self._logger.warning(
                 "%s: Too many kwargs (%d) passed to condition, truncating",
                 self._name,
                 len(kwargs),
             )
-            # Keep only first 50 items
-            kwargs = dict(list(kwargs.items())[:50])
 
-        # Copy kwargs, filtering out potentially dangerous items
+        # Filter first so invalid leading entries cannot consume the bounded
+        # guard context budget.  Dict insertion order makes the retained safe
+        # keys deterministic without retaining the caller's mapping.
         for key, value in kwargs.items():
-            # Skip private/protected attributes
-            if key.startswith("_"):
-                self._logger.debug(
-                    "%s: Skipping private kwarg '%s' for condition", self._name, key
-                )
-                continue
-
-            # Validate key is reasonable string
             if not isinstance(key, str) or len(key) > 100:
                 self._logger.warning(
-                    "%s: Skipping invalid kwarg key: %s", self._name, repr(key)
+                    "%s: Skipping invalid kwarg key for condition", self._name
                 )
                 continue
-
-            # Add value (conditions should validate their own expected types)
+            if key.startswith("_"):
+                self._logger.debug(
+                    "%s: Skipping private kwarg for condition", self._name
+                )
+                continue
+            if len(safe_kwargs) == 50:
+                continue
             safe_kwargs[key] = value
 
         return safe_kwargs
@@ -1455,36 +1482,10 @@ class StateMachine:
             ``(entry, current_state_name)`` on success, or a failure
             :class:`TransitionResult` if no transition exists.
         """
-        current_name = self._current_state.name
-
-        # Log trigger attempt (most verbose level)
-        if self._logger.isEnabledFor(
-            logging.DEBUG - 5
-        ):  # Custom level for ultra-verbose
-            args_str = f"args={args}, kwargs={kwargs}" if args or kwargs else "no args"
-            self._logger.log(
-                logging.DEBUG - 5,
-                "%s: Attempting trigger '%s' from state '%s' with %s",
-                self._name,
-                trigger,
-                current_name,
-                args_str,
-            )
-
-        # Check if transition exists
-        if (
-            current_name not in self._transitions
-            or trigger not in self._transitions[current_name]
-        ):
-            error_msg = (
-                f"No transition for trigger '{trigger}' from state '{current_name}'"
-            )
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
-            )
-
-        return self._transitions[current_name][trigger], current_name
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
+            return prepared
+        return prepared.entry, prepared.current_name
 
     def _execute_transition(
         self, to_state: State, trigger: str, *args: Any, **kwargs: Any
@@ -1643,16 +1644,17 @@ class StateMachine:
         Returns:
             TransitionResult indicating success or failure
         """
-        resolved = self._resolve_trigger(trigger, *args, **kwargs)
-        if isinstance(resolved, TransitionResult):
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
             if self._on_failed_callbacks:
                 for fn in self._on_failed_callbacks:
                     try:
-                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
+                        fn(trigger, self._current_state.name, prepared.error, **kwargs)
                     except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                         self._logger.error("on_failed callback error: %s", e)
-            return resolved
-        entry, current_name = resolved
+            return prepared
+        entry = prepared.entry
+        current_name = prepared.current_name
         to_state = entry.to_state
         condition = entry.condition
 
@@ -1667,9 +1669,10 @@ class StateMachine:
                 to_state.name,
             )
             try:
-                # Validate kwargs before passing to condition (safety improvement)
-                safe_kwargs = self._sanitize_condition_kwargs(kwargs)
-                condition_result = condition.check(*args, **safe_kwargs)
+                assert prepared.condition_kwargs is not None
+                condition_result = condition.check(
+                    *prepared.args, **prepared.condition_kwargs
+                )
                 self._logger.debug(
                     "%s: Condition '%s' result: %s",
                     self._name,
@@ -1920,23 +1923,22 @@ class AsyncStateMachine(StateMachine):
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
-        current_name = self._current_state.name
-
-        if current_name not in self._transitions:
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
             return False
 
-        if trigger not in self._transitions[current_name]:
-            return False
-
-        entry = self._transitions[current_name][trigger]
+        entry = prepared.entry
         condition = entry.condition
 
         if condition:
+            assert prepared.condition_kwargs is not None
             if isinstance(condition, AsyncCondition):
-                if not await condition.check_async(*args, **kwargs):
+                if not await condition.check_async(
+                    *prepared.args, **prepared.condition_kwargs
+                ):
                     return False
             else:
-                if not condition.check(*args, **kwargs):
+                if not condition.check(*prepared.args, **prepared.condition_kwargs):
                     return False
 
         # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
@@ -1960,16 +1962,17 @@ class AsyncStateMachine(StateMachine):
         Returns:
             TransitionResult indicating success or failure
         """
-        resolved = self._resolve_trigger(trigger, *args, **kwargs)
-        if isinstance(resolved, TransitionResult):
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
             if self._on_failed_callbacks:
                 for fn in self._on_failed_callbacks:
                     try:
-                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
+                        fn(trigger, self._current_state.name, prepared.error, **kwargs)
                     except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                         self._logger.error("on_failed callback error: %s", e)
-            return resolved
-        entry, current_name = resolved
+            return prepared
+        entry = prepared.entry
+        current_name = prepared.current_name
         to_state = entry.to_state
         condition = entry.condition
 
@@ -1984,10 +1987,15 @@ class AsyncStateMachine(StateMachine):
                 to_state.name,
             )
             try:
+                assert prepared.condition_kwargs is not None
                 if isinstance(condition, AsyncCondition):
-                    condition_result = await condition.check_async(*args, **kwargs)
+                    condition_result = await condition.check_async(
+                        *prepared.args, **prepared.condition_kwargs
+                    )
                 else:
-                    condition_result = condition.check(*args, **kwargs)
+                    condition_result = condition.check(
+                        *prepared.args, **prepared.condition_kwargs
+                    )
 
                 self._logger.debug(
                     "%s: Condition '%s' result: %s",
