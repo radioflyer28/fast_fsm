@@ -8,7 +8,12 @@ FSMBuilder async auto-detection, and AsyncDeclarativeState.
 import pytest
 
 from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
-from fast_fsm.conditions import AsyncCondition, Condition, NegatedCondition
+from fast_fsm.conditions import (
+    AsyncCondition,
+    Condition,
+    FuncCondition,
+    NegatedCondition,
+)
 from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
@@ -535,6 +540,49 @@ class TestAsyncWrapperEvaluation:
         assert CompiledFuncCondition(guard).check(marker, payload="value")
         assert captured[0][0][0] is marker
         assert captured[0][1] == {"payload": "value"}
+
+
+class TestAsyncFuncConditionSubclassPolicy:
+    """Async entry guards honor public FuncCondition subclass overrides."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ("reject", "raise", "awaitable"))
+    async def test_machine_uses_effective_func_condition_check(self, outcome):
+        class OverridingFuncCondition(FuncCondition):
+            def __init__(self):
+                super().__init__(lambda *args, **kwargs: True)
+                self.calls = 0
+
+            def check(self, *args, **kwargs):
+                self.calls += 1
+                if outcome == "reject":
+                    return False
+                if outcome == "raise":
+                    raise RuntimeError("subclass guard boom")
+
+                async def allow():
+                    return True
+
+                return allow()
+
+        condition = OverridingFuncCondition()
+        source = State("source")
+        target = State("target")
+        machine = AsyncStateMachine(source, name="func_condition_subclass")
+        machine.add_state(target)
+        machine.add_transition("go", source, target, condition)
+
+        if outcome == "raise":
+            with pytest.raises(RuntimeError, match="subclass guard boom"):
+                await machine.can_trigger_async("go")
+            result = await machine.trigger_async("go")
+            assert not result.success
+        else:
+            assert await machine.can_trigger_async("go") is (outcome == "awaitable")
+            result = await machine.trigger_async("go")
+            assert result.success is (outcome == "awaitable")
+
+        assert condition.calls == 2
 
 
 # ---------------------------------------------------------------------------

@@ -143,17 +143,23 @@ async def _evaluate_condition_async_iteratively(
                 elif isinstance(current, AsyncCondition):
                     result = await current.check_async(*args, **kwargs)
                     active.remove(current_id)
-                elif isinstance(current, FuncCondition):
+                elif type(current) is FuncCondition:
                     # ``FuncCondition.check`` is annotated to return ``bool``.
-                    # Calling the wrapped function directly keeps an async leaf
-                    # visible to mypyc long enough to await it.
+                    # The exact built-in type may call its wrapped function
+                    # directly so mypyc can still observe and await an async
+                    # leaf. Public FuncCondition subclasses must instead use
+                    # their effective ``check`` override below.
                     func = cast(Any, current.func)
                     result = func(*args, **kwargs)
                     if _is_awaitable(result):
                         result = await cast(Any, result)
                     active.remove(current_id)
                 else:
-                    result = current.check(*args, **kwargs)
+                    # The public ``Condition.check`` protocol is annotated as
+                    # synchronous. Keep an interpreted subclass's return at
+                    # the dynamic boundary so a legitimate awaitable override
+                    # reaches the awaitability check under mypyc.
+                    result = cast(Any, current).check(*args, **kwargs)
                     if _is_awaitable(result):
                         result = await cast(Any, result)
                     active.remove(current_id)

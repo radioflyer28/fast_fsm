@@ -860,6 +860,45 @@ class TestAsyncDeclarativeStateGaps:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ("reject", "raise", "awaitable"))
+    async def test_direct_async_policy_honors_func_condition_subclass_check(
+        self, outcome, recwarn
+    ):
+        """Public FuncCondition subclasses retain their effective check hook."""
+
+        class OverridingFuncCondition(FuncCondition):
+            def __init__(self):
+                super().__init__(lambda *args, **kwargs: True)
+                self.calls = 0
+
+            def check(self, *args, **kwargs):
+                self.calls += 1
+                if outcome == "reject":
+                    return False
+                if outcome == "raise":
+                    raise RuntimeError("subclass guard boom")
+
+                async def allow():
+                    return True
+
+                return allow()
+
+        condition = OverridingFuncCondition()
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=condition)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        result = await MyState("source").can_transition_async("go", State("target"))
+
+        assert result is (outcome == "awaitable")
+        assert condition.calls == 1
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.asyncio
     async def test_direct_async_policy_awaits_async_callable_condition(self, recwarn):
         """Raw async decorator callables are awaited by direct policies too."""
 
