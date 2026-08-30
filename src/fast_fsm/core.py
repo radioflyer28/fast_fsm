@@ -14,6 +14,7 @@ Key design principles:
 
 import logging
 import time
+from collections import deque
 from typing import Optional, Dict, Any, Callable, List, Union, Tuple, cast, overload
 from dataclasses import dataclass
 import asyncio
@@ -387,7 +388,7 @@ class StateMachine:
         self._state_enter_callbacks: Dict[str, List[Any]] = {}
 
         # History — opt-in transition recording (None = disabled)
-        self._history: Optional[List[TransitionRecord]] = None
+        self._history: Optional[deque[TransitionRecord]] = None
         self._history_max: int = 1000
 
         # Register the initial state
@@ -666,9 +667,17 @@ class StateMachine:
 
         Args:
             max_entries: Maximum number of records to keep.
+
+        Raises:
+            TypeError: If ``max_entries`` is not a non-boolean integer.
+            ValueError: If ``max_entries`` is zero or negative.
         """
+        if isinstance(max_entries, bool) or not isinstance(max_entries, int):
+            raise TypeError("max_entries must be a positive integer")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be a positive integer")
         self._history_max = max_entries
-        self._history = []
+        self._history = deque(maxlen=max_entries)
 
     def disable_history(self) -> None:
         """Disable transition history recording and discard all records."""
@@ -1776,8 +1785,6 @@ class StateMachine:
 
         # Record transition in history (zero-cost when disabled — single None check)
         if self._history is not None:
-            if len(self._history) >= self._history_max:
-                del self._history[0]
             self._history.append(
                 TransitionRecord(
                     old_state.name, trigger, to_state.name, time.monotonic()
