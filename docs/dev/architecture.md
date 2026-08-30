@@ -127,15 +127,22 @@ protocol.
 The fluent builder stages identity-canonical `State` objects, auto-detects
 supported nested async requirements, and returns the appropriate machine type:
 
-```python
+```{testcode}
+from fast_fsm import FSMBuilder, State
+
+idle = State("idle")
+running = State("running")
+
 fsm = (
-    FSMBuilder("my_fsm")
-    .add_state(idle)
+    FSMBuilder(idle, name="my_fsm")
     .add_state(running)
-    .add_transition("start", "idle", "running", condition=my_cond)
-    .set_initial("idle")
+    .add_transition("start", "idle", "running")
     .build()  # → StateMachine or AsyncStateMachine
 )
+
+assert fsm.current_state is idle
+assert fsm.trigger("start").success
+assert fsm.current_state is running
 ```
 
 `build()` creates and wires a local candidate and publishes its cached machine
