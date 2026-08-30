@@ -89,6 +89,56 @@ class ExplodingAsyncCondition(AsyncCondition):
         raise RuntimeError("async boom")
 
 
+def _machine_topology_fingerprint(machine):
+    """Capture the identity-bearing topology that a builder publishes."""
+    return (
+        machine._graph_version,
+        tuple((name, id(state)) for name, state in machine._states.items()),
+        tuple(
+            (source, trigger, id(entry.to_state), id(entry.condition))
+            for source, entries in machine._transitions.items()
+            for trigger, entry in entries.items()
+        ),
+    )
+
+
+def builder_staging_fingerprint(builder):
+    """Capture builder staging and any published topology without mutating it."""
+    machine = builder._machine
+    return (
+        tuple((name, id(state)) for name, state in builder._states.items()),
+        tuple(
+            (
+                trigger,
+                tuple(from_state) if isinstance(from_state, list) else from_state,
+                to_state,
+                id(condition),
+            )
+            for trigger, from_state, to_state, condition in builder._transitions
+        ),
+        tuple(
+            (state_name, id(callback))
+            for state_name, callback in builder._enter_callbacks
+        ),
+        tuple(
+            (state_name, id(callback))
+            for state_name, callback in builder._exit_callbacks
+        ),
+        tuple(
+            (state_name, id(callback))
+            for state_name, callback in builder._enter_async_callbacks
+        ),
+        tuple(
+            (state_name, id(callback))
+            for state_name, callback in builder._exit_async_callbacks
+        ),
+        builder._machine_type,
+        builder._auto_detect,
+        id(machine) if machine is not None else None,
+        _machine_topology_fingerprint(machine) if machine is not None else None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # FSMBuilder basics
 # ---------------------------------------------------------------------------
@@ -975,3 +1025,133 @@ class TestFSMBuilderCallbacks:
         assert not isinstance(fsm, AsyncStateMachine)
         # Sync transition still works fine
         assert fsm.trigger("go").success
+
+
+# ---------------------------------------------------------------------------
+# FSMBuilder publication transaction
+# ---------------------------------------------------------------------------
+
+
+class TestFSMBuilderPublication:
+    """D-09/D-10 builder staging, cache, and publication behavior."""
+
+    @staticmethod
+    def _builder():
+        builder = FSMBuilder(State("start"), name="publication")
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish")
+        return builder
+
+    @pytest.mark.parametrize(
+        "mutator",
+        (
+            "add_state",
+            "add_transition",
+            "on_enter",
+            "on_exit",
+            "on_enter_async",
+            "on_exit_async",
+            "force_async",
+            "force_sync",
+        ),
+    )
+    def test_every_builder_mutator_freezes_after_success(self, mutator):
+        builder = self._builder()
+        builder.build()
+        before = builder_staging_fingerprint(builder)
+
+        async def async_callback(*args, **kwargs):
+            pass
+
+        operations = {
+            "add_state": lambda: builder.add_state(State("later")),
+            "add_transition": lambda: builder.add_transition(
+                "later", "start", "finish"
+            ),
+            "on_enter": lambda: builder.on_enter(
+                "finish", lambda *args, **kwargs: None
+            ),
+            "on_exit": lambda: builder.on_exit("start", lambda *args, **kwargs: None),
+            "on_enter_async": lambda: builder.on_enter_async("finish", async_callback),
+            "on_exit_async": lambda: builder.on_exit_async("start", async_callback),
+            "force_async": builder.force_async,
+            "force_sync": builder.force_sync,
+        }
+
+        with pytest.raises(RuntimeError, match="Cannot mutate builder"):
+            operations[mutator]()
+
+        assert builder_staging_fingerprint(builder) == before
+
+    def test_same_object_staging_is_idempotent_and_same_name_rejection_is_atomic(self):
+        initial = State("同じ")
+        builder = FSMBuilder(initial)
+        before = builder_staging_fingerprint(builder)
+
+        assert builder.add_state(initial) is builder
+        assert builder_staging_fingerprint(builder) == before
+
+        with pytest.raises(ValueError, match="different State object"):
+            builder.add_state(State("同じ"))
+
+        assert builder_staging_fingerprint(builder) == before
+        machine = builder.build()
+        assert _machine_topology_fingerprint(machine) == (
+            machine._graph_version,
+            (("同じ", id(initial)),),
+            (),
+        )
+
+    def test_invalid_initial_or_staged_state_is_rejected_before_materialization(self):
+        with pytest.raises(TypeError, match="initial_state"):
+            FSMBuilder(None)
+
+        builder = FSMBuilder(State("valid"))
+        before = builder_staging_fingerprint(builder)
+        with pytest.raises(TypeError, match="State"):
+            builder.add_state(None)
+        assert builder_staging_fingerprint(builder) == before
+
+    def test_empty_single_and_ordered_content_publish_once(self):
+        initial = State("初期")
+        middle = State("途中")
+        final = State("完了")
+        calls = []
+        builder = FSMBuilder(initial)
+        builder.add_state(middle).add_state(final)
+        builder.add_transition("進む", "初期", "途中")
+        builder.add_transition("終える", "途中", "完了")
+        builder.on_enter("途中", lambda *args, **kwargs: calls.append("first"))
+        builder.on_enter("途中", lambda *args, **kwargs: calls.append("second"))
+
+        machine = builder.build()
+        before_repeat = _machine_topology_fingerprint(machine)
+
+        assert tuple(machine._states) == ("初期", "途中", "完了")
+        assert machine.trigger("進む").success
+        assert calls == ["first", "second"]
+        assert builder.build() is machine
+        assert _machine_topology_fingerprint(machine) == before_repeat
+
+        single = FSMBuilder(State("単独")).build()
+        assert tuple(single._states) == ("単独",)
+        assert not single._transitions["単独"]
+
+    def test_wiring_failure_stays_unpublished_and_repairable(self):
+        calls = []
+        builder = FSMBuilder(State("start"))
+        builder.on_enter("repair", lambda *args, **kwargs: calls.append("repair"))
+        before_failure = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="not registered"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder_staging_fingerprint(builder) == before_failure
+
+        builder.add_state(State("repair"))
+        builder.add_transition("go", "start", "repair")
+        machine = builder.build()
+
+        assert machine.trigger("go").success
+        assert calls == ["repair"]
