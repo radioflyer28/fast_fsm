@@ -449,6 +449,57 @@ def test_phase16_baseline_write_rejects_invalid_coverage_without_replacement(
 
 
 @pytest.mark.parametrize(
+    "generated_contents",
+    (
+        "{}",
+        '{"quality_baseline": {"coverage": {"total_percent": 96.16}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": NaN, "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": Infinity, "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": -Infinity, "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": true, "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": "96.16", "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": -0.01, "core_percent": 94.50}}}',
+        '{"quality_baseline": {"coverage": {"total_percent": 100.01, "core_percent": 94.50}}}',
+    ),
+)
+def test_phase16_first_baseline_write_rejects_invalid_generated_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, generated_contents: str
+) -> None:
+    """A first write validates generated evidence and leaves no destination."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    generated.write_text(generated_contents, encoding="utf-8")
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(runner.VerificationError, match="invalid coverage baseline"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert not destination.exists()
+
+
+def test_phase16_first_baseline_write_catches_json_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An oversized JSON number cannot establish a first durable baseline."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(generated, 96.16, 94.50)
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    def raise_overflow(*args, **kwargs):
+        raise OverflowError("integer string conversion limit exceeded")
+
+    monkeypatch.setattr(runner.json, "loads", raise_overflow)
+
+    with pytest.raises(runner.VerificationError, match="invalid coverage baseline"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
     "invalid",
     (
         float("nan"),

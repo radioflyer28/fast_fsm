@@ -225,16 +225,40 @@ def _manifest_output(value: str) -> Path:
     return destination
 
 
+def _reject_json_constant(value: str) -> object:
+    """Reject non-standard JSON constants such as ``NaN`` and ``Infinity``."""
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _strict_json_object(manifest_path: Path, *, label: str) -> dict[str, object]:
+    """Load one manifest as a strict JSON object without permissive constants."""
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        OSError,
+        OverflowError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise VerificationError(f"invalid {label}: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise VerificationError(f"invalid {label}: {manifest_path}")
+    return manifest
+
+
 def _coverage_values(manifest_path: Path) -> dict[str, float]:
     """Load the two durable coverage floors from one evidence manifest."""
+    manifest = _strict_json_object(manifest_path, label="coverage baseline manifest")
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         coverage = manifest["quality_baseline"]["coverage"]
         return {
             field: _coverage_percentage(coverage[field])
             for field in ("total_percent", "core_percent")
         }
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise VerificationError(
             f"invalid coverage baseline manifest: {manifest_path}"
         ) from exc
@@ -256,8 +280,10 @@ def _validate_coverage_floor_migration(
     replacement: dict[str, float],
 ) -> None:
     """Require an explicit, separately reviewed record for a lower floor."""
+    migration = _strict_json_object(
+        migration_path, label="coverage-floor migration record"
+    )
     try:
-        migration = json.loads(migration_path.read_text(encoding="utf-8"))
         record = migration["coverage_floor_migration"]
         if migration["schema_version"] != 1:
             raise ValueError("unsupported schema")
@@ -272,7 +298,7 @@ def _validate_coverage_floor_migration(
             field: _coverage_percentage(record["replacement"][field])
             for field in ("total_percent", "core_percent")
         }
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise VerificationError(
             f"invalid coverage-floor migration record: {migration_path}"
         ) from exc
@@ -287,10 +313,12 @@ def _validate_coverage_floor(
     existing: Path, generated: Path, migration_path: Path | None = None
 ) -> None:
     """Fail closed before a baseline write lowers durable coverage evidence."""
+    # A first write establishes durable evidence, so it receives exactly the
+    # same generated-manifest validation as a replacement write.
+    replacement = _coverage_values(generated)
     if not existing.is_file():
         return
     previous = _coverage_values(existing)
-    replacement = _coverage_values(generated)
     lowered = {
         field: (previous[field], replacement[field])
         for field in previous
