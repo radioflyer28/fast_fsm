@@ -120,6 +120,12 @@
 
 **Plans**: TBD
 
+- [ ] 16-01-PLAN.md
+- [ ] 16-02-PLAN.md
+- [ ] 16-03-PLAN.md
+- [ ] 16-04-PLAN.md
+- [ ] 16-05-PLAN.md
+
 ### Phase 17: Atomic Transition Lifecycle
 
 **Goal**: Users receive truthful, state-atomic transition outcomes when guards or callbacks fail in either sync or async execution.
@@ -187,7 +193,7 @@
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 15. Release Baseline & Evidence Harness | v0.3.0 | 9/9 | Complete    | 2026-08-29 |
-| 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 0/TBD | Not started | - |
+| 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 0/5 | Planned    |  |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 0/TBD | Not started | - |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 0/TBD | Not started | - |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 0/TBD | Not started | - |
