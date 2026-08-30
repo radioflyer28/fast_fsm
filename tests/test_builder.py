@@ -1393,6 +1393,34 @@ class TestFSMBuilderAsyncPreflight:
         assert builder._machine is None
         assert builder_staging_fingerprint(builder) == before
 
+    def test_transition_cycle_is_rejected_before_staging_mutates(self):
+        cycle = NotCondition(AlwaysTrue())
+        cycle.condition = cycle
+        builder = FSMBuilder(State("start"))
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.add_transition("go", "start", "finish", cycle)
+
+        assert builder_staging_fingerprint(builder) == before
+
+    def test_declarative_guard_cycle_is_rejected_before_state_staging_mutates(self):
+        cycle = NotCondition(AlwaysTrue())
+        cycle.condition = cycle
+
+        class CyclicDeclarativeState(DeclarativeState):
+            @transition("go", condition=cycle)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(State("start"))
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="cycle"):
+            builder.add_state(CyclicDeclarativeState("cyclic"))
+
+        assert builder_staging_fingerprint(builder) == before
+
     def test_shared_dag_and_deep_nesting_terminate_and_select_async(self):
         shared = ConfigurableAsyncCondition()
         condition = AndCondition(shared, OrCondition(AlwaysFalse(), shared))

@@ -2906,19 +2906,24 @@ class FSMBuilder:
             raise ValueError(
                 f"Builder already contains a different State object named '{state.name}'"
             )
-        self._states[state.name] = state
 
-        # Only upgrade if in auto-detect mode
+        required_type = self._machine_type
         if self._auto_detect:
-            required_type = self._detect_async_requirements(state)
+            detected_type = self._detect_async_requirements(state)
             if (
-                required_type == AsyncStateMachine
+                detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
             ):
-                self._machine_type = AsyncStateMachine
-                self._logger.debug(
-                    "Builder: Upgraded to async mode due to state '%s'", state.name
-                )
+                required_type = AsyncStateMachine
+
+        # Detection can reject malformed condition graphs. Do not publish the
+        # candidate state or machine-mode upgrade until that validation passes.
+        self._states[state.name] = state
+        if required_type != self._machine_type:
+            self._machine_type = required_type
+            self._logger.debug(
+                "Builder: Upgraded to async mode due to state '%s'", state.name
+            )
         return self
 
     def add_transition(
@@ -2954,20 +2959,24 @@ class FSMBuilder:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
                 )
-        self._transitions.append((trigger, from_state, to_state, condition))
-
-        # Only upgrade if in auto-detect mode
+        required_type = self._machine_type
         if condition and self._auto_detect:
-            required_type = self._detect_async_requirements(condition)
+            detected_type = self._detect_async_requirements(condition)
             if (
-                required_type == AsyncStateMachine
+                detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
             ):
-                self._machine_type = AsyncStateMachine
-                self._logger.debug(
-                    "Builder: Upgraded to async mode due to async condition '%s'",
-                    getattr(condition, "name", str(condition)),
-                )
+                required_type = AsyncStateMachine
+
+        # Keep the builder staging area atomic: graph validation must succeed
+        # before either the transition or the auto-detected machine type lands.
+        self._transitions.append((trigger, from_state, to_state, condition))
+        if required_type != self._machine_type:
+            self._machine_type = required_type
+            self._logger.debug(
+                "Builder: Upgraded to async mode due to async condition '%s'",
+                getattr(condition, "name", str(condition)),
+            )
         return self
 
     def on_enter(self, state_name: str, callback: Any) -> "FSMBuilder":
