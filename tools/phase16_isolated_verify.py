@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -223,10 +224,93 @@ def _manifest_output(value: str) -> Path:
     return destination
 
 
-def _export_manifest_atomically(generated: Path, output: str) -> None:
+def _coverage_values(manifest_path: Path) -> dict[str, float]:
+    """Load the two durable coverage floors from one evidence manifest."""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        coverage = manifest["quality_baseline"]["coverage"]
+        return {
+            field: round(float(coverage[field]), 2)
+            for field in ("total_percent", "core_percent")
+        }
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise VerificationError(
+            f"invalid coverage baseline manifest: {manifest_path}"
+        ) from exc
+
+
+def _validate_coverage_floor_migration(
+    migration_path: Path,
+    previous: dict[str, float],
+    replacement: dict[str, float],
+) -> None:
+    """Require an explicit, separately reviewed record for a lower floor."""
+    try:
+        migration = json.loads(migration_path.read_text(encoding="utf-8"))
+        record = migration["coverage_floor_migration"]
+        if migration["schema_version"] != 1:
+            raise ValueError("unsupported schema")
+        reviewed = (record["reason"], record["reviewed_by"], record["reviewed_at"])
+        if not all(isinstance(value, str) and value.strip() for value in reviewed):
+            raise ValueError("missing review metadata")
+        expected_previous = {
+            field: round(float(record["previous"][field]), 2)
+            for field in ("total_percent", "core_percent")
+        }
+        expected_replacement = {
+            field: round(float(record["replacement"][field]), 2)
+            for field in ("total_percent", "core_percent")
+        }
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise VerificationError(
+            f"invalid coverage-floor migration record: {migration_path}"
+        ) from exc
+    if expected_previous != previous or expected_replacement != replacement:
+        raise VerificationError(
+            "coverage-floor migration record does not match the existing and "
+            "generated manifests"
+        )
+
+
+def _validate_coverage_floor(
+    existing: Path, generated: Path, migration_path: Path | None = None
+) -> None:
+    """Fail closed before a baseline write lowers durable coverage evidence."""
+    if not existing.is_file():
+        return
+    previous = _coverage_values(existing)
+    replacement = _coverage_values(generated)
+    lowered = {
+        field: (previous[field], replacement[field])
+        for field in previous
+        if replacement[field] < previous[field]
+    }
+    if not lowered:
+        return
+    if migration_path is None:
+        rendered = ", ".join(
+            f"{field} {before:.2f}->{after:.2f}"
+            for field, (before, after) in sorted(lowered.items())
+        )
+        raise VerificationError(f"coverage floor regression: {rendered}")
+    _validate_coverage_floor_migration(migration_path, previous, replacement)
+
+
+def _coverage_floor_migration(value: str) -> Path:
+    """Resolve one explicit migration record without accepting an absent path."""
+    migration = _manifest_output(value)
+    if not migration.is_file():
+        raise VerificationError(f"coverage-floor migration file not found: {value!r}")
+    return migration
+
+
+def _export_manifest_atomically(
+    generated: Path, output: str, migration_path: Path | None = None
+) -> None:
     if not generated.is_file():
         raise VerificationError("baseline-write did not generate release-baseline.json")
     destination = _manifest_output(output)
+    _validate_coverage_floor(destination, generated, migration_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.phase16-tmp")
     shutil.copyfile(generated, temporary)
@@ -283,6 +367,11 @@ def _suite_mode(args: argparse.Namespace) -> int:
             _export_manifest_atomically(
                 source_tree / "evidence" / "release-baseline.json",
                 args.manifest_output,
+                (
+                    _coverage_floor_migration(args.coverage_floor_migration)
+                    if args.coverage_floor_migration is not None
+                    else None
+                ),
             )
             return 0
         finally:
@@ -342,6 +431,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--build-mode", choices=("pure", "compiled"))
     parser.add_argument("--include", action="append", default=[])
     parser.add_argument("--manifest-output")
+    parser.add_argument("--coverage-floor-migration")
     parser.add_argument(
         "--suite", choices=("graph", "baseline-write", "baseline-check", "phase16")
     )
@@ -359,6 +449,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             or args.include
             or args.command
             or (args.manifest_output is not None and args.suite != "baseline-write")
+            or (
+                args.coverage_floor_migration is not None
+                and args.suite != "baseline-write"
+            )
         ):
             raise VerificationError("suite mode does not accept task-mode arguments")
         return _suite_mode(args)

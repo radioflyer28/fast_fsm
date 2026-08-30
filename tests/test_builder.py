@@ -664,6 +664,15 @@ class TestConvenienceFunctions:
         assert "s1" in fsm.states
         assert "s2" in fsm.states
 
+    def test_quick_build_preserves_state_object_initial(self):
+        """The lower-level factory preserves an explicitly supplied initial State."""
+
+        initial = State("idle")
+        fsm = StateMachine.quick_build(initial, [("start", "idle", "running")])
+
+        assert fsm.current_state is initial
+        assert fsm._states["idle"] is initial
+
 
 # ---------------------------------------------------------------------------
 # DeclarativeState gap coverage
@@ -694,6 +703,43 @@ class TestDeclarativeStateGaps:
 
         s = MyState("s1")
         assert s.can_transition("go", State("target"))
+
+    def test_sync_policy_rejects_coroutine_returning_callable_without_warning(
+        self, recwarn
+    ):
+        """Sync direct policies close an accidental coroutine-returning guard."""
+
+        def guard(*args, **kwargs):
+            async def pending():
+                return True
+
+            return pending()
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        assert not MyState("source").can_transition("go", State("target"))
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    def test_sync_policy_rejects_async_callable_without_runtime_warning(self, recwarn):
+        """Direct sync policies reject coroutine functions before invoking them."""
+
+        async def guard(*args, **kwargs):
+            return True
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        assert not MyState("source").can_transition("go", State("target"))
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
 
     def test_can_transition_truthy_non_callable_condition(self):
         """A truthy non-callable condition evaluates via bool()."""
@@ -809,6 +855,23 @@ class TestAsyncDeclarativeStateGaps:
         state = MyState("source")
 
         assert await state.can_transition_async("go", State("target"))
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
+    @pytest.mark.asyncio
+    async def test_direct_async_policy_awaits_async_callable_condition(self, recwarn):
+        """Raw async decorator callables are awaited by direct policies too."""
+
+        async def guard(*args, **kwargs):
+            return True
+
+        class MyState(AsyncDeclarativeState):
+            @transition("go", condition=guard)
+            async def handle_go(self, *args, **kwargs):
+                return True
+
+        assert await MyState("source").can_transition_async("go", State("target"))
         assert not any(
             issubclass(warning.category, RuntimeWarning) for warning in recwarn
         )
@@ -1039,6 +1102,32 @@ class TestDeclarativePolicyCompatibility:
 
 class TestFSMBuilderGaps:
     """Cover uncovered FSMBuilder paths."""
+
+    def test_auto_detects_async_declarative_callable_guard(self):
+        """A decorator's raw async callable upgrades an auto-detected builder."""
+
+        async def guard(*args, **kwargs):
+            return True
+
+        class MyState(DeclarativeState):
+            @transition("go", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(MyState("source"))
+
+        assert builder.machine_type is AsyncStateMachine
+        assert builder.is_async
+
+    def test_unless_rejects_non_guard_value_before_staging(self):
+        """Builder shorthand validates invalid guards before mutating staging."""
+
+        builder = FSMBuilder(State("source"))
+
+        with pytest.raises(TypeError, match="'unless' must be a Condition or callable"):
+            builder.add_transition("go", "source", "target", unless="not-a-guard")
+
+        assert builder._transitions == []
 
     def test_force_sync_with_async_state_rejects_at_build(self):
         builder = FSMBuilder(AsyncDeclarativeState("async_s"))

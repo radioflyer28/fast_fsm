@@ -233,3 +233,34 @@ tests (including the existing 200,000 `trigger()` operations/second floor),
 and the asserted-pure release gate: source-origin preflight, Ruff format/lint,
 mypy, full tests, Sphinx HTML/doctests, and baseline freshness. The standalone
 blocking mypy and advisory ty checks both passed.
+
+## Review-Fix Iteration 3 Evidence
+
+- Collected: 2026-08-30
+- Context: the isolated review-fix worktree, followed by fresh temporary
+  archives for every origin-sensitive command. Pure contexts asserted
+  `src/fast_fsm/core.py`; compiled contexts built and asserted the native
+  extension. No developer-checkout native shadow was imported, deleted, or
+  used as evidence.
+
+The baseline writer now reads the existing manifest's total and `core.py`
+coverage values before copying a generated replacement. A lower value fails
+closed without replacing the destination unless the invocation names an
+explicit `--coverage-floor-migration` JSON record with matching old/new values
+and non-empty review metadata. Regression tests prove both the no-replacement
+failure path and the explicitly reviewed migration path.
+
+After focused direct-guard, async-classification, builder-validation, and
+factory-identity tests restored coverage above the previous floors, the
+following commands regenerated and then independently checked the baseline:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite baseline-check
+```
+
+The asserted-pure baseline contains 1,067/1,067 passing tests, 96.16% total
+source coverage, and 94.50% `core.py` coverage. Those values exceed the prior
+96.08% total and 94.27% core floors; the subsequent read-only check verifies
+that no fresh collection can change the committed manifest.

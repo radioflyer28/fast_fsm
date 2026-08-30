@@ -24,7 +24,10 @@ for full rationale.
 
 import ast
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
 PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
@@ -308,3 +311,80 @@ def test_phase16_runner_covers_boundary_negative_in_both_modes() -> None:
     source = PHASE16_RUNNER.read_text(encoding="utf-8")
 
     assert source.count('"tests/test_boundary_negative.py"') == 2
+
+
+def _load_phase16_runner():
+    """Load the standalone Phase 16 runner without importing Fast FSM."""
+    spec = importlib.util.spec_from_file_location("phase16_runner", PHASE16_RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    return runner
+
+
+def _write_coverage_manifest(path: Path, total: float, core: float) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "quality_baseline": {
+                    "coverage": {
+                        "total_percent": total,
+                        "core_percent": core,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_phase16_baseline_write_refuses_lower_coverage_before_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An isolated write cannot redefine an existing coverage floor downward."""
+    runner = _load_phase16_runner()
+    destination = tmp_path / "release-baseline.json"
+    generated = tmp_path / "generated.json"
+    _write_coverage_manifest(destination, 96.08, 94.27)
+    _write_coverage_manifest(generated, 96.07, 94.26)
+    original = destination.read_bytes()
+    monkeypatch.setattr(runner, "_manifest_output", lambda _output: destination)
+
+    with pytest.raises(runner.VerificationError, match="coverage floor regression"):
+        runner._export_manifest_atomically(generated, "evidence/release-baseline.json")
+
+    assert destination.read_bytes() == original
+
+
+def test_phase16_coverage_floor_migration_requires_explicit_review_data(
+    tmp_path: Path,
+) -> None:
+    """A future deliberate lower floor needs a separately reviewed record."""
+    runner = _load_phase16_runner()
+    baseline = tmp_path / "baseline.json"
+    generated = tmp_path / "generated.json"
+    migration = tmp_path / "coverage-floor-migration.json"
+    _write_coverage_manifest(baseline, 96.08, 94.27)
+    _write_coverage_manifest(generated, 96.07, 94.26)
+
+    with pytest.raises(runner.VerificationError, match="coverage floor regression"):
+        runner._validate_coverage_floor(baseline, generated)
+
+    migration.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "coverage_floor_migration": {
+                    "previous": {"total_percent": 96.08, "core_percent": 94.27},
+                    "replacement": {"total_percent": 96.07, "core_percent": 94.26},
+                    "reason": "intentional future coverage migration",
+                    "reviewed_by": "maintainer",
+                    "reviewed_at": "2026-08-30T00:00:00Z",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner._validate_coverage_floor(baseline, generated, migration)
