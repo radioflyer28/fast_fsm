@@ -98,6 +98,18 @@ class SyncCounter(Condition):
         return True
 
 
+class RecordingAsyncCondition(AsyncCondition):
+    """Async guard fixture that captures positional and keyword context."""
+
+    def __init__(self):
+        super().__init__("recording_async", "records async guard context")
+        self.calls = []
+
+    async def check_async(self, *args, **kwargs) -> bool:
+        self.calls.append((args, kwargs, id(kwargs)))
+        return True
+
+
 @pytest.fixture
 def two_state_async_fsm():
     """AsyncStateMachine with idle → running."""
@@ -241,6 +253,23 @@ class TestCanTriggerAsync:
         fsm.add_transition("go", "idle", "running")
         await fsm.can_trigger_async("go")
         assert fsm.current_state.name == "idle"
+
+    @pytest.mark.asyncio
+    async def test_async_guard_context_is_sanitized_and_positional(
+        self, two_state_async_fsm
+    ):
+        fsm, idle, running = two_state_async_fsm
+        condition = RecordingAsyncCondition()
+        fsm.add_transition("go", idle, running, condition)
+        marker = object()
+
+        assert await fsm.can_trigger_async(
+            "go", marker, safe="visible", _private="hidden"
+        )
+
+        args, kwargs, _ = condition.calls[-1]
+        assert args[0] is marker
+        assert kwargs == {"safe": "visible"}
 
 
 # ---------------------------------------------------------------------------

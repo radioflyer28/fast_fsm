@@ -8,7 +8,7 @@ problematic context data passed through **kwargs in trigger() calls.
 import pytest
 import logging
 from unittest.mock import Mock
-from fast_fsm.core import StateMachine, State, CompiledFuncCondition
+from fast_fsm.core import AsyncStateMachine, StateMachine, State, CompiledFuncCondition
 from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
 
 
@@ -34,6 +34,32 @@ class ExceptionCondition(Condition):
 
     def check(self, **kwargs):
         raise self.exception
+
+
+class RecordingCondition(Condition):
+    """Capture the exact guard context supplied by each synchronous path."""
+
+    def __init__(self, result=True):
+        super().__init__("recording", "Records guard context")
+        self.result = result
+        self.calls = []
+
+    def check(self, *args, **kwargs):
+        self.calls.append((args, kwargs, id(kwargs)))
+        return self.result
+
+
+class RecordingAsyncCondition(AsyncCondition):
+    """Capture the exact guard context supplied by each asynchronous path."""
+
+    def __init__(self, result=True):
+        super().__init__("recording_async", "Records async guard context")
+        self.result = result
+        self.calls = []
+
+    async def check_async(self, *args, **kwargs):
+        self.calls.append((args, kwargs, id(kwargs)))
+        return self.result
 
 
 @pytest.fixture
@@ -147,6 +173,115 @@ class TestKwargsSanitization:
 
         assert result.success
         assert condition.received_kwargs == {}
+
+
+class TestGuardContextParity:
+    """D-12/D-13 guard preparation is identical across all dispatch paths."""
+
+    @staticmethod
+    def _context_kwargs():
+        invalid = {f"_private_{index}": index for index in range(55)}
+        invalid["x" * 101] = "too-long"
+        invalid.update({f"safe_{index}": object() for index in range(55)})
+        return invalid
+
+    @staticmethod
+    def _sync_machine(condition):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="guard_context_sync")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+        return machine
+
+    @staticmethod
+    def _async_machine(condition):
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="guard_context_async")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+        return machine
+
+    def test_sanitize_filters_before_capping_and_preserves_value_identity(self):
+        machine = self._sync_machine(RecordingCondition())
+        raw_kwargs = self._context_kwargs()
+
+        sanitized = machine._sanitize_condition_kwargs(raw_kwargs)
+
+        assert list(sanitized) == [f"safe_{index}" for index in range(50)]
+        assert len(sanitized) == 50
+        assert sanitized["safe_0"] is raw_kwargs["safe_0"]
+        assert raw_kwargs["_private_0"] == 0
+        assert "x" * 101 in raw_kwargs
+
+    def test_sync_can_and_trigger_receive_equivalent_fresh_context(self):
+        condition = RecordingCondition()
+        machine = self._sync_machine(condition)
+        first = object()
+        second = object()
+        raw_kwargs = self._context_kwargs()
+        original_keys = list(raw_kwargs)
+
+        assert machine.can_trigger("go", first, second, **raw_kwargs)
+        assert machine.trigger("go", first, second, **raw_kwargs).success
+
+        assert len(condition.calls) == 2
+        first_call, second_call = condition.calls
+        assert first_call[0][0] is first
+        assert first_call[0][1] is second
+        assert second_call[0][0] is first
+        assert second_call[0][1] is second
+        assert first_call[1] == second_call[1]
+        assert first_call[2] != second_call[2]
+        assert list(first_call[1]) == [f"safe_{index}" for index in range(50)]
+        assert list(raw_kwargs) == original_keys
+
+    @pytest.mark.asyncio
+    async def test_async_can_and_trigger_receive_equivalent_fresh_context(self):
+        condition = RecordingAsyncCondition()
+        machine = self._async_machine(condition)
+        first = object()
+        second = object()
+        raw_kwargs = self._context_kwargs()
+        original_keys = list(raw_kwargs)
+
+        assert await machine.can_trigger_async("go", first, second, **raw_kwargs)
+        assert (await machine.trigger_async("go", first, second, **raw_kwargs)).success
+
+        assert len(condition.calls) == 2
+        first_call, second_call = condition.calls
+        assert first_call[0][0] is first
+        assert first_call[0][1] is second
+        assert second_call[0][0] is first
+        assert second_call[0][1] is second
+        assert first_call[1] == second_call[1]
+        assert first_call[2] != second_call[2]
+        assert list(first_call[1]) == [f"safe_{index}" for index in range(50)]
+        assert list(raw_kwargs) == original_keys
+
+    def test_missing_or_unconditional_transition_does_not_prepare_context(
+        self, monkeypatch
+    ):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="no_guard_context")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target)
+
+        calls = []
+        original = StateMachine._sanitize_condition_kwargs
+
+        def record_sanitization(instance, kwargs):
+            calls.append(kwargs)
+            return original(instance, kwargs)
+
+        monkeypatch.setattr(
+            StateMachine, "_sanitize_condition_kwargs", record_sanitization
+        )
+        assert not machine.can_trigger("missing", payload="value")
+        assert machine.trigger("go", payload="value").success
+        assert calls == []
 
 
 class TestConditionExceptionHandling:
