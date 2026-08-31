@@ -102,13 +102,18 @@ FUTR-05 owns any public topology format.
 
 ```text
 Condition (ABC, __slots__)
-├── FuncCondition          # wraps any Callable[..., bool]
+├── FuncCondition          # wraps any GuardCallable
+├── CompiledFuncCondition  # interpreted public wrapper + compiled invocation bridge
 └── AsyncCondition         # async check() — requires AsyncStateMachine
 ```
 
-All built-in conditions accept and forward `*args, **kwargs` in `check()`.
-Functions passed to `FSMBuilder.add_transition()` are auto-wrapped in
-`FuncCondition`. For guarded work, `can_trigger()`, `trigger()`,
+`GuardResult = bool | Awaitable[bool]` and
+`GuardCallable = Callable[..., GuardResult]` are public aliases from both
+`fast_fsm` and `fast_fsm.core`. All built-in conditions accept and forward
+`*args, **kwargs` in `check()`. Functions passed to
+`FSMBuilder.add_transition()` are auto-wrapped in `FuncCondition`. A sync
+machine closes and rejects an awaitable guard result; the async machine awaits
+it. For guarded work, `can_trigger()`, `trigger()`,
 `can_trigger_async()`, and `trigger_async()` share one private preparation
 seam: positional arguments remain unchanged, while a fresh keyword mapping
 filters private, non-string, and overlong keys before retaining the first 50
@@ -215,10 +220,23 @@ source in `src/fast_fsm/`.
 
 ## Performance Architecture
 
-### Why `__slots__` Everywhere
+### Measured `__slots__` Policy
 
-Every class in `src/fast_fsm/` uses `__slots__`. This eliminates `__dict__`
-per instance, yielding:
+Relevant production classes in `src/fast_fsm/` are recursively audited by
+
+```bash
+uv run python tools/release_evidence.py slots-policy --json
+```
+
+They must be slot-protected unless they appear in that measured exception
+registry. The two current exceptions are `CompiledFuncCondition`, which stays
+interpreted to support user subclassing while delegating invocation to a
+compiled core helper, and `TransitionError`, which uses
+`@mypyc_attr(native_class=False)` to retain ordinary Python exception behavior.
+Both can have an instance `__dict__`; the policy command—not an absolute
+dictionary-free claim—is the authority when maintaining or auditing classes.
+
+Slot-protected instances eliminate `__dict__` per instance, yielding:
 
 - ~1000× lower memory per FSM vs. dict-based alternatives
 - Better cache locality (contiguous attribute storage)
