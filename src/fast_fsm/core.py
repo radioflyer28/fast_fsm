@@ -30,7 +30,14 @@ from typing import (
 from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
-from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
+from .conditions import (
+    AsyncCondition,
+    CompiledFuncCondition,
+    Condition,
+    FuncCondition,
+    NegatedCondition,
+    _bind_compiled_func_condition_check,
+)
 
 
 # The machine-owned dispatch seam evaluates a declarative decorator guard before
@@ -102,6 +109,26 @@ def _is_awaitable(value: Any) -> bool:
     )
 
 
+def _is_async_callable(value: Any) -> bool:
+    """Classify a callable or its effective ``__call__`` hook without invoking it."""
+    return asyncio.iscoroutinefunction(value) or asyncio.iscoroutinefunction(
+        getattr(value, "__call__", None)
+    )
+
+
+def _compiled_func_condition_check(condition: Any, *args: Any, **kwargs: Any) -> Any:
+    """Evaluate an opt-in condition wrapper in the compiled core module.
+
+    The public condition protocol is typed as boolean, but the async dispatcher
+    must first receive an awaitable unchanged when a callable instance has an
+    async ``__call__`` hook.
+    """
+    return cast(Callable[..., Any], condition.func)(*args, **kwargs)
+
+
+_bind_compiled_func_condition_check(_compiled_func_condition_check)
+
+
 async def _evaluate_condition_async_iteratively(
     condition: Condition,
     args: Tuple[Any, ...],
@@ -160,10 +187,10 @@ async def _evaluate_condition_async_iteratively(
                     # function directly so mypyc can still observe and await
                     # an async leaf. Public FuncCondition subclasses must
                     # instead use their effective ``check`` override below.
-                    func = cast(Any, getattr(current, "func"))
+                    func = getattr(current, "func")
                     result = func(*args, **kwargs)
                     if _is_awaitable(result):
-                        result = await cast(Any, result)
+                        result = await result
                     active.remove(current_id)
                 else:
                     # The public ``Condition.check`` protocol is annotated as
@@ -172,7 +199,7 @@ async def _evaluate_condition_async_iteratively(
                     # reaches the awaitability check under mypyc.
                     result = cast(Any, current).check(*args, **kwargs)
                     if _is_awaitable(result):
-                        result = await cast(Any, result)
+                        result = await result
                     active.remove(current_id)
             elif action == "negate":
                 result = not result
@@ -324,66 +351,6 @@ class _PreparedDispatch:
     args: Tuple[Any, ...]
     condition_kwargs: Optional[Dict[str, Any]]
     declarative_handler: Optional[Dict[str, Any]]
-
-
-@mypyc_attr(native_class=False)
-class CompiledFuncCondition(Condition):
-    """A mypyc-compiled wrapper around a callable for use as a transition guard.
-
-    This is the **opt-in fast path** alternative to :class:`~fast_fsm.FuncCondition`.
-    Because this class lives in ``core.py`` (the compiled module), its ``check()``
-    method body is compiled to native machine code by mypyc.  This eliminates the
-    per-call CPython bytecode interpretation overhead that the uncompiled
-    :class:`~fast_fsm.FuncCondition` incurs when the guard fires on a hot
-    transition path.
-
-    **When to use this over** :class:`~fast_fsm.FuncCondition`:
-
-    * You have measured that condition evaluation is a bottleneck (≥ 5 % of
-      ``trigger()`` wall time in a profile).
-    * Your guard is a simple, self-contained callable with no need for
-      mixing-in additional behaviour.
-
-    **Implementation notes** — the class uses
-    ``@mypyc_attr(native_class=False)`` so that it can inherit from the
-    uncompiled ``Condition`` ABC without `__slots__` conflicts.  Attribute
-    storage falls back to a ``__dict__``.  The ``check()`` dispatch is
-    compiled; attribute access is not.  Unlike a fully-native mypyc class,
-    this class *can* be subclassed from interpreted Python — use
-    :class:`~fast_fsm.FuncCondition` as a base when subclassing is needed.
-
-    Args:
-        func: Any callable ``(*args, **kwargs) -> bool``. Receives the same
-            positional and sanitised keyword arguments as every other condition
-            (private ``_``-prefixed keys stripped, capped at 50 items).
-        name: Human-readable label.  Defaults to ``func.__name__`` when
-            available, otherwise ``"compiled_func"``.
-        description: Optional longer description.
-
-    Example::
-
-        from fast_fsm import StateMachine, CompiledFuncCondition
-
-        is_ready = CompiledFuncCondition(lambda **kw: kw.get("ready", False))
-        fsm = StateMachine.quick_build("idle", [("start", "idle", "running")])
-        fsm.add_transition("go", "idle", "running", condition=is_ready)
-    """
-
-    def __init__(
-        self,
-        func: Callable[..., bool],
-        name: Optional[str] = None,
-        description: str = "",
-    ) -> None:
-        resolved_name: str = (
-            name if name is not None else getattr(func, "__name__", "compiled_func")
-        )
-        super().__init__(resolved_name, description)
-        self.func: Callable[..., bool] = func
-
-    def check(self, *args: Any, **kwargs: Any) -> bool:
-        """Call the wrapped function and return its result."""
-        return self.func(*args, **kwargs)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -1564,7 +1531,7 @@ class StateMachine:
                     condition, prepared.args, prepared.condition_kwargs
                 )
             elif callable(condition):
-                if asyncio.iscoroutinefunction(condition):
+                if _is_async_callable(condition):
                     raise TypeError(
                         "Async declarative condition requires AsyncStateMachine and "
                         "trigger_async()"
@@ -1733,21 +1700,18 @@ class StateMachine:
                     )
                 else:
                     current_type = type(current)
-                    if current_type is FuncCondition:
-                        leaf_async = asyncio.iscoroutinefunction(
-                            cast(FuncCondition, current).func
-                        )
-                    elif current_type is CompiledFuncCondition:
-                        leaf_async = asyncio.iscoroutinefunction(
-                            cast(CompiledFuncCondition, current).func
-                        )
-                    elif (
-                        isinstance(current, FuncCondition)
-                        and current_type.check is FuncCondition.check
+                    if current_type in (FuncCondition, CompiledFuncCondition):
+                        leaf_async = _is_async_callable(getattr(current, "func"))
+                    elif isinstance(current, FuncCondition) and (
+                        current_type.check is FuncCondition.check
                     ):
-                        leaf_async = asyncio.iscoroutinefunction(current.func)
+                        leaf_async = _is_async_callable(current.func)
+                    elif isinstance(current, CompiledFuncCondition) and (
+                        current_type.check is CompiledFuncCondition.check
+                    ):
+                        leaf_async = _is_async_callable(getattr(current, "func"))
                     else:
-                        leaf_async = asyncio.iscoroutinefunction(current.check)
+                        leaf_async = _is_async_callable(current.check)
                     completed[current_id] = (
                         isinstance(current, AsyncCondition) or leaf_async
                     )
@@ -1823,7 +1787,7 @@ class StateMachine:
                             "AsyncCondition requires AsyncStateMachine and trigger_async()"
                         )
                     elif condition_type in (FuncCondition, CompiledFuncCondition):
-                        result = cast(Any, getattr(current, "func"))(*args, **kwargs)
+                        result = getattr(current, "func")(*args, **kwargs)
                         if _is_awaitable(result):
                             _reject_sync_awaitable(result)
                         active.remove(current_id)
@@ -2885,7 +2849,7 @@ class DeclarativeState(State):
                         "from_state": getattr(attr, "_fsm_from_state", None),
                         "to_state": getattr(attr, "_fsm_to_state", None),
                         "condition": getattr(attr, "_fsm_condition", None),
-                        "is_async": asyncio.iscoroutinefunction(attr),
+                        "is_async": _is_async_callable(attr),
                     }
 
                     self._handlers[trigger] = handler_info
@@ -2930,7 +2894,7 @@ class DeclarativeState(State):
                     elif isinstance(condition, Condition):
                         condition_result = condition.check(*args, **kwargs)
                     elif callable(condition):
-                        if asyncio.iscoroutinefunction(condition):
+                        if _is_async_callable(condition):
                             raise TypeError(
                                 "Async declarative condition requires "
                                 "AsyncStateMachine and trigger_async()"
@@ -3172,7 +3136,7 @@ class FSMBuilder:
                 item
             ):
                 async_required = True
-            elif callable(item) and asyncio.iscoroutinefunction(item):
+            elif callable(item) and _is_async_callable(item):
                 async_required = True
 
             # Check DeclarativeState for async handlers
@@ -3185,7 +3149,7 @@ class FSMBuilder:
                         condition, Condition
                     ) and StateMachine._contains_async_requirement(condition):
                         async_required = True
-                    elif callable(condition) and asyncio.iscoroutinefunction(condition):
+                    elif callable(condition) and _is_async_callable(condition):
                         async_required = True
 
         return AsyncStateMachine if async_required else StateMachine
@@ -3400,7 +3364,7 @@ class FSMBuilder:
                             first_requirement = (
                                 f"declarative condition for trigger '{trigger}'"
                             )
-                    elif callable(condition) and asyncio.iscoroutinefunction(condition):
+                    elif callable(condition) and _is_async_callable(condition):
                         if first_requirement is None:
                             first_requirement = (
                                 f"declarative condition for trigger '{trigger}'"
@@ -3412,7 +3376,7 @@ class FSMBuilder:
             ) and StateMachine._contains_async_requirement(condition):
                 if first_requirement is None:
                     first_requirement = f"transition '{trigger}' condition"
-            elif callable(condition) and asyncio.iscoroutinefunction(condition):
+            elif callable(condition) and _is_async_callable(condition):
                 if first_requirement is None:
                     first_requirement = f"transition '{trigger}' condition"
 

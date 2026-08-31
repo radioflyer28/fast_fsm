@@ -41,7 +41,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.058486,
+      "elapsed_seconds": 0.059713,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -51,24 +51,24 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 683923.87,
+      "ops_per_second": 669866.67,
       "warmup_operations": 2000
     }
   },
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 94.85,
-      "total_percent": 96.37
+      "core_percent": 95.06,
+      "total_percent": 96.48
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1175,
+      "collected": 1188,
       "errors": 0,
       "failed": 0,
-      "passed": 1175,
+      "passed": 1188,
       "skipped": 0
     }
   },
@@ -153,8 +153,15 @@
       },
       {
         "classification": "slot-protected",
-        "line": 124,
+        "line": 172,
         "qualified_name": "fast_fsm.conditions.AsyncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "registered-exception",
+        "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
+        "line": 104,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
@@ -165,111 +172,104 @@
       },
       {
         "classification": "slot-protected",
-        "line": 58,
+        "line": 67,
         "qualified_name": "fast_fsm.conditions.FuncCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "slot-protected",
-        "line": 95,
+        "line": 143,
         "qualified_name": "fast_fsm.conditions.NegatedCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "slot-protected",
-        "line": 2979,
+        "line": 2943,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 2390,
+        "line": 2354,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 461,
+        "line": 428,
         "qualified_name": "fast_fsm.core.CallbackState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
-        "classification": "registered-exception",
-        "exception_reason": "@mypyc_attr(native_class=False) preserves the interpreted Condition inheritance boundary.",
-        "line": 330,
-        "qualified_name": "fast_fsm.core.CompiledFuncCondition",
-        "source_path": "src/fast_fsm/core.py"
-      },
-      {
         "classification": "slot-protected",
-        "line": 2847,
+        "line": 2811,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 3057,
+        "line": 3021,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 390,
+        "line": 357,
         "qualified_name": "fast_fsm.core.State",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 491,
+        "line": 458,
         "qualified_name": "fast_fsm.core.StateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 265,
+        "line": 292,
         "qualified_name": "fast_fsm.core.TransitionEntry",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "registered-exception",
         "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
-        "line": 201,
+        "line": 228,
         "qualified_name": "fast_fsm.core.TransitionError",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 241,
+        "line": 268,
         "qualified_name": "fast_fsm.core.TransitionRecord",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 217,
+        "line": 244,
         "qualified_name": "fast_fsm.core.TransitionResult",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 292,
+        "line": 319,
         "qualified_name": "fast_fsm.core._GraphSnapshot",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 282,
+        "line": 309,
         "qualified_name": "fast_fsm.core._GraphTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 318,
+        "line": 345,
         "qualified_name": "fast_fsm.core._PreparedDispatch",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 308,
+        "line": 335,
         "qualified_name": "fast_fsm.core._PreparedTransition",
         "source_path": "src/fast_fsm/core.py"
       },
@@ -306,10 +306,10 @@
     ],
     "registered_exceptions": [
       {
-        "exception_reason": "@mypyc_attr(native_class=False) preserves the interpreted Condition inheritance boundary.",
+        "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
         "has_instance_dict": true,
-        "instance_size_bytes": 64,
-        "qualified_name": "fast_fsm.core.CompiledFuncCondition"
+        "instance_size_bytes": 72,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition"
       },
       {
         "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
@@ -385,6 +385,11 @@
         "qualified_name": "fast_fsm.conditions.AsyncCondition"
       },
       {
+        "dictoffset": -1,
+        "has_instance_dict": true,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition"
+      },
+      {
         "dictoffset": 0,
         "has_instance_dict": false,
         "qualified_name": "fast_fsm.conditions.Condition"
@@ -413,11 +418,6 @@
         "dictoffset": 0,
         "has_instance_dict": false,
         "qualified_name": "fast_fsm.core.CallbackState"
-      },
-      {
-        "dictoffset": -1,
-        "has_instance_dict": true,
-        "qualified_name": "fast_fsm.core.CompiledFuncCondition"
       },
       {
         "dictoffset": 0,

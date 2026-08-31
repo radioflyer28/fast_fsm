@@ -240,9 +240,10 @@ uv run python tools/release_evidence.py slots-policy --json
 ```
 
 Hot-path classes use `__slots__`. Two measured exceptions are deliberately
-registered: `CompiledFuncCondition` uses `@mypyc_attr(native_class=False)` to
-preserve the interpreted `Condition` subclass boundary, while `TransitionError`
-uses it to preserve ordinary Python exception behavior. Both can therefore have
-an instance `__dict__`; their environment-labeled measurements live in the
+registered: `CompiledFuncCondition` stays interpreted for user subclassing and
+delegates evaluation to a compiled core helper, while `TransitionError` uses
+`native_class=False` to preserve ordinary Python exception behavior. Both can
+therefore have an instance `__dict__`; their environment-labeled measurements
+live in the
 evidence manifest rather than this guide. This is the measured exception policy
 recorded by ADR-003, not a relaxation of the general hot-path rule.

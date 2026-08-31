@@ -488,7 +488,7 @@ def test_slots_policy_recursively_classifies_every_production_class() -> None:
         entry["qualified_name"]: entry for entry in evidence["registered_exceptions"]
     }
     assert set(registered) == {
-        "fast_fsm.core.CompiledFuncCondition",
+        "fast_fsm.conditions.CompiledFuncCondition",
         "fast_fsm.core.TransitionError",
     }
     for name, entry in registered.items():
@@ -1422,18 +1422,18 @@ def _manifest_fixture() -> dict[str, object]:
         "artifact_evidence": {"wheels": []},
         "slots_policy": {
             "inventory": [
-                {"qualified_name": "fast_fsm.core.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.conditions.CompiledFuncCondition"},
                 {"qualified_name": "fast_fsm.core.State"},
                 {"qualified_name": "fast_fsm.core.TransitionError"},
             ],
             "registered_exceptions": [
-                {"qualified_name": "fast_fsm.core.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.conditions.CompiledFuncCondition"},
                 {"qualified_name": "fast_fsm.core.TransitionError"},
             ],
             "measurements": [],
             "runtime_layouts": [
                 {
-                    "qualified_name": "fast_fsm.core.CompiledFuncCondition",
+                    "qualified_name": "fast_fsm.conditions.CompiledFuncCondition",
                     "has_instance_dict": True,
                     "dictoffset": -1,
                 },

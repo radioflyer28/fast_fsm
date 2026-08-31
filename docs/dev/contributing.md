@@ -112,10 +112,11 @@ exception cannot be silently omitted:
 uv run python tools/release_evidence.py slots-policy --json
 ```
 
-There are two measured, registered exceptions. `CompiledFuncCondition` has
-`@mypyc_attr(native_class=False)` to preserve the interpreted `Condition`
-subclass boundary; `TransitionError` has it to preserve normal Python exception
-behavior. Both can have an instance `__dict__`; their observed sizes are
+There are two measured, registered exceptions. `CompiledFuncCondition` stays
+interpreted so users can subclass it, while its guard evaluation delegates to a
+compiled `core.py` helper; `TransitionError` has `native_class=False` to
+preserve normal Python exception behavior. Both can have an instance
+`__dict__`; their observed sizes are
 environment-labeled evidence, not a portable memory promise. If you need
 callback storage on a state, use `CallbackState`. These are the deliberate
 ADR-003 registry entries, not a relaxation of the hot-path policy.

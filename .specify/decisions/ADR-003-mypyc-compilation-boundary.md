@@ -173,8 +173,11 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   (e.g., `Condition` from `conditions.py`) which has `__slots__` MUST also use
   `@mypyc_attr(native_class=False)` to avoid the runtime `TypeError: mypyc classes can't
   have __slots__` error. With `native_class=False`, method bodies ARE compiled but attribute
-  storage falls back to `__dict__` (no native C struct slots). `CompiledFuncCondition` is
-  the canonical example of this pattern.
+  storage falls back to `__dict__` (no native C struct slots). `TransitionError` is the
+  canonical built-in-subclass example. A public condition wrapper that must accept
+  interpreted subclasses belongs in `conditions.py` and may delegate only its hot
+  evaluation step to a compiled `core.py` helper; `CompiledFuncCondition` follows that
+  boundary so its construction and dispatch match in pure and compiled artifacts.
 
 **Follow-up work:**
 - If a future profiling pass shows condition evaluation is a bottleneck,

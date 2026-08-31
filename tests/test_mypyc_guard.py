@@ -33,6 +33,7 @@ import threading
 import pytest
 
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
+CONDITIONS_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "conditions.py"
 PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
 SETUP_PY = Path(__file__).parent.parent / "setup.py"
 PHASE16_RUNNER = Path(__file__).parent.parent / "tools" / "phase16_isolated_verify.py"
@@ -176,6 +177,47 @@ def test_known_classes_have_decorator() -> None:
             f"This decorator is required for mypyc-compiled classes that users "
             f"subclass from interpreted Python. See ADR-003."
         )
+
+
+def test_compiled_func_condition_keeps_its_interpreted_subclass_boundary() -> None:
+    """The public wrapper stays interpreted while its evaluator stays in core."""
+    tree = ast.parse(
+        CONDITIONS_PY.read_text(encoding="utf-8"), filename=str(CONDITIONS_PY)
+    )
+    compiled_condition = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "CompiledFuncCondition"
+    )
+    slots = next(
+        node.value
+        for node in compiled_condition.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(slots, ast.Tuple)
+    assert {item.value for item in slots.elts if isinstance(item, ast.Constant)} == {
+        "func",
+        "__dict__",
+    }
+    check = next(
+        node
+        for node in compiled_condition.body
+        if isinstance(node, ast.FunctionDef) and node.name == "check"
+    )
+    assert any(
+        isinstance(node, ast.Name) and node.id == "_compiled_func_condition_check"
+        for node in ast.walk(check)
+    )
+    core_source = CORE_PY.read_text(encoding="utf-8")
+    assert "def _compiled_func_condition_check" in core_source
+    assert (
+        "_bind_compiled_func_condition_check(_compiled_func_condition_check)"
+        in core_source
+    )
 
 
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:

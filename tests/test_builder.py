@@ -1716,6 +1716,131 @@ class TestFSMBuilderPublication:
 class TestFSMBuilderAsyncPreflight:
     """D-11 builder mode selection before candidate publication."""
 
+    @staticmethod
+    def _async_callable_instance():
+        """Return an inspectable callable whose invocation is asynchronous."""
+
+        class AsyncCallable:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def __call__(self, *args, **kwargs) -> bool:
+                self.calls += 1
+                return True
+
+        return AsyncCallable()
+
+    @staticmethod
+    def _async_callable_instance_condition(shape, guard):
+        """Wrap one async callable instance through every public guard shape."""
+        if shape == "func":
+            return FuncCondition(guard)
+        if shape == "compiled":
+            return CompiledFuncCondition(guard)
+        if shape == "inherited-func":
+
+            class InheritedFuncCondition(FuncCondition):
+                pass
+
+            return InheritedFuncCondition(guard)
+        if shape == "inherited-compiled":
+
+            class InheritedCompiledFuncCondition(CompiledFuncCondition):
+                pass
+
+            return InheritedCompiledFuncCondition(guard)
+        return guard
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "shape",
+        ("func", "compiled", "inherited-func", "inherited-compiled", "direct"),
+    )
+    async def test_auto_detects_async_callable_instances_and_awaits_them(self, shape):
+        """Both incremental detection and build preflight inspect ``__call__``."""
+        guard = self._async_callable_instance()
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go",
+            "start",
+            "finish",
+            self._async_callable_instance_condition(shape, guard),
+        )
+
+        # This assertion covers incremental staging; the build repeats the
+        # traversal before candidate allocation.
+        assert builder.machine_type is AsyncStateMachine
+        machine = builder.build()
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+        assert guard.calls == 2
+
+    @pytest.mark.parametrize(
+        "shape",
+        ("func", "compiled", "inherited-func", "inherited-compiled", "direct"),
+    )
+    def test_explicit_sync_rejects_async_callable_instances_before_invocation(
+        self, shape
+    ):
+        """Forced sync rejects callable instances without running user code."""
+        guard = self._async_callable_instance()
+        builder = FSMBuilder(State("start"), async_mode=False)
+        builder.add_state(State("finish"))
+        builder.add_transition(
+            "go",
+            "start",
+            "finish",
+            self._async_callable_instance_condition(shape, guard),
+        )
+
+        with pytest.raises(RuntimeError, match="explicit sync.*condition"):
+            builder.build()
+
+        assert guard.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_declarative_async_callable_instance_guard_uses_the_same_classifier(
+        self,
+    ):
+        """Decorator guards select async mode and are awaited through dispatch."""
+        guard = self._async_callable_instance()
+
+        class GuardedState(DeclarativeState):
+            @transition("go", from_state="start", to_state="finish", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(GuardedState("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish")
+
+        assert builder.machine_type is AsyncStateMachine
+        machine = builder.build()
+        assert isinstance(machine, AsyncStateMachine)
+        assert await machine.can_trigger_async("go")
+        assert (await machine.trigger_async("go")).success
+        assert guard.calls == 2
+
+    def test_explicit_sync_rejects_declarative_async_callable_instance_before_invocation(
+        self,
+    ):
+        """Decorator callable instances fail at preflight, not at runtime."""
+        guard = self._async_callable_instance()
+
+        class GuardedState(DeclarativeState):
+            @transition("go", condition=guard)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        builder = FSMBuilder(GuardedState("start"), async_mode=False)
+
+        with pytest.raises(RuntimeError, match="explicit sync.*declarative condition"):
+            builder.build()
+
+        assert guard.calls == 0
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "factory",

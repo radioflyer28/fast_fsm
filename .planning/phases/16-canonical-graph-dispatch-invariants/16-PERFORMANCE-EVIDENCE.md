@@ -410,3 +410,46 @@ the full test suite, Sphinx HTML, three doctests, and a direct
 environment's 30-second command host cut off the monolithic task wrapper, so
 the evidence records its independently successful component exits rather than
 claiming an unobserved wrapper exit code.
+
+## Review-Fix Cycle 4 — Callable-Instance and Public-Subclass Parity
+
+- Collected: 2026-08-30
+- Context: an isolated review-fix worktree, with every origin-sensitive
+  verification command exporting a new temporary repository. Pure contexts
+  asserted `src/fast_fsm/core.py`; compiled contexts built and asserted the
+  temporary `fast_fsm.core` extension. Developer-checkout native shadows were
+  neither imported nor removed.
+
+The async classifier now examines both a callable and its effective
+`__call__` hook, without invocation, on every builder/preflight/declarative
+path. Fresh pure and compiled contexts each passed the 13-case matrix covering
+exact `FuncCondition`, exact `CompiledFuncCondition`, their inherited wrappers,
+direct and declarative callable instances, auto selection, explicit-sync
+rejection, and awaited dispatch.
+
+Mypyc 1.17.1 builds `@mypyc_attr(native_class=False,
+allow_interpreted_subclasses=True)`, but its compiled `__init__` entry still
+rejects an ordinary Python subclass before method-body execution. The public
+`CompiledFuncCondition` therefore remains interpreted in `conditions.py` and
+is re-exported from `core.py`; its `check()` delegates only the evaluation step
+to the compiled core helper. This preserves the documented public constructor,
+subclassing, and dispatch behavior in both artifacts. The helper returns the
+dynamic result unchanged so an async callable instance reaches the async
+dispatcher before mypyc could coerce it to `bool`.
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite baseline-write \
+  --manifest-output evidence/release-baseline.json
+uv run python tools/phase16_isolated_verify.py --suite phase16
+task typecheck-mypy
+task typecheck-ty
+```
+
+The regenerated pure manifest records 1,188/1,188 passed tests, 96.48% total
+source coverage, and 95.06% `core.py` coverage. The full Phase 16 suite passed
+fresh pure and compiled semantic matrices, the compiled trigger/history
+selection (3 tests), and the asserted-pure release gate (source origin, Ruff,
+mypy, full tests, Sphinx HTML/doctests, and baseline freshness). Mypy and the
+advisory ty checker passed with no diagnostics. No new condition-wrapper
+throughput claim is made: the existing compiled trigger/history floor remains
+the measured contract, and its selected performance checks passed.

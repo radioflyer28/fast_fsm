@@ -47,9 +47,9 @@ _RELEASE_HISTORY_FACTS = (
 )
 
 REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
-    "fast_fsm.core.CompiledFuncCondition": (
-        "@mypyc_attr(native_class=False) preserves the interpreted Condition "
-        "inheritance boundary."
+    "fast_fsm.conditions.CompiledFuncCondition": (
+        "The interpreted public subclass boundary delegates evaluation to a "
+        "compiled core helper."
     ),
     "fast_fsm.core.TransitionError": (
         "@mypyc_attr(native_class=False) preserves normal Python exception behavior."
@@ -2017,7 +2017,7 @@ def _slots_measurements(
     core = importlib.import_module(CORE_MODULE_NAME)
 
     registered_instances = {
-        "fast_fsm.core.CompiledFuncCondition": core.CompiledFuncCondition(
+        "fast_fsm.conditions.CompiledFuncCondition": core.CompiledFuncCondition(
             lambda **_kwargs: True
         ),
         "fast_fsm.core.TransitionError": core.TransitionError(

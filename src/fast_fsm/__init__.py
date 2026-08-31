@@ -16,7 +16,6 @@ from .core import (
     TransitionRecord,
     Condition,
     FuncCondition,
-    CompiledFuncCondition,
     AsyncCondition,
     NegatedCondition,
     DeclarativeState,
@@ -28,6 +27,7 @@ from .core import (
     quick_fsm,
     condition_builder,
 )
+from .conditions import CompiledFuncCondition
 from .condition_templates import TimeoutCondition, CooldownCondition, ElapsedCondition
 from .visualization import (
     to_mermaid,

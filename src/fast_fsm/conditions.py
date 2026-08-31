@@ -55,6 +55,15 @@ class Condition(ABC):
         return f"{self.__class__.__name__}('{self.name}')"
 
 
+_compiled_func_condition_check: Optional[Callable[..., Any]] = None
+
+
+def _bind_compiled_func_condition_check(checker: Callable[..., Any]) -> None:
+    """Install the compiled core evaluator after the import cycle has completed."""
+    global _compiled_func_condition_check
+    _compiled_func_condition_check = checker
+
+
 class FuncCondition(Condition):
     """
     Condition wrapper for functions.
@@ -90,6 +99,45 @@ class FuncCondition(Condition):
     def check(self, *args: Any, **kwargs: Any) -> bool:
         """Check condition by calling the wrapped function"""
         return self.func(*args, **kwargs)
+
+
+class CompiledFuncCondition(Condition):
+    """An interpreted-subclassable guard whose evaluation delegates to compiled core code.
+
+    The public wrapper intentionally stays in ``conditions.py`` so users can
+    inherit from it in ordinary Python. Once :mod:`fast_fsm.core` is imported,
+    its ``check`` method dispatches to a mypyc-compiled helper. This keeps the
+    accelerated evaluation path without asking mypyc to accept interpreted
+    subclasses of a compiled class.
+
+    Args:
+        func: Any callable ``(*args, **kwargs) -> bool``.
+        name: Human-readable label. Defaults to ``func.__name__`` when present.
+        description: Optional longer description.
+    """
+
+    __slots__ = ("func", "__dict__")
+
+    def __init__(
+        self,
+        func: Callable[..., bool],
+        name: Optional[str] = None,
+        description: str = "",
+    ) -> None:
+        resolved_name = (
+            name if name is not None else getattr(func, "__name__", "compiled_func")
+        )
+        super().__init__(resolved_name, description)
+        self.func = func
+
+    def check(self, *args: Any, **kwargs: Any) -> bool:
+        """Evaluate the wrapped function through the compiled core helper."""
+        checker = _compiled_func_condition_check
+        if checker is None:
+            # Importing ``fast_fsm.conditions`` alone remains usable before the
+            # package's core module binds the optional acceleration helper.
+            return self.func(*args, **kwargs)
+        return checker(self, *args, **kwargs)
 
 
 class NegatedCondition(Condition):
