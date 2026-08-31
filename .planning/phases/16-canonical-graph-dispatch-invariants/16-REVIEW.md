@@ -1,13 +1,16 @@
 ---
 phase: 16-canonical-graph-dispatch-invariants
-reviewed: 2026-08-30T19:10:01Z
+reviewed: 2026-08-31T12:37:03Z
 depth: standard
-files_reviewed: 17
+files_reviewed: 22
 files_reviewed_list:
+  - .specify/decisions/ADR-003-mypyc-compilation-boundary.md
   - .specify/memory/spr-core-api.md
   - docs/dev/architecture.md
+  - docs/dev/contributing.md
   - docs/dev/testing.md
   - evidence/release-baseline.json
+  - src/fast_fsm/__init__.py
   - src/fast_fsm/condition_templates.py
   - src/fast_fsm/conditions.py
   - src/fast_fsm/core.py
@@ -19,108 +22,91 @@ files_reviewed_list:
   - tests/test_graph_invariants.py
   - tests/test_mypyc_guard.py
   - tests/test_performance_benchmarks.py
+  - tests/test_release_evidence.py
   - tests/test_safety_kwargs.py
   - tools/phase16_isolated_verify.py
+  - tools/release_evidence.py
 findings:
-  critical: 2
+  critical: 1
   warning: 0
   info: 0
-  total: 2
+  total: 1
 status: issues_found
 ---
 
 # Phase 16: Code Review Report
 
-**Reviewed:** 2026-08-30T19:10:01Z
+**Reviewed:** 2026-08-31T12:37:03Z
 **Depth:** standard
-**Files Reviewed:** 17
+**Files Reviewed:** 22
 **Status:** issues_found
 
 ## Summary
 
-The four findings from the preceding review are fixed on their named paths.
-The exact `CompiledFuncCondition`, inherited `FuncCondition`, and overridden
-`check()` cases now select or reject the correct machine type; failed auto
-builds publish neither their candidate nor its transient type; manifest
-publication stays on a no-follow descriptor after parent/leaf swaps and fails
-closed without the required platform primitives; and the new-file mode probe
-does not mutate process-global `umask`. The focused 14-test asserted-pure
-selection passed, and an independent asserted-pure baseline check reproduced
-1,175/1,175 tests with 96.37% total coverage and 94.85% `core.py` coverage.
-The component-level release evidence is internally consistent and does not
-claim an unobserved monolithic-wrapper exit.
+The three findings from the preceding review are resolved: the public guard aliases
+are consistently exported and accepted by the guard APIs, the slots documentation
+matches the measured exceptions, and ADR-003/SPR describe the interpreted wrapper
+and compiled invocation bridge consistently. Public alias and wrapper identities were
+also verified in isolated pure and freshly compiled installations.
 
-The review is not clean. The async classifier still misses inspectable async
-callable objects, so both auto and explicit-sync builders choose invalid modes
-in fresh pure and compiled reproductions. The review also reproduced a separate
-pure/compiled contract split: `CompiledFuncCondition` is documented as an
-interpreted-subclass surface, works that way in pure mode, but crashes at
-construction under the compiled artifact.
+The authoritative Phase 16 isolated suite and an independent baseline check both
+passed with 1,191/1,191 tests, 96.53% total coverage, and 95.06% core coverage.
+Those green gates do not exercise direct composite `Condition.check()` calls with
+awaitable children. Such calls remain observably incorrect in both pure and compiled
+builds, so the phase is not clean.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Async callable objects still bypass builder mode classification
+### CR-01: Composite condition checks coerce awaitable children instead of preserving the guard channel
 
 **Classification:** BLOCKER
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:1735-1750,3175-3189,3403-3417`
+**Files:** `src/fast_fsm/condition_templates.py:130-160`,
+`src/fast_fsm/conditions.py:179-181`
 
-**Issue:** The repaired classifier calls `asyncio.iscoroutinefunction()` on
-the stored callable object itself. Python returns `False` for an instance whose
-`__call__` method is declared with `async def`, even though invoking that object
-returns a coroutine. This affects exact `FuncCondition(AsyncCallable())`, exact
-`CompiledFuncCondition(AsyncCallable())`, and a callable object supplied
-directly as a builder guard. In fresh asserted-pure and freshly compiled
-reproductions, auto mode reported and built `StateMachine`; explicit-sync mode
-also accepted the condition. Async runtime evaluation is already capable of
-awaiting the resulting coroutine, so detection and execution disagree and
-GRAF-05/D-11 remain unsatisfied for a documented “any callable” guard shape.
+**Issue:** `Condition.check()` now truthfully permits `GuardResult` (`bool |
+Awaitable[bool]`), but the public composite implementations still apply `all()`,
+`any()`, or `not` directly to child results and still annotate their own return as
+`bool`. A fresh isolated pure reproduction and a fresh mypyc build both showed
+`AndCondition(FuncCondition(async_false)).check()` returning `True` and emitting
+`RuntimeWarning: coroutine ... was never awaited`. `OrCondition` likewise treats an
+awaitable as true, while `NegatedCondition` and `NotCondition` invert the awaitable
+object's truthiness rather than its awaited boolean. Awaitables can therefore leak
+unclosed, exceptions raised by them are lost, and the direct public API returns the
+wrong result. The machine-owned iterative evaluators are correct, which explains why
+the full suite remains green, but it does not repair direct calls to the standardized
+`Condition.check()` interface. This also contradicts the explicit compatibility claim
+in `.specify/memory/spr-core-api.md:20`.
 
-**Fix:** Centralize callable-hook classification and test both the callable and
-its effective `__call__` method without executing user code, for example:
+**Fix:** Change all four composite `check()` methods to return `GuardResult` and add
+an interpreted composition helper that preserves the current immediate `bool` result
+for all-synchronous children but returns a coroutine as soon as an awaitable child is
+encountered. That coroutine must await each produced value exactly once and continue
+left-to-right with the same short-circuit or inversion rule. Keep the helper outside
+compiled `core.py` (or inject it without reversing the `conditions -> core` dependency)
+so the documented compilation boundary remains intact. For example, the shape should
+be equivalent to:
 
 ```python
-def _is_async_callable(value: object) -> bool:
-    return asyncio.iscoroutinefunction(value) or asyncio.iscoroutinefunction(
-        getattr(value, "__call__", None)
-    )
+def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+    result = self.condition.check(*args, **kwargs)
+    if inspect.isawaitable(result):
+        async def invert() -> bool:
+            return not await result
+        return invert()
+    return not result
 ```
 
-Use that helper for stored `.func` leaves and direct/declarative callable
-guards in both incremental detection and build preflight. Add pure and compiled
-auto-mode, explicit-sync, and awaited-dispatch regressions for callable
-instances wrapped by both public function-condition types and supplied
-directly.
-
-### CR-02: `CompiledFuncCondition`'s documented subclass contract crashes when compiled
-
-**Classification:** BLOCKER
-
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:329-386`
-**Related contract:** `/Users/akriz/code/fast_fsm/.specify/memory/spr-core-api.md:45`
-
-**Issue:** Both the class docstring and the current SPR state that
-`CompiledFuncCondition` can be subclassed from interpreted Python. A minimal
-inherited subclass constructs and runs in asserted-pure mode, but the same
-class against a freshly built native extension fails in the inherited
-constructor with `TypeError: fast_fsm.core.CompiledFuncCondition object
-expected; got __main__.InheritedCompiled`. This is a public artifact-mode crash,
-and it also means the new classifier's pure-mode inherited-compiled leaf falls
-outside the promised compiled/pure equivalence.
-
-**Fix:** Make the contract explicit and identical in both artifacts. If this is
-an intended subclass surface, use a mypyc-supported interpreted-subclass
-boundary and add a pure/compiled construction, auto-detection, explicit-sync,
-and dispatch matrix. If it is intentionally sealed, remove the subclassability
-claims from the class documentation and SPR, reject subclass creation
-consistently in pure mode, and direct users to the already supported
-interpreted `FuncCondition` subclass surface. Do not leave the current
-pure-only behavior.
+Use a shared implementation for `AndCondition` and `OrCondition` that retains their
+short-circuit behavior without evaluating later children early. Add direct-call tests
+in asserted-pure and freshly compiled environments for async true, false, and raising
+leaves under `NegatedCondition`, `AndCondition`, `OrCondition`, and `NotCondition`,
+including a warnings-as-errors assertion that no coroutine is left unawaited.
 
 ---
 
-_Reviewed: 2026-08-30T19:10:01Z_
+_Reviewed: 2026-08-31T12:37:03Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
