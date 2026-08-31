@@ -28,6 +28,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -218,6 +220,81 @@ def test_compiled_func_condition_keeps_its_interpreted_subclass_boundary() -> No
         "_bind_compiled_func_condition_check(_compiled_func_condition_check)"
         in core_source
     )
+
+
+def test_compiled_func_condition_remains_usable_before_core_binds_helper() -> None:
+    """The interpreted wrapper has a safe direct-module fallback at import time."""
+    spec = importlib.util.spec_from_file_location(
+        "fast_fsm_unbound_conditions", CONDITIONS_PY
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    condition = module.CompiledFuncCondition(lambda: True)
+
+    assert condition.check() is True
+
+
+def test_typed_downstream_async_callable_wrappers_accept_exact_and_inherited_shapes(
+    tmp_path: Path,
+) -> None:
+    """The PEP 561 client contract matches runtime async wrapper support."""
+    assert (CONDITIONS_PY.parent / "py.typed").is_file()
+    client = tmp_path / "client.py"
+    client.write_text(
+        "from fast_fsm import (\n"
+        "    CompiledFuncCondition,\n"
+        "    FuncCondition,\n"
+        "    GuardCallable,\n"
+        "    GuardResult,\n"
+        ")\n"
+        "from fast_fsm.core import (\n"
+        "    CompiledFuncCondition as CoreCompiledFuncCondition,\n"
+        "    FuncCondition as CoreFuncCondition,\n"
+        "    GuardCallable as CoreGuardCallable,\n"
+        "    GuardResult as CoreGuardResult,\n"
+        ")\n\n"
+        "class AsyncCallable:\n"
+        "    async def __call__(self, *args: object, **kwargs: object) -> bool:\n"
+        "        return True\n\n"
+        "class InheritedPackageFunc(FuncCondition):\n"
+        "    pass\n\n"
+        "class InheritedPackageCompiled(CompiledFuncCondition):\n"
+        "    pass\n\n"
+        "class InheritedCoreFunc(CoreFuncCondition):\n"
+        "    pass\n\n"
+        "class InheritedCoreCompiled(CoreCompiledFuncCondition):\n"
+        "    pass\n\n"
+        "guard = AsyncCallable()\n"
+        "package_guard: GuardCallable = guard\n"
+        "core_guard: CoreGuardCallable = guard\n"
+        "package_exact_func = FuncCondition(package_guard)\n"
+        "package_exact_compiled = CompiledFuncCondition(package_guard)\n"
+        "package_inherited_func = InheritedPackageFunc(package_guard)\n"
+        "package_inherited_compiled = InheritedPackageCompiled(package_guard)\n"
+        "core_exact_func = CoreFuncCondition(core_guard)\n"
+        "core_exact_compiled = CoreCompiledFuncCondition(core_guard)\n"
+        "core_inherited_func = InheritedCoreFunc(core_guard)\n"
+        "core_inherited_compiled = InheritedCoreCompiled(core_guard)\n"
+        "package_result: GuardResult = package_exact_func.check()\n"
+        "core_result: CoreGuardResult = core_exact_compiled.check()\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["FAST_FSM_BUILD_MODE"] = "pure"
+    environment.pop("MYPYPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", str(client)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:

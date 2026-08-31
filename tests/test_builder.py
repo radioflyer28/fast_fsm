@@ -766,6 +766,31 @@ class TestConvenienceFunctions:
 class TestDeclarativeStateGaps:
     """Cover uncovered paths in DeclarativeState."""
 
+    def test_direct_sync_policy_rejects_awaitable_condition_protocol(self, recwarn):
+        """A sync declarative policy closes and rejects an awaitable condition."""
+
+        class AwaitableCondition(Condition):
+            def __init__(self):
+                super().__init__("awaitable")
+                self.calls = 0
+
+            async def check(self, *args, **kwargs):
+                self.calls += 1
+                return True
+
+        condition = AwaitableCondition()
+
+        class GuardedState(DeclarativeState):
+            @transition("go", condition=condition)
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        assert not GuardedState("source").can_transition("go", State("target"))
+        assert condition.calls == 0
+        assert not any(
+            issubclass(warning.category, RuntimeWarning) for warning in recwarn
+        )
+
     def test_can_transition_async_condition_in_sync_context(self):
         """AsyncCondition on a sync DeclarativeState — should warn and return False."""
 

@@ -31,11 +31,13 @@ from dataclasses import dataclass
 import asyncio
 from mypy_extensions import mypyc_attr
 from .conditions import (
-    AsyncCondition,
-    CompiledFuncCondition,
-    Condition,
-    FuncCondition,
-    NegatedCondition,
+    AsyncCondition as AsyncCondition,
+    CompiledFuncCondition as CompiledFuncCondition,
+    Condition as Condition,
+    FuncCondition as FuncCondition,
+    GuardCallable as GuardCallable,
+    GuardResult as GuardResult,
+    NegatedCondition as NegatedCondition,
     _bind_compiled_func_condition_check,
 )
 
@@ -116,14 +118,16 @@ def _is_async_callable(value: Any) -> bool:
     )
 
 
-def _compiled_func_condition_check(condition: Any, *args: Any, **kwargs: Any) -> Any:
+def _compiled_func_condition_check(
+    condition: CompiledFuncCondition, *args: Any, **kwargs: Any
+) -> GuardResult:
     """Evaluate an opt-in condition wrapper in the compiled core module.
 
-    The public condition protocol is typed as boolean, but the async dispatcher
-    must first receive an awaitable unchanged when a callable instance has an
-    async ``__call__`` hook.
+    The public guard contract permits an awaitable result, which the async
+    dispatcher must receive unchanged when a callable instance has an async
+    ``__call__`` hook.
     """
-    return cast(Callable[..., Any], condition.func)(*args, **kwargs)
+    return condition.func(*args, **kwargs)
 
 
 _bind_compiled_func_condition_check(_compiled_func_condition_check)
@@ -182,20 +186,19 @@ async def _evaluate_condition_async_iteratively(
                     result = await current.check_async(*args, **kwargs)
                     active.remove(current_id)
                 elif condition_type in (FuncCondition, CompiledFuncCondition):
-                    # ``FuncCondition.check`` is annotated to return ``bool``.
-                    # The exact built-in callable wrappers call their stored
+                    # Exact built-in callable wrappers call their stored
                     # function directly so mypyc can still observe and await
-                    # an async leaf. Public FuncCondition subclasses must
-                    # instead use their effective ``check`` override below.
+                    # a ``GuardResult`` async leaf. Public FuncCondition
+                    # subclasses must instead use their effective ``check``
+                    # override below.
                     func = getattr(current, "func")
                     result = func(*args, **kwargs)
                     if _is_awaitable(result):
                         result = await result
                     active.remove(current_id)
                 else:
-                    # The public ``Condition.check`` protocol is annotated as
-                    # synchronous. Keep an interpreted subclass's return at
-                    # the dynamic boundary so a legitimate awaitable override
+                    # Keep an interpreted subclass's ``GuardResult`` at the
+                    # dynamic boundary so a legitimate awaitable override
                     # reaches the awaitability check under mypyc.
                     result = cast(Any, current).check(*args, **kwargs)
                     if _is_awaitable(result):
@@ -699,7 +702,7 @@ class StateMachine:
         config: Dict[str, Any],
         *,
         name: Optional[str] = None,
-        conditions: Optional[Dict[str, Union[Condition, Callable[..., bool]]]] = None,
+        conditions: Optional[Dict[str, Union[Condition, GuardCallable]]] = None,
     ) -> "StateMachine":
         """Build a :class:`StateMachine` from a plain dictionary description.
 
@@ -748,7 +751,7 @@ class StateMachine:
             name: Override the machine name.  Takes precedence over
                 ``config["name"]`` if both are provided.
             conditions: Optional mapping of ``trigger_name → Condition``
-                (or any ``(**kwargs) -> bool`` callable).  Keys that do not
+                (or any ``(**kwargs) -> GuardResult`` callable).  Keys that do not
                 match any trigger in *config* are silently ignored.
 
         Returns:
@@ -798,7 +801,7 @@ class StateMachine:
         fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
 
         # Add transitions — add_transition natively supports str-or-list from_state
-        _conditions: Dict[str, Union[Condition, Callable[..., bool]]] = conditions or {}
+        _conditions: Dict[str, Union[Condition, GuardCallable]] = conditions or {}
         for entry in raw_transitions:
             cond = _conditions.get(entry["trigger"])
             fsm.add_transition(
@@ -964,9 +967,9 @@ class StateMachine:
         trigger: str,
         from_state: Union[str, State, List[Union[str, State]]],
         to_state: Union[str, State],
-        condition: Optional[Union[Condition, Callable[..., bool]]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable[..., bool]]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
         raw_sources: List[Any]
@@ -1065,9 +1068,9 @@ class StateMachine:
         trigger: str,
         from_state: Union[str, State, List[Union[str, State]]],
         to_state: Union[str, State],
-        condition: Optional[Union[Condition, Callable[..., bool]]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable[..., bool]]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
         prepared = self._normalize_transition_request(
@@ -1086,7 +1089,7 @@ class StateMachine:
                     str,
                     Union[str, State, List[Union[str, State]]],
                     Union[str, State],
-                    Optional[Union[Condition, Callable[..., bool]]],
+                    Optional[Union[Condition, GuardCallable]],
                 ],
             ]
         ],
@@ -1097,8 +1100,9 @@ class StateMachine:
         Each entry is either a 3-tuple ``(trigger, from_state, to_state)`` or a
         4-tuple ``(trigger, from_state, to_state, condition)`` where *condition*
         follows the same rules as :meth:`add_transition` — a
-        :class:`~fast_fsm.Condition` instance, a plain ``(**kwargs) -> bool``
-        callable, or ``None`` / omitted for an unconditional transition.
+        :class:`~fast_fsm.Condition` instance, a plain
+        ``(**kwargs) -> GuardResult`` callable, or ``None`` / omitted for an
+        unconditional transition.
 
         Args:
             transitions: List of 3- or 4-tuples describing each transition.
@@ -1117,7 +1121,7 @@ class StateMachine:
             if len(entry) not in (3, 4):
                 raise ValueError("each transition entry must contain 3 or 4 items")
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
-            condition: Optional[Union[Condition, Callable[..., bool]]] = (
+            condition: Optional[Union[Condition, GuardCallable]] = (
                 rest[0] if rest else None
             )
             prepared.append(
@@ -1133,11 +1137,11 @@ class StateMachine:
         trigger2: str,
         state1: Union[str, State],
         state2: Union[str, State],
-        condition1: Optional[Union[Condition, Callable]] = None,
-        condition2: Optional[Union[Condition, Callable]] = None,
+        condition1: Optional[Union[Condition, GuardCallable]] = None,
+        condition2: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless1: Optional[Union[Condition, Callable]] = None,
-        unless2: Optional[Union[Condition, Callable]] = None,
+        unless1: Optional[Union[Condition, GuardCallable]] = None,
+        unless2: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """
         Add transitions in both directions between two states.
@@ -1174,9 +1178,9 @@ class StateMachine:
         self,
         trigger: str,
         to_state: Union[str, State],
-        condition: Optional[Union[Condition, Callable]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """
         Add an emergency transition from all states to a specific state.
@@ -2893,6 +2897,8 @@ class DeclarativeState(State):
                         return False
                     elif isinstance(condition, Condition):
                         condition_result = condition.check(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            _reject_sync_awaitable(condition_result)
                     elif callable(condition):
                         if _is_async_callable(condition):
                             raise TypeError(
@@ -3193,9 +3199,9 @@ class FSMBuilder:
         trigger: str,
         from_state: Union[str, List[str]],
         to_state: str,
-        condition: Optional[Union[Condition, Callable]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> "FSMBuilder":
         """Add a transition to the builder with async detection.
 
@@ -3646,21 +3652,21 @@ def quick_fsm(
 
 
 @overload
-def condition_builder(func: Callable[..., bool]) -> FuncCondition: ...
+def condition_builder(func: GuardCallable) -> FuncCondition: ...
 
 
 @overload
 def condition_builder(
     func: None = None, *, name: str = "", description: str = ""
-) -> Callable[[Callable[..., bool]], FuncCondition]: ...
+) -> Callable[[GuardCallable], FuncCondition]: ...
 
 
 def condition_builder(
-    func: Optional[Callable[..., bool]] = None,
+    func: Optional[GuardCallable] = None,
     *,
     name: str = "",
     description: str = "",
-) -> Union[FuncCondition, Callable[[Callable[..., bool]], FuncCondition]]:
+) -> Union[FuncCondition, Callable[[GuardCallable], FuncCondition]]:
     """
     Decorator to create condition functions with metadata.
 
@@ -3683,7 +3689,7 @@ def condition_builder(
             return level > 0
     """
 
-    def decorator(f: Callable[..., bool]) -> FuncCondition:
+    def decorator(f: GuardCallable) -> FuncCondition:
         func_name = getattr(f, "__name__", "anonymous_condition")
         return FuncCondition(f, name or func_name, description)
 

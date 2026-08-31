@@ -7,9 +7,17 @@ from interpreted Python code while still allowing the core FSM logic to be compi
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, TypeAlias
 
 __slots__ = ()
+
+
+# Guard wrappers can retain an awaitable until the owning machine chooses the
+# synchronous rejection or asynchronous awaiting boundary.  These aliases are
+# public because ``fast_fsm`` is a typed distribution and callers may provide
+# async callable objects (including instances with an async ``__call__``).
+GuardResult: TypeAlias = bool | Awaitable[bool]
+GuardCallable: TypeAlias = Callable[..., GuardResult]
 
 
 class Condition(ABC):
@@ -34,7 +42,7 @@ class Condition(ABC):
         self.description = description or name
 
     @abstractmethod
-    def check(self, *args: Any, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
         """
         Check if the condition is met.
 
@@ -42,7 +50,9 @@ class Condition(ABC):
             **kwargs: Context data for evaluating the condition
 
         Returns:
-            True if condition is satisfied, False otherwise
+            ``True`` or ``False`` for synchronous conditions. Callable-backed
+            wrappers may return an awaitable; a ``StateMachine`` closes and
+            rejects that result, while ``AsyncStateMachine`` awaits it.
         """
         pass  # pragma: no cover
 
@@ -55,10 +65,12 @@ class Condition(ABC):
         return f"{self.__class__.__name__}('{self.name}')"
 
 
-_compiled_func_condition_check: Optional[Callable[..., Any]] = None
+_compiled_func_condition_check: Optional[Callable[..., GuardResult]] = None
 
 
-def _bind_compiled_func_condition_check(checker: Callable[..., Any]) -> None:
+def _bind_compiled_func_condition_check(
+    checker: Callable[..., GuardResult],
+) -> None:
     """Install the compiled core evaluator after the import cycle has completed."""
     global _compiled_func_condition_check
     _compiled_func_condition_check = checker
@@ -76,7 +88,7 @@ class FuncCondition(Condition):
 
     def __init__(
         self,
-        func: Callable[..., bool],
+        func: GuardCallable,
         name: Optional[str] = None,
         description: str = "",
     ):
@@ -84,7 +96,7 @@ class FuncCondition(Condition):
         Initialize with a callable.
 
         Args:
-            func: Callable that takes ``**kwargs`` and returns bool.
+            func: Callable that takes ``**kwargs`` and returns ``GuardResult``.
             name: Name for this condition (defaults to function name).
             description: Description of what this condition does.
         """
@@ -96,7 +108,7 @@ class FuncCondition(Condition):
         super().__init__(name, description)
         self.func = func
 
-    def check(self, *args: Any, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
         """Check condition by calling the wrapped function"""
         return self.func(*args, **kwargs)
 
@@ -111,7 +123,7 @@ class CompiledFuncCondition(Condition):
     subclasses of a compiled class.
 
     Args:
-        func: Any callable ``(*args, **kwargs) -> bool``.
+        func: Any callable ``(*args, **kwargs) -> GuardResult``.
         name: Human-readable label. Defaults to ``func.__name__`` when present.
         description: Optional longer description.
     """
@@ -120,7 +132,7 @@ class CompiledFuncCondition(Condition):
 
     def __init__(
         self,
-        func: Callable[..., bool],
+        func: GuardCallable,
         name: Optional[str] = None,
         description: str = "",
     ) -> None:
@@ -130,7 +142,7 @@ class CompiledFuncCondition(Condition):
         super().__init__(resolved_name, description)
         self.func = func
 
-    def check(self, *args: Any, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
         """Evaluate the wrapped function through the compiled core helper."""
         checker = _compiled_func_condition_check
         if checker is None:

@@ -27,7 +27,7 @@ from .core import (
     quick_fsm,
     condition_builder,
 )
-from .conditions import CompiledFuncCondition
+from .conditions import CompiledFuncCondition, GuardCallable, GuardResult
 from .condition_templates import TimeoutCondition, CooldownCondition, ElapsedCondition
 from .visualization import (
     to_mermaid,
@@ -71,6 +71,8 @@ __all__ = [
     "Condition",
     "FuncCondition",
     "CompiledFuncCondition",
+    "GuardCallable",
+    "GuardResult",
     "AsyncCondition",
     "NegatedCondition",
     # Advanced state handling
