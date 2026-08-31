@@ -61,8 +61,11 @@ Described above.
   import DAG split (`conditions → core`).
 
 **Cons / tradeoffs:**
-- Condition evaluation itself is not accelerated. For FSMs with very
-  expensive guard conditions, this is not the bottleneck anyway.
+- Caller-supplied predicates and the public condition wrappers remain
+  interpreted. `CompiledFuncCondition` is also interpreted, but its
+  `check()` delegates the narrow operation of invoking its stored predicate to
+  a private compiled `core.py` helper. That bridge does not make the predicate
+  native and has no separately measured throughput claim.
 - `allow_interpreted_subclasses=True` on `State` means the compiled
   `State` classes pay a small interop penalty for interpreted subclasses.
 
@@ -156,9 +159,11 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   is strictly additive.
 
 **Negative / watch-outs:**
-- Condition evaluation code itself is not accelerated by mypyc. This is
-  acceptable because conditions are caller-supplied logic, not dispatch
-  infrastructure.
+- Caller-supplied condition predicates and public wrappers remain interpreted.
+  `CompiledFuncCondition` only crosses a compiled invocation bridge; it is not
+  a fully native condition evaluator and its standalone benefit has not been
+  measured. This preserves the public interpreted-subclass boundary while
+  keeping any future performance claim evidence-based.
 - Any new user-subclassable base class added to `core.py` (e.g., a future
   `Hook` or `Middleware` ABC) must use `@mypyc_attr(allow_interpreted_subclasses=True)`.
   Forgetting this will silently work in pure Python mode and crash only
@@ -175,12 +180,15 @@ apply `allow_interpreted_subclasses=True` to `Condition` there.
   have __slots__` error. With `native_class=False`, method bodies ARE compiled but attribute
   storage falls back to `__dict__` (no native C struct slots). `TransitionError` is the
   canonical built-in-subclass example. A public condition wrapper that must accept
-  interpreted subclasses belongs in `conditions.py` and may delegate only its hot
-  evaluation step to a compiled `core.py` helper; `CompiledFuncCondition` follows that
-  boundary so its construction and dispatch match in pure and compiled artifacts.
+  interpreted subclasses belongs in `conditions.py`; `CompiledFuncCondition` therefore
+  stays interpreted and delegates only its invocation bridge to a compiled `core.py`
+  helper. Its caller-supplied predicate remains interpreted, so construction and dispatch
+  match in pure and compiled artifacts without overstating the bridge as a native
+  condition evaluator.
 
 **Follow-up work:**
-- If a future profiling pass shows condition evaluation is a bottleneck,
-  consider providing a compiled `FuncCondition`-equivalent in `core.py`
-  (as a non-subclassable helper, not a base class) as an opt-in
-  acceleration path (fast_fsm-spf).
+- Profile the existing compiled invocation bridge with representative
+  caller-supplied predicates. Only if measurements justify it, make a separate
+  API and compatibility decision about a sealed, fully native opt-in wrapper;
+  it must not replace or narrow the interpreted public wrapper/subclass
+  contract (fast_fsm-spf).
