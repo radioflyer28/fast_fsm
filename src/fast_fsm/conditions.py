@@ -7,7 +7,17 @@ from interpreted Python code while still allowing the core FSM logic to be compi
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable, Optional, TypeAlias
+from collections import abc as collections_abc
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Optional,
+    TypeAlias,
+    TypeGuard,
+)
 
 __slots__ = ()
 
@@ -18,6 +28,78 @@ __slots__ = ()
 # async callable objects (including instances with an async ``__call__``).
 GuardResult: TypeAlias = bool | Awaitable[bool]
 GuardCallable: TypeAlias = Callable[..., GuardResult]
+
+
+def _is_awaitable_guard_result(result: GuardResult) -> TypeGuard[Awaitable[bool]]:
+    """Narrow the public guard channel without consuming its awaitable."""
+    return isinstance(result, collections_abc.Awaitable)
+
+
+async def _continue_compound_check(
+    result: Awaitable[bool],
+    remaining: Iterator["Condition"],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    short_circuit_result: bool,
+) -> bool:
+    """Await one composite branch at a time, preserving ordinary short-circuiting."""
+    current = bool(await result)
+    if current is short_circuit_result:
+        return short_circuit_result
+
+    for condition in remaining:
+        next_result = condition.check(*args, **kwargs)
+        if _is_awaitable_guard_result(next_result):
+            current = bool(await next_result)
+        else:
+            current = bool(next_result)
+        if current is short_circuit_result:
+            return short_circuit_result
+
+    return not short_circuit_result
+
+
+def _check_compound_conditions(
+    conditions: Iterable["Condition"],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    short_circuit_result: bool,
+) -> GuardResult:
+    """Combine child guard channels without evaluating after an async boundary early.
+
+    Fully synchronous children keep the historic immediate ``bool`` result.  When a
+    child returns an awaitable, this returns one coroutine that awaits that child and
+    each subsequently produced awaitable exactly once, in left-to-right order.
+    """
+    remaining = iter(conditions)
+    for condition in remaining:
+        result = condition.check(*args, **kwargs)
+        if _is_awaitable_guard_result(result):
+            return _continue_compound_check(
+                result,
+                remaining,
+                args,
+                kwargs,
+                short_circuit_result=short_circuit_result,
+            )
+        if bool(result) is short_circuit_result:
+            return short_circuit_result
+
+    return not short_circuit_result
+
+
+async def _negate_awaitable_guard_result(result: Awaitable[bool]) -> bool:
+    """Await and invert one guard result without coercing the coroutine itself."""
+    return not bool(await result)
+
+
+def _negate_guard_result(result: GuardResult) -> GuardResult:
+    """Return an immediate inverse or a coroutine that computes it after awaiting."""
+    if _is_awaitable_guard_result(result):
+        return _negate_awaitable_guard_result(result)
+    return not bool(result)
 
 
 class Condition(ABC):
@@ -176,9 +258,9 @@ class NegatedCondition(Condition):
         super().__init__(f"not({inner})", f"Negation of: {inner.description}")
         self._inner = inner
 
-    def check(self, *args: Any, **kwargs: Any) -> bool:
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
         """Return the inverse of the wrapped condition's result."""
-        return not self._inner.check(*args, **kwargs)
+        return _negate_guard_result(self._inner.check(*args, **kwargs))
 
 
 class AsyncCondition(Condition):

@@ -249,7 +249,9 @@ def test_typed_downstream_async_callable_wrappers_accept_exact_and_inherited_sha
         "    FuncCondition,\n"
         "    GuardCallable,\n"
         "    GuardResult,\n"
+        "    NegatedCondition,\n"
         ")\n"
+        "from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition\n"
         "from fast_fsm.core import (\n"
         "    CompiledFuncCondition as CoreCompiledFuncCondition,\n"
         "    FuncCondition as CoreFuncCondition,\n"
@@ -279,6 +281,10 @@ def test_typed_downstream_async_callable_wrappers_accept_exact_and_inherited_sha
         "core_inherited_func = InheritedCoreFunc(core_guard)\n"
         "core_inherited_compiled = InheritedCoreCompiled(core_guard)\n"
         "package_result: GuardResult = package_exact_func.check()\n"
+        "package_negated_result: GuardResult = NegatedCondition(package_exact_func).check()\n"
+        "package_and_result: GuardResult = AndCondition(package_exact_func).check()\n"
+        "package_or_result: GuardResult = OrCondition(package_exact_func).check()\n"
+        "package_not_result: GuardResult = NotCondition(package_exact_func).check()\n"
         "core_result: CoreGuardResult = core_exact_compiled.check()\n",
         encoding="utf-8",
     )

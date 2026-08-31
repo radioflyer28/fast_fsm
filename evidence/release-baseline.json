@@ -41,7 +41,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.057751,
+      "elapsed_seconds": 0.057334,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -51,7 +51,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 692630.2,
+      "ops_per_second": 697666.8,
       "warmup_operations": 2000
     }
   },
@@ -59,16 +59,16 @@
     "build_mode": "pure",
     "coverage": {
       "core_percent": 95.06,
-      "total_percent": 96.53
+      "total_percent": 96.58
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1191,
+      "collected": 1211,
       "errors": 0,
       "failed": 0,
-      "passed": 1191,
+      "passed": 1211,
       "skipped": 0
     }
   },
@@ -81,104 +81,104 @@
     "inventory": [
       {
         "classification": "slot-protected",
-        "line": 13,
+        "line": 18,
         "qualified_name": "fast_fsm.condition_templates.AlwaysCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 118,
+        "line": 123,
         "qualified_name": "fast_fsm.condition_templates.AndCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 84,
+        "line": 89,
         "qualified_name": "fast_fsm.condition_templates.ComparisonCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 180,
+        "line": 195,
         "qualified_name": "fast_fsm.condition_templates.CooldownCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 201,
+        "line": 216,
         "qualified_name": "fast_fsm.condition_templates.ElapsedCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 37,
+        "line": 42,
         "qualified_name": "fast_fsm.condition_templates.KeyExistsCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 25,
+        "line": 30,
         "qualified_name": "fast_fsm.condition_templates.NeverCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 150,
+        "line": 165,
         "qualified_name": "fast_fsm.condition_templates.NotCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 134,
+        "line": 144,
         "qualified_name": "fast_fsm.condition_templates.OrCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 68,
+        "line": 73,
         "qualified_name": "fast_fsm.condition_templates.RegexCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 163,
+        "line": 178,
         "qualified_name": "fast_fsm.condition_templates.TimeoutCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 53,
+        "line": 58,
         "qualified_name": "fast_fsm.condition_templates.ValueInSetCondition",
         "source_path": "src/fast_fsm/condition_templates.py"
       },
       {
         "classification": "slot-protected",
-        "line": 184,
+        "line": 266,
         "qualified_name": "fast_fsm.conditions.AsyncCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "registered-exception",
         "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
-        "line": 116,
+        "line": 198,
         "qualified_name": "fast_fsm.conditions.CompiledFuncCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "slot-protected",
-        "line": 23,
+        "line": 105,
         "qualified_name": "fast_fsm.conditions.Condition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "slot-protected",
-        "line": 79,
+        "line": 161,
         "qualified_name": "fast_fsm.conditions.FuncCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },
       {
         "classification": "slot-protected",
-        "line": 155,
+        "line": 237,
         "qualified_name": "fast_fsm.conditions.NegatedCondition",
         "source_path": "src/fast_fsm/conditions.py"
       },

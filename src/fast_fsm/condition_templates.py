@@ -5,7 +5,12 @@ Collection of common TransitionCondition patterns for real-world usage
 
 import time
 
-from .conditions import Condition
+from .conditions import (
+    Condition,
+    GuardResult,
+    _check_compound_conditions,
+    _negate_guard_result,
+)
 from typing import Any, Set
 import re
 
@@ -127,8 +132,13 @@ class AndCondition(Condition):
         )
         self.conditions = conditions
 
-    def check(self, *args, **kwargs) -> bool:
-        return all(condition.check(*args, **kwargs) for condition in self.conditions)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions,
+            args,
+            kwargs,
+            short_circuit_result=False,
+        )
 
 
 class OrCondition(Condition):
@@ -143,8 +153,13 @@ class OrCondition(Condition):
         )
         self.conditions = conditions
 
-    def check(self, *args, **kwargs) -> bool:
-        return any(condition.check(*args, **kwargs) for condition in self.conditions)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions,
+            args,
+            kwargs,
+            short_circuit_result=True,
+        )
 
 
 class NotCondition(Condition):
@@ -156,8 +171,8 @@ class NotCondition(Condition):
         super().__init__(f"not_{condition.name}", f"NOT {condition.description}")
         self.condition = condition
 
-    def check(self, *args, **kwargs) -> bool:
-        return not self.condition.check(*args, **kwargs)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _negate_guard_result(self.condition.check(*args, **kwargs))
 
 
 class TimeoutCondition(Condition):

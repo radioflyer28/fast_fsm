@@ -9,7 +9,9 @@ StateMachine.add_transition() and FSMBuilder.add_transition().
 All tests use real condition objects — no mocking.
 """
 
+import inspect
 import time
+from typing import Any, Awaitable, Callable, cast
 
 import pytest
 
@@ -27,7 +29,7 @@ from fast_fsm.condition_templates import (
     TimeoutCondition,
     ValueInSetCondition,
 )
-from fast_fsm.conditions import Condition, FuncCondition, NegatedCondition
+from fast_fsm.conditions import Condition, FuncCondition, GuardResult, NegatedCondition
 from fast_fsm.core import AsyncStateMachine, FSMBuilder, State, StateMachine
 
 
@@ -303,6 +305,36 @@ class ShortCircuitCondition(Condition):
         return self.result
 
 
+class AwaitableResultCondition(Condition):
+    """Test-only leaf that records one deferred guard result."""
+
+    __slots__ = ("await_calls", "calls", "error", "result")
+
+    def __init__(self, result: bool, error: BaseException | None = None) -> None:
+        super().__init__("awaitable_result", "returns a deferred guard result")
+        self.result = result
+        self.error = error
+        self.calls = 0
+        self.await_calls = 0
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+
+        async def resolve() -> bool:
+            self.await_calls += 1
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+        return resolve()
+
+
+async def _await_direct_guard_result(result: GuardResult) -> bool:
+    """Await a direct composite result after asserting its public channel."""
+    assert inspect.isawaitable(result)
+    return await cast(Awaitable[bool], result)
+
+
 class TestPositionalConditionForwarding:
     """Built-in wrappers preserve the two-channel guard calling convention."""
 
@@ -387,6 +419,192 @@ class TestPositionalConditionForwarding:
         assert TimeoutCondition(10.0).check(marker)
         assert CooldownCondition(10.0).check(marker)
         assert isinstance(ElapsedCondition(10.0).check(marker), bool)
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+class TestDirectCompositeAwaitableChecks:
+    """Direct composite ``check`` calls retain the async guard channel."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "true_result", "false_result"),
+        (
+            (NegatedCondition, False, True),
+            (AndCondition, True, False),
+            (OrCondition, True, False),
+            (NotCondition, False, True),
+        ),
+    )
+    async def test_direct_checks_await_async_true_and_false_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        true_result: bool,
+        false_result: bool,
+    ) -> None:
+        for leaf_result, expected in ((True, true_result), (False, false_result)):
+            leaf = AwaitableResultCondition(leaf_result)
+            result = factory(leaf).check()
+
+            assert inspect.isawaitable(result)
+            assert await _await_direct_guard_result(result) is expected
+            assert leaf.calls == 1
+            assert leaf.await_calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        (NegatedCondition, AndCondition, OrCondition, NotCondition),
+    )
+    async def test_direct_checks_propagate_async_errors_once(
+        self, factory: Callable[[Condition], Condition]
+    ) -> None:
+        leaf = AwaitableResultCondition(False, RuntimeError("guard exploded"))
+        result = factory(leaf).check()
+
+        with pytest.raises(RuntimeError, match="guard exploded"):
+            await _await_direct_guard_result(result)
+        assert leaf.calls == 1
+        assert leaf.await_calls == 1
+
+    def test_direct_checks_stay_immediate_for_all_synchronous_children(self) -> None:
+        assert NegatedCondition(AlwaysCondition()).check() is False
+        assert AndCondition(AlwaysCondition(), AlwaysCondition()).check() is True
+        assert OrCondition(NeverCondition(), AlwaysCondition()).check() is True
+        assert NotCondition(NeverCondition()).check() is True
+
+    @pytest.mark.asyncio
+    async def test_and_defers_later_children_until_the_async_branch_resolves(
+        self,
+    ) -> None:
+        left = ShortCircuitCondition(True)
+        middle = AwaitableResultCondition(False)
+        skipped = ShortCircuitCondition(True)
+
+        result = AndCondition(left, middle, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert left.calls == 1
+        assert middle.calls == 1
+        assert middle.await_calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is False
+        assert middle.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_or_defers_later_children_until_the_async_branch_resolves(
+        self,
+    ) -> None:
+        left = ShortCircuitCondition(False)
+        middle = AwaitableResultCondition(True)
+        skipped = ShortCircuitCondition(False)
+
+        result = OrCondition(left, middle, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert left.calls == 1
+        assert middle.calls == 1
+        assert middle.await_calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is True
+        assert middle.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "first_result", "second_result", "expected"),
+        (
+            (AndCondition, True, False, False),
+            (OrCondition, False, True, True),
+        ),
+    )
+    async def test_direct_compounds_await_later_async_children_in_order(
+        self,
+        factory: Callable[..., Condition],
+        first_result: bool,
+        second_result: bool,
+        expected: bool,
+    ) -> None:
+        first = AwaitableResultCondition(first_result)
+        second = AwaitableResultCondition(second_result)
+        skipped = ShortCircuitCondition(not second_result)
+
+        result = factory(first, second, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert first.calls == 1
+        assert first.await_calls == 0
+        assert second.calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is expected
+        assert first.await_calls == 1
+        assert second.calls == 1
+        assert second.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "first_result", "second_result", "expected"),
+        (
+            (AndCondition, True, False, False),
+            (OrCondition, False, True, True),
+        ),
+    )
+    async def test_direct_compounds_continue_to_later_sync_children(
+        self,
+        factory: Callable[..., Condition],
+        first_result: bool,
+        second_result: bool,
+        expected: bool,
+    ) -> None:
+        first = AwaitableResultCondition(first_result)
+        second = ShortCircuitCondition(second_result)
+
+        result = factory(first, second).check()
+
+        assert inspect.isawaitable(result)
+        assert first.calls == 1
+        assert first.await_calls == 0
+        assert second.calls == 0
+        assert await _await_direct_guard_result(result) is expected
+        assert first.await_calls == 1
+        assert second.calls == 1
+
+    def test_sync_short_circuit_does_not_create_later_async_leaf(self) -> None:
+        skipped_and = AwaitableResultCondition(True)
+        skipped_or = AwaitableResultCondition(False)
+
+        assert AndCondition(ShortCircuitCondition(False), skipped_and).check() is False
+        assert OrCondition(ShortCircuitCondition(True), skipped_or).check() is True
+        assert skipped_and.calls == 0
+        assert skipped_or.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "leaf_result", "expected_success"),
+        (
+            (NegatedCondition, True, False),
+            (AndCondition, True, True),
+            (OrCondition, False, False),
+            (NotCondition, True, False),
+        ),
+    )
+    async def test_machine_iterative_evaluator_calls_async_composite_leaf_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        leaf_result: bool,
+        expected_success: bool,
+    ) -> None:
+        leaf = AwaitableResultCondition(leaf_result)
+        machine = AsyncStateMachine(State("source"))
+        machine.add_state(State("target"))
+        machine.add_transition("advance", "source", "target", factory(leaf))
+
+        result = await machine.trigger_async("advance")
+
+        assert result.success is expected_success
+        assert leaf.calls == 1
+        assert leaf.await_calls == 1
 
 
 # ---------------------------------------------------------------------------
