@@ -8,10 +8,12 @@ from interpreted Python code while still allowing the core FSM logic to be compi
 import asyncio
 from abc import ABC, abstractmethod
 from collections import abc as collections_abc
+import types
 from typing import (
     Any,
     Awaitable,
     Callable,
+    Generator,
     Iterable,
     Iterator,
     Optional,
@@ -30,9 +32,58 @@ GuardResult: TypeAlias = bool | Awaitable[bool]
 GuardCallable: TypeAlias = Callable[..., GuardResult]
 
 
+# ``types.coroutine`` marks generator-based coroutines with this private code
+# flag but deliberately does not add ``__await__`` or register them with the
+# Awaitable ABC.  ``inspect.isawaitable`` recognizes that form too, but the
+# runtime-layout evidence policy intentionally disallows ``inspect`` imports
+# in production modules.
+_CO_ITERABLE_COROUTINE = 0x100
+
+
+def _is_awaitable_result(value: Any) -> TypeGuard[Awaitable[Any]]:
+    """Recognize every awaitable shape accepted by Python's ``await`` protocol."""
+    return (
+        isinstance(value, collections_abc.Awaitable)
+        or hasattr(value, "__await__")
+        or (
+            isinstance(value, types.GeneratorType)
+            and bool(value.gi_code.co_flags & _CO_ITERABLE_COROUTINE)
+        )
+    )
+
+
 def _is_awaitable_guard_result(result: GuardResult) -> TypeGuard[Awaitable[bool]]:
     """Narrow the public guard channel without consuming its awaitable."""
-    return isinstance(result, collections_abc.Awaitable)
+    return _is_awaitable_result(result)
+
+
+class _DeferredGuardResult(collections_abc.Awaitable[bool]):
+    """Own one not-yet-awaited child result until composition begins or closes."""
+
+    __slots__ = ("_result",)
+
+    def __init__(self, result: Awaitable[bool]) -> None:
+        self._result: Awaitable[bool] | None = result
+
+    def _take_result(self) -> Awaitable[bool]:
+        result = self._result
+        if result is None:
+            raise RuntimeError("cannot reuse an awaited guard result")
+        self._result = None
+        return result
+
+    def close(self) -> None:
+        """Close an unstarted child so direct callers cannot leak it."""
+        result = self._result
+        if result is None:
+            return
+        self._result = None
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+
+    def __del__(self) -> None:
+        self.close()
 
 
 async def _continue_compound_check(
@@ -60,6 +111,39 @@ async def _continue_compound_check(
     return not short_circuit_result
 
 
+class _DeferredCompoundCheck(_DeferredGuardResult):
+    """Delay compound continuation while retaining ownership of its first child."""
+
+    __slots__ = ("_args", "_kwargs", "_remaining", "_short_circuit_result")
+
+    def __init__(
+        self,
+        result: Awaitable[bool],
+        remaining: Iterator["Condition"],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        short_circuit_result: bool,
+    ) -> None:
+        super().__init__(result)
+        self._remaining = remaining
+        self._args = args
+        self._kwargs = kwargs
+        self._short_circuit_result = short_circuit_result
+
+    def __await__(self) -> Generator[Any, None, bool]:
+        return self._await_result().__await__()
+
+    async def _await_result(self) -> bool:
+        return await _continue_compound_check(
+            self._take_result(),
+            self._remaining,
+            self._args,
+            self._kwargs,
+            short_circuit_result=self._short_circuit_result,
+        )
+
+
 def _check_compound_conditions(
     conditions: Iterable["Condition"],
     args: tuple[Any, ...],
@@ -77,7 +161,7 @@ def _check_compound_conditions(
     for condition in remaining:
         result = condition.check(*args, **kwargs)
         if _is_awaitable_guard_result(result):
-            return _continue_compound_check(
+            return _DeferredCompoundCheck(
                 result,
                 remaining,
                 args,
@@ -95,10 +179,22 @@ async def _negate_awaitable_guard_result(result: Awaitable[bool]) -> bool:
     return not bool(await result)
 
 
+class _DeferredNegatedGuardResult(_DeferredGuardResult):
+    """Delay one negation while retaining ownership of its child result."""
+
+    __slots__ = ()
+
+    def __await__(self) -> Generator[Any, None, bool]:
+        return self._await_result().__await__()
+
+    async def _await_result(self) -> bool:
+        return await _negate_awaitable_guard_result(self._take_result())
+
+
 def _negate_guard_result(result: GuardResult) -> GuardResult:
     """Return an immediate inverse or a coroutine that computes it after awaiting."""
     if _is_awaitable_guard_result(result):
-        return _negate_awaitable_guard_result(result)
+        return _DeferredNegatedGuardResult(result)
     return not bool(result)
 
 

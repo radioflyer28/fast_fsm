@@ -9,8 +9,10 @@ StateMachine.add_transition() and FSMBuilder.add_transition().
 All tests use real condition objects — no mocking.
 """
 
+import gc
 import inspect
 import time
+import types
 from typing import Any, Awaitable, Callable, cast
 
 import pytest
@@ -329,6 +331,65 @@ class AwaitableResultCondition(Condition):
         return resolve()
 
 
+class GeneratorAwaitableResultCondition(Condition):
+    """Test-only leaf that returns a legacy generator-based coroutine."""
+
+    __slots__ = ("await_calls", "calls", "result")
+
+    def __init__(self, result: bool) -> None:
+        super().__init__("generator_awaitable", "returns a legacy awaitable")
+        self.result = result
+        self.calls = 0
+        self.await_calls = 0
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+
+        @types.coroutine
+        def resolve():
+            self.await_calls += 1
+            if False:
+                yield None
+            return self.result
+
+        return resolve()
+
+
+class CloseTrackingAwaitable:
+    """Own a native child coroutine and record each explicit close."""
+
+    __slots__ = ("_close_events", "_coroutine")
+
+    def __init__(self, close_events: list[str]) -> None:
+        async def resolve() -> bool:
+            return True
+
+        self._close_events = close_events
+        self._coroutine = resolve()
+
+    def __await__(self):
+        return self._coroutine.__await__()
+
+    def close(self) -> None:
+        self._close_events.append("closed")
+        self._coroutine.close()
+
+
+class CloseTrackingAwaitableCondition(Condition):
+    """Create one child whose close lifecycle is observable by the test."""
+
+    __slots__ = ("calls", "close_events")
+
+    def __init__(self) -> None:
+        super().__init__("close_tracking", "records direct wrapper cleanup")
+        self.calls = 0
+        self.close_events: list[str] = []
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+        return CloseTrackingAwaitable(self.close_events)
+
+
 async def _await_direct_guard_result(result: GuardResult) -> bool:
     """Await a direct composite result after asserting its public channel."""
     assert inspect.isawaitable(result)
@@ -449,6 +510,52 @@ class TestDirectCompositeAwaitableChecks:
             assert await _await_direct_guard_result(result) is expected
             assert leaf.calls == 1
             assert leaf.await_calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "true_result", "false_result"),
+        (
+            (NegatedCondition, False, True),
+            (AndCondition, True, False),
+            (OrCondition, True, False),
+            (NotCondition, False, True),
+        ),
+    )
+    async def test_direct_checks_await_generator_based_coroutines_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        true_result: bool,
+        false_result: bool,
+    ) -> None:
+        for leaf_result, expected in ((True, true_result), (False, false_result)):
+            leaf = GeneratorAwaitableResultCondition(leaf_result)
+            result = factory(leaf).check()
+
+            assert inspect.isawaitable(result)
+            assert await _await_direct_guard_result(result) is expected
+            assert leaf.calls == 1
+            assert leaf.await_calls == 1
+
+    @pytest.mark.parametrize(
+        "factory",
+        (NegatedCondition, AndCondition, OrCondition, NotCondition),
+    )
+    def test_closing_unstarted_direct_check_closes_captured_child_once(
+        self, factory: Callable[[Condition], Condition]
+    ) -> None:
+        leaf = CloseTrackingAwaitableCondition()
+        result = factory(leaf).check()
+
+        assert inspect.isawaitable(result)
+        close = getattr(result, "close", None)
+        assert callable(close)
+        close()
+        close()
+        del result
+        gc.collect()
+
+        assert leaf.calls == 1
+        assert leaf.close_events == ["closed"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

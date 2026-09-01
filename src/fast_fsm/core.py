@@ -39,6 +39,7 @@ from .conditions import (
     GuardResult as GuardResult,
     NegatedCondition as NegatedCondition,
     _bind_compiled_func_condition_check,
+    _is_awaitable_result,
 )
 
 
@@ -103,12 +104,8 @@ def _reject_sync_awaitable(awaitable: Any) -> None:
 
 
 def _is_awaitable(value: Any) -> bool:
-    """Recognize coroutine, Future, and custom ``__await__`` protocol values."""
-    return (
-        asyncio.iscoroutine(value)
-        or asyncio.isfuture(value)
-        or hasattr(value, "__await__")
-    )
+    """Recognize every awaitable shape accepted by Python's ``await`` protocol."""
+    return _is_awaitable_result(value)
 
 
 def _is_async_callable(value: Any) -> bool:
