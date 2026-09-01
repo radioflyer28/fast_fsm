@@ -2072,6 +2072,27 @@ class StateMachine:
             cause=cause,
         )
 
+    def _build_lifecycle_failure(
+        self,
+        old_state: State,
+        to_state: State,
+        trigger: str,
+        stage: str,
+        cause: BaseException,
+        *,
+        committed: bool,
+    ) -> TransitionResult:
+        """Describe one redacted lifecycle failure without observing it."""
+        return self._build_failure_result(
+            old_state.name,
+            trigger,
+            f"Transition callback failed at {stage}",
+            stage=stage,
+            to_state=to_state.name if committed else None,
+            committed=committed,
+            cause=cause,
+        )
+
     def _finalize_failure(
         self, result: TransitionResult, kwargs: Dict[str, Any]
     ) -> TransitionResult:
@@ -2099,22 +2120,32 @@ class StateMachine:
         to_state: State,
         trigger: str,
         *args: Any,
-        fail_fast_destination_enter: bool = False,
+        declarative_handler: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> TransitionResult:
-        """Perform exit/enter callbacks and state change.
+        """Run the synchronous lifecycle around one non-callback commit seam.
 
-        Assumes all pre-checks (condition, permission) have already passed.
+        Assumes canonical resolution, guard evaluation, and source permission
+        have already passed.  The direct calls retain their registration order;
+        each ordinary callback failure returns immediately so no later lifecycle
+        surface can observe a partially completed suffix.
         """
         old_state = self._current_state
 
-        # Fire before_transition listeners (before on_exit)
+        # Pre-commit: before-transition listeners.
         if self._before_listeners:
             for fn in self._before_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.error("before_transition listener error: %s", e)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "before-transition",
+                        cause,
+                        committed=False,
+                    )
 
         # Log transition start
         self._logger.debug(
@@ -2125,119 +2156,146 @@ class StateMachine:
             to_state.name,
         )
 
-        # Call exit handler
+        # Pre-commit: source state hook, then registered source callbacks.
         try:
             old_state.on_exit(to_state, trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-            self._logger.warning(
-                "%s: Exception in on_exit for state '%s': %s",
-                self._name,
-                old_state.name,
-                e,
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                "source-exit",
+                cause,
+                committed=False,
             )
 
-        # Fire per-state exit callbacks registered via on_exit(state, fn)
         _exit_cbs = self._state_exit_callbacks.get(old_state.name)
         if _exit_cbs:
             for fn in _exit_cbs:
                 try:
                     fn(to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit callback for state '%s': %s",
-                        self._name,
-                        old_state.name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "source-exit-callback",
+                        cause,
+                        committed=False,
                     )
 
-        # Notify on_exit_state listeners (after state's own on_exit)
+        # Pre-commit: machine exit-state listeners.
         if self._on_exit_listeners:
             for fn in self._on_exit_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit_state listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "exit-state-listener",
+                        cause,
+                        committed=False,
                     )
 
-        # The commit boundary deliberately contains no user callback. The state
-        # and history record therefore become one coherent outcome even when a
-        # later post-commit callback fails.
+        # Commit: this section invokes no user code, so current state and
+        # optional history cannot diverge through a lifecycle callback.
         self._commit_transition(old_state, to_state, trigger)
 
-        # Call enter handler
+        # Post-commit: destination state hook, then registered callbacks.
         try:
             to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as cause:  # callback failure is a truthful trigger result
-            if fail_fast_destination_enter:
-                return self._build_failure_result(
-                    old_state.name,
-                    trigger,
-                    "Transition callback failed at destination-enter",
-                    stage=_DESTINATION_ENTER_STAGE,
-                    to_state=to_state.name,
-                    committed=True,
-                    cause=cause,
-                )
-            self._logger.warning(
-                "%s: Exception in on_enter for state '%s': %s",
-                self._name,
-                to_state.name,
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                "destination-enter",
                 cause,
+                committed=True,
             )
 
-        # Fire per-state enter callbacks registered via on_enter(state, fn)
         _enter_cbs = self._state_enter_callbacks.get(to_state.name)
         if _enter_cbs:
             for fn in _enter_cbs:
                 try:
                     fn(old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter callback for state '%s': %s",
-                        self._name,
-                        to_state.name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "destination-enter-callback",
+                        cause,
+                        committed=True,
                     )
 
-        # Notify on_enter_state listeners (after state's own on_enter)
+        # Post-commit: machine enter-state listeners.
         if self._on_enter_listeners:
             for fn in self._on_enter_listeners:
                 try:
                     fn(to_state, old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter_state listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "enter-state-listener",
+                        cause,
+                        committed=True,
                     )
+
+        # Post-commit: the selected ordinary declarative handler runs once.
+        if declarative_handler is not None:
+            declarative_result = _invoke_declarative_handler_for_transition(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage="declarative-handler",
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                )
 
         # Log successful transition (main transition log)
         self._logger.debug(
             "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
         )
 
-        # Notify after_transition listeners
+        # Post-commit: trigger-specific callbacks precede after listeners.
+        _trigger_cbs = self._trigger_callbacks.get(trigger)
+        if _trigger_cbs:
+            for fn in _trigger_cbs:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "trigger-callback",
+                        cause,
+                        committed=True,
+                    )
+
         if self._after_listeners:
             for fn in self._after_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in after_transition listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        "after-transition",
+                        cause,
+                        committed=True,
                     )
-
-        # Fire per-trigger callbacks registered via on_trigger(name, fn)
-        if trigger in self._trigger_callbacks:
-            for fn in self._trigger_callbacks[trigger]:
-                try:
-                    fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.error("on_trigger callback error: %s", e)
 
         return TransitionResult(
             True,
@@ -2389,21 +2447,15 @@ class StateMachine:
                 kwargs,
             )
 
-        old_state = self._current_state
         result = self._execute_transition(
             to_state,
             trigger,
             *args,
-            fail_fast_destination_enter=True,
+            declarative_handler=prepared.declarative_handler,
             **kwargs,
         )
         if not result.success:
             return self._finalize_failure(result, kwargs)
-        handler_info = prepared.declarative_handler
-        if handler_info is not None:
-            _invoke_declarative_handler(
-                old_state, handler_info, trigger, prepared.args, kwargs
-            )
         return result
 
     def safe_trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
@@ -2914,6 +2966,45 @@ def _normalize_declarative_handler_result(result: Any) -> TransitionResult:
     return TransitionResult(
         True, error=f"Invalid return type from handler: {type(result)}"
     )
+
+
+def _invoke_declarative_handler_for_transition(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Run one ordinary sync handler without compatibility-result coercion.
+
+    Direct ``handle_event()`` retains its historical normalization helper.  A
+    machine-owned ordinary transition instead needs a redacted success/failure
+    signal so its post-commit lifecycle stage can be finalized exactly once.
+    """
+    method = handler_info["method"]
+    logger = cast(DeclarativeState, source_state)._logger
+    if handler_info["is_async"]:
+        logger.warning(
+            "State '%s': declarative handler failed stage=declarative-handler type=async",
+            source_state.name,
+        )
+        return TransitionResult(False)
+    try:
+        raw_result = method(*args, **kwargs)
+    except Exception as cause:
+        logger.warning(
+            "State '%s': declarative handler failed stage=declarative-handler type=%s",
+            source_state.name,
+            type(cause).__name__,
+        )
+        return TransitionResult(False, cause=cause)
+    if raw_result is None or raw_result is True:
+        return TransitionResult(True)
+    if isinstance(raw_result, TransitionResult):
+        if raw_result.success:
+            return TransitionResult(True)
+        return TransitionResult(False, cause=raw_result.cause)
+    return TransitionResult(False)
 
 
 def _invoke_declarative_handler(
