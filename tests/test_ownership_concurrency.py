@@ -856,3 +856,84 @@ async def test_async_waiting_and_owning_cancellation_release_for_reuse() -> None
         await cancelled_owner
 
     assert (await machine.trigger_async("advance")).success
+
+
+@pytest.mark.asyncio
+async def test_async_causal_child_reentry_rejects_without_blocking_other_machine() -> (
+    None
+):
+    """A callback-created child is rejected while another machine can nest."""
+    child_errors: list[BaseException] = []
+    nested_source = State("nested-source")
+    nested_destination = State("nested-destination")
+    other = AsyncStateMachine(nested_source, name="causal-other")
+    other.add_state(nested_destination)
+    other.add_transition("inner", "nested-source", "nested-destination")
+
+    source = State("source")
+    destination = State("destination")
+    alternate = State("alternate")
+    machine = AsyncStateMachine(source, name="causal-owner")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", "source", "destination")
+    machine.add_transition("nested", "source", "alternate")
+
+    async def child_reentry(*_args: object, **_kwargs: object) -> None:
+        child = asyncio.create_task(machine.trigger_async("nested", payload="secret"))
+        with pytest.raises(RuntimeError, match="reentrant async operation") as raised:
+            await asyncio.wait_for(child, timeout=5)
+        child_errors.append(raised.value)
+        assert (await other.trigger_async("inner")).success
+
+    machine.on_exit_async("source", child_reentry)
+
+    assert (await machine.trigger_async("outer")).success
+    assert machine.current_state is destination
+    assert other.current_state is nested_destination
+    assert len(child_errors) == 1
+    assert "secret" not in str(child_errors[0])
+
+
+@pytest.mark.asyncio
+async def test_bound_async_machine_sync_writers_follow_idle_thread_policy() -> None:
+    """Bound-loop sync writes work only while idle on that loop's thread."""
+    owner_entered = asyncio.Event()
+    release_owner = asyncio.Event()
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="mixed-sync-async")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+
+    assert await machine.can_trigger_async("advance")
+    machine.force_state("destination")
+    machine.force_state("source")
+
+    foreign_errors: list[BaseException] = []
+
+    def write_from_foreign_thread() -> None:
+        try:
+            machine.force_state("destination")
+        except BaseException as cause:
+            foreign_errors.append(cause)
+
+    foreign = threading.Thread(target=write_from_foreign_thread)
+    foreign.start()
+    foreign.join(timeout=5)
+    assert not foreign.is_alive()
+    assert len(foreign_errors) == 1
+    assert isinstance(foreign_errors[0], RuntimeError)
+    assert "foreign async-machine writer" in str(foreign_errors[0])
+
+    async def hold_owner(*_args: object, **_kwargs: object) -> None:
+        owner_entered.set()
+        await release_owner.wait()
+
+    machine.on_exit_async("source", hold_owner)
+    owner = asyncio.create_task(machine.trigger_async("advance"))
+    await owner_entered.wait()
+    with pytest.raises(RuntimeError, match="async machine busy"):
+        machine.force_state("destination")
+    release_owner.set()
+    assert (await owner).success

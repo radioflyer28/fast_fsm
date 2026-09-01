@@ -5,6 +5,8 @@ Covers trigger_async, can_trigger_async, AsyncCondition.check_async,
 FSMBuilder async auto-detection, and AsyncDeclarativeState.
 """
 
+import threading
+
 import pytest
 
 from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
@@ -637,6 +639,25 @@ class TestAsyncCallbacks:
         await fsm.trigger_async("go")
         assert "exit_idle" in log
         assert "enter_running" in log
+
+    @pytest.mark.asyncio
+    async def test_sync_callbacks_remain_inline_on_the_bound_loop_thread(self):
+        """Async ownership never moves synchronous callbacks to a worker."""
+        callback_threads: list[int] = []
+        loop_thread = threading.get_ident()
+        idle = State.create(
+            "idle",
+            on_exit=lambda *_args, **_kwargs: callback_threads.append(
+                threading.get_ident()
+            ),
+        )
+        running = State("running")
+        fsm = AsyncStateMachine(idle, name="inline-sync-callback")
+        fsm.add_state(running)
+        fsm.add_transition("go", "idle", "running")
+
+        assert (await fsm.trigger_async("go")).success
+        assert callback_threads == [loop_thread]
 
     @pytest.mark.asyncio
     async def test_callback_exception_returns_precommit_failure(self):

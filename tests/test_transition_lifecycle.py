@@ -965,6 +965,9 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
     assert len(machine.history) == int(expected_committed)
     assert "trigger-callback" not in events
     assert "after-transition" not in events
+    assert machine._async_owner_task is None
+    assert machine._async_owner_root is None
+    assert not machine._async_ownership_lock.locked()
 
 
 @pytest.mark.asyncio

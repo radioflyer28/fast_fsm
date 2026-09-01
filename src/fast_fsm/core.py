@@ -2889,27 +2889,44 @@ class AsyncStateMachine(StateMachine):
             self._async_admission_lock.release()
         return loop
 
-    async def _acquire_async_ownership(self, operation: str) -> asyncio.Task[Any]:
-        """Await this machine's async lock after permanent-loop prechecks."""
+    async def _acquire_async_ownership(
+        self, operation: str
+    ) -> Tuple[asyncio.Task[Any], object, contextvars.Token[Optional[object]]]:
+        """Await this machine's async lock after loop and causal prechecks."""
         self._bind_or_check_async_loop(operation)
+        inherited_root = _ownership_root.get()
+        if inherited_root is not None and inherited_root is self._async_owner_root:
+            raise RuntimeError("FSM ownership violation: reentrant async operation")
         await self._async_ownership_lock.acquire()
         try:
             task = asyncio.current_task()
             if task is None:
                 raise RuntimeError("FSM ownership violation: missing async task")
+            root = inherited_root if inherited_root is not None else object()
+            token = _ownership_root.set(root)
             self._async_owner_task = task
-            return task
+            self._async_owner_root = root
+            return task, root, token
         except BaseException:
             self._async_ownership_lock.release()
             raise
 
-    def _release_async_ownership(self, owner_task: asyncio.Task[Any]) -> None:
+    def _release_async_ownership(
+        self,
+        owner_task: asyncio.Task[Any],
+        owner_root: object,
+        token: contextvars.Token[Optional[object]],
+    ) -> None:
         """Clear owner metadata and release the async lock on every exit."""
         try:
             if self._async_owner_task is not owner_task:
                 raise RuntimeError("FSM ownership violation: foreign async release")
+            if self._async_owner_root is not owner_root:
+                raise RuntimeError("FSM ownership violation: invalid async release")
             self._async_owner_task = None
+            self._async_owner_root = None
         finally:
+            _ownership_root.reset(token)
             self._async_ownership_lock.release()
 
     def on_enter_async(self, state_name: str, callback: Any) -> None:
@@ -3252,11 +3269,13 @@ class AsyncStateMachine(StateMachine):
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one owned async transition with permanent-loop admission."""
-        owner_task = await self._acquire_async_ownership("trigger_async")
+        owner_task, owner_root, token = await self._acquire_async_ownership(
+            "trigger_async"
+        )
         try:
             return await self._trigger_async_owned(trigger, *args, **kwargs)
         finally:
-            self._release_async_ownership(owner_task)
+            self._release_async_ownership(owner_task, owner_root, token)
 
     async def _trigger_async_owned(
         self, trigger: str, *args, **kwargs
