@@ -40,7 +40,7 @@ not any native shadow in the developer checkout.
 | Pure | `fast_fsm.core` resolved to `src/fast_fsm/core.py` in a clean export | lifecycle, advanced, listener, builder, async, boundary, and mypyc-guard tests | Passed. |
 | Fresh compiled | A mypyc extension built in a separate temporary export | the same lifecycle selection | Passed. |
 | Fresh compiled | A mypyc extension built in a separate temporary export | `lifecycle_success or trigger_min_throughput` performance selection | 2 passed; the fixed 200,000 ops/sec floor held. |
-| Pure | `fast_fsm.core` resolved to `src/fast_fsm/core.py` in a clean export | slots-policy audit and the full sequential release gate | Passed: 1,261 tests, Ruff format/lint, mypy, Sphinx HTML, doctests, and baseline freshness. |
+| Pure | `fast_fsm.core` resolved to `src/fast_fsm/core.py` in a clean export | slots-policy audit and the full sequential release gate | Passed: 1,267 tests, Ruff format/lint, mypy, Sphinx HTML, doctests, and baseline freshness. |
 
 The final gate ran through the Phase 17 harness, which exports `HEAD`, overlays
 the reviewed lifecycle files, and asserts the imported module origin for each

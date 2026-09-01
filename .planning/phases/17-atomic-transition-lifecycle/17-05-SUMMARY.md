@@ -70,7 +70,7 @@ status: complete
 
 # Phase 17 Plan 05: Lifecycle Contract Documentation and Release Evidence Summary
 
-**Published the atomic lifecycle contract, recorded ADR-004, and proved it through fresh pure/native source-tree gates with a current 1,261-test baseline.**
+**Published the atomic lifecycle contract, recorded ADR-004, and proved it through fresh pure/native source-tree gates with a current 1,267-test baseline.**
 
 ## Performance
 
@@ -84,7 +84,7 @@ status: complete
 
 - Documented the stable callback stages, structured result fields, redacted failure boundary, committed-only history, fail-fast behavior, and cancellation propagation for users and maintainers.
 - Added accepted ADR-004 without changing accepted ADR-002/ADR-003 or the behavior-owning SPR; Phase 18 reentrancy, Phase 19 diagnostics, and Phase 20 installed-wheel parity remain explicit boundaries.
-- Finalized the Phase 17 isolated harness, refreshed the reviewed pure-source baseline to 1,261 passing tests and 97.14% total / 96.04% core coverage, and passed the fresh compiled 200,000 ops/sec floor.
+- Finalized the Phase 17 isolated harness, refreshed the reviewed pure-source baseline to 1,267 passing tests and 97.17% total / 96.10% core coverage, and passed the fresh compiled 200,000 ops/sec floor.
 
 ## Task Commits
 
@@ -108,7 +108,7 @@ status: complete
 
 ## Verification
 
-- `uv run python tools/phase16_isolated_verify.py --suite baseline-write --manifest-output evidence/release-baseline.json` — passed; published a 1,261-test pure baseline.
+- `uv run python tools/phase16_isolated_verify.py --suite baseline-write --manifest-output evidence/release-baseline.json` — passed; published a 1,267-test pure baseline.
 - `uv run python tools/phase16_isolated_verify.py --suite phase17` — passed fresh pure/native semantic matrices, two compiled floor selections, slots policy, full pure tests, Ruff, mypy, Sphinx HTML/doctests, and baseline freshness.
 - `task typecheck-ty` — passed.
 - Fresh pure Sphinx HTML check after recording final performance evidence — passed.
@@ -122,7 +122,7 @@ status: complete
 - **Issue:** Boundary, async, and basic tests expected callback exception text or pre-lifecycle rejection wording in `TransitionResult.error`, contradicting the implemented redacted guard-result contract.
 - **Fix:** Asserted the stable guard stage and redacted public error instead; retained cause identity checks where the public API provides it.
 - **Files modified:** `tests/test_boundary_negative.py`, `tests/test_async.py`, `tests/test_basic_functionality.py`.
-- **Verification:** Fresh pure full suite passed 1,261 tests and the full fresh pure/native Phase 17 suite passed.
+- **Verification:** Fresh pure full suite passed 1,267 tests and the full fresh pure/native Phase 17 suite passed.
 - **Committed in:** `8dcf671`, `be719e3`.
 
 **Total deviations:** 1 auto-fixed issue (Rule 1).
