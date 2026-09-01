@@ -294,6 +294,7 @@ class TransitionResult:
                 # Assign explicitly before raising so mypyc and CPython expose
                 # the same public cause identity on the opt-in error boundary.
                 error.__cause__ = self.cause
+                raise error from self.cause
             raise error
         return self
 

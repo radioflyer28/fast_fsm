@@ -370,7 +370,9 @@ def test_state_machine_graph_version_remains_in_slots() -> None:
     }
 
 
-def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> None:
+def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> (
+    None
+):
     """The public result stays compact while its opt-in error keeps the cause."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
     classes = {
@@ -407,10 +409,9 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
     assert any(
         isinstance(node, ast.Raise)
         and isinstance(node.cause, ast.Attribute)
-        and isinstance(node.cause.value, ast.Attribute)
-        and isinstance(node.cause.value.value, ast.Name)
-        and node.cause.value.value.id == "self"
-        and node.cause.value.attr == "cause"
+        and isinstance(node.cause.value, ast.Name)
+        and node.cause.value.id == "self"
+        and node.cause.attr == "cause"
         for node in ast.walk(raise_if_failed)
     )
     assert isinstance(error.bases[0], ast.Name) and error.bases[0].id == "RuntimeError"
