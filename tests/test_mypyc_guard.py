@@ -370,6 +370,64 @@ def test_state_machine_graph_version_remains_in_slots() -> None:
     }
 
 
+def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> None:
+    """The public result stays compact while its opt-in error keeps the cause."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    result = classes["TransitionResult"]
+    error = classes["TransitionError"]
+
+    result_decorator = next(
+        item
+        for item in result.decorator_list
+        if isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "dataclass"
+    )
+    assert {
+        keyword.arg: keyword.value.value
+        for keyword in result_decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    }.get("slots") is True
+    fields = [
+        node.target.id
+        for node in result.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ]
+    assert fields[:5] == ["success", "from_state", "to_state", "trigger", "error"]
+    assert fields[5:] == ["committed", "stage", "cause"]
+
+    raise_if_failed = next(
+        node
+        for node in result.body
+        if isinstance(node, ast.FunctionDef) and node.name == "raise_if_failed"
+    )
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.cause, ast.Attribute)
+        and isinstance(node.cause.value, ast.Attribute)
+        and isinstance(node.cause.value.value, ast.Name)
+        and node.cause.value.value.id == "self"
+        and node.cause.value.attr == "cause"
+        for node in ast.walk(raise_if_failed)
+    )
+    assert isinstance(error.bases[0], ast.Name) and error.bases[0].id == "RuntimeError"
+    assert any(
+        isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "mypyc_attr"
+        and any(
+            keyword.arg == "native_class"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in item.keywords
+        )
+        for item in error.decorator_list
+    )
+
+
 def test_private_graph_records_are_not_public_exports() -> None:
     """The Phase 16 internal graph contract must not widen ``fast_fsm.__all__``."""
     tree = ast.parse(

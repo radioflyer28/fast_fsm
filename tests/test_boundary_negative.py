@@ -204,6 +204,7 @@ class TestTransitionResult:
     def test_additive_lifecycle_fields_preserve_legacy_constructor_and_equality(self):
         """Old five-field positional calls remain valid and do not expose causes."""
         legacy = TransitionResult(False, "source", "destination", "go", "failed")
+        successful = TransitionResult(True, "source", "destination", "go")
         first_cause = RuntimeError("first-secret")
         second_cause = RuntimeError("second-secret")
         first = TransitionResult(
@@ -228,6 +229,7 @@ class TestTransitionResult:
         )
 
         assert (legacy.committed, legacy.stage, legacy.cause) == (False, None, None)
+        assert successful.raise_if_failed() is successful
         assert first.cause is first_cause
         assert first == second
         assert "first-secret" not in repr(first)
