@@ -98,6 +98,54 @@ def test_contract_inventory_accounts_for_every_requirement_and_probe() -> None:
     assert FALLBACK_PROBE_ROWS[6][2] == "none"
 
 
+def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
+    """Keep each Wave 0 RED row executable until its owner removes the mark."""
+    from pathlib import Path
+
+    source = (Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py").read_text()
+    if case.owner_plan == "18-02":
+        return "_force_state_owned" in source
+    if case.owner_plan == "18-03":
+        return "_acquire_async_ownership" in source and "_ownership_root" in source
+    if case.owner_plan == "18-04":
+        for method in ("add_state", "add_transition", "enable_history", "add_listener"):
+            start = source.index(f"    def {method}(")
+            end = source.find("\n    def ", start + 1)
+            body = source[start:] if end == -1 else source[start:end]
+            if "_acquire_sync_ownership" not in body:
+                return False
+        return True
+    if case.owner_plan == "18-05":
+        return (
+            "ContextVar" in source
+            and "_prepared_declarative_guards" not in source
+            and "return self._trigger_owned"
+            in source[source.index("    def safe_trigger(") :]
+        )
+    raise AssertionError(f"unexpected strict RED owner: {case.owner_plan}")
+
+
+@pytest.mark.parametrize(
+    "case",
+    tuple(
+        pytest.param(
+            case,
+            marks=pytest.mark.xfail(
+                strict=True, reason=f"RED until Plan {case.owner_plan}"
+            ),
+            id=case.identifier,
+        )
+        for case in OWNERSHIP_CONTRACT_CASES
+        if case.owner_plan != "18-01"
+    ),
+)
+def test_strict_red_contract_row_has_one_owning_plan(
+    case: OwnershipContractCase,
+) -> None:
+    """Every unimplemented behavior fails deterministically until its owner acts."""
+    assert _future_contract_row_is_implemented(case), case.scenario
+
+
 @pytest.mark.xfail(strict=True, reason="RED until Plan 18-02")
 def test_strict_red_sync_control_requires_private_owned_body() -> None:
     """Plan 18-02 must prevent control callbacks from reentering public writes."""
