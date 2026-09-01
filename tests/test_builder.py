@@ -1541,9 +1541,9 @@ class TestFSMBuilderCallbacks:
 
         builder = self._two_state_builder(async_mode=False)
         builder.on_enter_async("b", cb)
-        source = (
-            Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
-        ).read_text(encoding="utf-8")
+        source = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py").read_text(
+            encoding="utf-8"
+        )
         builder_start = source.index("class FSMBuilder:")
         method_start = source.index("    def on_enter_async(", builder_start)
         method_end = source.index("    def on_exit_async(", method_start)

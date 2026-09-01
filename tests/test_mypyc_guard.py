@@ -1019,7 +1019,10 @@ def test_phase16_coverage_floor_migration_rejects_external_symlinks_before_publi
         )
 
     assert destination.read_bytes() == original
-    assert external_record.read_text(encoding="utf-8") == "external migration must not be read"
+    assert (
+        external_record.read_text(encoding="utf-8")
+        == "external migration must not be read"
+    )
 
 
 @pytest.mark.parametrize(
