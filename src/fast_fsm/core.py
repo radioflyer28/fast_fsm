@@ -14,6 +14,7 @@ Key design principles:
 
 import logging
 import time
+import threading
 from collections import deque
 from typing import (
     Optional,
@@ -531,6 +532,8 @@ class StateMachine:
         "_state_enter_callbacks",
         "_history",
         "_history_max",
+        "_sync_ownership_lock",
+        "_sync_owner_thread_id",
     )
 
     def __init__(
@@ -587,8 +590,30 @@ class StateMachine:
         self._history: Optional[deque[TransitionRecord]] = None
         self._history_max: int = 1000
 
+        # One private primitive per machine serializes whole sync operations.
+        # The owner marker is examined before lock acquisition so callback
+        # reentry cannot wait behind itself and deadlock the dispatch thread.
+        self._sync_ownership_lock = threading.Lock()
+        self._sync_owner_thread_id: Optional[int] = None
+
         # Register the initial state
         self._register_state(initial_state)
+
+    def _acquire_sync_ownership(self, operation: str) -> int:
+        """Enter one synchronous public-write envelope for this machine."""
+        owner_thread_id = threading.get_ident()
+        if self._sync_owner_thread_id == owner_thread_id:
+            raise RuntimeError(f"FSM ownership violation: reentrant {operation}")
+        self._sync_ownership_lock.acquire()
+        self._sync_owner_thread_id = owner_thread_id
+        return owner_thread_id
+
+    def _release_sync_ownership(self, owner_thread_id: int) -> None:
+        """Clear one synchronous owner marker and release its paired primitive."""
+        if self._sync_owner_thread_id != owner_thread_id:
+            raise RuntimeError("FSM ownership violation: foreign trigger release")
+        self._sync_owner_thread_id = None
+        self._sync_ownership_lock.release()
 
     @classmethod
     def from_states(
@@ -2470,6 +2495,14 @@ class StateMachine:
         Returns:
             TransitionResult indicating success or failure
         """
+        owner_thread_id = self._acquire_sync_ownership("trigger")
+        try:
+            return self._trigger_owned(trigger, *args, **kwargs)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _trigger_owned(self, trigger: str, *args, **kwargs) -> TransitionResult:
+        """Run one ordinary trigger while its caller owns this machine."""
         prepared = self._prepare_transition(trigger, args, kwargs)
         if isinstance(prepared, TransitionResult):
             return self._finalize_failure(prepared, kwargs)

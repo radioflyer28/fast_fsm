@@ -71,6 +71,40 @@ def test_sync_uncaught_reentry_uses_existing_source_exit_failure_stage() -> None
     assert "callback-secret" not in str(result.cause)
 
 
+@pytest.mark.parametrize("failure_type", (RuntimeError, KeyboardInterrupt, SystemExit))
+def test_sync_release_tracer_reuses_machine_after_every_throwable(
+    failure_type: type[BaseException],
+) -> None:
+    """The ownership envelope releases after result failures and BaseException."""
+    raise_once = True
+
+    def on_exit(*_args: object, **_kwargs: object) -> None:
+        nonlocal raise_once
+        if raise_once:
+            raise_once = False
+            raise failure_type("release-sentinel")
+
+    source = CallbackState("source", on_exit=on_exit)
+    destination = State("destination")
+    machine = StateMachine(source, name="ownership-release")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+
+    if issubclass(failure_type, Exception):
+        result = machine.trigger("advance")
+        assert result.success is False
+        assert result.stage == "source-exit"
+        assert machine.current_state is source
+    else:
+        with pytest.raises(failure_type, match="release-sentinel"):
+            machine.trigger("advance")
+        assert machine.current_state is source
+
+    retry = machine.trigger("advance")
+    assert retry.success is True
+    assert machine.current_state is destination
+
+
 def test_sync_thread_tracer_serializes_one_machine_without_global_lock() -> None:
     """One machine blocks a competing writer while another remains independent."""
     first_entered = threading.Event()
@@ -80,20 +114,21 @@ def test_sync_thread_tracer_serializes_one_machine_without_global_lock() -> None
     start_first = threading.Barrier(2)
     results: list[bool] = []
 
-    def before_transition(
-        _from_state: State, _to_state: State, trigger: str, **_kwargs: object
-    ) -> None:
-        if trigger == "first":
-            first_entered.set()
-            assert release_first.wait(timeout=5)
+    class BlockingListener:
+        def before_transition(
+            self, _from_state: State, _to_state: State, trigger: str, **_kwargs: object
+        ) -> None:
+            if trigger == "first":
+                first_entered.set()
+                assert release_first.wait(timeout=5)
 
     source = State("source")
     destination = State("destination")
     machine = StateMachine(source, name="owned-machine")
     machine.add_state(destination)
     machine.add_transition("first", "source", "destination")
-    machine.add_transition("second", "source", "destination")
-    machine.before_transition(before_transition)
+    machine.add_transition("second", "destination", "source")
+    machine.add_listener(BlockingListener())
 
     other_source = State("source")
     other_destination = State("destination")
@@ -134,5 +169,5 @@ def test_sync_thread_tracer_serializes_one_machine_without_global_lock() -> None
     assert not second.is_alive()
     assert not other.is_alive()
     assert results == [True, True, True]
-    assert machine.current_state is destination
+    assert machine.current_state is source
     assert other_machine.current_state is other_destination
