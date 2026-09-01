@@ -19,6 +19,7 @@ from typing import (
     Optional,
     TypeAlias,
     TypeGuard,
+    cast,
 )
 
 __slots__ = ()
@@ -57,7 +58,7 @@ def _is_awaitable_guard_result(result: GuardResult) -> TypeGuard[Awaitable[bool]
     return _is_awaitable_result(result)
 
 
-class _DeferredGuardResult(collections_abc.Awaitable[bool]):
+class _DeferredGuardResult:
     """Own one not-yet-awaited child result until composition begins or closes."""
 
     __slots__ = ("_result",)
@@ -161,12 +162,15 @@ def _check_compound_conditions(
     for condition in remaining:
         result = condition.check(*args, **kwargs)
         if _is_awaitable_guard_result(result):
-            return _DeferredCompoundCheck(
-                result,
-                remaining,
-                args,
-                kwargs,
-                short_circuit_result=short_circuit_result,
+            return cast(
+                GuardResult,
+                _DeferredCompoundCheck(
+                    result,
+                    remaining,
+                    args,
+                    kwargs,
+                    short_circuit_result=short_circuit_result,
+                ),
             )
         if bool(result) is short_circuit_result:
             return short_circuit_result
@@ -194,7 +198,7 @@ class _DeferredNegatedGuardResult(_DeferredGuardResult):
 def _negate_guard_result(result: GuardResult) -> GuardResult:
     """Return an immediate inverse or a coroutine that computes it after awaiting."""
     if _is_awaitable_guard_result(result):
-        return _DeferredNegatedGuardResult(result)
+        return cast(GuardResult, _DeferredNegatedGuardResult(result))
     return not bool(result)
 
 
