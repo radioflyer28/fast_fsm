@@ -331,6 +331,36 @@ def test_failure_observers_continue_after_baseexceptions_without_recursion(
         assert secret not in caplog.text
 
 
+def test_sync_commit_failure_is_precommit_and_finalized_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clock fault cannot mutate state or history before commit succeeds."""
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, name="sync-commit-failure")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+    failure = OSError("clock-secret")
+
+    def fail_record(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr("fast_fsm.core.TransitionRecord", fail_record)
+
+    result = machine.trigger("advance")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == "commit"
+    assert result.cause is failure
+    assert machine.current_state is source
+    assert machine.history == []
+    assert observed == ["observer"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("family", "outcome", "expected_stage", "expected_cause"),
@@ -402,6 +432,37 @@ async def test_async_precommit_failures_match_the_result_finalizer_contract(
     ]
     if expected_cause is not None:
         assert expected_cause not in result.error
+
+
+@pytest.mark.asyncio
+async def test_async_commit_failure_is_precommit_and_finalized_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async dispatch shares the non-mutating ordinary commit-failure path."""
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="async-commit-failure")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+    failure = OSError("async-clock-secret")
+
+    def fail_record(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr("fast_fsm.core.TransitionRecord", fail_record)
+
+    result = await machine.trigger_async("advance")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == "commit"
+    assert result.cause is failure
+    assert machine.current_state is source
+    assert machine.history == []
+    assert observed == ["observer"]
 
 
 def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order() -> (

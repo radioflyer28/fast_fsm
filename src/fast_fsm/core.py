@@ -2039,13 +2039,15 @@ class StateMachine:
         self, old_state: State, to_state: State, trigger: str
     ) -> None:
         """Commit state and optional history without invoking user code."""
-        self._current_state = to_state
-        if self._history is not None:
-            self._history.append(
-                TransitionRecord(
-                    old_state.name, trigger, to_state.name, time.monotonic()
-                )
+        record: Optional[TransitionRecord] = None
+        history = self._history
+        if history is not None:
+            record = TransitionRecord(
+                old_state.name, trigger, to_state.name, time.monotonic()
             )
+        if record is not None:
+            history.append(record)
+        self._current_state = to_state
 
     @staticmethod
     def _build_failure_result(
@@ -2204,7 +2206,17 @@ class StateMachine:
 
         # Commit: this section invokes no user code, so current state and
         # optional history cannot diverge through a lifecycle callback.
-        self._commit_transition(old_state, to_state, trigger)
+        try:
+            self._commit_transition(old_state, to_state, trigger)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                "commit",
+                cause,
+                committed=False,
+            )
 
         # Post-commit: destination state hook, then registered callbacks.
         try:
@@ -2863,7 +2875,18 @@ class AsyncStateMachine(StateMachine):
                     committed=False,
                 )
 
-        self._commit_transition(old_state, to_state, trigger)
+        lifecycle_stage[0] = "commit"
+        try:
+            self._commit_transition(old_state, to_state, trigger)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=False,
+            )
         committed[0] = True
 
         lifecycle_stage[0] = "destination-enter"
