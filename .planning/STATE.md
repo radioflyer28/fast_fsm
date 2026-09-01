@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
-current_phase: 16
-current_phase_name: Canonical Graph & Dispatch Invariants
-status: verifying
-stopped_at: Phase 16 code review clean; validation, security, and goal verification pending
-last_updated: "2026-09-01T11:10:21-04:00"
+current_phase: 17
+current_phase_name: Atomic Transition Lifecycle
+status: planning
+stopped_at: Phase 16 complete, ready to plan Phase 17
+last_updated: "2026-09-01T15:32:39.061Z"
 last_activity: 2026-09-01
-last_activity_desc: Phase 16 code review converged cleanly after five remediation cycles
-state_head: e68027ca177f060598e8924625b2bca27f32d510
+last_activity_desc: Phase 16 complete, transitioned to Phase 17
+state_head: 5af1df1e405ecafcf47e7db55bf107ec99717008
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 14
   completed_plans: 14
-  percent: 17
+  percent: 33
 ---
 
 # State: Fast FSM
@@ -25,22 +25,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-29)
 
 **Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec and all core runtime operations O(1).
-**Current focus:** Phase 16 — Canonical Graph & Dispatch Invariants
+**Current focus:** Phase 17 — Atomic Transition Lifecycle
 
 ## Current Position
 
-Phase: 16 (Canonical Graph & Dispatch Invariants) — VERIFYING
-Plan: 5 of 5 complete
-Status: Code review clean; validation, security, and goal verification pending
-Last activity: 2026-09-01 — Phase 16 code review converged cleanly
+Phase: 17 — Atomic Transition Lifecycle
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-01 — Phase 16 complete, transitioned to Phase 17
 
-Progress: [██░░░░░░░░] 17%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9
+- Total plans completed: 14
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -50,8 +50,9 @@ Progress: [██░░░░░░░░] 17%
 |-------|-------|-------|----------|
 | 15–20 | 0 | TBD | — |
 | 15 | 9 | - | - |
+| 16 | 5 | - | - |
 
-**Recent Trend:** No v0.3.0 plans completed yet.
+**Recent Trend:** Phases 15 and 16 complete; Phase 17 is ready for planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -102,5 +103,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-01T11:10:21-04:00
-Stopped at: Phase 16 code review clean; proceeding to validation, security, and goal verification
+Stopped at: Phase 16 complete, ready to plan Phase 17
 Resume file: None
