@@ -295,7 +295,9 @@ class TestAsyncConditionEvaluation:
 
         result = await fsm.trigger_async("go")
         assert not result.success
-        assert "async boom" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert "async boom" not in result.error
         assert fsm.current_state.name == "idle"
 
     @pytest.mark.asyncio
@@ -688,8 +690,9 @@ class TestAsyncTriggerGaps:
 
         result = await fsm.trigger_async("go")
         assert not result.success
-        assert result.error is not None
-        assert "async boom" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert "async boom" not in result.error
 
     @pytest.mark.asyncio
     async def test_async_trigger_state_rejection(self):

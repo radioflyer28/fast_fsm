@@ -115,7 +115,8 @@ class TestConditionalTransitions:
 
         assert not result.success
         assert fsm.current_state.name == "initial"  # Should stay in initial
-        assert result.error and "failed" in result.error.lower()
+        assert result.stage == "guard"
+        assert result.error and "guard rejected" in result.error.lower()
 
     def test_condition_with_context(self):
         """Test condition that uses context data"""

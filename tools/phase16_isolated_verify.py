@@ -65,8 +65,15 @@ PHASE17_INVENTORY = (
     "tests/test_listeners.py",
     "tests/test_async.py",
     "tests/test_builder.py",
+    "tests/test_basic_functionality.py",
+    "tests/test_safety_kwargs.py",
+    "tests/test_readme_examples.py",
+    "tools/release_evidence.py",
     "tools/phase16_isolated_verify.py",
+    "README.md",
+    "docs/QUICK_START.md",
     ".specify/memory/spr-core-api.md",
+    ".specify/decisions/ADR-004-atomic-transition-lifecycle.md",
     "docs/dev/architecture.md",
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
@@ -806,7 +813,7 @@ def _suite_mode(args: argparse.Namespace) -> int:
             )
         tempdir, source_tree, env, _ = _prepare_tree(
             build_mode="pure",
-            includes=("tools/phase16_isolated_verify.py", *PHASE16_INVENTORY),
+            includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
         )
         try:
             status = _run(
@@ -881,6 +888,10 @@ def _suite_mode(args: argparse.Namespace) -> int:
             "run",
             "pytest",
             "tests/test_transition_lifecycle.py",
+            "tests/test_advanced_functionality.py",
+            "tests/test_listeners.py",
+            "tests/test_builder.py",
+            "tests/test_async.py",
             "tests/test_boundary_negative.py",
             "tests/test_mypyc_guard.py",
             "-x",
@@ -904,10 +915,31 @@ def _suite_mode(args: argparse.Namespace) -> int:
             "-k",
             "lifecycle_success or trigger_min_throughput",
         )
-        return _run_suite_command(
+        status = _run_suite_command(
             build_mode="compiled",
             includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
             command=performance,
+        )
+        if status:
+            return status
+        status = _run_suite_command(
+            build_mode="pure",
+            includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
+            command=(
+                "uv",
+                "run",
+                "python",
+                "tools/release_evidence.py",
+                "slots-policy",
+                "--json",
+            ),
+        )
+        if status:
+            return status
+        return _run_suite_command(
+            build_mode="pure",
+            includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
+            command=("task", "release-gate"),
         )
     raise AssertionError(f"unhandled suite: {args.suite}")
 
