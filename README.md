@@ -201,7 +201,7 @@ except TransitionError as exc:
     print(exc.result.from_state)  # state at time of failure
 
 # Chain directly when you also need the destination
-target = fsm.trigger("start").raise_if_failed().to_state
+target = result.raise_if_failed().to_state
 ```
 
 `TransitionError.result` holds the original `TransitionResult` for inspection.
