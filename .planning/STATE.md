@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 17
 current_phase_name: Atomic Transition Lifecycle
 status: executing
-stopped_at: Phase 17 context gathered
-last_updated: "2026-09-01T16:23:40.561Z"
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-09-01T16:47:09.040Z"
 last_activity: 2026-09-01
-last_activity_desc: Phase 16 complete, transitioned to Phase 17
-state_head: a9a244487f227c10f8d85eba7be1120c8bc6f251
+last_activity_desc: Phase 17 execution started
+state_head: 0408c1859cb968ce34cee7d3c962a1b9ef447547
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 19
-  completed_plans: 14
+  completed_plans: 15
   percent: 33
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 17 (Atomic Transition Lifecycle) — READY TO EXECUTE
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-01 — Phase 16 complete, transitioned to Phase 17
+Phase: 17 (Atomic Transition Lifecycle) — EXECUTING
+Plan: 2 of 5
+Status: Executing Phase 17
+Last activity: 2026-09-01 — Phase 17 execution started
 
 Progress: [███░░░░░░░] 33%
 
@@ -61,6 +61,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 15 P02 | 29m | 3 tasks | 10 files |
 | Phase 15 P05 | 20m | 2 tasks | 1 files |
 | Phase 16 P05 | 12m | 3 tasks | 5 files |
+| Phase 17 P01 | 16 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 15]: Published the authorized v0.2.3 correction additively after unchanged URL, tag-ref, and asset checks.
 - [Phase 16]: Phase 16 evidence archives must explicitly overlay the complete source, test, documentation, and evidence inventory before origin proof.
 - [Phase 16]: Use helper-validated evidence interfaces and record environment-labelled pure/native measurements; compiled trigger floor remains 200000 ops/sec.
+- [Phase 17]: Phase 17 Wave 0: destination State.on_enter failures return committed=True at destination-enter, retain a hidden cause, and notify ordered observers exactly once.
+- [Phase 17]: Phase 17 Wave 0: lifecycle evidence accepts only fresh pure or freshly compiled exports, never checkout native shadows.
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T15:37:26.392Z
-Stopped at: Phase 17 context gathered
-Resume file: .planning/phases/17-atomic-transition-lifecycle/17-CONTEXT.md
+Last session: 2026-09-01T16:47:08.981Z
+Stopped at: Completed 17-01-PLAN.md
+Resume file: None
