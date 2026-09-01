@@ -119,14 +119,6 @@ class DeclarativeInvocationCounter(DeclarativeState):
         return self._result
 
 
-def _invoke_and_ignore_phase17_outcome(invoker):
-    """Exercise a handler without fixing Phase 17 lifecycle outcomes in this phase."""
-    try:
-        invoker()
-    except Exception:
-        pass
-
-
 def _machine_topology_fingerprint(machine):
     """Capture the identity-bearing topology that a builder publishes."""
     return (
@@ -486,15 +478,19 @@ class TestOrdinaryDeclarativeDispatch:
         assert source.invocations == 1
 
     @pytest.mark.parametrize("handler_result", [False, "invalid", "raise"])
-    def test_declarative_ordinary_invocation_only_for_phase17_outcomes(
+    def test_declarative_ordinary_failure_outcomes_are_committed_once(
         self, handler_result
     ):
         source = DeclarativeInvocationCounter(result=handler_result)
         fsm = self._machine(source)
 
-        _invoke_and_ignore_phase17_outcome(lambda: fsm.trigger("advance"))
+        result = fsm.trigger("advance")
 
         assert source.invocations == 1
+        assert not result.success
+        assert result.committed
+        assert result.stage == "declarative-handler"
+        assert fsm.current_state_name == "target"
 
 
 # ---------------------------------------------------------------------------

@@ -306,7 +306,7 @@ class TestListenerOrdering:
 
 
 class TestListenerErrorIsolation:
-    def test_crashing_listener_does_not_crash_fsm(self):
+    def test_crashing_after_listener_returns_postcommit_failure(self):
         fsm = _make_fsm()
 
         class BrokenListener:
@@ -315,10 +315,12 @@ class TestListenerErrorIsolation:
 
         fsm.add_listener(BrokenListener())
         result = fsm.trigger("start")
-        assert result.success
+        assert not result.success
+        assert result.committed
+        assert result.stage == "after-transition"
         assert fsm.is_in("running")
 
-    def test_subsequent_listeners_called_after_crash(self):
+    def test_subsequent_listeners_are_suppressed_after_crash(self):
         fsm = _make_fsm()
         log = []
 
@@ -331,10 +333,12 @@ class TestListenerErrorIsolation:
                 log.append("second")
 
         fsm.add_listener(BrokenFirst(), GoodSecond())
-        fsm.trigger("start")
-        assert log == ["second"]
+        result = fsm.trigger("start")
+        assert not result.success
+        assert result.stage == "after-transition"
+        assert log == []
 
-    def test_crash_in_on_exit_does_not_block_enter(self):
+    def test_crash_in_on_exit_listener_preserves_source_and_suppresses_enter(self):
         fsm = _make_fsm()
         log = []
 
@@ -346,8 +350,12 @@ class TestListenerErrorIsolation:
                 log.append("entered")
 
         fsm.add_listener(ExitCrash())
-        fsm.trigger("start")
-        assert log == ["entered"]
+        result = fsm.trigger("start")
+        assert not result.success
+        assert not result.committed
+        assert result.stage == "exit-state-listener"
+        assert fsm.is_in("idle")
+        assert log == []
 
 
 # ---------------------------------------------------------------------------

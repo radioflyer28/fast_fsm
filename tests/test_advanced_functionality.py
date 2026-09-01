@@ -246,13 +246,17 @@ class TestStateTriggerMethods:
         # Regular trigger should handle the exception gracefully
         result = fsm.trigger("test")
         assert not result.success
-        assert result.error and "raised exception" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert isinstance(result.cause, ValueError)
         assert fsm.current_state.name == "state1"
 
         # safe_trigger should also handle the exception gracefully
         result = fsm.safe_trigger("test")
         assert not result.success
-        assert result.error and "raised exception" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert isinstance(result.cause, ValueError)
         assert fsm.current_state.name == "state1"
 
         # Test with non-exception condition
@@ -764,6 +768,34 @@ class TestForceStateAndReset:
             "listener.after",
         ]
 
+    def test_force_state_keeps_direct_control_callbacks_best_effort(self):
+        """Synthetic control keeps its legacy callback-completion contract."""
+        from fast_fsm import CallbackState
+
+        events = []
+
+        def broken_exit(*_args, **_kwargs):
+            events.append("source-exit")
+            raise RuntimeError("force-state callback failure")
+
+        source = CallbackState("source", on_exit=broken_exit)
+        destination = CallbackState(
+            "destination", on_enter=lambda *_args, **_kwargs: events.append("enter")
+        )
+        fsm = StateMachine(source, name="force-state-compatibility")
+        fsm.add_state(destination)
+
+        class Listener:
+            def after_transition(self, *_args, **_kwargs):
+                events.append("after")
+
+        fsm.add_listener(Listener())
+
+        fsm.force_state("destination")
+
+        assert fsm.current_state is destination
+        assert events == ["source-exit", "enter", "after"]
+
     # ------------------------------------------------------------------
     # reset()
     # ------------------------------------------------------------------
@@ -1230,8 +1262,8 @@ class TestMachineCallbacks:
     # Exception safety
     # ------------------------------------------------------------------
 
-    def test_on_enter_exception_does_not_abort_transition(self):
-        """A raising on_enter callback must not stop the transition."""
+    def test_on_enter_exception_returns_postcommit_failure(self):
+        """A raising destination callback leaves the committed destination truthful."""
         fsm = self._make_fsm()
 
         def boom(*a, **kw):
@@ -1240,11 +1272,13 @@ class TestMachineCallbacks:
         fsm.on_enter("running", boom)
 
         result = fsm.trigger("start")
-        assert result.success
+        assert not result.success
+        assert result.committed
+        assert result.stage == "destination-enter-callback"
         assert fsm.current_state_name == "running"
 
-    def test_on_exit_exception_does_not_abort_transition(self):
-        """A raising on_exit callback must not stop the transition."""
+    def test_on_exit_exception_returns_precommit_failure(self):
+        """A raising source callback preserves the source state."""
         fsm = self._make_fsm()
 
         def boom(*a, **kw):
@@ -1253,8 +1287,10 @@ class TestMachineCallbacks:
         fsm.on_exit("idle", boom)
 
         result = fsm.trigger("start")
-        assert result.success
-        assert fsm.current_state_name == "running"
+        assert not result.success
+        assert not result.committed
+        assert result.stage == "source-exit-callback"
+        assert fsm.current_state_name == "idle"
 
     # ------------------------------------------------------------------
     # clone() copies callbacks
