@@ -2102,7 +2102,8 @@ class StateMachine:
         self, result: TransitionResult, kwargs: Dict[str, Any]
     ) -> TransitionResult:
         """Notify failure observers once without replacing the original outcome."""
-        for observer_index, observer in enumerate(self._on_failed_callbacks):
+        observers = tuple(self._on_failed_callbacks)
+        for observer_index, observer in enumerate(observers):
             try:
                 observer(
                     result.trigger,

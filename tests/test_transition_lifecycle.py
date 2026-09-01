@@ -331,6 +331,29 @@ def test_failure_observers_continue_after_baseexceptions_without_recursion(
         assert secret not in caplog.text
 
 
+def test_failure_observer_registration_starts_with_the_next_sync_failure() -> None:
+    """An observer cannot extend the current failure-finalization pass."""
+    machine = StateMachine(State("source"), name="observer-snapshot-sync")
+    events: list[str] = []
+
+    def added_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("added")
+
+    def registering_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("registered")
+        machine.on_failed(added_observer)
+
+    machine.on_failed(registering_observer)
+
+    first = machine.trigger("missing")
+    assert first.stage == "resolution"
+    assert events == ["registered"]
+
+    second = machine.trigger("missing")
+    assert second.stage == "resolution"
+    assert events == ["registered", "registered", "added"]
+
+
 def test_sync_commit_failure_is_precommit_and_finalized_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -917,3 +940,45 @@ async def test_async_failure_observer_cancellation_cannot_replace_the_cause() ->
     assert result.stage == "source-exit-callback"
     assert result.cause is failure
     assert observed == ["cancelling-observer", "later-observer"]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_observer_registration_starts_with_next_failure() -> None:
+    """A cancellation observer snapshot excludes registrations made in its pass."""
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="observer-snapshot-cancellation")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block(*_args: object, **_kwargs: object) -> None:
+        started.set()
+        await release.wait()
+
+    def added_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("added")
+
+    def registering_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("registered")
+        machine.on_failed(added_observer)
+
+    machine.on_exit_async("source", block)
+    machine.on_failed(registering_observer)
+
+    first_task = asyncio.create_task(machine.trigger_async("advance"))
+    await started.wait()
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+    assert events == ["registered"]
+
+    started.clear()
+    second_task = asyncio.create_task(machine.trigger_async("advance"))
+    await started.wait()
+    second_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second_task
+    assert events == ["registered", "registered", "added"]
