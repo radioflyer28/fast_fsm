@@ -40,13 +40,13 @@
 
 ### Ownership and Concurrency
 
-- [ ] **OWN-01**: A transition or mutator invoked reentrantly by its current owner fails immediately before lock acquisition and cannot overwrite the outer operation.
-- [ ] **OWN-02**: Independent threads operating on one synchronous machine are serialized without a global lock.
-- [ ] **OWN-03**: Independent tasks operating on one asynchronous machine in the same event loop are serialized without blocking the loop.
-- [ ] **OWN-04**: Unsupported cross-event-loop use fails explicitly instead of binding or corrupting ownership silently.
-- [ ] **OWN-05**: State and topology mutators, including trigger, force/reset/restore, and graph changes, participate in the same per-machine ownership policy.
-- [ ] **OWN-06**: Ownership is released after exceptions, `BaseException`, or cancellation, leaving state and history at a documented coherent boundary.
-- [ ] **OWN-07**: The async callback contract explicitly states that synchronous callbacks run inline, while async callbacks and machine control remain event-loop safe; automatic thread offload is not implied.
+- [x] **OWN-01**: A transition or mutator invoked reentrantly by its current owner fails immediately before lock acquisition and cannot overwrite the outer operation.
+- [x] **OWN-02**: Independent threads operating on one synchronous machine are serialized without a global lock.
+- [x] **OWN-03**: Independent tasks operating on one asynchronous machine in the same event loop are serialized without blocking the loop.
+- [x] **OWN-04**: Unsupported cross-event-loop use fails explicitly instead of binding or corrupting ownership silently.
+- [x] **OWN-05**: State and topology mutators, including trigger, force/reset/restore, and graph changes, participate in the same per-machine ownership policy.
+- [x] **OWN-06**: Ownership is released after exceptions, `BaseException`, or cancellation, leaving state and history at a documented coherent boundary.
+- [x] **OWN-07**: The async callback contract explicitly states that synchronous callbacks run inline, while async callbacks and machine control remain event-loop safe; automatic thread offload is not implied.
 
 ### Bounded Diagnostics
 
@@ -132,13 +132,13 @@
 | LIFE-05 | Phase 17 | Complete |
 | LIFE-06 | Phase 17 | Complete |
 | LIFE-07 | Phase 16 | Complete |
-| OWN-01 | Phase 18 | Pending |
-| OWN-02 | Phase 18 | Pending |
-| OWN-03 | Phase 18 | Pending |
-| OWN-04 | Phase 18 | Pending |
-| OWN-05 | Phase 18 | Pending |
-| OWN-06 | Phase 18 | Pending |
-| OWN-07 | Phase 18 | Pending |
+| OWN-01 | Phase 18 | Complete |
+| OWN-02 | Phase 18 | Complete |
+| OWN-03 | Phase 18 | Complete |
+| OWN-04 | Phase 18 | Complete |
+| OWN-05 | Phase 18 | Complete |
+| OWN-06 | Phase 18 | Complete |
+| OWN-07 | Phase 18 | Complete |
 | DIAG-01 | Phase 19 | Pending |
 | DIAG-02 | Phase 19 | Pending |
 | DIAG-03 | Phase 19 | Pending |

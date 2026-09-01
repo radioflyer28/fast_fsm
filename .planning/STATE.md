@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 18
 current_phase_name: Safe Ownership & Concurrency
 status: executing
-stopped_at: Completed 18-02-PLAN.md
-last_updated: "2026-09-01T21:07:39.167Z"
+stopped_at: Completed 18-03-PLAN.md
+last_updated: "2026-09-01T21:24:08.502Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 18 execution started
-state_head: 81baea2d96953627406c68249717351ab845cf49
+state_head: bedcb3178dd696e110a4a253751af7c95589aa6b
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 26
-  completed_plans: 21
+  completed_plans: 22
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 18 (Safe Ownership & Concurrency) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 18 execution started
 
@@ -69,6 +69,7 @@ Progress: [█████░░░░░] 50%
 | Phase 17 P05 | 20m | 3 tasks | 11 files |
 | Phase 18 P01 | 25 min | 3 tasks | 9 files |
 | Phase 18 P02 | 15m | 2 tasks | 5 files |
+| Phase 18 P03 | 10m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 18]: Keep ordinary trigger ownership through every Phase 17 callback and failure observer.
 - [Phase 18]: Give force_state, reset, and restore distinct public labels but one private _force_state_owned body.
 - [Phase 18]: Retain direct-control best-effort Exception behavior while finally releasing after BaseException.
+- [Phase 18]: Async machines bind permanently to their first event loop and thread.
+- [Phase 18]: Causal child-task reentry is rejected before it waits on its parent-owned lock.
 
 ### Pending Todos
 
@@ -123,6 +126,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T21:07:39.038Z
-Stopped at: Completed 18-02-PLAN.md
+Last session: 2026-09-01T21:24:08.379Z
+Stopped at: Completed 18-03-PLAN.md
 Resume file: None
