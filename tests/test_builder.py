@@ -5,6 +5,8 @@ Tests for FSMBuilder, DeclarativeState, AsyncDeclarativeState,
 All tests use real components — no mocking.
 """
 
+from pathlib import Path
+
 import pytest
 
 from fast_fsm.condition_templates import AndCondition, NotCondition, OrCondition
@@ -1539,8 +1541,18 @@ class TestFSMBuilderCallbacks:
 
         builder = self._two_state_builder(async_mode=False)
         builder.on_enter_async("b", cb)
+        source = (
+            Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+        ).read_text(encoding="utf-8")
+        builder_start = source.index("class FSMBuilder:")
+        method_start = source.index("    def on_enter_async(", builder_start)
+        method_end = source.index("    def on_exit_async(", method_start)
+        on_enter_async_source = source[method_start:method_end]
+        assert "remains staged" in on_enter_async_source
+        assert "raises before publishing" in on_enter_async_source
         with pytest.raises(RuntimeError, match="explicit sync.*async callback"):
             builder.build()
+        assert builder._machine is None
 
 
 # ---------------------------------------------------------------------------

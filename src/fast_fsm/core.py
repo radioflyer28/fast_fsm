@@ -3284,8 +3284,9 @@ class FSMBuilder:
 
         Registering at least one async callback auto-upgrades the builder to
         :class:`AsyncStateMachine` when *async_mode* is ``None`` (auto-detect).
-        Has no effect if the machine is forced to sync mode via *async_mode=False*
-        or :meth:`force_sync` — a warning is logged instead.
+        When the machine is explicitly forced to synchronous mode via
+        *async_mode=False* or :meth:`force_sync`, the callback remains staged but
+        :meth:`build` raises before publishing a machine.
 
         Args:
             state_name: Name of the state to watch.
@@ -3460,11 +3461,6 @@ class FSMBuilder:
                 candidate.on_enter_async(state_name, cb)
             for state_name, cb in self._exit_async_callbacks:
                 candidate.on_exit_async(state_name, cb)
-        elif self._enter_async_callbacks or self._exit_async_callbacks:
-            self._logger.warning(
-                "Builder: %d async callback(s) registered but building sync machine — they will be ignored",
-                len(self._enter_async_callbacks) + len(self._exit_async_callbacks),
-            )
 
         # Log final machine type and stats
         machine_type_name = (
