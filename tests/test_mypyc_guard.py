@@ -39,6 +39,34 @@ CONDITIONS_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "conditions.
 PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
 SETUP_PY = Path(__file__).parent.parent / "setup.py"
 PHASE16_RUNNER = Path(__file__).parent.parent / "tools" / "phase16_isolated_verify.py"
+PHASE18_NATIVE_PROBE = (
+    Path(__file__).parent.parent / "tools" / "phase18_native_probe.py"
+)
+CI_WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
+
+PHASE18_WRITER_OWNER_PLANS = {
+    "trigger": "18-01",
+    "force_state": "18-02",
+    "reset": "18-02",
+    "restore": "18-02",
+    "trigger_async": "18-03",
+    "add_state": "18-04",
+    "add_transition": "18-04",
+    "add_transitions": "18-04",
+    "add_bidirectional_transition": "18-04",
+    "add_emergency_transition": "18-04",
+    "enable_history": "18-04",
+    "disable_history": "18-04",
+    "add_listener": "18-04",
+    "on_enter": "18-04",
+    "on_exit": "18-04",
+    "after_transition": "18-04",
+    "on_failed": "18-04",
+    "on_trigger": "18-04",
+    "on_enter_async": "18-04",
+    "on_exit_async": "18-04",
+    "safe_trigger": "18-05",
+}
 
 # Classes that inherit (transitively) from State or ABC but are intentionally
 # sealed — not designed for user subclassing.  Exempt from the decorator
@@ -368,6 +396,93 @@ def test_state_machine_graph_version_remains_in_slots() -> None:
     assert "_graph_version" in {
         item.value for item in slots.elts if isinstance(item, ast.Constant)
     }
+
+
+def test_staged_writer_inventory_names_every_phase18_public_write() -> None:
+    """Wave 0 records the exact writer owner before full entry checks land."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    state_machine = classes["StateMachine"]
+    async_machine = classes["AsyncStateMachine"]
+    state_machine_methods = {
+        node.name
+        for node in state_machine.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    async_machine_methods = {
+        node.name
+        for node in async_machine.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    expected_state_machine = set(PHASE18_WRITER_OWNER_PLANS) - {
+        "trigger_async",
+        "on_enter_async",
+        "on_exit_async",
+    }
+    assert expected_state_machine <= state_machine_methods
+    assert {"trigger_async", "on_enter_async", "on_exit_async"} <= async_machine_methods
+    assert set(PHASE18_WRITER_OWNER_PLANS.values()) == {
+        "18-01",
+        "18-02",
+        "18-03",
+        "18-04",
+        "18-05",
+    }
+
+
+def test_phase18_sync_tracer_keeps_slots_private_body_and_no_global_lock() -> None:
+    """The production tracer has one private sync-admission representation."""
+    source = CORE_PY.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(CORE_PY))
+    state_machine = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
+    )
+    slots = next(
+        node.value
+        for node in state_machine.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(slots, ast.Tuple)
+    slot_names = {item.value for item in slots.elts if isinstance(item, ast.Constant)}
+    assert {"_sync_ownership_lock", "_sync_owner_thread_id"} <= slot_names
+    methods = {
+        node.name
+        for node in state_machine.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "_acquire_sync_ownership",
+        "_release_sync_ownership",
+        "_trigger_owned",
+        "trigger",
+    } <= methods
+    assert source.count("threading.Lock()") == 1
+    assert "_sync_ownership_locks" not in source
+
+
+def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
+    """The adopted representation is compile-first for all supported Python rows."""
+    probe_source = PHASE18_NATIVE_PROBE.read_text(encoding="utf-8")
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    for required in (
+        "threading.Lock",
+        "asyncio.Lock",
+        "ContextVar",
+        "OwnershipRepresentation",
+        "--assert-native",
+    ):
+        assert required in probe_source
+    assert "ownership_native_probe:" in workflow
+    for version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
+        assert f'"{version}"' in workflow
 
 
 def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> (

@@ -79,6 +79,27 @@ PHASE17_INVENTORY = (
     "evidence/release-baseline.json",
     ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
 )
+PHASE18_INVENTORY = (
+    "src/fast_fsm/core.py",
+    "src/fast_fsm/conditions.py",
+    "src/fast_fsm/condition_templates.py",
+    "src/fast_fsm/__init__.py",
+    "tests/test_ownership_concurrency.py",
+    "tests/test_transition_lifecycle.py",
+    "tests/test_boundary_negative.py",
+    "tests/test_mypyc_guard.py",
+    "tests/test_performance_benchmarks.py",
+    "tests/test_advanced_functionality.py",
+    "tests/test_listeners.py",
+    "tests/test_builder.py",
+    "tests/test_async.py",
+    "tools/release_evidence.py",
+    "tools/phase16_isolated_verify.py",
+    "tools/phase18_native_probe.py",
+    ".github/workflows/ci.yml",
+    ".specify/memory/spr-core-api.md",
+    ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+)
 MANIFEST_DESCRIPTOR_SUPPORT = (
     all(
         hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_CREAT", "O_EXCL")
@@ -941,6 +962,60 @@ def _suite_mode(args: argparse.Namespace) -> int:
             includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
             command=("task", "release-gate"),
         )
+    if args.suite == "phase18":
+        semantic = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_ownership_concurrency.py",
+            "tests/test_transition_lifecycle.py",
+            "tests/test_boundary_negative.py",
+            "tests/test_mypyc_guard.py",
+            "tests/test_advanced_functionality.py",
+            "tests/test_listeners.py",
+            "tests/test_builder.py",
+            "tests/test_async.py",
+            "-x",
+            "-q",
+        )
+        for build_mode in ("pure", "compiled"):
+            status = _run_suite_command(
+                build_mode=build_mode,
+                includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
+                command=semantic,
+            )
+            if status:
+                return status
+        performance = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_performance_benchmarks.py",
+            "tests/test_ownership_concurrency.py",
+            "-x",
+            "-q",
+            "-k",
+            "ownership or trigger_min_throughput",
+        )
+        status = _run_suite_command(
+            build_mode="compiled",
+            includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
+            command=performance,
+        )
+        if status:
+            return status
+        return _run_suite_command(
+            build_mode="pure",
+            includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
+            command=(
+                "uv",
+                "run",
+                "python",
+                "tools/release_evidence.py",
+                "slots-policy",
+                "--json",
+            ),
+        )
     raise AssertionError(f"unhandled suite: {args.suite}")
 
 
@@ -953,7 +1028,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-floor-migration")
     parser.add_argument(
         "--suite",
-        choices=("graph", "baseline-write", "baseline-check", "phase16", "phase17"),
+        choices=(
+            "graph",
+            "baseline-write",
+            "baseline-check",
+            "phase16",
+            "phase17",
+            "phase18",
+        ),
     )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
