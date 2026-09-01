@@ -447,7 +447,7 @@ def test_phase16_runner_covers_boundary_negative_in_both_modes() -> None:
     """Changed boundary behavior belongs in the canonical parity command."""
     source = PHASE16_RUNNER.read_text(encoding="utf-8")
 
-    assert source.count('"tests/test_boundary_negative.py"') == 2
+    assert source.count('"tests/test_boundary_negative.py"') >= 2
 
 
 def test_phase17_runner_has_explicit_lifecycle_overlay_and_suite() -> None:

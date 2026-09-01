@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Phase 16 checks in an asserted pure or compiled temporary checkout.
+"""Run Phase 16/17 checks in an asserted pure or compiled temporary checkout.
 
 The developer checkout may intentionally contain native build shadows.  This helper
 never imports Fast FSM itself: it exports ``HEAD`` to a fresh temporary tree, overlays
@@ -51,6 +51,26 @@ PHASE16_INVENTORY = (
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+)
+PHASE17_INVENTORY = (
+    "src/fast_fsm/core.py",
+    "src/fast_fsm/conditions.py",
+    "src/fast_fsm/condition_templates.py",
+    "src/fast_fsm/__init__.py",
+    "tests/test_transition_lifecycle.py",
+    "tests/test_boundary_negative.py",
+    "tests/test_mypyc_guard.py",
+    "tests/test_performance_benchmarks.py",
+    "tests/test_advanced_functionality.py",
+    "tests/test_listeners.py",
+    "tests/test_async.py",
+    "tests/test_builder.py",
+    "tools/phase16_isolated_verify.py",
+    ".specify/memory/spr-core-api.md",
+    "docs/dev/architecture.md",
+    "docs/dev/testing.md",
+    "evidence/release-baseline.json",
+    ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
 )
 MANIFEST_DESCRIPTOR_SUPPORT = (
     all(
@@ -608,8 +628,7 @@ def _coverage_floor_migration(value: str) -> _CoverageFloorMigration:
         except OSError as exc:
             if exc.errno == errno.ELOOP:
                 raise VerificationError(
-                    "coverage-floor migration file must not be a symlink: "
-                    f"{value!r}"
+                    f"coverage-floor migration file must not be a symlink: {value!r}"
                 ) from exc
             raise VerificationError(
                 f"could not open coverage-floor migration without following links: {value!r}"
@@ -856,6 +875,40 @@ def _suite_mode(args: argparse.Namespace) -> int:
             includes=("tools/phase16_isolated_verify.py", *PHASE16_INVENTORY),
             command=("task", "release-gate"),
         )
+    if args.suite == "phase17":
+        semantic = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_transition_lifecycle.py",
+            "tests/test_boundary_negative.py",
+            "tests/test_mypyc_guard.py",
+            "-x",
+            "-q",
+        )
+        for build_mode in ("pure", "compiled"):
+            status = _run_suite_command(
+                build_mode=build_mode,
+                includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
+                command=semantic,
+            )
+            if status:
+                return status
+        performance = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_performance_benchmarks.py",
+            "-x",
+            "-q",
+            "-k",
+            "lifecycle_success or trigger_min_throughput",
+        )
+        return _run_suite_command(
+            build_mode="compiled",
+            includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
+            command=performance,
+        )
     raise AssertionError(f"unhandled suite: {args.suite}")
 
 
@@ -867,7 +920,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-output")
     parser.add_argument("--coverage-floor-migration")
     parser.add_argument(
-        "--suite", choices=("graph", "baseline-write", "baseline-check", "phase16")
+        "--suite",
+        choices=("graph", "baseline-write", "baseline-check", "phase16", "phase17"),
     )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser

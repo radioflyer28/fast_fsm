@@ -21,4 +21,14 @@ uv run python tools/phase16_isolated_verify.py --mode task --build-mode compiled
 
 The benchmark emits pass/fail against a fixed floor rather than a durable exact
 rate; this record intentionally makes no unstated throughput claim. Post-tracer
-measurements are added after the lifecycle-success selection exists in Task 2.
+measurements are recorded below after the lifecycle-success selection exists.
+
+## Wave 0 tracer and compatibility guard — 2026-09-01
+
+| Artifact mode | Origin assertion | Selection | Result |
+| --- | --- | --- | --- |
+| Pure | `fast_fsm.core` resolved to `src/fast_fsm/core.py` in a clean export | lifecycle tracer, `TransitionResult`, observer, and isolation-guard selection | 8 passed. |
+| Fresh compiled | A mypyc extension built in a separate temporary export | lifecycle tracer plus `lifecycle_success` and `trigger_min_throughput` | 4 passed; the compiled 200,000 ops/sec floor held. |
+
+The compiled result is a fresh extension produced from the Wave 0 source and
+not any native shadow in the developer checkout.
