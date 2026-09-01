@@ -2680,7 +2680,7 @@ class AsyncStateMachine(StateMachine):
     - :meth:`trigger_async` / :meth:`can_trigger_async` — await-safe transition
       methods that evaluate :class:`AsyncCondition` guards.
     - :meth:`on_enter_async` / :meth:`on_exit_async` — register ``async``
-      callbacks for specific states, fired after all synchronous callbacks.
+      callbacks for specific states at their matching lifecycle slots.
     """
 
     __slots__ = ("_state_enter_async_callbacks", "_state_exit_async_callbacks")
@@ -2699,8 +2699,10 @@ class AsyncStateMachine(StateMachine):
     def on_enter_async(self, state_name: str, callback: Any) -> None:
         """Register an ``async`` callback fired when the machine enters *state_name*.
 
-        Fires **after** the synchronous :meth:`~StateMachine.on_enter` callbacks,
-        still within the same ``trigger_async`` call.
+        Fires immediately after the synchronous :meth:`~StateMachine.on_enter`
+        callbacks and before enter-state listeners, still within the same
+        ``trigger_async`` call.  Cancellation propagates natively after the
+        machine observes the reached lifecycle boundary once.
 
         Signature: ``async callback(from_state: State, trigger: str, **kwargs)``
 
@@ -2725,8 +2727,10 @@ class AsyncStateMachine(StateMachine):
     def on_exit_async(self, state_name: str, callback: Any) -> None:
         """Register an ``async`` callback fired when the machine exits *state_name*.
 
-        Fires **after** the synchronous :meth:`~StateMachine.on_exit` callbacks,
-        still within the same ``trigger_async`` call.
+        Fires immediately after the synchronous :meth:`~StateMachine.on_exit`
+        callbacks and before exit-state listeners, still within the same
+        ``trigger_async`` call.  Cancellation propagates natively after the
+        machine observes the reached lifecycle boundary once.
 
         Signature: ``async callback(to_state: State, trigger: str, **kwargs)``
 
@@ -3157,13 +3161,14 @@ class AsyncStateMachine(StateMachine):
                 return self._finalize_failure(result, kwargs)
             return result
         except asyncio.CancelledError as cancellation:
-            cancelled_result = self._build_lifecycle_failure(
-                old_state,
-                to_state,
+            cancelled_result = self._build_failure_result(
+                old_state.name,
                 trigger,
-                lifecycle_stage[0],
-                cancellation,
+                f"Transition cancelled at {lifecycle_stage[0]}",
+                stage=lifecycle_stage[0],
+                to_state=to_state.name if committed[0] else None,
                 committed=committed[0],
+                cause=cancellation,
             )
             self._finalize_failure(cancelled_result, kwargs)
             raise
