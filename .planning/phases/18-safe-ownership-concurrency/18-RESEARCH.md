@@ -414,22 +414,21 @@ Use explicit reset rather than Python 3.14's token context-manager shorthand so 
 |---|-------|---------|---------------|
 | A1 | [ASSUMED] The lock/ContextVar slot pattern that compiled and executed locally with mypyc 1.17.1 on CPython 3.12/macOS will compile identically on Python 3.10, 3.11, 3.13, and 3.14 and other supported native targets. | Standard Stack / Environment | Native CI could fail or expose version-specific typing/runtime behavior; Wave 0 must compile and run the full version matrix before design freeze. |
 
-## Open Questions
+## Resolved Questions
 
 1. **How should `safe_trigger()` describe ownership preconditions?**
    - What we know: D-01/D-14 require ownership `RuntimeError` to escape, but current docs say the whole `trigger()` call is inside `except Exception`. [VERIFIED: src/fast_fsm/core.py:2617-2659]
-   - What's unclear: The exact public wording, not the behavior.
-   - Recommendation: State that `safe_trigger()` converts transition/internal `Exception`s after successful ownership admission, while ownership/loop preconditions raise before the safety barrier.
+   - **RESOLVED:** State that `safe_trigger()` converts transition/internal `Exception`s only after successful ownership admission. Ownership, loop, causal-root, foreign-thread, and busy preconditions are outside its catch and raise `RuntimeError` before the safety barrier. This is the exact public wording and implementation boundary used by Plan 18-05.
 
 2. **What happens if the first async operation races an unbound sync write?**
    - What we know: The event loop must never block, and unbound sync configuration is permitted.
-   - What's unclear: D-12 does not promise waiting or fairness for this mixed-mode race.
-   - Recommendation: Use a non-blocking short admission check from the async path and raise a stable `RuntimeError` category if a sync write is active; never await a thread lock or offload acquisition.
+   - **RESOLVED:** Use one short, non-awaiting per-instance admission gate to arbitrate initial loop binding and synchronous configuration per D-12. A sync writer installs its active-owner reservation under the gate, releases the gate, and then runs its lifecycle; a first async control operation acquires the gate only non-blockingly, rejects with a stable busy-category `RuntimeError` if sync ownership is active, otherwise records the permanent loop binding and async reservation before releasing the gate. The gate is never held across an await, callback, lifecycle, or mutation body. Once bound, foreign threads/loops reject before acquisition, while a synchronous write from the bound loop thread is admitted only when async ownership is idle. This defines exclusion without adding waiting, fairness, or offload semantics.
 
-3. **Will every supported Python/native target accept the exact slot annotations?**
+3. **How is supported-version native representation compatibility gated?**
    - What we know: A temporary probe using `threading.Lock`, `asyncio.Lock`, `ContextVar`, task/loop slots, `with`, `async with`, and `finally` compiled and ran with repository-pinned mypyc 1.17.1 on local CPython 3.12/macOS. [VERIFIED: local mypyc compile/import probe]
-   - What's unclear: Python 3.10/3.11/3.13/3.14 and Windows/Linux compilation were not available in this session.
-   - Recommendation: Make the compile-first matrix a Wave 0 gate; do not freeze private annotations before it passes.
+   - **RESOLVED:** Wave 0 adds a repository-native representation probe and requires its strict local/current-runtime compiled import to pass before production representation expansion. The same Wave defines the Python 3.10–3.14 native matrix contract. Phase closure then requires that matrix to compile actual `core.py`, assert native origin, execute ownership semantics, and succeed for the exact implementation SHA. This separates the local design gate from hosted coverage without treating an unavailable or unfinished run as success.
+
+**Resolution status:** Questions 1 and 2 are fully resolved by the locked Phase 18 plan contract. Question 3 is an evidence gate rather than an interface ambiguity: Wave 0 must pass a local/current-runtime native representation probe and define the Python 3.10–3.14 hosted matrix before later plans depend on the representation; Phase 18 closure requires an exact-SHA hosted matrix success.
 
 ## Environment Availability
 
