@@ -688,7 +688,7 @@ async def test_async_callback_failure_is_the_matching_staged_result() -> None:
     result = await machine.trigger_async("advance")
 
     assert result.success is False
-    assert result.stage == "source-exit-async-callback"
+    assert result.stage == "source-exit-callback"
     assert result.committed is False
     assert result.cause is failure
     assert machine.current_state is source

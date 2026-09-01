@@ -637,8 +637,8 @@ class TestAsyncCallbacks:
         assert "enter_running" in log
 
     @pytest.mark.asyncio
-    async def test_callback_exception_does_not_block_transition(self):
-        """Transition completes even when a callback raises."""
+    async def test_callback_exception_returns_precommit_failure(self):
+        """A synchronous callback on the async machine follows lifecycle policy."""
 
         def bad_exit(to_state, trigger, *a, **kw):
             raise ValueError("exit crash")
@@ -651,8 +651,11 @@ class TestAsyncCallbacks:
         fsm.add_transition("go", "idle", "running")
 
         result = await fsm.trigger_async("go")
-        assert result.success
-        assert fsm.current_state.name == "running"
+        assert result.success is False
+        assert result.stage == "source-exit"
+        assert result.committed is False
+        assert isinstance(result.cause, ValueError)
+        assert fsm.current_state.name == "idle"
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +829,7 @@ class TestAsyncPerStateCallbacks:
         assert log == [1, 2]
 
     @pytest.mark.asyncio
-    async def test_async_callback_exception_is_caught_not_raised(self):
+    async def test_async_callback_exception_returns_postcommit_failure(self):
         idle = State("idle")
         running = State("running")
         fsm = AsyncStateMachine(idle, name="exc_async")
@@ -838,8 +841,10 @@ class TestAsyncPerStateCallbacks:
 
         fsm.on_enter_async("running", bad_cb)
         result = await fsm.trigger_async("start")
-        # Transition still succeeds; exception is caught and logged
-        assert result.success
+        assert result.success is False
+        assert result.stage == "destination-enter-callback"
+        assert result.committed is True
+        assert isinstance(result.cause, RuntimeError)
         assert fsm.current_state.name == "running"
 
     @pytest.mark.asyncio
@@ -861,7 +866,7 @@ class TestAsyncPerStateCallbacks:
 
     @pytest.mark.asyncio
     async def test_on_enter_exit_async_order_relative_to_sync(self):
-        """Async callbacks fire AFTER all sync callbacks."""
+        """Async callbacks run at their matching source and destination slots."""
         from fast_fsm import CallbackState
 
         log: list = []
@@ -886,9 +891,7 @@ class TestAsyncPerStateCallbacks:
         fsm.on_exit_async("idle", async_exit)
         fsm.on_enter_async("running", async_enter)
         await fsm.trigger_async("start")
-        # sync callbacks fire first (inside _execute_transition),
-        # then async callbacks fire in exit→enter order
-        assert log == ["sync_exit", "sync_enter", "async_exit", "async_enter"]
+        assert log == ["sync_exit", "async_exit", "sync_enter", "async_enter"]
 
     @pytest.mark.asyncio
     async def test_clone_copies_async_callbacks(self):

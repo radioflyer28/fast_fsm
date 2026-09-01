@@ -2762,6 +2762,212 @@ class AsyncStateMachine(StateMachine):
         }
         return base
 
+    async def _execute_transition_async(
+        self,
+        to_state: State,
+        trigger: str,
+        *args: Any,
+        declarative_handler: Optional[Dict[str, Any]] = None,
+        lifecycle_stage: List[str],
+        committed: List[bool],
+        **kwargs: Any,
+    ) -> TransitionResult:
+        """Run the async lifecycle with awaits at their matching callback slots.
+
+        The public :meth:`trigger_async` boundary owns cancellation finalization.
+        This runner merely keeps the reached stage and no-user-code commit seam
+        explicit while converting ordinary callback exceptions into one staged
+        result, exactly like the synchronous runner.
+        """
+        old_state = self._current_state
+
+        lifecycle_stage[0] = "before-transition"
+        for fn in self._before_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        self._logger.debug(
+            "%s: Executing async transition %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        lifecycle_stage[0] = "source-exit"
+        try:
+            old_state.on_exit(to_state, trigger, *args, **kwargs)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=False,
+            )
+
+        lifecycle_stage[0] = "source-exit-callback"
+        for fn in self._state_exit_callbacks.get(old_state.name, ()):
+            try:
+                fn(to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+        for fn in self._state_exit_async_callbacks.get(old_state.name, ()):
+            try:
+                await fn(to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        lifecycle_stage[0] = "exit-state-listener"
+        for fn in self._on_exit_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        self._commit_transition(old_state, to_state, trigger)
+        committed[0] = True
+
+        lifecycle_stage[0] = "destination-enter"
+        try:
+            to_state.on_enter(old_state, trigger, *args, **kwargs)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=True,
+            )
+
+        lifecycle_stage[0] = "destination-enter-callback"
+        for fn in self._state_enter_callbacks.get(to_state.name, ()):
+            try:
+                fn(old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+        for fn in self._state_enter_async_callbacks.get(to_state.name, ()):
+            try:
+                await fn(old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = "enter-state-listener"
+        for fn in self._on_enter_listeners:
+            try:
+                fn(to_state, old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = "declarative-handler"
+        if declarative_handler is not None:
+            declarative_result = await _invoke_declarative_handler_for_transition_async(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage=lifecycle_stage[0],
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                )
+
+        self._logger.debug(
+            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
+        )
+
+        lifecycle_stage[0] = "trigger-callback"
+        for fn in self._trigger_callbacks.get(trigger, ()):
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = "after-transition"
+        for fn in self._after_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        return TransitionResult(
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
+        )
+
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
         prepared = self._prepare_transition(trigger, args, kwargs)
@@ -2813,16 +3019,13 @@ class AsyncStateMachine(StateMachine):
             _reset_prepared_declarative_guard(scope_key, previous)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
-        """
-        Async version of trigger that properly handles AsyncCondition instances.
+        """Run one async transition with same-slot callback and cancellation semantics.
 
-        Args:
-            trigger: The trigger/event name
-            *args: Positional arguments for the transition
-            **kwargs: Keyword arguments for the transition
-
-        Returns:
-            TransitionResult indicating success or failure
+        Synchronous callbacks run inline.  Registered asynchronous callbacks
+        are awaited immediately after their synchronous callback collection at
+        the source-exit and destination-enter lifecycle slots.  Cancellation is
+        observed once and re-raised unchanged after failure observers run; the
+        reached commit/history boundary is never shielded or rolled back.
         """
         prepared = self._prepare_transition(trigger, args, kwargs)
         if isinstance(prepared, TransitionResult):
@@ -2831,46 +3034,64 @@ class AsyncStateMachine(StateMachine):
         current_name = prepared.current_name
         to_state = entry.to_state
         condition = entry.condition
+        old_state = self._current_state
+        lifecycle_stage = ["guard"]
+        committed = [False]
 
-        # Check condition with async support
-        if condition:
-            condition_name = str(condition)
-            self._logger.debug(
-                "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                self._name,
-                condition_name,
-                current_name,
-                to_state.name,
-            )
-            try:
-                assert prepared.condition_kwargs is not None
-                condition_result = await self._evaluate_condition_async(
-                    condition, prepared.args, prepared.condition_kwargs
-                )
-
+        try:
+            if condition:
+                condition_name = str(condition)
                 self._logger.debug(
-                    "%s: Condition '%s' result: %s",
+                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
                     self._name,
                     condition_name,
-                    condition_result,
+                    current_name,
+                    to_state.name,
                 )
-                if not condition_result:
-                    error_msg = (
-                        f"Transition guard rejected trigger '{trigger}' "
-                        f"from state '{current_name}'"
+                try:
+                    assert prepared.condition_kwargs is not None
+                    condition_result = await self._evaluate_condition_async(
+                        condition, prepared.args, prepared.condition_kwargs
                     )
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    self._logger.debug(
+                        "%s: Condition '%s' result: %s",
+                        self._name,
+                        condition_name,
+                        condition_result,
+                    )
+                    if not condition_result:
+                        error_msg = (
+                            f"Transition guard rejected trigger '{trigger}' "
+                            f"from state '{current_name}'"
+                        )
+                        return self._finalize_failure(
+                            self._build_failure_result(
+                                current_name, trigger, error_msg, stage="guard"
+                            ),
+                            kwargs,
+                        )
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                    )
                     return self._finalize_failure(
                         self._build_failure_result(
                             current_name,
                             trigger,
-                            error_msg,
+                            "Transition guard raised an exception",
                             stage="guard",
+                            cause=cause,
                         ),
                         kwargs,
                     )
-            except Exception as cause:  # guard failure is a truthful result
-                error_msg = "Transition guard raised an exception"
+
+            try:
+                declarative_guard_passed = (
+                    await self._evaluate_declarative_condition_async(
+                        prepared, raise_on_error=True
+                    )
+                )
+            except Exception as cause:
                 self._logger.warning(
                     "%s: FAILED guard type=%s", self._name, type(cause).__name__
                 )
@@ -2878,126 +3099,74 @@ class AsyncStateMachine(StateMachine):
                     self._build_failure_result(
                         current_name,
                         trigger,
-                        error_msg,
+                        "Transition guard raised an exception",
                         stage="guard",
                         cause=cause,
                     ),
                     kwargs,
                 )
+            if not declarative_guard_passed:
+                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name, trigger, error_msg, stage="guard"
+                    ),
+                    kwargs,
+                )
 
-        try:
-            declarative_guard_passed = await self._evaluate_declarative_condition_async(
-                prepared, raise_on_error=True
-            )
-        except Exception as cause:
-            error_msg = "Transition guard raised an exception"
-            self._logger.warning(
-                "%s: FAILED guard type=%s", self._name, type(cause).__name__
-            )
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage="guard",
-                    cause=cause,
-                ),
-                kwargs,
-            )
-        if not declarative_guard_passed:
-            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name, trigger, error_msg, stage="guard"
-                ),
-                kwargs,
-            )
+            lifecycle_stage[0] = "state-permission"
+            try:
+                can_proceed = await self._can_transition_after_declarative_guard_async(
+                    trigger, to_state, args, kwargs
+                )
+            except Exception as cause:
+                self._logger.warning(
+                    "%s: FAILED state-permission type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        "State permission raised an exception",
+                        stage=lifecycle_stage[0],
+                        cause=cause,
+                    ),
+                    kwargs,
+                )
+            if not can_proceed:
+                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name, trigger, error_msg, stage=lifecycle_stage[0]
+                    ),
+                    kwargs,
+                )
 
-        # Check if source state allows transition
-        self._logger.debug(
-            "%s: Checking if state '%s' allows transition '%s'",
-            self._name,
-            current_name,
-            trigger,
-        )
-        try:
-            can_proceed = await self._can_transition_after_declarative_guard_async(
-                trigger, to_state, args, kwargs
+            result = await self._execute_transition_async(
+                to_state,
+                trigger,
+                *args,
+                declarative_handler=prepared.declarative_handler,
+                lifecycle_stage=lifecycle_stage,
+                committed=committed,
+                **kwargs,
             )
-        except Exception as cause:
-            error_msg = "State permission raised an exception"
-            self._logger.warning(
-                "%s: FAILED state-permission type=%s",
-                self._name,
-                type(cause).__name__,
+            if not result.success:
+                return self._finalize_failure(result, kwargs)
+            return result
+        except asyncio.CancelledError as cancellation:
+            cancelled_result = self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cancellation,
+                committed=committed[0],
             )
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage="state-permission",
-                    cause=cause,
-                ),
-                kwargs,
-            )
-        if not can_proceed:
-            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name, trigger, error_msg, stage="state-permission"
-                ),
-                kwargs,
-            )
-
-        old_state = self._current_state
-        result = self._execute_transition(
-            to_state,
-            trigger,
-            *args,
-            fail_fast_destination_enter=True,
-            **kwargs,
-        )
-        if not result.success:
-            return self._finalize_failure(result, kwargs)
-
-        handler_info = prepared.declarative_handler
-        if handler_info is not None:
-            await _invoke_declarative_handler_async(
-                old_state, handler_info, trigger, prepared.args, kwargs
-            )
-
-        # Fire async per-state exit callbacks (after all sync callbacks)
-        _async_exit = self._state_exit_async_callbacks.get(old_state.name)
-        if _async_exit:
-            for fn in _async_exit:
-                try:
-                    await fn(to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit_async callback for state '%s': %s",
-                        self._name,
-                        old_state.name,
-                        e,
-                    )
-
-        # Fire async per-state enter callbacks
-        _async_enter = self._state_enter_async_callbacks.get(to_state.name)
-        if _async_enter:
-            for fn in _async_enter:
-                try:
-                    await fn(old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter_async callback for state '%s': %s",
-                        self._name,
-                        to_state.name,
-                        e,
-                    )
-
-        return result
+            self._finalize_failure(cancelled_result, kwargs)
+            raise
 
 
 # Convenience functions and classes
@@ -3100,6 +3269,38 @@ def _invoke_declarative_handler_for_transition(
         return TransitionResult(False)
     try:
         raw_result = method(*args, **kwargs)
+    except Exception as cause:
+        logger.warning(
+            "State '%s': declarative handler failed stage=declarative-handler type=%s",
+            source_state.name,
+            type(cause).__name__,
+        )
+        return TransitionResult(False, cause=cause)
+    if raw_result is None or raw_result is True:
+        return TransitionResult(True)
+    if isinstance(raw_result, TransitionResult):
+        if raw_result.success:
+            return TransitionResult(True)
+        return TransitionResult(False, cause=raw_result.cause)
+    return TransitionResult(False)
+
+
+async def _invoke_declarative_handler_for_transition_async(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Run one ordinary async handler without direct-handler coercion or leaks."""
+    method = handler_info["method"]
+    logger = cast(DeclarativeState, source_state)._logger
+    try:
+        raw_result = (
+            await method(*args, **kwargs)
+            if handler_info["is_async"]
+            else method(*args, **kwargs)
+        )
     except Exception as cause:
         logger.warning(
             "State '%s': declarative handler failed stage=declarative-handler type=%s",
