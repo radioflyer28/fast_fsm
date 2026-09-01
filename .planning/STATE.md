@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 17
 current_phase_name: Atomic Transition Lifecycle
 status: executing
-stopped_at: Completed 17-01-PLAN.md
-last_updated: "2026-09-01T16:47:09.040Z"
+stopped_at: Completed 17-02-PLAN.md
+last_updated: "2026-09-01T17:07:31.632Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 17 execution started
-state_head: 0408c1859cb968ce34cee7d3c962a1b9ef447547
+state_head: a237be7f7ca283a6303f49b9862594d43a00fc0e
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 19
-  completed_plans: 15
+  completed_plans: 16
   percent: 33
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 17 (Atomic Transition Lifecycle) — EXECUTING
-Plan: 2 of 5
-Status: Executing Phase 17
+Plan: 3 of 5
+Status: Ready to execute
 Last activity: 2026-09-01 — Phase 17 execution started
 
 Progress: [███░░░░░░░] 33%
@@ -62,6 +62,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 15 P05 | 20m | 2 tasks | 1 files |
 | Phase 16 P05 | 12m | 3 tasks | 5 files |
 | Phase 17 P01 | 16 min | 2 tasks | 8 files |
+| Phase 17 P02 | 10 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 16]: Use helper-validated evidence interfaces and record environment-labelled pure/native measurements; compiled trigger floor remains 200000 ops/sec.
 - [Phase 17]: Phase 17 Wave 0: destination State.on_enter failures return committed=True at destination-enter, retain a hidden cause, and notify ordered observers exactly once.
 - [Phase 17]: Phase 17 Wave 0: lifecycle evidence accepts only fresh pure or freshly compiled exports, never checkout native shadows.
+- [Phase 17]: Phase 17: Resolution, guard, and state-permission failures are pre-commit results finalized exactly once at the public sync or async trigger boundary.
+- [Phase 17]: Phase 17: Failure observers isolate BaseException locally, preserving ordered notification and the original result cause.
 
 ### Pending Todos
 
@@ -105,6 +108,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T16:47:08.981Z
-Stopped at: Completed 17-01-PLAN.md
+Last session: 2026-09-01T17:07:31.575Z
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
