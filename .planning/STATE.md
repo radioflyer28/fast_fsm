@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 17
 current_phase_name: Atomic Transition Lifecycle
 status: executing
-stopped_at: Completed 17-03-PLAN.md
-last_updated: "2026-09-01T17:24:59.848Z"
+stopped_at: Completed 17-04-PLAN.md
+last_updated: "2026-09-01T17:41:30.324Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 17 execution started
-state_head: e6c78cb2e93777347b4951cffa7cf83fa07a90f6
+state_head: de5e9834df69b4bc717e7884256be346516bc01d
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 19
-  completed_plans: 17
+  completed_plans: 18
   percent: 33
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 17 (Atomic Transition Lifecycle) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 17 execution started
 
@@ -64,6 +64,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 17 P01 | 16 min | 2 tasks | 8 files |
 | Phase 17 P02 | 10 min | 2 tasks | 6 files |
 | Phase 17 P03 | 13 min | 2 tasks | 6 files |
+| Phase 17 P04 | 11 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -90,6 +91,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 17]: Phase 17: Failure observers isolate BaseException locally, preserving ordered notification and the original result cause.
 - [Phase 17]: Ordinary synchronous transitions use a fail-fast lifecycle transaction with a non-user-code commit boundary.
 - [Phase 17]: Direct control operations retain best-effort callbacks through a separate runner, outside ordinary trigger finalization.
+- [Phase 17]: Async callbacks share synchronous lifecycle slots; cancellation finalizes once and bare re-raises without shield or rollback.
 
 ### Pending Todos
 
@@ -111,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T17:24:59.789Z
-Stopped at: Completed 17-03-PLAN.md
+Last session: 2026-09-01T17:41:30.261Z
+Stopped at: Completed 17-04-PLAN.md
 Resume file: None
