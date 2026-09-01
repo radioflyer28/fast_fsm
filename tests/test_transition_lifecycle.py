@@ -1,11 +1,19 @@
 """Executable lifecycle contract for real Fast FSM transition objects."""
 
 from dataclasses import dataclass
+import asyncio
 import logging
 
 import pytest
 
-from fast_fsm.core import CallbackState, StateMachine, TransitionError
+from fast_fsm.conditions import Condition
+from fast_fsm.core import (
+    AsyncStateMachine,
+    CallbackState,
+    State,
+    StateMachine,
+    TransitionError,
+)
 
 
 class LifecycleRecorder:
@@ -21,6 +29,53 @@ class LifecycleRecorder:
 
 class _DestinationEnterFailure(RuntimeError):
     """Distinct sentinel exception retained by identity in the result."""
+
+
+class _ResultCondition(Condition):
+    """Return or raise one configured guard outcome for lifecycle tests."""
+
+    def __init__(self, outcome: bool | BaseException) -> None:
+        super().__init__("lifecycle-guard", "lifecycle test guard")
+        self._outcome = outcome
+
+    def check(self, *args: object, **kwargs: object) -> bool:
+        if isinstance(self._outcome, BaseException):
+            raise self._outcome
+        return self._outcome
+
+
+class _PermissionState(State):
+    """State policy with a configurable synchronous permission outcome."""
+
+    __slots__ = ("_outcome",)
+
+    def __init__(self, name: str, outcome: bool | BaseException) -> None:
+        super().__init__(name)
+        self._outcome = outcome
+
+    def can_transition(
+        self, trigger: str, to_state: State, *args: object, **kwargs: object
+    ) -> bool:
+        if isinstance(self._outcome, BaseException):
+            raise self._outcome
+        return self._outcome
+
+
+class _AsyncPermissionState(State):
+    """State policy with a configurable asynchronous permission outcome."""
+
+    __slots__ = ("_outcome",)
+
+    def __init__(self, name: str, outcome: bool | BaseException) -> None:
+        super().__init__(name)
+        self._outcome = outcome
+
+    async def can_transition_async(
+        self, trigger: str, to_state: State, *args: object, **kwargs: object
+    ) -> bool:
+        if isinstance(self._outcome, BaseException):
+            raise self._outcome
+        return self._outcome
 
 
 @dataclass(frozen=True)
@@ -138,3 +193,189 @@ def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     assert raised.value.result is result
     assert raised.value.__cause__ is failure
     assert "destination-secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("family", "outcome", "expected_stage", "expected_cause"),
+    (
+        ("resolution", None, "resolution", None),
+        ("guard-false", False, "guard", None),
+        (
+            "guard-raises",
+            RuntimeError("guard-secret"),
+            "guard",
+            "guard-secret",
+        ),
+        ("permission-false", False, "state-permission", None),
+        (
+            "permission-raises",
+            RuntimeError("permission-secret"),
+            "state-permission",
+            "permission-secret",
+        ),
+    ),
+)
+def test_precommit_failures_are_truthful_and_finalize_once(
+    family: str,
+    outcome: bool | BaseException | None,
+    expected_stage: str,
+    expected_cause: str | None,
+) -> None:
+    """Every synchronous preparation failure uses one pre-commit result seam."""
+    if family == "resolution":
+        source = State("source")
+        machine = StateMachine(source, name=f"{family}-lifecycle")
+        trigger = "missing"
+        expected = None
+    elif family.startswith("guard"):
+        source = State("source")
+        machine = StateMachine(source, name=f"{family}-lifecycle")
+        machine.add_state(State("destination"))
+        machine.add_transition(
+            "advance", "source", "destination", _ResultCondition(outcome)
+        )
+        trigger = "advance"
+        expected = outcome if isinstance(outcome, BaseException) else None
+    else:
+        source = _PermissionState("source", outcome)
+        machine = StateMachine(source, name=f"{family}-lifecycle")
+        machine.add_state(State("destination"))
+        machine.add_transition("advance", "source", "destination")
+        trigger = "advance"
+        expected = outcome if isinstance(outcome, BaseException) else None
+
+    machine.enable_history()
+    observed: list[tuple[str | None, str | None, str, dict[str, object]]] = []
+    machine.on_failed(
+        lambda observed_trigger, from_state, error, **kwargs: observed.append(
+            (observed_trigger, from_state, error, dict(kwargs))
+        )
+    )
+
+    result = machine.trigger(trigger, payload="caller-payload")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == expected_stage
+    assert result.cause is expected
+    assert machine.current_state is source
+    assert machine.history == []
+    assert observed == [
+        (trigger, "source", result.error, {"payload": "caller-payload"})
+    ]
+    if expected_cause is not None:
+        assert expected_cause not in result.error
+
+
+def test_failure_observers_continue_after_baseexceptions_without_recursion(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Observer failures cannot replace a preparation result or skip later observers."""
+    machine = StateMachine(State("source"), name="observer-isolation")
+    observer_events: list[str] = []
+
+    def failing_observer(name: str, error: BaseException):
+        def observer(*_args: object, **_kwargs: object) -> None:
+            observer_events.append(name)
+            raise error
+
+        return observer
+
+    machine.on_failed(failing_observer("runtime", RuntimeError("runtime-secret")))
+    machine.on_failed(
+        failing_observer("cancel", asyncio.CancelledError("cancel-secret"))
+    )
+    machine.on_failed(
+        failing_observer("interrupt", KeyboardInterrupt("interrupt-secret"))
+    )
+    machine.on_failed(failing_observer("exit", SystemExit("exit-secret")))
+    machine.on_failed(lambda *_args, **_kwargs: observer_events.append("later"))
+
+    with caplog.at_level(logging.WARNING):
+        result = machine.trigger("missing", payload="caller-payload")
+
+    assert result.success is False
+    assert result.stage == "resolution"
+    assert result.cause is None
+    assert observer_events == ["runtime", "cancel", "interrupt", "exit", "later"]
+    for secret in (
+        "runtime-secret",
+        "cancel-secret",
+        "interrupt-secret",
+        "exit-secret",
+        "caller-payload",
+    ):
+        assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("family", "outcome", "expected_stage", "expected_cause"),
+    (
+        ("resolution", None, "resolution", None),
+        ("guard-false", False, "guard", None),
+        (
+            "guard-raises",
+            RuntimeError("async-guard-secret"),
+            "guard",
+            "async-guard-secret",
+        ),
+        ("permission-false", False, "state-permission", None),
+        (
+            "permission-raises",
+            RuntimeError("async-permission-secret"),
+            "state-permission",
+            "async-permission-secret",
+        ),
+    ),
+)
+async def test_async_precommit_failures_match_the_result_finalizer_contract(
+    family: str,
+    outcome: bool | BaseException | None,
+    expected_stage: str,
+    expected_cause: str | None,
+) -> None:
+    """Async preparation failures preserve the same result and observer contract."""
+    if family == "resolution":
+        source = State("source")
+        machine = AsyncStateMachine(source, name=f"async-{family}-lifecycle")
+        trigger = "missing"
+        expected = None
+    elif family.startswith("guard"):
+        source = State("source")
+        machine = AsyncStateMachine(source, name=f"async-{family}-lifecycle")
+        machine.add_state(State("destination"))
+        machine.add_transition(
+            "advance", "source", "destination", _ResultCondition(outcome)
+        )
+        trigger = "advance"
+        expected = outcome if isinstance(outcome, BaseException) else None
+    else:
+        source = _AsyncPermissionState("source", outcome)
+        machine = AsyncStateMachine(source, name=f"async-{family}-lifecycle")
+        machine.add_state(State("destination"))
+        machine.add_transition("advance", "source", "destination")
+        trigger = "advance"
+        expected = outcome if isinstance(outcome, BaseException) else None
+
+    machine.enable_history()
+    observed: list[tuple[str | None, str | None, str, dict[str, object]]] = []
+    machine.on_failed(
+        lambda observed_trigger, from_state, error, **kwargs: observed.append(
+            (observed_trigger, from_state, error, dict(kwargs))
+        )
+    )
+
+    result = await machine.trigger_async(trigger, payload="caller-payload")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == expected_stage
+    assert result.cause is expected
+    assert machine.current_state is source
+    assert machine.history == []
+    assert observed == [
+        (trigger, "source", result.error, {"payload": "caller-payload"})
+    ]
+    if expected_cause is not None:
+        assert expected_cause not in result.error
