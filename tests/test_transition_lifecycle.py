@@ -10,9 +10,12 @@ from fast_fsm.conditions import Condition
 from fast_fsm.core import (
     AsyncStateMachine,
     CallbackState,
+    DeclarativeState,
     State,
     StateMachine,
     TransitionError,
+    TransitionResult,
+    transition,
 )
 
 
@@ -379,3 +382,220 @@ async def test_async_precommit_failures_match_the_result_finalizer_contract(
     ]
     if expected_cause is not None:
         assert expected_cause not in result.error
+
+
+def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order() -> (
+    None
+):
+    """One successful sync trigger visits every callback slot in its public order."""
+    events: list[str] = []
+
+    class Source(DeclarativeState):
+        __slots__ = ("events",)
+
+        def __init__(self) -> None:
+            self.events = events
+            super().__init__("source")
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            self.events.append("source-exit")
+
+        @transition("advance")
+        def advance(self, *args: object, **kwargs: object) -> None:
+            self.events.append("declarative-handler")
+
+    source = Source()
+    destination = CallbackState(
+        "destination",
+        on_enter=lambda *_args, **_kwargs: events.append("destination-enter"),
+    )
+    machine = StateMachine(source, name="sync-lifecycle-order")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+
+    class Listener:
+        def __init__(self, suffix: str) -> None:
+            self._suffix = suffix
+
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            events.append(f"before-{self._suffix}")
+
+        def on_exit_state(self, *_args: object, **_kwargs: object) -> None:
+            events.append(f"exit-listener-{self._suffix}")
+
+        def on_enter_state(self, *_args: object, **_kwargs: object) -> None:
+            events.append(f"enter-listener-{self._suffix}")
+
+        def after_transition(self, *_args: object, **_kwargs: object) -> None:
+            events.append(f"after-{self._suffix}")
+
+    machine.add_listener(Listener("one"), Listener("two"))
+    machine.on_exit(
+        "source", lambda *_args, **_kwargs: events.append("source-callback-one")
+    )
+    machine.on_exit(
+        "source", lambda *_args, **_kwargs: events.append("source-callback-two")
+    )
+    machine.on_enter(
+        "destination",
+        lambda *_args, **_kwargs: events.append("destination-callback-one"),
+    )
+    machine.on_enter(
+        "destination",
+        lambda *_args, **_kwargs: events.append("destination-callback-two"),
+    )
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: events.append("trigger-callback-one")
+    )
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: events.append("trigger-callback-two")
+    )
+
+    result = machine.trigger("advance", payload="caller-payload")
+
+    assert result == TransitionResult(
+        True,
+        from_state="source",
+        to_state="destination",
+        trigger="advance",
+        committed=True,
+    )
+    assert events == [
+        "before-one",
+        "before-two",
+        "source-exit",
+        "source-callback-one",
+        "source-callback-two",
+        "exit-listener-one",
+        "exit-listener-two",
+        "destination-enter",
+        "destination-callback-one",
+        "destination-callback-two",
+        "enter-listener-one",
+        "enter-listener-two",
+        "declarative-handler",
+        "trigger-callback-one",
+        "trigger-callback-two",
+        "after-one",
+        "after-two",
+    ]
+    assert [
+        (item.from_state, item.trigger, item.to_state) for item in machine.history
+    ] == [("source", "advance", "destination")]
+
+
+@pytest.mark.parametrize(
+    ("failing_stage", "expected_committed"),
+    (
+        ("before-transition", False),
+        ("source-exit", False),
+        ("source-exit-callback", False),
+        ("exit-state-listener", False),
+        ("destination-enter", True),
+        ("destination-enter-callback", True),
+        ("enter-state-listener", True),
+        ("trigger-callback", True),
+        ("after-transition", True),
+    ),
+)
+def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
+    failing_stage: str, expected_committed: bool
+) -> None:
+    """Every synchronous callback slot yields one truthful fail-fast result."""
+    events: list[str] = []
+    failure = RuntimeError(f"{failing_stage}-secret")
+
+    def callback(stage: str):
+        def run(*_args: object, **_kwargs: object) -> None:
+            events.append(stage)
+            if stage == failing_stage:
+                raise failure
+
+        return run
+
+    source = CallbackState("source", on_exit=callback("source-exit"))
+    destination = CallbackState("destination", on_enter=callback("destination-enter"))
+    machine = StateMachine(source, name=f"sync-{failing_stage}")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+
+    class Listener:
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            callback("before-transition")()
+
+        def on_exit_state(self, *_args: object, **_kwargs: object) -> None:
+            callback("exit-state-listener")()
+
+        def on_enter_state(self, *_args: object, **_kwargs: object) -> None:
+            callback("enter-state-listener")()
+
+        def after_transition(self, *_args: object, **_kwargs: object) -> None:
+            callback("after-transition")()
+
+    machine.add_listener(Listener())
+    machine.on_exit("source", callback("source-exit-callback"))
+    machine.on_enter("destination", callback("destination-enter-callback"))
+    machine.on_trigger("advance", callback("trigger-callback"))
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    result = machine.trigger("advance")
+
+    assert result.success is False
+    assert result.committed is expected_committed
+    assert result.stage == failing_stage
+    assert result.cause is failure
+    assert observed == ["observer"]
+    assert machine.current_state is (destination if expected_committed else source)
+    assert len(machine.history) == int(expected_committed)
+    assert events[-1] == failing_stage
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_cause"),
+    (
+        (False, None),
+        (TransitionResult(False, error="handler-result-secret"), None),
+        ("invalid", None),
+        (RuntimeError("handler-exception-secret"), "exception"),
+    ),
+)
+def test_sync_declarative_failure_is_postcommit_and_finalized_once(
+    outcome: object, expected_cause: str | None
+) -> None:
+    """Ordinary declarative outcomes control the transition completion once."""
+    invocations: list[str] = []
+
+    class Source(DeclarativeState):
+        __slots__ = ()
+
+        @transition("advance")
+        def advance(self, *args: object, **kwargs: object) -> object:
+            invocations.append("handler")
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+    source = Source("source")
+    destination = State("destination")
+    machine = StateMachine(source, name="sync-declarative-failure")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+    observer_calls: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observer_calls.append("observer"))
+
+    result = machine.trigger("advance")
+
+    assert invocations == ["handler"]
+    assert result.success is False
+    assert result.committed is True
+    assert result.stage == "declarative-handler"
+    assert result.cause is (outcome if expected_cause is not None else None)
+    assert machine.current_state is destination
+    assert len(machine.history) == 1
+    assert observer_calls == ["observer"]
