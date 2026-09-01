@@ -4,17 +4,17 @@ milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
 current_phase: 17
 current_phase_name: Atomic Transition Lifecycle
-status: executing
-stopped_at: Completed 17-04-PLAN.md
-last_updated: "2026-09-01T17:41:30.324Z"
+status: verifying
+stopped_at: Completed 17-05-PLAN.md
+last_updated: "2026-09-01T18:09:51.476Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 17 execution started
-state_head: de5e9834df69b4bc717e7884256be346516bc01d
+state_head: be719e3161f41f5bbf7c99994b830f9ec35f31e6
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
   percent: 33
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 Phase: 17 (Atomic Transition Lifecycle) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-01 — Phase 17 execution started
 
 Progress: [███░░░░░░░] 33%
@@ -65,6 +65,7 @@ Progress: [███░░░░░░░] 33%
 | Phase 17 P02 | 10 min | 2 tasks | 6 files |
 | Phase 17 P03 | 13 min | 2 tasks | 6 files |
 | Phase 17 P04 | 11 min | 2 tasks | 5 files |
+| Phase 17 P05 | 20m | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 17]: Ordinary synchronous transitions use a fail-fast lifecycle transaction with a non-user-code commit boundary.
 - [Phase 17]: Direct control operations retain best-effort callbacks through a separate runner, outside ordinary trigger finalization.
 - [Phase 17]: Async callbacks share synchronous lifecycle slots; cancellation finalizes once and bare re-raises without shield or rollback.
+- [Phase 17]: Published the lifecycle order and structured TransitionResult fields as one redacted public contract.
+- [Phase 17]: Use asserted fresh source/native exports as Phase 17 proof; installed-wheel parity remains Phase 20.
+- [Phase 17]: Keep a fixed compiled throughput floor; exact rates remain environment-labelled observations.
 
 ### Pending Todos
 
@@ -113,6 +117,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T17:41:30.261Z
-Stopped at: Completed 17-04-PLAN.md
+Last session: 2026-09-01T18:09:51.415Z
+Stopped at: Completed 17-05-PLAN.md
 Resume file: None

@@ -30,12 +30,12 @@
 
 ### Atomic Transition Lifecycle
 
-- [ ] **LIFE-01**: A user observes one documented callback order with explicit pre-commit, commit, and post-commit stages in both sync and async machines.
-- [ ] **LIFE-02**: A pre-commit callback failure preserves the source state and returns or raises a failure that identifies the failed stage and original cause.
-- [ ] **LIFE-03**: A post-commit callback failure preserves the destination state, reports `committed=True`, and never reports the transition as successful.
-- [ ] **LIFE-04**: Each failed transition notifies failure observers exactly once without swallowing the callback exception or recursively re-entering failure handling.
-- [ ] **LIFE-05**: Transition history records only committed transitions and remains coherent when callbacks fail or async work is cancelled.
-- [ ] **LIFE-06**: Sync and async transitions expose equivalent state, result, callback-order, guard-context, and failure semantics.
+- [x] **LIFE-01**: A user observes one documented callback order with explicit pre-commit, commit, and post-commit stages in both sync and async machines.
+- [x] **LIFE-02**: A pre-commit callback failure preserves the source state and returns or raises a failure that identifies the failed stage and original cause.
+- [x] **LIFE-03**: A post-commit callback failure preserves the destination state, reports `committed=True`, and never reports the transition as successful.
+- [x] **LIFE-04**: Each failed transition notifies failure observers exactly once without swallowing the callback exception or recursively re-entering failure handling.
+- [x] **LIFE-05**: Transition history records only committed transitions and remains coherent when callbacks fail or async work is cancelled.
+- [x] **LIFE-06**: Sync and async transitions expose equivalent state, result, callback-order, guard-context, and failure semantics.
 - [x] **LIFE-07**: History rejects non-positive capacities and uses O(1) bounded eviction while preserving copy-on-read behavior.
 
 ### Ownership and Concurrency
@@ -125,12 +125,12 @@
 | GRAF-06 | Phase 16 | Complete |
 | GRAF-07 | Phase 16 | Complete |
 | GRAF-08 | Phase 16 | Complete |
-| LIFE-01 | Phase 17 | Pending |
-| LIFE-02 | Phase 17 | Pending |
-| LIFE-03 | Phase 17 | Pending |
-| LIFE-04 | Phase 17 | Pending |
-| LIFE-05 | Phase 17 | Pending |
-| LIFE-06 | Phase 17 | Pending |
+| LIFE-01 | Phase 17 | Complete |
+| LIFE-02 | Phase 17 | Complete |
+| LIFE-03 | Phase 17 | Complete |
+| LIFE-04 | Phase 17 | Complete |
+| LIFE-05 | Phase 17 | Complete |
+| LIFE-06 | Phase 17 | Complete |
 | LIFE-07 | Phase 16 | Complete |
 | OWN-01 | Phase 18 | Pending |
 | OWN-02 | Phase 18 | Pending |
