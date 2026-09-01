@@ -1,5 +1,6 @@
 """Executable lifecycle contract for real Fast FSM transition objects."""
 
+from dataclasses import dataclass
 import logging
 
 import pytest
@@ -20,6 +21,41 @@ class LifecycleRecorder:
 
 class _DestinationEnterFailure(RuntimeError):
     """Distinct sentinel exception retained by identity in the result."""
+
+
+@dataclass(frozen=True)
+class LifecycleProbe:
+    """One spec-less lifecycle family reserved for its owning implementation wave."""
+
+    identifier: str
+    owner_plan: str
+    expectation: str
+
+
+LIFECYCLE_PROBES = (
+    LifecycleProbe("LIFE-01", "17-03", "exact sync/async callback order"),
+    LifecycleProbe("LIFE-02", "17-03", "pre-commit failure preserves source"),
+    LifecycleProbe("LIFE-03", "17-03", "post-commit failure preserves destination"),
+    LifecycleProbe("LIFE-04-adjacency", "17-02", "observers run exactly once"),
+    LifecycleProbe("LIFE-04-empty", "17-02", "empty and single observer behavior"),
+    LifecycleProbe("LIFE-04-ordering", "17-02", "observer registration ordering"),
+    LifecycleProbe("LIFE-05", "17-04", "committed-only history and cancellation"),
+    LifecycleProbe("LIFE-06", "17-04", "sync/async semantic parity"),
+)
+
+
+def test_lifecycle_probe_inventory_accounts_for_all_spec_less_families() -> None:
+    """Wave 0 records all eight families without pre-implementing later slices."""
+    assert [(probe.identifier, probe.owner_plan) for probe in LIFECYCLE_PROBES] == [
+        ("LIFE-01", "17-03"),
+        ("LIFE-02", "17-03"),
+        ("LIFE-03", "17-03"),
+        ("LIFE-04-adjacency", "17-02"),
+        ("LIFE-04-empty", "17-02"),
+        ("LIFE-04-ordering", "17-02"),
+        ("LIFE-05", "17-04"),
+        ("LIFE-06", "17-04"),
+    ]
 
 
 def test_tracer_destination_enter_failure_commits_and_finalizes_once(

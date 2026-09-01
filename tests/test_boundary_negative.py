@@ -9,7 +9,7 @@ All tests use real FSM components — no mocking.
 
 import pytest
 
-from fast_fsm.core import State, StateMachine, TransitionResult
+from fast_fsm.core import State, StateMachine, TransitionError, TransitionResult
 from fast_fsm.conditions import Condition
 
 
@@ -200,6 +200,41 @@ class TestTransitionResult:
         r = TransitionResult(True, from_state="a", to_state="b", trigger="go")
         text = repr(r)
         assert "True" in text or "success" in text.lower()
+
+    def test_additive_lifecycle_fields_preserve_legacy_constructor_and_equality(self):
+        """Old five-field positional calls remain valid and do not expose causes."""
+        legacy = TransitionResult(False, "source", "destination", "go", "failed")
+        first_cause = RuntimeError("first-secret")
+        second_cause = RuntimeError("second-secret")
+        first = TransitionResult(
+            False,
+            "source",
+            "destination",
+            "go",
+            "failed",
+            True,
+            "destination-enter",
+            first_cause,
+        )
+        second = TransitionResult(
+            False,
+            "source",
+            "destination",
+            "go",
+            "failed",
+            True,
+            "destination-enter",
+            second_cause,
+        )
+
+        assert (legacy.committed, legacy.stage, legacy.cause) == (False, None, None)
+        assert first.cause is first_cause
+        assert first == second
+        assert "first-secret" not in repr(first)
+        with pytest.raises(TransitionError) as raised:
+            first.raise_if_failed()
+        assert raised.value.__cause__ is first_cause
+        assert "first-secret" not in str(raised.value)
 
 
 # ---------------------------------------------------------------------------

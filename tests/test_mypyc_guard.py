@@ -450,6 +450,20 @@ def test_phase16_runner_covers_boundary_negative_in_both_modes() -> None:
     assert source.count('"tests/test_boundary_negative.py"') == 2
 
 
+def test_phase17_runner_has_explicit_lifecycle_overlay_and_suite() -> None:
+    """Lifecycle evidence must not silently inherit checkout artifacts."""
+    source = PHASE16_RUNNER.read_text(encoding="utf-8")
+
+    for required in (
+        "PHASE17_INVENTORY",
+        '"tests/test_transition_lifecycle.py"',
+        '".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"',
+        'args.suite == "phase17"',
+        "lifecycle_success",
+    ):
+        assert required in source
+
+
 def _load_phase16_runner():
     """Load the standalone Phase 16 runner without importing Fast FSM."""
     spec = importlib.util.spec_from_file_location("phase16_runner", PHASE16_RUNNER)

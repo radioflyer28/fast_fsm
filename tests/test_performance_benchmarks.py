@@ -438,6 +438,42 @@ class TestAdvancedPerformance:
         )
 
     @pytest.mark.slow
+    def test_lifecycle_success_trigger_throughput(self):
+        """The committed lifecycle-success path retains the fixed trigger floor."""
+        source = State("lifecycle-source")
+        destination = State("lifecycle-destination")
+        fsm = StateMachine(source, name="lifecycle_success_throughput")
+        fsm.add_state(destination)
+        fsm.add_transition("toggle", "lifecycle-source", "lifecycle-destination")
+        fsm.add_transition("toggle", "lifecycle-destination", "lifecycle-source")
+
+        for _ in range(1000):
+            assert fsm.trigger("toggle").success
+
+        gc.collect()
+        iterations = 200_000
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fsm.trigger("toggle")
+        elapsed = time.perf_counter() - start
+        ops_per_sec = iterations / elapsed
+
+        import importlib.util
+
+        core_spec = importlib.util.find_spec("fast_fsm.core")
+        compiled = (
+            core_spec is not None
+            and core_spec.origin is not None
+            and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
+        )
+        floor = 200_000 if compiled else 30_000
+        assert ops_per_sec >= floor, (
+            f"lifecycle-success trigger throughput {ops_per_sec:,.0f} ops/sec is "
+            f"below the {'compiled' if compiled else 'pure-Python'} floor of "
+            f"{floor:,} ops/sec"
+        )
+
+    @pytest.mark.slow
     def test_trigger_history_enabled_throughput(self):
         """History-enabled throughput gate: trigger() with enable_history() must
         not degrade more than 2× vs. disabled baseline.
