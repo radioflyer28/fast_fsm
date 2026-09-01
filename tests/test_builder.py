@@ -2040,6 +2040,31 @@ class TestFSMBuilderAsyncPreflight:
         assert (await machine.trigger_async("go")).success
         assert calls == ["called"]
 
+    @pytest.mark.asyncio
+    async def test_auto_async_builder_keeps_callbacks_at_their_lifecycle_slots(self):
+        """Builder wiring preserves same-slot order and exactly-once invocation."""
+        events: list[str] = []
+
+        async def exit_async(*args, **kwargs):
+            events.append("exit-async")
+
+        async def enter_async(*args, **kwargs):
+            events.append("enter-async")
+
+        builder = FSMBuilder(State("start"))
+        builder.add_state(State("finish"))
+        builder.add_transition("go", "start", "finish")
+        builder.on_exit("start", lambda *args, **kwargs: events.append("exit-sync"))
+        builder.on_exit_async("start", exit_async)
+        builder.on_enter("finish", lambda *args, **kwargs: events.append("enter-sync"))
+        builder.on_enter_async("finish", enter_async)
+
+        machine = builder.build()
+
+        assert isinstance(machine, AsyncStateMachine)
+        assert (await machine.trigger_async("go")).success
+        assert events == ["exit-sync", "exit-async", "enter-sync", "enter-async"]
+
     def test_wrapper_cycle_rejects_without_freezing_staging(self):
         cycle = NotCondition(AlwaysTrue())
         builder = FSMBuilder(State("start"))

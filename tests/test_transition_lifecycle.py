@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from fast_fsm.conditions import Condition
+from fast_fsm.conditions import AsyncCondition, Condition
 from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
@@ -46,6 +46,25 @@ class _ResultCondition(Condition):
         if isinstance(self._outcome, BaseException):
             raise self._outcome
         return self._outcome
+
+
+class _BlockingAsyncCondition(AsyncCondition):
+    """Coordinate guard cancellation without relying on timing sleeps."""
+
+    def __init__(self, started: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__("blocking-guard", "lifecycle cancellation guard")
+        self._started = started
+        self._release = release
+        self.cancellation: asyncio.CancelledError | None = None
+
+    async def check_async(self, **kwargs: object) -> bool:
+        self._started.set()
+        try:
+            await self._release.wait()
+        except asyncio.CancelledError as cancellation:
+            self.cancellation = cancellation
+            raise
+        return True
 
 
 class _PermissionState(State):
@@ -694,3 +713,141 @@ async def test_async_callback_failure_is_the_matching_staged_result() -> None:
     assert machine.current_state is source
     assert machine.history == []
     assert events == ["exit-async", "observer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "expected_stage", "expected_committed"),
+    (
+        ("guard", "guard", False),
+        ("source-exit", "source-exit-callback", False),
+        ("destination-enter", "destination-enter-callback", True),
+        ("declarative-handler", "declarative-handler", True),
+    ),
+)
+async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
+    boundary: str, expected_stage: str, expected_committed: bool
+) -> None:
+    """Cancellation preserves its identity, commits only when reached, and stops.
+
+    Every wait is coordinated through an event handshake: no timing assumption is
+    permitted in the cancellation contract.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+    events: list[str] = []
+    observed_cancellation: list[asyncio.CancelledError] = []
+
+    async def block(label: str) -> None:
+        events.append(label)
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError as cancellation:
+            observed_cancellation.append(cancellation)
+            raise
+
+    if boundary == "declarative-handler":
+
+        class Source(AsyncDeclarativeState):
+            __slots__ = ()
+
+            @transition("advance")
+            async def advance(self, *args: object, **kwargs: object) -> None:
+                await block("declarative-handler")
+
+        source: State = Source("source")
+        condition = None
+    else:
+        source = State("source")
+        condition = (
+            _BlockingAsyncCondition(started, release) if boundary == "guard" else None
+        )
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name=f"cancel-{boundary}")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination", condition)
+    machine.enable_history()
+    if boundary == "source-exit":
+
+        async def source_exit(*_args: object, **_kwargs: object) -> None:
+            await block("source-exit")
+
+        machine.on_exit_async("source", source_exit)
+    if boundary == "destination-enter":
+
+        async def destination_enter(*_args: object, **_kwargs: object) -> None:
+            await block("destination-enter")
+
+        machine.on_enter_async("destination", destination_enter)
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+    machine.after_transition(
+        lambda *_args, **_kwargs: events.append("after-transition")
+    )
+    observer_events: list[tuple[str, str, str]] = []
+    machine.on_failed(
+        lambda trigger, from_state, error, **_kwargs: observer_events.append(
+            (trigger, from_state, error)
+        )
+    )
+    machine.on_failed(
+        lambda trigger, from_state, error, **_kwargs: observer_events.append(
+            (trigger, from_state, error)
+        )
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("advance"))
+    await started.wait()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await pending
+
+    if boundary == "guard":
+        assert condition is not None
+        assert isinstance(condition, _BlockingAsyncCondition)
+        assert condition.cancellation is raised.value
+    else:
+        assert observed_cancellation == [raised.value]
+    assert observer_events == [
+        ("advance", "source", f"Transition cancelled at {expected_stage}"),
+        ("advance", "source", f"Transition cancelled at {expected_stage}"),
+    ]
+    assert machine.current_state is (destination if expected_committed else source)
+    assert len(machine.history) == int(expected_committed)
+    assert "trigger-callback" not in events
+    assert "after-transition" not in events
+
+
+@pytest.mark.asyncio
+async def test_async_failure_observer_cancellation_cannot_replace_the_cause() -> None:
+    """Observer cancellation stays local to one ordinary callback failure."""
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="observer-cancellation")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    failure = RuntimeError("ordinary-callback-secret")
+    observed: list[str] = []
+
+    async def failing_callback(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    def cancelling_observer(*_args: object, **_kwargs: object) -> None:
+        observed.append("cancelling-observer")
+        raise asyncio.CancelledError("observer-cancellation-secret")
+
+    def later_observer(*_args: object, **_kwargs: object) -> None:
+        observed.append("later-observer")
+
+    machine.on_exit_async("source", failing_callback)
+    machine.on_failed(cancelling_observer)
+    machine.on_failed(later_observer)
+
+    result = await machine.trigger_async("advance")
+
+    assert result.success is False
+    assert result.stage == "source-exit-callback"
+    assert result.cause is failure
+    assert observed == ["cancelling-observer", "later-observer"]
