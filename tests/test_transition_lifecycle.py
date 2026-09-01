@@ -43,11 +43,13 @@ def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     machine.add_transition("advance", "source", "destination")
     machine.enable_history()
 
-    machine.on_enter("destination", lambda *_args, **_kwargs: recorder.add("enter-callback"))
-    machine.on_trigger("advance", lambda *_args, **_kwargs: recorder.add("trigger-callback"))
-    machine.after_transition(
-        lambda *_args, **_kwargs: recorder.add("after-transition")
+    machine.on_enter(
+        "destination", lambda *_args, **_kwargs: recorder.add("enter-callback")
     )
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: recorder.add("trigger-callback")
+    )
+    machine.after_transition(lambda *_args, **_kwargs: recorder.add("after-transition"))
 
     def failing_observer(
         trigger: str, from_state: str, error: str, **kwargs: object
@@ -87,9 +89,10 @@ def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     assert result.stage == "destination-enter"
     assert result.cause is failure
     assert machine.current_state is destination
-    assert [(record.from_state, record.trigger, record.to_state) for record in machine.history] == [
-        ("source", "advance", "destination")
-    ]
+    assert [
+        (record.from_state, record.trigger, record.to_state)
+        for record in machine.history
+    ] == [("source", "advance", "destination")]
     assert "destination-secret" not in repr(result)
     assert "destination-secret" not in caplog.text
     assert "observer-secret" not in caplog.text

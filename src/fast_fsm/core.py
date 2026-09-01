@@ -27,7 +27,7 @@ from typing import (
     cast,
     overload,
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import asyncio
 from mypy_extensions import mypyc_attr
 from .conditions import (
@@ -49,6 +49,28 @@ from .conditions import (
 # tuple. A marker is restored after each dispatch so nested policy calls retain
 # the outer state safely in both pure Python and mypyc builds.
 _prepared_declarative_guards: Dict[Optional[int], Tuple[int, str, int]] = {}
+
+
+# Stable lifecycle labels are deliberately strings so callers can inspect a
+# failure result without importing a private implementation type. Later Phase
+# 17 slices route the remaining labels through the same execution seams.
+_LIFECYCLE_STAGES: Tuple[str, ...] = (
+    "resolution",
+    "guard",
+    "state-permission",
+    "before-transition",
+    "source-exit",
+    "source-exit-callback",
+    "exit-state-listener",
+    "commit",
+    "destination-enter",
+    "destination-enter-callback",
+    "enter-state-listener",
+    "declarative-handler",
+    "trigger-callback",
+    "after-transition",
+)
+_DESTINATION_ENTER_STAGE = "destination-enter"
 
 
 def _prepared_guard_scope_key() -> Optional[int]:
@@ -234,10 +256,13 @@ class TransitionError(RuntimeError):
 
     def __init__(self, result: "TransitionResult") -> None:
         self.result: "TransitionResult" = result
+        stage_part = f" at {result.stage}" if result.stage else ""
         trigger_part = f" (trigger={result.trigger!r})" if result.trigger else ""
         from_part = f" from {result.from_state!r}" if result.from_state else ""
         error_part = f": {result.error}" if result.error else ""
-        super().__init__(f"Transition failed{from_part}{trigger_part}{error_part}")
+        super().__init__(
+            f"Transition failed{stage_part}{from_part}{trigger_part}{error_part}"
+        )
 
 
 @dataclass(slots=True)
@@ -249,6 +274,9 @@ class TransitionResult:
     to_state: Optional[str] = None
     trigger: Optional[str] = None
     error: str = ""
+    committed: bool = False
+    stage: Optional[str] = None
+    cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
 
     def raise_if_failed(self) -> "TransitionResult":
         """Raise :class:`TransitionError` if the transition did not succeed.
@@ -261,7 +289,12 @@ class TransitionResult:
             TransitionError: when ``self.success`` is ``False``.
         """
         if not self.success:
-            raise TransitionError(self)
+            error = TransitionError(self)
+            if self.cause is not None:
+                # Assign explicitly before raising so mypyc and CPython expose
+                # the same public cause identity on the opt-in error boundary.
+                error.__cause__ = self.cause
+            raise error
         return self
 
 
@@ -1989,8 +2022,47 @@ class StateMachine:
             return prepared
         return prepared.entry, prepared.current_name
 
+    def _commit_transition(
+        self, old_state: State, to_state: State, trigger: str
+    ) -> None:
+        """Commit state and optional history without invoking user code."""
+        self._current_state = to_state
+        if self._history is not None:
+            self._history.append(
+                TransitionRecord(
+                    old_state.name, trigger, to_state.name, time.monotonic()
+                )
+            )
+
+    def _finalize_failure(
+        self, result: TransitionResult, kwargs: Dict[str, Any]
+    ) -> TransitionResult:
+        """Notify failure observers once without replacing the original outcome."""
+        for observer_index, observer in enumerate(self._on_failed_callbacks):
+            try:
+                observer(
+                    result.trigger,
+                    result.from_state,
+                    result.error,
+                    **kwargs,
+                )
+            except BaseException as observer_error:
+                self._logger.warning(
+                    "%s: failure observer failed stage=%s index=%d type=%s",
+                    self._name,
+                    result.stage,
+                    observer_index,
+                    type(observer_error).__name__,
+                )
+        return result
+
     def _execute_transition(
-        self, to_state: State, trigger: str, *args: Any, **kwargs: Any
+        self,
+        to_state: State,
+        trigger: str,
+        *args: Any,
+        fail_fast_destination_enter: bool = False,
+        **kwargs: Any,
     ) -> TransitionResult:
         """Perform exit/enter callbacks and state change.
 
@@ -2052,18 +2124,34 @@ class StateMachine:
                         e,
                     )
 
-        # Change state
-        self._current_state = to_state
+        # The commit boundary deliberately contains no user callback. The state
+        # and history record therefore become one coherent outcome even when a
+        # later post-commit callback fails.
+        self._commit_transition(old_state, to_state, trigger)
 
         # Call enter handler
         try:
             to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
+        except Exception as cause:  # callback failure is a truthful trigger result
+            if fail_fast_destination_enter:
+                return self._finalize_failure(
+                    TransitionResult(
+                        False,
+                        from_state=old_state.name,
+                        to_state=to_state.name,
+                        trigger=trigger,
+                        error="Transition callback failed at destination-enter",
+                        committed=True,
+                        stage=_DESTINATION_ENTER_STAGE,
+                        cause=cause,
+                    ),
+                    kwargs,
+                )
             self._logger.warning(
                 "%s: Exception in on_enter for state '%s': %s",
                 self._name,
                 to_state.name,
-                e,
+                cause,
             )
 
         # Fire per-state enter callbacks registered via on_enter(state, fn)
@@ -2117,16 +2205,12 @@ class StateMachine:
                 except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
                     self._logger.error("on_trigger callback error: %s", e)
 
-        # Record transition in history (zero-cost when disabled — single None check)
-        if self._history is not None:
-            self._history.append(
-                TransitionRecord(
-                    old_state.name, trigger, to_state.name, time.monotonic()
-                )
-            )
-
         return TransitionResult(
-            True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
         )
 
     def trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
@@ -2240,7 +2324,15 @@ class StateMachine:
             )
 
         old_state = self._current_state
-        result = self._execute_transition(to_state, trigger, *args, **kwargs)
+        result = self._execute_transition(
+            to_state,
+            trigger,
+            *args,
+            fail_fast_destination_enter=True,
+            **kwargs,
+        )
+        if not result.success:
+            return result
         handler_info = prepared.declarative_handler
         if handler_info is not None:
             _invoke_declarative_handler(
@@ -2603,7 +2695,15 @@ class AsyncStateMachine(StateMachine):
             )
 
         old_state = self._current_state
-        result = self._execute_transition(to_state, trigger, *args, **kwargs)
+        result = self._execute_transition(
+            to_state,
+            trigger,
+            *args,
+            fail_fast_destination_enter=True,
+            **kwargs,
+        )
+        if not result.success:
+            return result
 
         handler_info = prepared.declarative_handler
         if handler_info is not None:
