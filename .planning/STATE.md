@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 18
 current_phase_name: Safe Ownership & Concurrency
 status: executing
-stopped_at: Completed 18-01-PLAN.md
-last_updated: "2026-09-01T20:52:55.393Z"
+stopped_at: Completed 18-02-PLAN.md
+last_updated: "2026-09-01T21:07:39.167Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 18 execution started
-state_head: d348d33c7bfb455971fdf795757143b5bd445597
+state_head: 81baea2d96953627406c68249717351ab845cf49
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 26
-  completed_plans: 20
+  completed_plans: 21
   percent: 50
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 18 (Safe Ownership & Concurrency) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-09-01 — Phase 18 execution started
 
@@ -68,6 +68,7 @@ Progress: [█████░░░░░] 50%
 | Phase 17 P04 | 11 min | 2 tasks | 5 files |
 | Phase 17 P05 | 20m | 3 tasks | 11 files |
 | Phase 18 P01 | 25 min | 3 tasks | 9 files |
+| Phase 18 P02 | 15m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 17]: Published the lifecycle order and structured TransitionResult fields as one redacted public contract.
 - [Phase 17]: Use asserted fresh source/native exports as Phase 17 proof; installed-wheel parity remains Phase 20.
 - [Phase 17]: Keep a fixed compiled throughput floor; exact rates remain environment-labelled observations.
+- [Phase 18]: Keep ordinary trigger ownership through every Phase 17 callback and failure observer.
+- [Phase 18]: Give force_state, reset, and restore distinct public labels but one private _force_state_owned body.
+- [Phase 18]: Retain direct-control best-effort Exception behavior while finally releasing after BaseException.
 
 ### Pending Todos
 
@@ -119,6 +123,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-01T20:52:55.257Z
-Stopped at: Completed 18-01-PLAN.md
+Last session: 2026-09-01T21:07:39.038Z
+Stopped at: Completed 18-02-PLAN.md
 Resume file: None
