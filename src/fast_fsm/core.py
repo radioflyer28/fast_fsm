@@ -1529,8 +1529,11 @@ class StateMachine:
                 f"No transition for trigger '{trigger}' from state '{current_name}'"
             )
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage="resolution",
             )
         declarative_handler = _resolve_declarative_handler(
             self._current_state, trigger, entry.to_state
@@ -1547,7 +1550,9 @@ class StateMachine:
             entry, current_name, trigger, args, condition_kwargs, declarative_handler
         )
 
-    def _evaluate_declarative_condition_sync(self, prepared: _PreparedDispatch) -> bool:
+    def _evaluate_declarative_condition_sync(
+        self, prepared: _PreparedDispatch, *, raise_on_error: bool = False
+    ) -> bool:
         """Evaluate one resolved declarative guard through the sync guard seam."""
         handler_info = prepared.declarative_handler
         if handler_info is None:
@@ -1584,17 +1589,19 @@ class StateMachine:
                 condition_result,
             )
             return bool(condition_result)
-        except Exception as exc:  # broad catch isolates declarative guard failures
+        except Exception as exc:  # broad catch preserves can_trigger compatibility
+            if raise_on_error:
+                raise
             source_state._logger.warning(
-                "State '%s': Condition evaluation failed for trigger '%s': %s",
+                "State '%s': Condition evaluation failed for trigger '%s' type=%s",
                 source_state.name,
                 prepared.trigger,
-                exc,
+                type(exc).__name__,
             )
             return False
 
     async def _evaluate_declarative_condition_async(
-        self, prepared: _PreparedDispatch
+        self, prepared: _PreparedDispatch, *, raise_on_error: bool = False
     ) -> bool:
         """Evaluate one resolved declarative guard through the async guard seam."""
         handler_info = prepared.declarative_handler
@@ -1627,12 +1634,14 @@ class StateMachine:
                 condition_result,
             )
             return bool(condition_result)
-        except Exception as exc:  # broad catch isolates declarative guard failures
+        except Exception as exc:  # broad catch preserves can_trigger compatibility
+            if raise_on_error:
+                raise
             source_state._logger.warning(
-                "State '%s': Async condition evaluation failed for trigger '%s': %s",
+                "State '%s': Async condition evaluation failed for trigger '%s' type=%s",
                 source_state.name,
                 prepared.trigger,
-                exc,
+                type(exc).__name__,
             )
             return False
 
@@ -2034,6 +2043,34 @@ class StateMachine:
                 )
             )
 
+    @staticmethod
+    def _build_failure_result(
+        from_state: str,
+        trigger: str,
+        error: str,
+        *,
+        stage: str,
+        to_state: Optional[str] = None,
+        committed: bool = False,
+        cause: Optional[BaseException] = None,
+    ) -> TransitionResult:
+        """Construct one staged failure without observing it.
+
+        Public trigger boundaries own observer notification through
+        :meth:`_finalize_failure`; lower resolution, guard, permission, and
+        lifecycle helpers only describe their truthful outcome here.
+        """
+        return TransitionResult(
+            False,
+            from_state=from_state,
+            to_state=to_state,
+            trigger=trigger,
+            error=error,
+            committed=committed,
+            stage=stage,
+            cause=cause,
+        )
+
     def _finalize_failure(
         self, result: TransitionResult, kwargs: Dict[str, Any]
     ) -> TransitionResult:
@@ -2134,18 +2171,14 @@ class StateMachine:
             to_state.on_enter(old_state, trigger, *args, **kwargs)
         except Exception as cause:  # callback failure is a truthful trigger result
             if fail_fast_destination_enter:
-                return self._finalize_failure(
-                    TransitionResult(
-                        False,
-                        from_state=old_state.name,
-                        to_state=to_state.name,
-                        trigger=trigger,
-                        error="Transition callback failed at destination-enter",
-                        committed=True,
-                        stage=_DESTINATION_ENTER_STAGE,
-                        cause=cause,
-                    ),
-                    kwargs,
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Transition callback failed at destination-enter",
+                    stage=_DESTINATION_ENTER_STAGE,
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=cause,
                 )
             self._logger.warning(
                 "%s: Exception in on_enter for state '%s': %s",
@@ -2230,13 +2263,7 @@ class StateMachine:
         """
         prepared = self._prepare_transition(trigger, args, kwargs)
         if isinstance(prepared, TransitionResult):
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, self._current_state.name, prepared.error, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return prepared
+            return self._finalize_failure(prepared, kwargs)
         entry = prepared.entry
         current_name = prepared.current_name
         to_state = entry.to_state
@@ -2264,41 +2291,63 @@ class StateMachine:
                     condition_result,
                 )
                 if not condition_result:
-                    error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-                    if self._on_failed_callbacks:
-                        for fn in self._on_failed_callbacks:
-                            try:
-                                fn(trigger, current_name, error_msg, **kwargs)
-                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                                self._logger.error("on_failed callback error: %s", e)
-                    return TransitionResult(
-                        False, from_state=current_name, trigger=trigger, error=error_msg
+                    error_msg = (
+                        f"Transition guard rejected trigger '{trigger}' "
+                        f"from state '{current_name}'"
                     )
-            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
-                error_msg = f"Condition '{condition_name}' raised exception: {e}"
-                self._logger.warning("%s: FAILED - %s", self._name, error_msg)
-                if self._on_failed_callbacks:
-                    for fn in self._on_failed_callbacks:
-                        try:
-                            fn(trigger, current_name, error_msg, **kwargs)
-                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                            self._logger.error("on_failed callback error: %s", e)
-                return TransitionResult(
-                    False, from_state=current_name, trigger=trigger, error=error_msg
+                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    return self._finalize_failure(
+                        self._build_failure_result(
+                            current_name,
+                            trigger,
+                            error_msg,
+                            stage="guard",
+                        ),
+                        kwargs,
+                    )
+            except Exception as cause:  # guard failure is a truthful result
+                error_msg = "Transition guard raised an exception"
+                self._logger.warning(
+                    "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        error_msg,
+                        stage="guard",
+                        cause=cause,
+                    ),
+                    kwargs,
                 )
 
-        if not self._evaluate_declarative_condition_sync(prepared):
+        try:
+            declarative_guard_passed = self._evaluate_declarative_condition_sync(
+                prepared, raise_on_error=True
+            )
+        except Exception as cause:
+            error_msg = "Transition guard raised an exception"
+            self._logger.warning(
+                "%s: FAILED guard type=%s", self._name, type(cause).__name__
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage="guard",
+                    cause=cause,
+                ),
+                kwargs,
+            )
+        if not declarative_guard_passed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name, trigger, error_msg, stage="guard"
+                ),
+                kwargs,
             )
 
         # Check if source state allows transition
@@ -2308,19 +2357,35 @@ class StateMachine:
             current_name,
             trigger,
         )
-        if not self._can_transition_after_declarative_guard(
-            trigger, to_state, args, kwargs
-        ):
+        try:
+            can_proceed = self._can_transition_after_declarative_guard(
+                trigger, to_state, args, kwargs
+            )
+        except Exception as cause:
+            error_msg = "State permission raised an exception"
+            self._logger.warning(
+                "%s: FAILED state-permission type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage="state-permission",
+                    cause=cause,
+                ),
+                kwargs,
+            )
+        if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name, trigger, error_msg, stage="state-permission"
+                ),
+                kwargs,
             )
 
         old_state = self._current_state
@@ -2332,7 +2397,7 @@ class StateMachine:
             **kwargs,
         )
         if not result.success:
-            return result
+            return self._finalize_failure(result, kwargs)
         handler_info = prepared.declarative_handler
         if handler_info is not None:
             _invoke_declarative_handler(
@@ -2599,13 +2664,7 @@ class AsyncStateMachine(StateMachine):
         """
         prepared = self._prepare_transition(trigger, args, kwargs)
         if isinstance(prepared, TransitionResult):
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, self._current_state.name, prepared.error, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return prepared
+            return self._finalize_failure(prepared, kwargs)
         entry = prepared.entry
         current_name = prepared.current_name
         to_state = entry.to_state
@@ -2634,41 +2693,63 @@ class AsyncStateMachine(StateMachine):
                     condition_result,
                 )
                 if not condition_result:
-                    error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-                    if self._on_failed_callbacks:
-                        for fn in self._on_failed_callbacks:
-                            try:
-                                fn(trigger, current_name, error_msg, **kwargs)
-                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                                self._logger.error("on_failed callback error: %s", e)
-                    return TransitionResult(
-                        False, from_state=current_name, trigger=trigger, error=error_msg
+                    error_msg = (
+                        f"Transition guard rejected trigger '{trigger}' "
+                        f"from state '{current_name}'"
                     )
-            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
-                error_msg = f"Condition '{condition_name}' raised exception: {e}"
-                self._logger.warning("%s: FAILED - %s", self._name, error_msg)
-                if self._on_failed_callbacks:
-                    for fn in self._on_failed_callbacks:
-                        try:
-                            fn(trigger, current_name, error_msg, **kwargs)
-                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                            self._logger.error("on_failed callback error: %s", e)
-                return TransitionResult(
-                    False, from_state=current_name, trigger=trigger, error=error_msg
+                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    return self._finalize_failure(
+                        self._build_failure_result(
+                            current_name,
+                            trigger,
+                            error_msg,
+                            stage="guard",
+                        ),
+                        kwargs,
+                    )
+            except Exception as cause:  # guard failure is a truthful result
+                error_msg = "Transition guard raised an exception"
+                self._logger.warning(
+                    "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        error_msg,
+                        stage="guard",
+                        cause=cause,
+                    ),
+                    kwargs,
                 )
 
-        if not await self._evaluate_declarative_condition_async(prepared):
+        try:
+            declarative_guard_passed = await self._evaluate_declarative_condition_async(
+                prepared, raise_on_error=True
+            )
+        except Exception as cause:
+            error_msg = "Transition guard raised an exception"
+            self._logger.warning(
+                "%s: FAILED guard type=%s", self._name, type(cause).__name__
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage="guard",
+                    cause=cause,
+                ),
+                kwargs,
+            )
+        if not declarative_guard_passed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name, trigger, error_msg, stage="guard"
+                ),
+                kwargs,
             )
 
         # Check if source state allows transition
@@ -2678,20 +2759,35 @@ class AsyncStateMachine(StateMachine):
             current_name,
             trigger,
         )
-        can_proceed = await self._can_transition_after_declarative_guard_async(
-            trigger, to_state, args, kwargs
-        )
+        try:
+            can_proceed = await self._can_transition_after_declarative_guard_async(
+                trigger, to_state, args, kwargs
+            )
+        except Exception as cause:
+            error_msg = "State permission raised an exception"
+            self._logger.warning(
+                "%s: FAILED state-permission type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage="state-permission",
+                    cause=cause,
+                ),
+                kwargs,
+            )
         if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name, trigger, error_msg, stage="state-permission"
+                ),
+                kwargs,
             )
 
         old_state = self._current_state
@@ -2703,7 +2799,7 @@ class AsyncStateMachine(StateMachine):
             **kwargs,
         )
         if not result.success:
-            return result
+            return self._finalize_failure(result, kwargs)
 
         handler_info = prepared.declarative_handler
         if handler_info is not None:

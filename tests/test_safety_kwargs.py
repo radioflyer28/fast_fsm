@@ -474,7 +474,7 @@ class TestConditionExceptionHandling:
     """Test exception handling in conditions"""
 
     def test_condition_exception_caught(self, basic_fsm, caplog):
-        """Test that condition exceptions are caught and logged"""
+        """Guard failures retain their cause without disclosing its text."""
         fsm, initial_state, target_state = basic_fsm
         condition = ExceptionCondition(ValueError("test error"))
 
@@ -484,13 +484,12 @@ class TestConditionExceptionHandling:
             result = fsm.trigger("test_trigger", test_arg="value")
 
         assert not result.success
-        assert (
-            result.error
-            == "Condition 'exception_condition' raised exception: test error"
-        )
-        assert (
-            "FAILED - Condition 'exception_condition' raised exception" in caplog.text
-        )
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert result.cause is condition.exception
+        assert "test error" not in result.error
+        assert "test error" not in caplog.text
+        assert "FAILED guard type=ValueError" in caplog.text
 
         # FSM state should not have changed
         assert fsm.current_state.name == "initial"
@@ -505,7 +504,8 @@ class TestConditionExceptionHandling:
 
         result = fsm.trigger("runtime_trigger")
         assert not result.success
-        assert "runtime error" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.cause is condition.exception
 
         # Test AttributeError
         condition2 = ExceptionCondition(AttributeError("attribute error"))
@@ -513,7 +513,8 @@ class TestConditionExceptionHandling:
 
         result = fsm.trigger("attr_trigger")
         assert not result.success
-        assert "attribute error" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.cause is condition2.exception
 
     def test_condition_exception_with_kwargs(self, basic_fsm):
         """Test exception handling preserves original kwargs context"""
