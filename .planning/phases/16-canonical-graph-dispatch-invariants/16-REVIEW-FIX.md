@@ -1,8 +1,8 @@
 ---
 phase: 16
-fixed_at: 2026-08-31T12:16:26Z
+fixed_at: 2026-09-01T14:59:44Z
 review_path: .planning/phases/16-canonical-graph-dispatch-invariants/16-REVIEW.md
-cycle: 4
+cycle: 5
 iteration: 2
 findings_in_scope: 3
 fixed: 3
@@ -12,9 +12,9 @@ status: all_fixed
 
 # Phase 16: Code Review Fix Report
 
-**Fixed at:** 2026-08-31T12:16:26Z
+**Fixed at:** 2026-09-01T14:59:44Z
 **Source review:** `.planning/phases/16-canonical-graph-dispatch-invariants/16-REVIEW.md`
-**Cycle / iteration:** 4 / 2
+**Cycle / iteration:** 5 / 2
 
 **Summary:**
 
@@ -24,64 +24,72 @@ status: all_fixed
 
 ## Fixed Issues
 
-### CR-01: Public type signatures reject the supported async callable-wrapper API
+### CR-01: Awaitable guard results omit generator protocol and resource ownership
 
 **Status:** Fixed: requires human verification
-**Files modified:** `src/fast_fsm/__init__.py`, `src/fast_fsm/conditions.py`, `src/fast_fsm/core.py`, `tests/test_builder.py`, `tests/test_mypyc_guard.py`, `evidence/release-baseline.json`
-**Commit:** `472833c`
-**Applied fix:** Published `GuardResult = bool | Awaitable[bool]` and
-`GuardCallable`, updated public wrappers and transition APIs to use the truthful
-contract, and re-exported both aliases from `fast_fsm` and `fast_fsm.core`.
-The downstream strict-mypy regression covers exact and inherited package/core
-wrappers with an async callable object. Focused regressions also cover the
-pre-core binding fallback and synchronous declarative rejection/closure of an
-awaitable `Condition` result; the refreshed evidence records the resulting
-coverage and inventory changes.
+**Files modified:** `src/fast_fsm/conditions.py`,
+`src/fast_fsm/core.py`, `tests/test_condition_templates.py`
+**Commits:** `ffc57ff`, `f949f25`, `2e9453e`
+**Applied fix:** Centralized protocol-complete awaitable detection, including
+generator-based coroutine awaitables created with `types.coroutine`. Deferred
+composite and negated results now own their already-created child until they
+begin execution, so closing or finalizing an unstarted parent closes that child
+exactly once. The direct check boundary remains synchronous when every child is
+synchronous, retains left-to-right short-circuiting and exactly-once execution,
+and continues to expose the public `GuardResult` contract without moving guard
+evaluation into the compiled machine evaluator.
 
-### WR-01: Architecture guide falsely claims every production instance is dictionary-free
+### CR-02: Coverage-floor migration authorization follows attacker-controlled paths
 
-**Files modified:** `docs/dev/architecture.md`
-**Commit:** `f822dcf`
-**Applied fix:** Replaced the absolute `__slots__` claim with the measured
-slots-policy rule, named the two registered instance-dictionary exceptions,
-and documented the audit command that is authoritative for maintainers.
+**Status:** Fixed: requires human verification
+**Files modified:** `tools/phase16_isolated_verify.py`,
+`tests/test_mypyc_guard.py`
+**Commit:** `e4040ff`
+**Applied fix:** Replaced migration reads through an untrusted `Path` with a
+repository-anchored, no-follow descriptor walk. Both symlinked parents and a
+symlinked manifest leaf are rejected before content is parsed. Regression tests
+exercise each escape route and prove the in-repository manifest and external
+target remain untouched.
 
-### WR-02: ADR-003 describes the compiled condition seam as both absent and present
+### WR-01: Forced-sync async entry documentation contradicts builder behavior
 
-**Files modified:** `.specify/decisions/ADR-003-mypyc-compilation-boundary.md`, `.specify/memory/spr-core-api.md`
-**Commit:** `2708964`
-**Applied fix:** Distinguished the interpreted wrapper/predicate from its
-compiled invocation bridge, removed unmeasured acceleration claims, and
-recorded the remaining profiling-and-API decision accurately.
+**Status:** Fixed
+**Files modified:** `src/fast_fsm/core.py`, `tests/test_builder.py`
+**Commit:** `9415a21`
+**Applied fix:** Aligned `on_enter_async` documentation with the forced-sync
+fail-before-publication contract and removed the unreachable warning branch.
+The regression test confirms the documented contract and that the builder does
+not publish a machine after the forced-sync preflight failure.
 
 ## Verification
 
-Source, test, evidence, and documentation edits were made in the isolated
-review-fix worktree. Origin-sensitive gates ran in fresh temporary exports:
-pure mode asserted `src/fast_fsm/core.py`, while compiled mode rebuilt and
-asserted a fresh native extension. Developer-checkout native shadows were not
-imported or removed. The final suite completed before the fast-forward; no
-source, test, evidence, or documentation file changed between that exit and
-integration.
+Source and test changes were made in an isolated review-fix worktree, then
+fast-forwarded into the main checkout before final verification. Origin-sensitive
+gates ran in fresh temporary exports: pure mode asserted
+`src/fast_fsm/core.py`; compiled mode rebuilt and asserted a fresh native core
+extension. No developer-checkout native shadow was imported or removed.
 
-- Focused direct fallback, downstream strict-mypy, and synchronous
-  awaitable-condition regressions: 3 passed (exit 0).
-- Final `uv run python tools/phase16_isolated_verify.py --suite phase16`:
-  exit 0. Fresh pure and compiled semantic matrices, the compiled
-  trigger/history performance selection, source-origin checks, Ruff
-  format/lint, mypy, the pure release gate, Sphinx HTML, three doctests, and
-  read-only release evidence all passed.
-- `task release-baseline-write`: exit 0 with 1,191/1,191 pure tests, 96.53%
-  total source coverage, and 95.06% `core.py` coverage.
-- `task release-baseline-check`: exit 0 with the same values.
-- `task typecheck-mypy`: exit 0 with no issues. Advisory `task typecheck-ty`:
-  exit 0 with no diagnostics.
+- Focused pure and fresh-compiled condition-template, migration, and builder
+  regressions: exit 0.
+- Ruff format and lint: exit 0. Strict mypy: exit 0. Pure slots-policy check:
+  exit 0.
+- `uv run python tools/phase16_isolated_verify.py --suite phase16`: exit 0.
+  It passed fresh pure and compiled semantic matrices, compiled
+  trigger/history performance selection, the full 1,221-test pure suite,
+  Ruff format/lint, mypy, Sphinx HTML, three doctests, and read-only release
+  baseline verification.
+- `uv run python tools/phase16_isolated_verify.py --suite baseline-check`:
+  exit 0.
+- The baseline was truthfully regenerated through
+  `--suite baseline-write` after coverage and test count improved. Commit
+  `d75f185` records 1,221/1,221 pure tests, 96.64% total source coverage, and
+  95.13% `core.py` coverage; no durable floor was lowered.
 
 This report is intentionally uncommitted; the review workflow owns its
 documentation commit.
 
 ---
 
-_Fixed: 2026-08-31T12:16:26Z_
+_Fixed: 2026-09-01T14:59:44Z_
 _Fixer: gsd-code-fixer_
-_Cycle / iteration: 4 / 2_
+_Cycle / iteration: 5 / 2_
