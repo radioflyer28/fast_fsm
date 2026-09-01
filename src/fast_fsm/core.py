@@ -274,8 +274,11 @@ class TransitionResult:
     to_state: Optional[str] = None
     trigger: Optional[str] = None
     error: str = ""
-    committed: bool = False
-    stage: Optional[str] = None
+    # These fields extend the legacy five-field result value.  They remain
+    # directly inspectable, but cannot change comparisons made by callers
+    # that constructed a result using the pre-lifecycle surface.
+    committed: bool = field(default=False, compare=False)
+    stage: Optional[str] = field(default=None, compare=False)
     cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
 
     def raise_if_failed(self) -> "TransitionResult":

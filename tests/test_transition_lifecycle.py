@@ -481,7 +481,6 @@ def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order()
         from_state="source",
         to_state="destination",
         trigger="advance",
-        committed=True,
     )
     assert events == [
         "before-one",
@@ -669,6 +668,12 @@ async def test_async_lifecycle_awaits_callbacks_at_their_matching_slots() -> Non
     result = await machine.trigger_async("advance", "positional", payload="caller")
 
     assert result.success is True
+    assert result == TransitionResult(
+        True,
+        from_state="source",
+        to_state="destination",
+        trigger="advance",
+    )
     assert events == [
         "source-exit",
         "exit-sync",
