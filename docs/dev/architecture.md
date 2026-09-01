@@ -158,21 +158,59 @@ build leaves the staging area mutable and repairable. Explicit async/sync
 selection remains authoritative; explicit sync rejects a detected async
 requirement before allocating a candidate.
 
-### Declarative Dispatch and History Boundaries
+### Atomic Transition Lifecycle
 
-Ordinary sync and async dispatch resolve a declarative handler by canonical
-source state, trigger, and target metadata, then invoke the selected handler
-exactly once through one private invocation seam. Compatibility
-`handle_event*()` paths delegate to that seam instead of creating a second
-dispatch route. Phase 16 intentionally does not promise a handler's
-callback-relative order, commit placement, failure/cancellation result, or
-history-on-failure behavior; Phase 17 owns that lifecycle contract.
+Ordinary sync and async triggers share the stable private
+`_LIFECYCLE_STAGES` catalog. Resolution, guard evaluation, and state permission
+happen before the lifecycle; every ordinary callback slot then belongs to one
+of three named regions:
 
-History is disabled with `None` and has no buffer allocation on the normal
-path. `enable_history(max_entries)` accepts only positive, non-boolean
-integers and replaces storage only after validation; enabled history uses
-`deque(maxlen=...)` for O(1) FIFO eviction. The public `history` property
-always returns a chronological defensive `list` copy.
+| Region | Ordered work |
+|---|---|
+| Pre-commit | before-transition listeners → source `State.on_exit` → registered source exit callbacks → exit-state listeners |
+| Commit | `_commit_transition()` updates `_current_state` and appends the optional `TransitionRecord` without a callback or await. |
+| Post-commit | destination `State.on_enter` → registered destination enter callbacks → enter-state listeners → selected declarative handler → trigger callbacks → after-transition listeners |
+
+The lifecycle labels are public result strings even though the catalog is
+private: `resolution`, `guard`, `state-permission`, `before-transition`,
+`source-exit`, `source-exit-callback`, `exit-state-listener`, `commit`,
+`destination-enter`, `destination-enter-callback`, `enter-state-listener`,
+`declarative-handler`, `trigger-callback`, and `after-transition`.
+
+`_execute_transition()` and `_execute_transition_async()` are paired direct
+runners rather than an async wrapper around a completed synchronous run. The
+async runner calls synchronous callbacks inline and awaits registered async
+source/destination callbacks at the matching source-exit/destination-enter
+slot. No automatic worker offload is implied.
+
+The first ordinary lifecycle callback exception returns a redacted
+`TransitionResult` and suppresses its remaining suffix. It never rolls back:
+pre-commit failures retain source state with `committed=False`, while
+post-commit failures retain the destination/history record with
+`committed=True`. Successful results use `success=True`, `committed=True`,
+`stage=None`, and `cause=None`; failures preserve the original exception by
+identity in hidden-from-repr `cause`. `raise_if_failed()` is the explicit
+exception boundary and chains `TransitionError` from that cause without
+formatting it into public text.
+
+All failed ordinary paths terminate through `_finalize_failure()` at the public
+trigger boundary. It preserves the existing
+`on_failed(trigger, from_state, error, **kwargs)` observer signature, invokes
+each observer exactly once in registration order, and isolates observer
+`BaseException` failures so they neither recurse nor replace the original
+result/cause. Direct `force_state()`/`reset()`/`restore()` retain their
+separate best-effort control path; they are not ordinary trigger transactions.
+
+`trigger_async()` catches `asyncio.CancelledError` only at its public boundary,
+finalizes observers once with the reached stage and commit status, then bare
+re-raises the original cancellation. It neither shields lifecycle work nor
+rolls back a commit. History remains disabled with `None` and no normal-path
+buffer allocation; enabled history uses `deque(maxlen=...)` and its public
+property returns a chronological defensive `list` copy.
+
+Reentrancy and caller ownership/serialization remain Phase 18. Diagnostic and
+logging architecture remains Phase 19. Fresh source-tree parity is documented
+below, but installed-wheel parity remains Phase 20.
 
 ## mypyc Selective Compilation
 

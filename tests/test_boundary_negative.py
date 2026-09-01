@@ -253,12 +253,14 @@ class TestSafeTrigger:
     def test_safe_trigger_catches_exception(self):
         """safe_trigger wraps any exception into a TransitionResult."""
 
+        bomb_error = RuntimeError("bomb went off")
+
         class BombCondition(Condition):
             def __init__(self):
                 super().__init__("bomb", "boom")
 
             def check(self, **kwargs) -> bool:
-                raise RuntimeError("bomb went off")
+                raise bomb_error
 
         fsm = StateMachine(State("a"), name="bomb_test")
         fsm.add_state(State("b"))
@@ -267,12 +269,16 @@ class TestSafeTrigger:
         # Normal trigger — condition exceptions are already caught by trigger()
         result = fsm.trigger("go")
         assert not result.success
-        assert "bomb went off" in result.error
+        assert result.stage == "guard"
+        assert result.cause is bomb_error
+        assert "bomb went off" not in result.error
 
         # safe_trigger should also handle it gracefully
         fsm._current_state = fsm._states["a"]
         result = fsm.safe_trigger("go")
         assert not result.success
+        assert result.stage == "guard"
+        assert "bomb went off" not in result.error
 
 
 # ---------------------------------------------------------------------------
@@ -415,4 +421,5 @@ class TestSafeTriggerEdgeCases:
         result = fsm.safe_trigger("go")
         assert not result.success
         assert result.error is not None
-        assert "exploded" in result.error
+        assert result.stage == "guard"
+        assert "exploded" not in result.error
