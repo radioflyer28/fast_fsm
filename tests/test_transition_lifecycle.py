@@ -8,6 +8,7 @@ import pytest
 
 from fast_fsm.conditions import Condition
 from fast_fsm.core import (
+    AsyncDeclarativeState,
     AsyncStateMachine,
     CallbackState,
     DeclarativeState,
@@ -599,3 +600,97 @@ def test_sync_declarative_failure_is_postcommit_and_finalized_once(
     assert machine.current_state is destination
     assert len(machine.history) == 1
     assert observer_calls == ["observer"]
+
+
+@pytest.mark.asyncio
+async def test_async_lifecycle_awaits_callbacks_at_their_matching_slots() -> None:
+    """Async callbacks run beside, rather than after, their synchronous slot."""
+    events: list[str] = []
+
+    class Source(AsyncDeclarativeState):
+        __slots__ = ()
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            events.append("source-exit")
+
+        @transition("advance")
+        async def advance(self, *args: object, **kwargs: object) -> None:
+            events.append("declarative-handler")
+
+    source = Source("source")
+    destination = CallbackState(
+        "destination",
+        on_enter=lambda *_args, **_kwargs: events.append("destination-enter"),
+    )
+    machine = AsyncStateMachine(source, name="async-lifecycle-order")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.on_exit("source", lambda *_args, **_kwargs: events.append("exit-sync"))
+
+    async def exit_async(*_args: object, **_kwargs: object) -> None:
+        events.append("exit-async")
+
+    async def enter_async(*_args: object, **_kwargs: object) -> None:
+        events.append("enter-async")
+
+    machine.on_exit_async("source", exit_async)
+    machine.on_enter(
+        "destination", lambda *_args, **_kwargs: events.append("enter-sync")
+    )
+    machine.on_enter_async("destination", enter_async)
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+    machine.after_transition(
+        lambda *_args, **_kwargs: events.append("after-transition")
+    )
+
+    result = await machine.trigger_async("advance", "positional", payload="caller")
+
+    assert result.success is True
+    assert events == [
+        "source-exit",
+        "exit-sync",
+        "exit-async",
+        "destination-enter",
+        "enter-sync",
+        "enter-async",
+        "declarative-handler",
+        "trigger-callback",
+        "after-transition",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_callback_failure_is_the_matching_staged_result() -> None:
+    """An awaited async callback fails fast without an after-the-fact suffix."""
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="async-callback-failure")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.enable_history()
+    failure = RuntimeError("async-callback-secret")
+    events: list[str] = []
+
+    async def exit_async(*_args: object, **_kwargs: object) -> None:
+        events.append("exit-async")
+        raise failure
+
+    machine.on_exit_async("source", exit_async)
+    machine.on_trigger(
+        "advance", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+    machine.on_failed(lambda *_args, **_kwargs: events.append("observer"))
+
+    result = await machine.trigger_async("advance")
+
+    assert result.success is False
+    assert result.stage == "source-exit-async-callback"
+    assert result.committed is False
+    assert result.cause is failure
+    assert machine.current_state is source
+    assert machine.history == []
+    assert events == ["exit-async", "observer"]
