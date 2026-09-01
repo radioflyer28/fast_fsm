@@ -200,13 +200,25 @@ print(hist.log)  # [('idle', 'start', 'running'), ('running', 'stop', 'idle')]
 ```
 
 Each listener can implement any combination of:
-- `before_transition(source, target, trigger, **kwargs)` — called first, before any `on_exit`
-- `on_exit_state(source, target, trigger, **kwargs)` — called after the state's own `on_exit`
-- `on_enter_state(target, source, trigger, **kwargs)` — called after the state's own `on_enter`
-- `after_transition(source, target, trigger, **kwargs)` — called last, once per successful trigger
+- `before_transition(source, target, trigger, **kwargs)` — first lifecycle callback
+- `on_exit_state(source, target, trigger, **kwargs)` — after source `on_exit` and registered source callbacks
+- `on_enter_state(target, source, trigger, **kwargs)` — after destination `on_enter` and registered destination callbacks
+- `after_transition(source, target, trigger, **kwargs)` — after the declarative handler and trigger-specific callbacks
 
-Listener exceptions are logged and **never crash the FSM**. Zero overhead when no
-listeners are registered.
+Ordinary triggers run one fail-fast transaction: before-transition listeners,
+source `on_exit`, registered source exit callbacks, and exit-state listeners
+are **pre-commit**; current state plus optional history append are the one
+non-awaiting **commit**; destination `on_enter`, registered destination enter
+callbacks, enter-state listeners, the declarative handler, trigger callbacks,
+and after-transition listeners are **post-commit**. The first lifecycle
+callback failure suppresses the remaining suffix. A pre-commit failure keeps
+the source state; a post-commit failure keeps the destination. Fast FSM does
+not roll back user side effects.
+
+`on_failed(trigger, from_state, error, **kwargs)` retains its existing call
+signature. It runs once per failed trigger in registration order; a failing
+failure observer neither changes the original result nor blocks later
+observers. Zero-overhead empty-registry checks remain on the common path.
 
 **Inline convenience methods** (no listener class needed for simple cases):
 
@@ -269,8 +281,9 @@ Payment confirmed
 
 ### Pattern 7: Error-handling with `raise_if_failed()`
 
-By default `trigger()` returns a `TransitionResult` and never raises. Use
-`raise_if_failed()` when you prefer exception-based control flow:
+By default `trigger()` returns a `TransitionResult`, including structured
+lifecycle failure information. Use `raise_if_failed()` when you prefer
+exception-based control flow:
 
 ```python
 from fast_fsm import StateMachine, TransitionError
@@ -281,9 +294,16 @@ fsm = StateMachine.quick_build(
     name="Demo",
 )
 
-# Chaining — raises TransitionError if the trigger failed
+# Inspect truth before choosing the opt-in exception boundary.
+result = fsm.trigger("start")
+if not result.success:
+    assert result.stage is not None
+    if result.committed:
+        assert fsm.current_state.name == result.to_state
+
+# Chaining — raises TransitionError if this result failed.
 try:
-    fsm.trigger("start").raise_if_failed()
+    result.raise_if_failed()
 except TransitionError as exc:
     print(f"Failed: {exc.result.error}")
 
@@ -291,6 +311,12 @@ except TransitionError as exc:
 target = fsm.trigger("stop").raise_if_failed().to_state
 print(target)  # "idle"
 ```
+
+Successful results have `committed=True`, `stage=None`, and `cause=None`.
+Failed results expose the stable lowercase `stage`, whether the commit happened
+in `committed`, and the original exception object in `cause` when there is one.
+`cause` is intentionally absent from result/error representations; do not
+format callback payloads or causes into logs.
 
 ### Pattern 8: Runtime State Control
 
@@ -479,6 +505,15 @@ async def main():
 # Run async FSM
 asyncio.run(main())
 ```
+
+Async per-state callbacks run at the same semantic slot as their synchronous
+counterparts: source exit callbacks before commit and destination enter
+callbacks after commit. Synchronous callbacks run inline; Fast FSM does not
+automatically offload them to a worker. If an awaited lifecycle operation is
+cancelled, failure observers run once for the reached stage and the original
+`asyncio.CancelledError` is re-raised. There is no shielding or rollback:
+pre-commit cancellation leaves source/history unchanged, while post-commit
+cancellation leaves the destination and its committed record intact.
 
 ## 📊 Performance Guide
 

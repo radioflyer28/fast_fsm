@@ -174,17 +174,30 @@ fsm.add_transition("emergency_reset", ["error", "processing", "waiting"], "idle"
 
 ### Error Handling
 
-By default `trigger()` returns a `TransitionResult` and never raises. Use
-`raise_if_failed()` for exception-based flow:
+By default `trigger()` returns a `TransitionResult`, including ordinary
+transition failures. Inspect its structured lifecycle fields before deciding
+whether to use exception-based flow:
 
 ```python
 from fast_fsm import TransitionError
 
-# Raises TransitionError when success is False
+# `committed` tells you whether the destination/history commit happened.
+result = fsm.trigger("start")
+if not result.success:
+    assert result.stage is not None       # stable lowercase lifecycle stage
+    assert result.cause is None or isinstance(result.cause, BaseException)
+    if result.committed:
+        # A later callback failed; the destination remains current.
+        assert fsm.current_state.name == result.to_state
+
+# Raises TransitionError only when success is False. Its original cause is
+# available through exception chaining; avoid formatting callback payloads or
+# causes into application logs.
 try:
-    fsm.trigger("start").raise_if_failed()
+    result.raise_if_failed()
 except TransitionError as exc:
-    print(exc.result.error)       # human-readable reason
+    assert exc.result is result
+    print(exc.result.error)       # concise, stage-aware reason
     print(exc.result.from_state)  # state at time of failure
 
 # Chain directly when you also need the destination
@@ -192,6 +205,11 @@ target = fsm.trigger("start").raise_if_failed().to_state
 ```
 
 `TransitionError.result` holds the original `TransitionResult` for inspection.
+Successful results have `success=True`, `committed=True`, `stage=None`, and
+`cause=None`. Failed pre-commit results preserve the source state with
+`committed=False`; failed post-commit results preserve the destination with
+`committed=True`. `cause` retains the original exception object when one
+exists, but is deliberately omitted from result representations and error text.
 
 ### Checking Active State
 
@@ -289,22 +307,33 @@ class TransitionLogger:
 fsm.add_listener(TransitionLogger())
 ```
 
-All four methods are optional — omit any you don't need. Multiple listeners can
-be registered; they are called in registration order. Listener exceptions are
-caught and logged without crashing the FSM. The empty-list guard
-(`if self._on_exit_listeners:`) means **zero overhead** when no listeners are
-attached.
+All four methods are optional — omit any you don't need. Multiple callbacks in
+every collection preserve registration order. An ordinary lifecycle callback
+failure is fail-fast: it stops the remaining lifecycle suffix, produces a
+failed `TransitionResult`, and never rolls back a completed commit. The
+empty-list guards keep the no-listener path lean.
 
-**Listener protocol — execution order per successful transition:**
+**Ordinary trigger lifecycle order:**
 
-| Method | Fires | Signature |
-|---|---|---|
-| `before_transition` | First — before any `on_exit` callback | `(source, target, trigger, **kw)` |
-| `on_exit_state` | After state's own `on_exit` | `(source, target, trigger, **kw)` |
-| `on_enter_state` | After state's own `on_enter` | `(target, source, trigger, **kw)` |
-| `after_transition` | Last — after all enter callbacks | `(source, target, trigger, **kw)` |
+| Stage | Ordered work |
+|---|---|
+| Pre-commit | `before_transition` listeners → source `State.on_exit` → registered source `on_exit` callbacks → `on_exit_state` listeners |
+| Commit | Update the current state and append one optional history record together; no user callback or async await occurs here. |
+| Post-commit | destination `State.on_enter` → registered destination `on_enter` callbacks → `on_enter_state` listeners → selected declarative handler → trigger-specific callbacks → `after_transition` listeners |
 
-**Common pattern — transition history:**
+The stable result stages identify the failing slot, including
+`before-transition`, `source-exit`, `source-exit-callback`,
+`exit-state-listener`, `destination-enter`, `destination-enter-callback`,
+`enter-state-listener`, `declarative-handler`, `trigger-callback`, and
+`after-transition` (with `resolution`, `guard`, and `state-permission` for
+pre-lifecycle failures).
+
+`on_failed(trigger, from_state, error, **kwargs)` keeps its existing
+signature. Each failed trigger invokes registered failure observers exactly
+once in registration order. An observer failure cannot replace the original
+result/cause or prevent the remaining observers from receiving their one call.
+
+**Common pattern — application-side transition history:**
 
 ```python
 class History:
@@ -323,7 +352,8 @@ fsm.add_listener(hist)
 # Fires after every successful transition
 fsm.after_transition(lambda src, tgt, t, **kw: print(f"{src.name} → {tgt.name}"))
 
-# Fires whenever a trigger attempt fails (wrong state, condition blocked, unknown trigger)
+# Fires once whenever a trigger attempt fails (wrong state, condition blocked,
+# lifecycle callback, or cancellation observation)
 fsm.on_failed(lambda t, from_s, err, **kw: print(f"BLOCKED: {t} from {from_s} — {err}"))
 
 # Fires after every successful "submit" trigger specifically
@@ -333,8 +363,9 @@ fsm.on_trigger("submit", lambda src, tgt, t, **kw: metrics.record(t))
 `clone()` copies all callbacks and listeners (shallow copy). Adding new callbacks
 to the clone after cloning does not affect the original.
 
-Listeners work identically on `AsyncStateMachine` (same `_execute_transition`
-hook, called from `trigger_async`).
+Listeners work identically on `AsyncStateMachine` through the paired async
+lifecycle runner. Synchronous callbacks still run inline; Fast FSM never
+automatically offloads them to a worker.
 
 ### Async Support
 
@@ -367,7 +398,10 @@ async def main():
 asyncio.run(main())
 ```
 
-Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()` — they fire after all synchronous callbacks, within the same `trigger_async()` call:
+Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()`.
+They are awaited at the matching source-exit or destination-enter slot,
+immediately after that slot's synchronous callbacks—not as an async tail after
+the whole transition:
 
 ```python
 async def log_alert(from_s, trigger, **kw):
@@ -375,6 +409,13 @@ async def log_alert(from_s, trigger, **kw):
 
 fsm.on_enter_async("alert", log_alert)
 ```
+
+If an awaited lifecycle operation is cancelled, `trigger_async()` invokes the
+registered failure observers once for the reached stage and re-raises the same
+`asyncio.CancelledError`. It does not shield work, roll back a completed
+transition, or invoke later lifecycle callbacks. Cancellation before commit
+leaves the source/history untouched; cancellation after commit leaves the
+destination and its one history record intact.
 
 ### Visualization
 
@@ -419,7 +460,10 @@ data["analysis"]["quality"]            # overall_score, grade, issues
 
 ### Transition History
 
-Opt-in bounded recording of every transition — zero cost when disabled:
+Opt-in bounded recording of committed transitions — zero cost when disabled.
+The machine appends each record at the internal commit point, so a pre-commit
+failure or cancellation records nothing while a later failure retains the
+already committed record:
 
 ```python
 fsm.enable_history(max_entries=1000)
