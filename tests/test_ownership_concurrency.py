@@ -1,11 +1,12 @@
 """Deterministic Wave 0 contracts for per-machine ownership admission."""
 
+import asyncio
 from dataclasses import dataclass
 import threading
 
 import pytest
 
-from fast_fsm.core import CallbackState, State, StateMachine
+from fast_fsm.core import AsyncStateMachine, CallbackState, State, StateMachine
 
 
 @dataclass(frozen=True)
@@ -130,12 +131,16 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
 @pytest.mark.parametrize(
     "case",
     tuple(
-        pytest.param(
-            case,
-            marks=pytest.mark.xfail(
-                strict=True, reason=f"RED until Plan {case.owner_plan}"
-            ),
-            id=case.identifier,
+        (
+            pytest.param(case, id=case.identifier)
+            if case.owner_plan == "18-03"
+            else pytest.param(
+                case,
+                marks=pytest.mark.xfail(
+                    strict=True, reason=f"RED until Plan {case.owner_plan}"
+                ),
+                id=case.identifier,
+            )
         )
         for case in OWNERSHIP_CONTRACT_CASES
         if case.owner_plan not in {"18-01", "18-02"}
@@ -175,7 +180,6 @@ def test_strict_red_sync_control_requires_private_owned_body() -> None:
     assert machine.current_state is source
 
 
-@pytest.mark.xfail(strict=True, reason="RED until Plan 18-03")
 def test_strict_red_async_ownership_representation_is_present() -> None:
     """Plan 18-03 owns loop/task/root state and its async admission seam."""
     from pathlib import Path
@@ -717,3 +721,138 @@ def test_sync_direct_control_validation_failures_release_ownership() -> None:
     machine.force_state("destination")
 
     assert machine.current_state is destination
+
+
+@pytest.mark.asyncio
+async def test_async_machine_binds_one_loop_before_preparing_foreign_work() -> None:
+    """A foreign loop is rejected before it can evaluate a transition guard."""
+    guard_calls: list[str] = []
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="loop-binding")
+    machine.add_state(destination)
+    machine.add_transition(
+        "advance",
+        "source",
+        "destination",
+        lambda *_args, **_kwargs: guard_calls.append("guard") or True,
+    )
+
+    assert await machine.can_trigger_async("advance")
+    assert machine._bound_loop is asyncio.get_running_loop()
+
+    outcomes: list[BaseException] = []
+
+    def use_foreign_loop() -> None:
+        async def attempt() -> None:
+            with pytest.raises(RuntimeError, match="foreign async loop"):
+                await machine.can_trigger_async("advance")
+
+        try:
+            asyncio.run(attempt())
+        except BaseException as cause:  # pragma: no cover - reported below
+            outcomes.append(cause)
+
+    foreign = threading.Thread(target=use_foreign_loop)
+    foreign.start()
+    foreign.join(timeout=5)
+
+    assert not foreign.is_alive()
+    assert outcomes == []
+    assert guard_calls == ["guard"]
+
+
+@pytest.mark.asyncio
+async def test_async_same_loop_tasks_serialize_without_blocking_heartbeat() -> None:
+    """A waiting task yields the loop while another task owns the lifecycle."""
+    owner_entered = asyncio.Event()
+    release_owner = asyncio.Event()
+    waiter_attempted = asyncio.Event()
+    heartbeat_ran = asyncio.Event()
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="same-loop-serialization")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+
+    async def hold_owner(*_args: object, **_kwargs: object) -> None:
+        owner_entered.set()
+        await release_owner.wait()
+
+    machine.on_exit_async("source", hold_owner)
+    owner = asyncio.create_task(machine.trigger_async("advance"))
+    await owner_entered.wait()
+
+    async def wait_for_machine() -> object:
+        waiter_attempted.set()
+        return await machine.trigger_async("advance")
+
+    waiter = asyncio.create_task(wait_for_machine())
+    await waiter_attempted.wait()
+
+    async def heartbeat() -> None:
+        heartbeat_ran.set()
+
+    beat = asyncio.create_task(heartbeat())
+    await heartbeat_ran.wait()
+    await beat
+    assert not waiter.done()
+
+    release_owner.set()
+    assert (await owner).success
+    assert not (await waiter).success
+
+
+@pytest.mark.asyncio
+async def test_async_waiting_and_owning_cancellation_release_for_reuse() -> None:
+    """Neither cancellation window leaves task ownership or the lock behind."""
+    owner_entered = asyncio.Event()
+    release_owner = asyncio.Event()
+    waiter_attempted = asyncio.Event()
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name="async-cancellation-reuse")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.add_transition("return", "destination", "source")
+
+    async def hold_first_exit(*_args: object, **_kwargs: object) -> None:
+        owner_entered.set()
+        await release_owner.wait()
+
+    machine.on_exit_async("source", hold_first_exit)
+    owner = asyncio.create_task(machine.trigger_async("advance"))
+    await owner_entered.wait()
+
+    async def wait_for_owner() -> object:
+        waiter_attempted.set()
+        return await machine.trigger_async("advance")
+
+    waiter = asyncio.create_task(wait_for_owner())
+    await waiter_attempted.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    release_owner.set()
+    assert (await owner).success
+    assert (await machine.trigger_async("return")).success
+
+    cancellation_entered = asyncio.Event()
+    cancel_once = True
+
+    async def cancel_owner_once(*_args: object, **_kwargs: object) -> None:
+        nonlocal cancel_once
+        if cancel_once:
+            cancel_once = False
+            cancellation_entered.set()
+            await asyncio.Event().wait()
+
+    machine.on_exit_async("source", cancel_owner_once)
+    cancelled_owner = asyncio.create_task(machine.trigger_async("advance"))
+    await cancellation_entered.wait()
+    cancelled_owner.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_owner
+
+    assert (await machine.trigger_async("advance")).success

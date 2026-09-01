@@ -15,6 +15,7 @@ Key design principles:
 import logging
 import time
 import threading
+import contextvars
 from collections import deque
 from typing import (
     Optional,
@@ -50,6 +51,14 @@ from .conditions import (
 # tuple. A marker is restored after each dispatch so nested policy calls retain
 # the outer state safely in both pure Python and mypyc builds.
 _prepared_declarative_guards: Dict[Optional[int], Tuple[int, str, int]] = {}
+
+
+# A task created by an owned async callback inherits this marker.  The marker
+# identifies a causal dispatch scope rather than a concrete Task so a parent
+# that awaits a child task cannot deadlock the machine behind itself.
+_ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
+    "_ownership_root", default=None
+)
 
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a
@@ -2780,7 +2789,17 @@ class AsyncStateMachine(StateMachine):
       callbacks for specific states at their matching lifecycle slots.
     """
 
-    __slots__ = ("_state_enter_async_callbacks", "_state_exit_async_callbacks")
+    __slots__ = (
+        "_state_enter_async_callbacks",
+        "_state_exit_async_callbacks",
+        "_async_ownership_lock",
+        "_async_admission_lock",
+        "_bound_loop",
+        "_bound_loop_thread_id",
+        "_async_owner_task",
+        "_async_owner_root",
+        "_sync_admission_reservations",
+    )
 
     def __init__(
         self,
@@ -2792,6 +2811,106 @@ class AsyncStateMachine(StateMachine):
         super().__init__(initial_state, name=name, logger_name=logger_name)
         self._state_enter_async_callbacks: Dict[str, List[Any]] = {}
         self._state_exit_async_callbacks: Dict[str, List[Any]] = {}
+        # ``asyncio.Lock`` is deliberately per machine and is touched only
+        # after the permanent loop identity has been checked.
+        self._async_ownership_lock = asyncio.Lock()
+        # This short gate only protects loop-binding and sync-admission
+        # metadata.  Async callers use non-blocking acquisition and it is
+        # never held over an await or lifecycle callback.
+        self._async_admission_lock = threading.Lock()
+        self._bound_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._bound_loop_thread_id: Optional[int] = None
+        self._async_owner_task: Optional[asyncio.Task[Any]] = None
+        self._async_owner_root: Optional[object] = None
+        self._sync_admission_reservations = 0
+
+    def _acquire_sync_ownership(self, operation: str) -> int:
+        """Apply the async machine's mixed sync/async writer policy.
+
+        Before async binding, inherited synchronous public writers retain the
+        base machine's per-instance serialization.  A bound machine accepts
+        those writers only from its loop thread while no async operation owns
+        the lifecycle.  The small metadata gate closes the bind-vs-sync race;
+        it is released before the normal synchronous lock can block.
+        """
+        owner_thread_id = threading.get_ident()
+        self._async_admission_lock.acquire()
+        try:
+            if self._bound_loop is not None:
+                if self._bound_loop_thread_id != owner_thread_id:
+                    raise RuntimeError(
+                        "FSM ownership violation: foreign async-machine writer"
+                    )
+                if self._async_owner_task is not None:
+                    raise RuntimeError("FSM ownership violation: async machine busy")
+            self._sync_admission_reservations += 1
+        finally:
+            self._async_admission_lock.release()
+
+        try:
+            return super()._acquire_sync_ownership(operation)
+        except BaseException:
+            self._release_sync_admission_reservation()
+            raise
+
+    def _release_sync_admission_reservation(self) -> None:
+        """Drop one sync writer reservation without exposing async metadata."""
+        self._async_admission_lock.acquire()
+        try:
+            if self._sync_admission_reservations <= 0:
+                raise RuntimeError("FSM ownership violation: invalid sync release")
+            self._sync_admission_reservations -= 1
+        finally:
+            self._async_admission_lock.release()
+
+    def _release_sync_ownership(self, owner_thread_id: int) -> None:
+        """Release base ownership and its matching mixed-mode reservation."""
+        try:
+            super()._release_sync_ownership(owner_thread_id)
+        finally:
+            self._release_sync_admission_reservation()
+
+    def _bind_or_check_async_loop(self, operation: str) -> asyncio.AbstractEventLoop:
+        """Bind this machine once, or reject a different loop before work."""
+        loop = asyncio.get_running_loop()
+        if not self._async_admission_lock.acquire(blocking=False):
+            raise RuntimeError("FSM ownership violation: async admission busy")
+        try:
+            if self._sync_admission_reservations:
+                raise RuntimeError("FSM ownership violation: sync machine busy")
+            if self._bound_loop is None:
+                self._bound_loop = loop
+                self._bound_loop_thread_id = threading.get_ident()
+            elif self._bound_loop is not loop:
+                raise RuntimeError("FSM ownership violation: foreign async loop")
+            elif self._bound_loop_thread_id != threading.get_ident():
+                raise RuntimeError("FSM ownership violation: foreign async thread")
+        finally:
+            self._async_admission_lock.release()
+        return loop
+
+    async def _acquire_async_ownership(self, operation: str) -> asyncio.Task[Any]:
+        """Await this machine's async lock after permanent-loop prechecks."""
+        self._bind_or_check_async_loop(operation)
+        await self._async_ownership_lock.acquire()
+        try:
+            task = asyncio.current_task()
+            if task is None:
+                raise RuntimeError("FSM ownership violation: missing async task")
+            self._async_owner_task = task
+            return task
+        except BaseException:
+            self._async_ownership_lock.release()
+            raise
+
+    def _release_async_ownership(self, owner_task: asyncio.Task[Any]) -> None:
+        """Clear owner metadata and release the async lock on every exit."""
+        try:
+            if self._async_owner_task is not owner_task:
+                raise RuntimeError("FSM ownership violation: foreign async release")
+            self._async_owner_task = None
+        finally:
+            self._async_ownership_lock.release()
 
     def on_enter_async(self, state_name: str, callback: Any) -> None:
         """Register an ``async`` callback fired when the machine enters *state_name*.
@@ -3082,6 +3201,7 @@ class AsyncStateMachine(StateMachine):
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
+        self._bind_or_check_async_loop("can_trigger_async")
         prepared = self._prepare_transition(trigger, args, kwargs)
         if isinstance(prepared, TransitionResult):
             return False
@@ -3131,6 +3251,16 @@ class AsyncStateMachine(StateMachine):
             _reset_prepared_declarative_guard(scope_key, previous)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
+        """Run one owned async transition with permanent-loop admission."""
+        owner_task = await self._acquire_async_ownership("trigger_async")
+        try:
+            return await self._trigger_async_owned(trigger, *args, **kwargs)
+        finally:
+            self._release_async_ownership(owner_task)
+
+    async def _trigger_async_owned(
+        self, trigger: str, *args, **kwargs
+    ) -> TransitionResult:
         """Run one async transition with same-slot callback and cancellation semantics.
 
         Synchronous callbacks run inline.  Registered asynchronous callbacks
