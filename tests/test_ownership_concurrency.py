@@ -104,6 +104,8 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
 
     source = (Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py").read_text()
     if case.owner_plan == "18-02":
+        if case.identifier in {"OWN-01-direct-reentry", "OWN-02-full-envelope"}:
+            return "def _trigger_owned" in source
         return "_force_state_owned" in source
     if case.owner_plan == "18-03":
         return "_acquire_async_ownership" in source and "_ownership_root" in source
@@ -136,13 +138,30 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
             id=case.identifier,
         )
         for case in OWNERSHIP_CONTRACT_CASES
-        if case.owner_plan != "18-01"
+        # Plan 18-02 turns the ordinary trigger rows green in Task 1.  Its
+        # direct-control release row remains a strict RED contract until Task 2
+        # adds the private control body.
+        if case.owner_plan not in {"18-01", "18-02"}
+        or case.identifier == "OWN-06-sync-release"
     ),
 )
 def test_strict_red_contract_row_has_one_owning_plan(
     case: OwnershipContractCase,
 ) -> None:
     """Every unimplemented behavior fails deterministically until its owner acts."""
+    assert _future_contract_row_is_implemented(case), case.scenario
+
+
+@pytest.mark.parametrize(
+    "case",
+    tuple(
+        case
+        for case in OWNERSHIP_CONTRACT_CASES
+        if case.owner_plan == "18-02" and case.identifier != "OWN-06-sync-release"
+    ),
+)
+def test_sync_trigger_contract_row_is_green(case: OwnershipContractCase) -> None:
+    """The ordinary trigger rows have exactly one owned private body."""
     assert _future_contract_row_is_implemented(case), case.scenario
 
 
@@ -390,3 +409,185 @@ def test_sync_thread_tracer_serializes_one_machine_without_global_lock() -> None
     assert results == [True, True, True]
     assert machine.current_state is source
     assert other_machine.current_state is other_destination
+
+
+@pytest.mark.parametrize(
+    ("outer_stage", "committed"),
+    (
+        ("before-transition", False),
+        ("source-exit", False),
+        ("source-exit-callback", False),
+        ("exit-state-listener", False),
+        ("destination-enter", True),
+        ("destination-enter-callback", True),
+        ("enter-state-listener", True),
+        ("trigger-callback", True),
+        ("after-transition", True),
+    ),
+)
+def test_sync_uncaught_reentry_preserves_the_outer_lifecycle_stage(
+    outer_stage: str, committed: bool
+) -> None:
+    """Every synchronous lifecycle callback rejects nested work before preparation."""
+    nested_calls: list[str] = []
+    machine: StateMachine
+
+    def reenter(*_args: object, **_kwargs: object) -> None:
+        nested_calls.append("attempted")
+        machine.trigger("nested", payload="nested-secret")
+
+    source = CallbackState(
+        "source", on_exit=reenter if outer_stage == "source-exit" else None
+    )
+    destination = CallbackState(
+        "destination",
+        on_enter=reenter if outer_stage == "destination-enter" else None,
+    )
+    alternate = State("alternate")
+    machine = StateMachine(source, name=f"ownership-{outer_stage}")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", "source", "destination")
+    machine.add_transition("nested", "source", "alternate")
+    machine.add_transition("nested", "destination", "alternate")
+    machine.enable_history()
+
+    class Listener:
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            if outer_stage == "before-transition":
+                reenter()
+
+        def on_exit_state(self, *_args: object, **_kwargs: object) -> None:
+            if outer_stage == "exit-state-listener":
+                reenter()
+
+        def on_enter_state(self, *_args: object, **_kwargs: object) -> None:
+            if outer_stage == "enter-state-listener":
+                reenter()
+
+        def after_transition(self, *_args: object, **_kwargs: object) -> None:
+            if outer_stage == "after-transition":
+                reenter()
+
+    machine.add_listener(Listener())
+    if outer_stage == "source-exit-callback":
+        machine.on_exit("source", reenter)
+    if outer_stage == "destination-enter-callback":
+        machine.on_enter("destination", reenter)
+    if outer_stage == "trigger-callback":
+        machine.on_trigger("outer", reenter)
+
+    result = machine.trigger("outer", payload="outer-secret")
+
+    assert result.success is False
+    assert result.stage == outer_stage
+    assert result.committed is committed
+    assert result.cause is not None
+    assert "nested-secret" not in result.error
+    assert "nested-secret" not in str(result.cause)
+    assert nested_calls == ["attempted"]
+    assert machine.current_state is (destination if committed else source)
+    assert [record.trigger for record in machine.history] == (
+        ["outer"] if committed else []
+    )
+
+
+@pytest.mark.parametrize("outer_stage", ("source-exit", "after-transition"))
+def test_sync_caught_reentry_allows_the_outer_lifecycle_to_continue(
+    outer_stage: str,
+) -> None:
+    """A callback may explicitly handle the redacted admission failure."""
+    events: list[str] = []
+    machine: StateMachine
+
+    def caught_reentry(*_args: object, **_kwargs: object) -> None:
+        with pytest.raises(
+            RuntimeError, match=r"^FSM ownership violation: reentrant trigger$"
+        ):
+            machine.trigger("nested", payload="nested-secret")
+        events.append("nested-rejected")
+
+    source = CallbackState(
+        "source", on_exit=caught_reentry if outer_stage == "source-exit" else None
+    )
+    destination = State("destination")
+    alternate = State("alternate")
+    machine = StateMachine(source, name=f"ownership-caught-{outer_stage}")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", "source", "destination")
+    machine.add_transition("nested", "source", "alternate")
+    machine.add_transition("nested", "destination", "alternate")
+
+    if outer_stage == "after-transition":
+        machine.after_transition(caught_reentry)
+
+    result = machine.trigger("outer", payload="outer-secret")
+
+    assert result.success is True
+    assert machine.current_state is destination
+    assert events == ["nested-rejected"]
+
+
+@pytest.mark.parametrize("observer_error", (KeyboardInterrupt, SystemExit))
+def test_sync_finalizer_holds_ownership_until_baseexception_observer_returns(
+    observer_error: type[BaseException],
+) -> None:
+    """A contender cannot reach lifecycle code until failure finalization ends."""
+    finalizer_started = threading.Event()
+    release_finalizer = threading.Event()
+    contender_attempted = threading.Event()
+    contender_entered_lifecycle = threading.Event()
+    outcomes: list[bool] = []
+    fail_once = True
+
+    def fail_outer(*_args: object, **_kwargs: object) -> None:
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            raise RuntimeError("outer-secret")
+
+    def blocking_observer(*_args: object, **_kwargs: object) -> None:
+        finalizer_started.set()
+        assert contender_attempted.wait(timeout=5)
+        assert not contender_entered_lifecycle.is_set()
+        assert release_finalizer.wait(timeout=5)
+        raise observer_error("observer-secret")
+
+    class Listener:
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            if finalizer_started.is_set():
+                contender_entered_lifecycle.set()
+
+    source = CallbackState("source", on_exit=fail_outer)
+    destination = State("destination")
+    machine = StateMachine(source, name="ownership-finalizer")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+    machine.add_listener(Listener())
+    machine.on_failed(blocking_observer)
+
+    def run_outer() -> None:
+        outcomes.append(machine.trigger("advance").success)
+
+    def run_contender() -> None:
+        assert finalizer_started.wait(timeout=5)
+        contender_attempted.set()
+        outcomes.append(machine.trigger("advance").success)
+
+    outer = threading.Thread(target=run_outer)
+    contender = threading.Thread(target=run_contender)
+    outer.start()
+    assert finalizer_started.wait(timeout=5)
+    contender.start()
+    assert contender_attempted.wait(timeout=5)
+    assert not contender_entered_lifecycle.wait(timeout=0.05)
+    release_finalizer.set()
+    outer.join(timeout=5)
+    contender.join(timeout=5)
+
+    assert not outer.is_alive()
+    assert not contender.is_alive()
+    assert outcomes == [False, True]
+    assert contender_entered_lifecycle.is_set()
+    assert machine.current_state is destination

@@ -376,6 +376,29 @@ def test_failure_observer_registration_starts_with_the_next_sync_failure() -> No
     assert events == ["registered", "registered", "added"]
 
 
+def test_sync_failure_observer_reentry_is_rejected_inside_the_outer_finalizer() -> None:
+    """Failure observers cannot prepare a nested transition while one is finalizing."""
+    machine = StateMachine(State("source"), name="observer-reentry-sync")
+    events: list[str] = []
+
+    def reentering_observer(*_args: object, **_kwargs: object) -> None:
+        with pytest.raises(
+            RuntimeError, match=r"^FSM ownership violation: reentrant trigger$"
+        ):
+            machine.trigger("missing", payload="nested-secret")
+        events.append("nested-rejected")
+
+    machine.on_failed(reentering_observer)
+    machine.on_failed(lambda *_args, **_kwargs: events.append("later-observer"))
+
+    result = machine.trigger("missing", payload="outer-secret")
+
+    assert result.success is False
+    assert result.stage == "resolution"
+    assert "outer-secret" not in result.error
+    assert events == ["nested-rejected", "later-observer"]
+
+
 def test_sync_commit_failure_is_precommit_and_finalized_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
