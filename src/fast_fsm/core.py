@@ -52,25 +52,40 @@ _prepared_declarative_guards: Dict[Optional[int], Tuple[int, str, int]] = {}
 
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a
-# failure result without importing a private implementation type. Later Phase
-# 17 slices route the remaining labels through the same execution seams.
+# failure result without importing a private implementation type. Every stage
+# producer consumes these constants; the tuple below is the corresponding
+# catalog for contract validation and documentation.
+_LIFECYCLE_STAGE_RESOLUTION = "resolution"
+_LIFECYCLE_STAGE_GUARD = "guard"
+_LIFECYCLE_STAGE_STATE_PERMISSION = "state-permission"
+_LIFECYCLE_STAGE_BEFORE_TRANSITION = "before-transition"
+_LIFECYCLE_STAGE_SOURCE_EXIT = "source-exit"
+_LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK = "source-exit-callback"
+_LIFECYCLE_STAGE_EXIT_STATE_LISTENER = "exit-state-listener"
+_LIFECYCLE_STAGE_COMMIT = "commit"
+_LIFECYCLE_STAGE_DESTINATION_ENTER = "destination-enter"
+_LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK = "destination-enter-callback"
+_LIFECYCLE_STAGE_ENTER_STATE_LISTENER = "enter-state-listener"
+_LIFECYCLE_STAGE_DECLARATIVE_HANDLER = "declarative-handler"
+_LIFECYCLE_STAGE_TRIGGER_CALLBACK = "trigger-callback"
+_LIFECYCLE_STAGE_AFTER_TRANSITION = "after-transition"
+
 _LIFECYCLE_STAGES: Tuple[str, ...] = (
-    "resolution",
-    "guard",
-    "state-permission",
-    "before-transition",
-    "source-exit",
-    "source-exit-callback",
-    "exit-state-listener",
-    "commit",
-    "destination-enter",
-    "destination-enter-callback",
-    "enter-state-listener",
-    "declarative-handler",
-    "trigger-callback",
-    "after-transition",
+    _LIFECYCLE_STAGE_RESOLUTION,
+    _LIFECYCLE_STAGE_GUARD,
+    _LIFECYCLE_STAGE_STATE_PERMISSION,
+    _LIFECYCLE_STAGE_BEFORE_TRANSITION,
+    _LIFECYCLE_STAGE_SOURCE_EXIT,
+    _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
+    _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
+    _LIFECYCLE_STAGE_COMMIT,
+    _LIFECYCLE_STAGE_DESTINATION_ENTER,
+    _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
+    _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
+    _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+    _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
+    _LIFECYCLE_STAGE_AFTER_TRANSITION,
 )
-_DESTINATION_ENTER_STAGE = "destination-enter"
 
 
 def _prepared_guard_scope_key() -> Optional[int]:
@@ -1537,7 +1552,7 @@ class StateMachine:
                 current_name,
                 trigger,
                 error_msg,
-                stage="resolution",
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
             )
         declarative_handler = _resolve_declarative_handler(
             self._current_state, trigger, entry.to_state
@@ -2046,6 +2061,7 @@ class StateMachine:
                 old_state.name, trigger, to_state.name, time.monotonic()
             )
         if record is not None:
+            assert history is not None
             history.append(record)
         self._current_state = to_state
 
@@ -2148,7 +2164,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "before-transition",
+                        _LIFECYCLE_STAGE_BEFORE_TRANSITION,
                         cause,
                         committed=False,
                     )
@@ -2170,7 +2186,7 @@ class StateMachine:
                 old_state,
                 to_state,
                 trigger,
-                "source-exit",
+                _LIFECYCLE_STAGE_SOURCE_EXIT,
                 cause,
                 committed=False,
             )
@@ -2185,7 +2201,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "source-exit-callback",
+                        _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
                         cause,
                         committed=False,
                     )
@@ -2200,7 +2216,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "exit-state-listener",
+                        _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
                         cause,
                         committed=False,
                     )
@@ -2214,7 +2230,7 @@ class StateMachine:
                 old_state,
                 to_state,
                 trigger,
-                "commit",
+                _LIFECYCLE_STAGE_COMMIT,
                 cause,
                 committed=False,
             )
@@ -2227,7 +2243,7 @@ class StateMachine:
                 old_state,
                 to_state,
                 trigger,
-                "destination-enter",
+                _LIFECYCLE_STAGE_DESTINATION_ENTER,
                 cause,
                 committed=True,
             )
@@ -2242,7 +2258,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "destination-enter-callback",
+                        _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
                         cause,
                         committed=True,
                     )
@@ -2257,7 +2273,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "enter-state-listener",
+                        _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
                         cause,
                         committed=True,
                     )
@@ -2272,7 +2288,7 @@ class StateMachine:
                     old_state.name,
                     trigger,
                     "Declarative handler failed",
-                    stage="declarative-handler",
+                    stage=_LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
                     to_state=to_state.name,
                     committed=True,
                     cause=declarative_result.cause,
@@ -2294,7 +2310,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "trigger-callback",
+                        _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
                         cause,
                         committed=True,
                     )
@@ -2308,7 +2324,7 @@ class StateMachine:
                         old_state,
                         to_state,
                         trigger,
-                        "after-transition",
+                        _LIFECYCLE_STAGE_AFTER_TRANSITION,
                         cause,
                         committed=True,
                     )
@@ -2336,8 +2352,9 @@ class StateMachine:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=before-transition type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_BEFORE_TRANSITION,
                         type(cause).__name__,
                     )
 
@@ -2345,8 +2362,9 @@ class StateMachine:
             old_state.on_exit(to_state, trigger)
         except Exception as cause:
             self._logger.warning(
-                "%s: control callback failed stage=source-exit type=%s",
+                "%s: control callback failed stage=%s type=%s",
                 self._name,
+                _LIFECYCLE_STAGE_SOURCE_EXIT,
                 type(cause).__name__,
             )
 
@@ -2357,8 +2375,9 @@ class StateMachine:
                     fn(to_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=source-exit-callback type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
                         type(cause).__name__,
                     )
 
@@ -2368,8 +2387,9 @@ class StateMachine:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=exit-state-listener type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
                         type(cause).__name__,
                     )
 
@@ -2379,8 +2399,9 @@ class StateMachine:
             to_state.on_enter(old_state, trigger)
         except Exception as cause:
             self._logger.warning(
-                "%s: control callback failed stage=destination-enter type=%s",
+                "%s: control callback failed stage=%s type=%s",
                 self._name,
+                _LIFECYCLE_STAGE_DESTINATION_ENTER,
                 type(cause).__name__,
             )
 
@@ -2391,8 +2412,9 @@ class StateMachine:
                     fn(old_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=destination-enter-callback type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
                         type(cause).__name__,
                     )
 
@@ -2402,8 +2424,9 @@ class StateMachine:
                     fn(to_state, old_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=enter-state-listener type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
                         type(cause).__name__,
                     )
 
@@ -2413,8 +2436,9 @@ class StateMachine:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=after-transition type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_AFTER_TRANSITION,
                         type(cause).__name__,
                     )
 
@@ -2425,8 +2449,9 @@ class StateMachine:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
                     self._logger.warning(
-                        "%s: control callback failed stage=trigger-callback type=%s",
+                        "%s: control callback failed stage=%s type=%s",
                         self._name,
+                        _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
                         type(cause).__name__,
                     )
 
@@ -2485,7 +2510,7 @@ class StateMachine:
                             current_name,
                             trigger,
                             error_msg,
-                            stage="guard",
+                            stage=_LIFECYCLE_STAGE_GUARD,
                         ),
                         kwargs,
                     )
@@ -2499,7 +2524,7 @@ class StateMachine:
                         current_name,
                         trigger,
                         error_msg,
-                        stage="guard",
+                        stage=_LIFECYCLE_STAGE_GUARD,
                         cause=cause,
                     ),
                     kwargs,
@@ -2519,7 +2544,7 @@ class StateMachine:
                     current_name,
                     trigger,
                     error_msg,
-                    stage="guard",
+                    stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
                 ),
                 kwargs,
@@ -2529,7 +2554,10 @@ class StateMachine:
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             return self._finalize_failure(
                 self._build_failure_result(
-                    current_name, trigger, error_msg, stage="guard"
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_GUARD,
                 ),
                 kwargs,
             )
@@ -2557,7 +2585,7 @@ class StateMachine:
                     current_name,
                     trigger,
                     error_msg,
-                    stage="state-permission",
+                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                     cause=cause,
                 ),
                 kwargs,
@@ -2567,7 +2595,10 @@ class StateMachine:
             self._logger.debug("%s: FAILED - %s", self._name, error_msg)
             return self._finalize_failure(
                 self._build_failure_result(
-                    current_name, trigger, error_msg, stage="state-permission"
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 ),
                 kwargs,
             )
@@ -2801,7 +2832,7 @@ class AsyncStateMachine(StateMachine):
         """
         old_state = self._current_state
 
-        lifecycle_stage[0] = "before-transition"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_BEFORE_TRANSITION
         for fn in self._before_listeners:
             try:
                 fn(old_state, to_state, trigger, **kwargs)
@@ -2823,7 +2854,7 @@ class AsyncStateMachine(StateMachine):
             to_state.name,
         )
 
-        lifecycle_stage[0] = "source-exit"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_SOURCE_EXIT
         try:
             old_state.on_exit(to_state, trigger, *args, **kwargs)
         except Exception as cause:
@@ -2836,7 +2867,7 @@ class AsyncStateMachine(StateMachine):
                 committed=False,
             )
 
-        lifecycle_stage[0] = "source-exit-callback"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK
         for fn in self._state_exit_callbacks.get(old_state.name, ()):
             try:
                 fn(to_state, trigger, **kwargs)
@@ -2862,7 +2893,7 @@ class AsyncStateMachine(StateMachine):
                     committed=False,
                 )
 
-        lifecycle_stage[0] = "exit-state-listener"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_EXIT_STATE_LISTENER
         for fn in self._on_exit_listeners:
             try:
                 fn(old_state, to_state, trigger, **kwargs)
@@ -2876,7 +2907,7 @@ class AsyncStateMachine(StateMachine):
                     committed=False,
                 )
 
-        lifecycle_stage[0] = "commit"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_COMMIT
         try:
             self._commit_transition(old_state, to_state, trigger)
         except Exception as cause:
@@ -2890,7 +2921,7 @@ class AsyncStateMachine(StateMachine):
             )
         committed[0] = True
 
-        lifecycle_stage[0] = "destination-enter"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DESTINATION_ENTER
         try:
             to_state.on_enter(old_state, trigger, *args, **kwargs)
         except Exception as cause:
@@ -2903,7 +2934,7 @@ class AsyncStateMachine(StateMachine):
                 committed=True,
             )
 
-        lifecycle_stage[0] = "destination-enter-callback"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK
         for fn in self._state_enter_callbacks.get(to_state.name, ()):
             try:
                 fn(old_state, trigger, **kwargs)
@@ -2929,7 +2960,7 @@ class AsyncStateMachine(StateMachine):
                     committed=True,
                 )
 
-        lifecycle_stage[0] = "enter-state-listener"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_ENTER_STATE_LISTENER
         for fn in self._on_enter_listeners:
             try:
                 fn(to_state, old_state, trigger, **kwargs)
@@ -2943,7 +2974,7 @@ class AsyncStateMachine(StateMachine):
                     committed=True,
                 )
 
-        lifecycle_stage[0] = "declarative-handler"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DECLARATIVE_HANDLER
         if declarative_handler is not None:
             declarative_result = await _invoke_declarative_handler_for_transition_async(
                 old_state, declarative_handler, trigger, args, kwargs
@@ -2963,7 +2994,7 @@ class AsyncStateMachine(StateMachine):
             "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
         )
 
-        lifecycle_stage[0] = "trigger-callback"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_TRIGGER_CALLBACK
         for fn in self._trigger_callbacks.get(trigger, ()):
             try:
                 fn(old_state, to_state, trigger, **kwargs)
@@ -2977,7 +3008,7 @@ class AsyncStateMachine(StateMachine):
                     committed=True,
                 )
 
-        lifecycle_stage[0] = "after-transition"
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_AFTER_TRANSITION
         for fn in self._after_listeners:
             try:
                 fn(old_state, to_state, trigger, **kwargs)
@@ -3066,7 +3097,7 @@ class AsyncStateMachine(StateMachine):
         to_state = entry.to_state
         condition = entry.condition
         old_state = self._current_state
-        lifecycle_stage = ["guard"]
+        lifecycle_stage = [_LIFECYCLE_STAGE_GUARD]
         committed = [False]
 
         try:
@@ -3097,7 +3128,10 @@ class AsyncStateMachine(StateMachine):
                         )
                         return self._finalize_failure(
                             self._build_failure_result(
-                                current_name, trigger, error_msg, stage="guard"
+                                current_name,
+                                trigger,
+                                error_msg,
+                                stage=_LIFECYCLE_STAGE_GUARD,
                             ),
                             kwargs,
                         )
@@ -3110,7 +3144,7 @@ class AsyncStateMachine(StateMachine):
                             current_name,
                             trigger,
                             "Transition guard raised an exception",
-                            stage="guard",
+                            stage=_LIFECYCLE_STAGE_GUARD,
                             cause=cause,
                         ),
                         kwargs,
@@ -3131,7 +3165,7 @@ class AsyncStateMachine(StateMachine):
                         current_name,
                         trigger,
                         "Transition guard raised an exception",
-                        stage="guard",
+                        stage=_LIFECYCLE_STAGE_GUARD,
                         cause=cause,
                     ),
                     kwargs,
@@ -3140,12 +3174,15 @@ class AsyncStateMachine(StateMachine):
                 error_msg = f"State '{current_name}' rejected transition '{trigger}'"
                 return self._finalize_failure(
                     self._build_failure_result(
-                        current_name, trigger, error_msg, stage="guard"
+                        current_name,
+                        trigger,
+                        error_msg,
+                        stage=_LIFECYCLE_STAGE_GUARD,
                     ),
                     kwargs,
                 )
 
-            lifecycle_stage[0] = "state-permission"
+            lifecycle_stage[0] = _LIFECYCLE_STAGE_STATE_PERMISSION
             try:
                 can_proceed = await self._can_transition_after_declarative_guard_async(
                     trigger, to_state, args, kwargs
@@ -3295,16 +3332,18 @@ def _invoke_declarative_handler_for_transition(
     logger = cast(DeclarativeState, source_state)._logger
     if handler_info["is_async"]:
         logger.warning(
-            "State '%s': declarative handler failed stage=declarative-handler type=async",
+            "State '%s': declarative handler failed stage=%s type=async",
             source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
         )
         return TransitionResult(False)
     try:
         raw_result = method(*args, **kwargs)
     except Exception as cause:
         logger.warning(
-            "State '%s': declarative handler failed stage=declarative-handler type=%s",
+            "State '%s': declarative handler failed stage=%s type=%s",
             source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
             type(cause).__name__,
         )
         return TransitionResult(False, cause=cause)
@@ -3335,8 +3374,9 @@ async def _invoke_declarative_handler_for_transition_async(
         )
     except Exception as cause:
         logger.warning(
-            "State '%s': declarative handler failed stage=declarative-handler type=%s",
+            "State '%s': declarative handler failed stage=%s type=%s",
             source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
             type(cause).__name__,
         )
         return TransitionResult(False, cause=cause)

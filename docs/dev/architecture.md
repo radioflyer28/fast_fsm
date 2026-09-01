@@ -160,7 +160,8 @@ requirement before allocating a candidate.
 
 ### Atomic Transition Lifecycle
 
-Ordinary sync and async triggers share the stable private
+Ordinary sync and async triggers share stable private
+`_LIFECYCLE_STAGE_*` constants, collected in the ordered
 `_LIFECYCLE_STAGES` catalog. Resolution, guard evaluation, and state permission
 happen before the lifecycle; every ordinary callback slot then belongs to one
 of three named regions:

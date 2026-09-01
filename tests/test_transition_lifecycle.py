@@ -3,11 +3,13 @@
 from dataclasses import dataclass
 import asyncio
 import logging
+import time
 
 import pytest
 
 from fast_fsm.conditions import AsyncCondition, Condition
 from fast_fsm.core import (
+    _LIFECYCLE_STAGES,
     AsyncDeclarativeState,
     AsyncStateMachine,
     CallbackState,
@@ -134,6 +136,26 @@ def test_lifecycle_probe_inventory_accounts_for_all_spec_less_families() -> None
         ("LIFE-05", "17-04"),
         ("LIFE-06", "17-04"),
     ]
+
+
+def test_lifecycle_stage_catalog_covers_every_produced_result_stage() -> None:
+    """The pure/native lifecycle matrix shares one ordered stage vocabulary."""
+    assert _LIFECYCLE_STAGES == (
+        "resolution",
+        "guard",
+        "state-permission",
+        "before-transition",
+        "source-exit",
+        "source-exit-callback",
+        "exit-state-listener",
+        "commit",
+        "destination-enter",
+        "destination-enter-callback",
+        "enter-state-listener",
+        "declarative-handler",
+        "trigger-callback",
+        "after-transition",
+    )
 
 
 def test_tracer_destination_enter_failure_commits_and_finalizes_once(
@@ -368,10 +390,10 @@ def test_sync_commit_failure_is_precommit_and_finalized_once(
     machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
     failure = OSError("clock-secret")
 
-    def fail_record(*_args: object) -> None:
+    def fail_clock() -> float:
         raise failure
 
-    monkeypatch.setattr("fast_fsm.core.TransitionRecord", fail_record)
+    monkeypatch.setattr("fast_fsm.core.time.monotonic", fail_clock)
 
     result = machine.trigger("advance")
 
@@ -472,10 +494,22 @@ async def test_async_commit_failure_is_precommit_and_finalized_once(
     machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
     failure = OSError("async-clock-secret")
 
-    def fail_record(*_args: object) -> None:
-        raise failure
+    original_monotonic = time.monotonic
+    fail_next_clock_read = True
 
-    monkeypatch.setattr("fast_fsm.core.TransitionRecord", fail_record)
+    def fail_clock_once() -> float:
+        nonlocal fail_next_clock_read
+        if fail_next_clock_read:
+            fail_next_clock_read = False
+            raise failure
+        return original_monotonic()
+
+    def install_clock_fault(*_args: object, **_kwargs: object) -> None:
+        # This synchronous source callback is the final user callback before
+        # the no-await commit seam, so the next clock read belongs to commit.
+        monkeypatch.setattr("fast_fsm.core.time.monotonic", fail_clock_once)
+
+    machine.on_exit("source", install_clock_fault)
 
     result = await machine.trigger_async("advance")
 
@@ -486,6 +520,7 @@ async def test_async_commit_failure_is_precommit_and_finalized_once(
     assert machine.current_state is source
     assert machine.history == []
     assert observed == ["observer"]
+    assert fail_next_clock_read is False
 
 
 def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order() -> (
