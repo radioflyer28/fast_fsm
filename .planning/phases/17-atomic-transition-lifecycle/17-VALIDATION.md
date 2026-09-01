@@ -1,9 +1,9 @@
 ---
 phase: 17
 slug: atomic-transition-lifecycle
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-09-01
 ---
 
@@ -40,11 +40,11 @@ created: 2026-09-01
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 17-01-01 | 01 | 0 | LIFE-01–06 | T-17-01–08 | Executable scenario matrix defines order, stage, state, history, cause, observer, cancellation, and parity outcomes | unit/integration | `uv run pytest tests/test_transition_lifecycle.py -x -q` | ❌ W0 | ⬜ pending |
-| 17-02-01 | 02 | 1 | LIFE-02, LIFE-04 | T-17-03, T-17-04 | Additive result contract preserves cause without disclosure and finalizes failures once | unit/API | `uv run pytest tests/test_transition_lifecycle.py tests/test_boundary_negative.py tests/test_mypyc_guard.py -x -q` | mixed | ⬜ pending |
-| 17-03-01 | 03 | 2 | LIFE-01–05 | T-17-01–04 | Sync runner fails fast and commits state/history atomically | integration | `uv run pytest tests/test_transition_lifecycle.py tests/test_advanced_functionality.py tests/test_listeners.py tests/test_builder.py -x -q` | mixed | ⬜ pending |
-| 17-04-01 | 04 | 3 | LIFE-01, LIFE-03–06 | T-17-02, T-17-05, T-17-06 | Async runner awaits work at matching slots and re-raises cancellation unchanged | async integration | `uv run pytest tests/test_transition_lifecycle.py tests/test_async.py -x -q` | mixed | ⬜ pending |
-| 17-05-01 | 05 | 4 | LIFE-01–06 | T-17-06–08 | Fresh pure/native semantics, documentation, slots, types, and compiled throughput agree | conformance/performance | `uv run python tools/phase16_isolated_verify.py --suite phase17` | ❌ W0 | ⬜ pending |
+| 17-01-01 | 01 | 0 | LIFE-01–06 | T-17-01–08 | Executable scenario matrix defines order, stage, state, history, cause, observer, cancellation, and parity outcomes | unit/integration | `uv run pytest tests/test_transition_lifecycle.py -x -q` | ✅ | ✅ covered |
+| 17-02-01 | 02 | 1 | LIFE-02, LIFE-04 | T-17-03, T-17-04 | Additive result contract preserves cause without disclosure and finalizes failures once | unit/API | `uv run pytest tests/test_transition_lifecycle.py tests/test_boundary_negative.py tests/test_mypyc_guard.py -x -q` | ✅ | ✅ covered |
+| 17-03-01 | 03 | 2 | LIFE-01–05 | T-17-01–04 | Sync runner fails fast and commits state/history atomically | integration | `uv run pytest tests/test_transition_lifecycle.py tests/test_advanced_functionality.py tests/test_listeners.py tests/test_builder.py -x -q` | ✅ | ✅ covered |
+| 17-04-01 | 04 | 3 | LIFE-01, LIFE-03–06 | T-17-02, T-17-05, T-17-06 | Async runner awaits work at matching slots and re-raises cancellation unchanged | async integration | `uv run pytest tests/test_transition_lifecycle.py tests/test_async.py -x -q` | ✅ | ✅ covered |
+| 17-05-01 | 05 | 4 | LIFE-01–06 | T-17-06–08 | Fresh pure/native semantics, documentation, slots, types, and compiled throughput agree | conformance/performance | `uv run python tools/phase16_isolated_verify.py --suite phase17` | ✅ | ✅ covered |
 
 Task identifiers are provisional until the planner writes executable plans; the planner must preserve equivalent coverage when assigning final IDs.
 
@@ -52,11 +52,11 @@ Task identifiers are provisional until the planner writes executable plans; the 
 
 ## Wave 0 Requirements
 
-- [ ] `tests/test_transition_lifecycle.py` — authoritative sync/async stage, order, failure, cancellation, observer, history, and cause matrix for LIFE-01–06.
-- [ ] `tools/phase16_isolated_verify.py` — backward-compatible Phase 17 suite and explicit overlay inventory for fresh pure/native proof.
-- [ ] `tests/test_performance_benchmarks.py` — lifecycle-success selection retaining the compiled `trigger()` floor of 200,000 operations/second.
-- [ ] `tests/test_mypyc_guard.py` and `tests/test_boundary_negative.py` — additive slotted result/API compatibility and hidden-cause guards.
-- [ ] Rewrite contradictory expectations in `tests/test_advanced_functionality.py`, `tests/test_listeners.py`, and `tests/test_async.py` as implementation lands.
+- [x] `tests/test_transition_lifecycle.py` — authoritative sync/async stage, order, failure, cancellation, observer, history, and cause matrix for LIFE-01–06.
+- [x] `tools/phase16_isolated_verify.py` — backward-compatible Phase 17 suite and explicit overlay inventory for fresh pure/native proof.
+- [x] `tests/test_performance_benchmarks.py` — lifecycle-success selection retaining the compiled `trigger()` floor of 200,000 operations/second.
+- [x] `tests/test_mypyc_guard.py` and `tests/test_boundary_negative.py` — additive slotted result/API compatibility and hidden-cause guards.
+- [x] Rewrite contradictory expectations in `tests/test_advanced_functionality.py`, `tests/test_listeners.py`, and `tests/test_async.py` as implementation lands.
 
 No new test framework or shared fixture module is required.
 
@@ -82,12 +82,20 @@ All Phase 17 behaviors have automated verification. Documentation review is enfo
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verification or Wave 0 dependencies.
-- [ ] Sampling continuity: no three consecutive tasks without automated verification.
-- [ ] Wave 0 covers every missing test/harness reference.
-- [ ] No watch-mode flags or timing sleeps.
-- [ ] Pure and compiled origins are asserted before semantic tests.
-- [ ] Compiled `trigger()` remains at or above 200,000 operations/second.
-- [ ] `nyquist_compliant: true` is set only after validation audit.
+- [x] All tasks have `<automated>` verification or Wave 0 dependencies.
+- [x] Sampling continuity: no three consecutive tasks without automated verification.
+- [x] Wave 0 covers every missing test/harness reference.
+- [x] No watch-mode flags or timing sleeps.
+- [x] Pure and compiled origins are asserted before semantic tests.
+- [x] Compiled `trigger()` remains at or above 200,000 operations/second.
+- [x] `nyquist_compliant: true` is set only after validation audit.
 
-**Approval:** pending
+**Approval:** validated 2026-09-01
+
+## Validation Audit 2026-09-01
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
