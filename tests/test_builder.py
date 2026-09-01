@@ -1183,8 +1183,10 @@ class TestDeclarativePolicyCompatibility:
         if policy == "raise":
             with pytest.raises(RuntimeError, match="sync policy boom"):
                 machine.can_trigger("go")
-            with pytest.raises(RuntimeError, match="sync policy boom"):
-                machine.trigger("go")
+            result = machine.trigger("go")
+            assert not result.success
+            assert result.stage == "state-permission"
+            assert isinstance(result.cause, RuntimeError)
         else:
             expected = policy == "super"
             assert machine.can_trigger("go") is expected
@@ -1230,8 +1232,10 @@ class TestDeclarativePolicyCompatibility:
         if policy == "raise":
             with pytest.raises(RuntimeError, match="async policy boom"):
                 await machine.can_trigger_async("go")
-            with pytest.raises(RuntimeError, match="async policy boom"):
-                await machine.trigger_async("go")
+            result = await machine.trigger_async("go")
+            assert not result.success
+            assert result.stage == "state-permission"
+            assert isinstance(result.cause, RuntimeError)
         else:
             expected = policy == "super"
             assert await machine.can_trigger_async("go") is expected

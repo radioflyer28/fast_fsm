@@ -322,7 +322,7 @@ class TestStateCallbacks:
         assert execution_log == ["exit_state2", "enter_state3"]
 
     def test_callback_exception_handling(self):
-        """Test that exceptions in callbacks don't break transitions"""
+        """Callback failures report their commit boundary without rollback."""
 
         def failing_exit(*args, **kwargs):
             raise RuntimeError("Exit callback failed")
@@ -338,19 +338,23 @@ class TestStateCallbacks:
         fsm.add_state(state2)
         fsm.add_transition("go", "state1", "state2")
 
-        # Transition should succeed even with exit callback exception
         result = fsm.trigger("go")
-        assert result.success  # Transition still completes
-        assert fsm.current_state.name == "state2"
+        assert not result.success
+        assert not result.committed
+        assert result.stage == "source-exit"
+        assert fsm.current_state.name == "state1"
 
         # Test enter callback exception
+        state2 = State("state2")
         state3 = State.create("state3", on_enter=failing_enter)
+        fsm = StateMachine(initial_state=state2, name="enter_callback_exception_test")
         fsm.add_state(state3)
         fsm.add_transition("go_again", "state2", "state3")
 
-        # Transition should succeed even with enter callback exception
         result = fsm.trigger("go_again")
-        assert result.success  # Transition still completes
+        assert not result.success
+        assert result.committed
+        assert result.stage == "destination-enter"
         assert fsm.current_state.name == "state3"
 
     def test_callback_with_args_and_kwargs(self):

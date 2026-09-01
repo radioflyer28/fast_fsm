@@ -1902,7 +1902,7 @@ class StateMachine:
                 f"Registered states: {list(self._states)}"
             )
         to_state = self._states[state_name]
-        self._execute_transition(to_state, "__force__")
+        self._execute_control_transition(to_state, "__force__")
 
     def reset(self) -> None:
         """Return the machine to its initial state, bypassing guard conditions.
@@ -2304,6 +2304,115 @@ class StateMachine:
             trigger=trigger,
             committed=True,
         )
+
+    def _execute_control_transition(self, to_state: State, trigger: str) -> None:
+        """Preserve direct-control callback behavior outside ordinary trigger results.
+
+        ``force_state()``, ``reset()``, and ``restore()`` have no result return
+        contract.  They retain their historical best-effort callback flow and
+        must therefore not borrow the ordinary trigger's fail-fast finalizer.
+        """
+        old_state = self._current_state
+
+        if self._before_listeners:
+            for fn in self._before_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=before-transition type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        try:
+            old_state.on_exit(to_state, trigger)
+        except Exception as cause:
+            self._logger.warning(
+                "%s: control callback failed stage=source-exit type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+
+        _exit_cbs = self._state_exit_callbacks.get(old_state.name)
+        if _exit_cbs:
+            for fn in _exit_cbs:
+                try:
+                    fn(to_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=source-exit-callback type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        if self._on_exit_listeners:
+            for fn in self._on_exit_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=exit-state-listener type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        self._commit_transition(old_state, to_state, trigger)
+
+        try:
+            to_state.on_enter(old_state, trigger)
+        except Exception as cause:
+            self._logger.warning(
+                "%s: control callback failed stage=destination-enter type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+
+        _enter_cbs = self._state_enter_callbacks.get(to_state.name)
+        if _enter_cbs:
+            for fn in _enter_cbs:
+                try:
+                    fn(old_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=destination-enter-callback type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        if self._on_enter_listeners:
+            for fn in self._on_enter_listeners:
+                try:
+                    fn(to_state, old_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=enter-state-listener type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        if self._after_listeners:
+            for fn in self._after_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=after-transition type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+
+        _trigger_cbs = self._trigger_callbacks.get(trigger)
+        if _trigger_cbs:
+            for fn in _trigger_cbs:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    self._logger.warning(
+                        "%s: control callback failed stage=trigger-callback type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
 
     def trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
