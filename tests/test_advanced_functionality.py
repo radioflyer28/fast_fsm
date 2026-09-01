@@ -1045,6 +1045,19 @@ class TestClone:
         clone.trigger("finish")
         assert fsm.current_state_name == "running"
 
+    def test_clone_has_independent_sync_ownership_primitives(self):
+        """Cloning never transfers an active lock or owner marker to a peer."""
+        fsm = self._make_fsm()
+        original_owner = fsm._acquire_sync_ownership("trigger")
+        try:
+            clone = fsm.clone()
+            assert clone._sync_ownership_lock is not fsm._sync_ownership_lock
+            assert clone._sync_owner_thread_id is None
+            clone.force_state("running")
+            assert clone.current_state_name == "running"
+        finally:
+            fsm._release_sync_ownership(original_owner)
+
     def test_clone_adding_transition_does_not_affect_original(self):
         """Adding a transition to the clone doesn't appear in the original."""
         fsm = self._make_fsm()

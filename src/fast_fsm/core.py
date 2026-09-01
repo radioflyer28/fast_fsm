@@ -1939,13 +1939,20 @@ class StateMachine:
         Raises:
             KeyError: If ``state_name`` is not a registered state.
         """
+        owner_thread_id = self._acquire_sync_ownership("force_state")
+        try:
+            self._force_state_owned(state_name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _force_state_owned(self, state_name: str) -> None:
+        """Run direct control after one public caller owns this machine."""
         if state_name not in self._states:
             raise KeyError(
                 f"State '{state_name}' is not registered in '{self._name}'. "
                 f"Registered states: {list(self._states)}"
             )
-        to_state = self._states[state_name]
-        self._execute_control_transition(to_state, "__force__")
+        self._execute_control_transition(self._states[state_name], "__force__")
 
     def reset(self) -> None:
         """Return the machine to its initial state, bypassing guard conditions.
@@ -1957,7 +1964,11 @@ class StateMachine:
         Safe to call when the machine is already in its initial state
         (callbacks still fire).
         """
-        self.force_state(self._initial_state.name)
+        owner_thread_id = self._acquire_sync_ownership("reset")
+        try:
+            self._force_state_owned(self._initial_state.name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
     def snapshot(self) -> Dict[str, Any]:
         """Capture a lightweight, serialisable snapshot of the current state.
@@ -1979,8 +1990,9 @@ class StateMachine:
     def restore(self, snapshot: Dict[str, Any]) -> None:
         """Restore the machine to a previously captured snapshot.
 
-        Calls :meth:`force_state` under the hood, so the full callback chain
-        fires and guards are bypassed.
+        Runs the same private direct-control body as :meth:`force_state`, so
+        the full callback chain fires and guards are bypassed without a second
+        public ownership admission.
 
         Args:
             snapshot: A dict previously returned by :meth:`snapshot`.
@@ -1991,18 +2003,23 @@ class StateMachine:
             KeyError: If the state named in the snapshot is no longer
                 registered (e.g. machine topology changed since capture).
         """
-        version = snapshot.get("version", 1)
-        if version != 1:
-            raise ValueError(
-                f"Unsupported snapshot version: {version!r}. "
-                "Only version 1 is currently supported."
-            )
-        state_name = snapshot.get("state")
-        if not isinstance(state_name, str):
-            raise ValueError(
-                f"Snapshot 'state' must be a string, got {type(state_name).__name__!r}."
-            )
-        self.force_state(state_name)
+        owner_thread_id = self._acquire_sync_ownership("restore")
+        try:
+            version = snapshot.get("version", 1)
+            if version != 1:
+                raise ValueError(
+                    f"Unsupported snapshot version: {version!r}. "
+                    "Only version 1 is currently supported."
+                )
+            state_name = snapshot.get("state")
+            if not isinstance(state_name, str):
+                raise ValueError(
+                    "Snapshot 'state' must be a string, got "
+                    f"{type(state_name).__name__!r}."
+                )
+            self._force_state_owned(state_name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
     def clone(self) -> "StateMachine":
         """Create a verbatim clone of this machine reset to its initial state.

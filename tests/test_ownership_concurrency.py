@@ -138,11 +138,7 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
             id=case.identifier,
         )
         for case in OWNERSHIP_CONTRACT_CASES
-        # Plan 18-02 turns the ordinary trigger rows green in Task 1.  Its
-        # direct-control release row remains a strict RED contract until Task 2
-        # adds the private control body.
         if case.owner_plan not in {"18-01", "18-02"}
-        or case.identifier == "OWN-06-sync-release"
     ),
 )
 def test_strict_red_contract_row_has_one_owning_plan(
@@ -154,18 +150,13 @@ def test_strict_red_contract_row_has_one_owning_plan(
 
 @pytest.mark.parametrize(
     "case",
-    tuple(
-        case
-        for case in OWNERSHIP_CONTRACT_CASES
-        if case.owner_plan == "18-02" and case.identifier != "OWN-06-sync-release"
-    ),
+    tuple(case for case in OWNERSHIP_CONTRACT_CASES if case.owner_plan == "18-02"),
 )
-def test_sync_trigger_contract_row_is_green(case: OwnershipContractCase) -> None:
-    """The ordinary trigger rows have exactly one owned private body."""
+def test_sync_control_contract_row_is_green(case: OwnershipContractCase) -> None:
+    """Plan 18-02 routes each synchronous write through one private body."""
     assert _future_contract_row_is_implemented(case), case.scenario
 
 
-@pytest.mark.xfail(strict=True, reason="RED until Plan 18-02")
 def test_strict_red_sync_control_requires_private_owned_body() -> None:
     """Plan 18-02 must prevent control callbacks from reentering public writes."""
     source = State("source")
@@ -590,4 +581,139 @@ def test_sync_finalizer_holds_ownership_until_baseexception_observer_returns(
     assert not contender.is_alive()
     assert outcomes == [False, True]
     assert contender_entered_lifecycle.is_set()
+    assert machine.current_state is destination
+
+
+@pytest.mark.parametrize(
+    ("operation", "operation_name"),
+    (
+        ("force", "force_state"),
+        ("reset", "reset"),
+        ("restore", "restore"),
+    ),
+)
+def test_sync_direct_control_reentry_precedes_nested_validation(
+    operation: str, operation_name: str
+) -> None:
+    """All direct-control public entries reject a callback before doing nested work."""
+    events: list[str] = []
+    machine: StateMachine
+
+    def reenter(*_args: object, **_kwargs: object) -> None:
+        with pytest.raises(
+            RuntimeError,
+            match=rf"^FSM ownership violation: reentrant {operation_name}$",
+        ):
+            if operation == "force":
+                machine.force_state("missing")
+            elif operation == "reset":
+                machine.reset()
+            else:
+                machine.restore({"state": 42, "version": 1})
+        events.append("nested-rejected")
+
+    source = CallbackState("source", on_exit=reenter)
+    destination = State("destination")
+    machine = StateMachine(source, name=f"direct-reentry-{operation}")
+    machine.add_state(destination)
+
+    machine.force_state("destination")
+
+    assert events == ["nested-rejected"]
+    assert machine.current_state is destination
+
+
+@pytest.mark.parametrize("operation", ("force", "reset", "restore"))
+def test_sync_direct_control_serializes_threads_and_releases_after_validation(
+    operation: str,
+) -> None:
+    """An owned direct-control path releases after its own validation and callbacks."""
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_finished = threading.Event()
+    results: list[str] = []
+
+    class BlockingListener:
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            if not first_entered.is_set():
+                first_entered.set()
+                assert release_first.wait(timeout=5)
+
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, name=f"direct-thread-{operation}")
+    machine.add_state(destination)
+    machine.add_listener(BlockingListener())
+
+    def run_first() -> None:
+        machine.force_state("destination")
+        results.append("first")
+
+    def run_second() -> None:
+        assert first_entered.wait(timeout=5)
+        if operation == "force":
+            machine.force_state("source")
+        elif operation == "reset":
+            machine.reset()
+        else:
+            machine.restore({"state": "source", "version": 1})
+        results.append("second")
+        second_finished.set()
+
+    first = threading.Thread(target=run_first)
+    second = threading.Thread(target=run_second)
+    first.start()
+    assert first_entered.wait(timeout=5)
+    second.start()
+    assert not second_finished.wait(timeout=0.05)
+    release_first.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results == ["first", "second"]
+    assert machine.current_state is source
+
+
+@pytest.mark.parametrize("failure_type", (KeyboardInterrupt, SystemExit))
+def test_sync_direct_control_releases_after_baseexception(
+    failure_type: type[BaseException],
+) -> None:
+    """Best-effort control leaves the owner clean even when BaseException escapes."""
+    fail_once = True
+
+    def fail_exit(*_args: object, **_kwargs: object) -> None:
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            raise failure_type("control-secret")
+
+    source = CallbackState("source", on_exit=fail_exit)
+    destination = State("destination")
+    machine = StateMachine(source, name="direct-baseexception")
+    machine.add_state(destination)
+
+    with pytest.raises(failure_type, match="control-secret"):
+        machine.force_state("destination")
+
+    machine.force_state("destination")
+
+    assert machine.current_state is destination
+
+
+def test_sync_direct_control_validation_failures_release_ownership() -> None:
+    """Each public validation path is inside its single direct-control envelope."""
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, name="direct-validation")
+    machine.add_state(destination)
+
+    with pytest.raises(KeyError, match="missing"):
+        machine.force_state("missing")
+    with pytest.raises(ValueError, match="Unsupported snapshot version"):
+        machine.restore({"state": "destination", "version": 2})
+
+    machine.force_state("destination")
+
     assert machine.current_state is destination
