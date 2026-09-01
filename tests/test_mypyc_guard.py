@@ -894,7 +894,7 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
     runner = _load_phase16_runner()
     destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
-    migration = tmp_path / "coverage-floor-migration.json"
+    migration = destination.parent / "coverage-floor-migration.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.15, 94.49)
     record = {
@@ -916,12 +916,15 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
     record["quality_floor_migration"][section]["coverage"][field] = invalid
     migration.write_text(json.dumps(record), encoding="utf-8")
     original = destination.read_bytes()
+    secure_migration = runner._coverage_floor_migration(
+        "evidence/coverage-floor-migration.json"
+    )
 
     with pytest.raises(
         runner.VerificationError, match="invalid quality-floor migration"
     ):
         runner._export_manifest_atomically(
-            generated, "evidence/release-baseline.json", migration
+            generated, "evidence/release-baseline.json", secure_migration
         )
 
     assert destination.read_bytes() == original
@@ -929,12 +932,16 @@ def test_phase16_baseline_write_rejects_invalid_migration_coverage_without_repla
 
 def test_phase16_coverage_floor_migration_requires_explicit_review_data(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A future deliberate lower floor needs a separately reviewed record."""
     runner = _load_phase16_runner()
     baseline = tmp_path / "baseline.json"
     generated = tmp_path / "generated.json"
-    migration = tmp_path / "coverage-floor-migration.json"
+    source_root = tmp_path / "repo"
+    source_root.mkdir()
+    migration = source_root / "coverage-floor-migration.json"
+    monkeypatch.setattr(runner, "ROOT", source_root)
     _write_coverage_manifest(baseline, 96.08, 94.27)
     _write_coverage_manifest(generated, 96.07, 94.26)
 
@@ -973,7 +980,46 @@ def test_phase16_coverage_floor_migration_requires_explicit_review_data(
         encoding="utf-8",
     )
 
-    runner._validate_coverage_floor(baseline, generated, migration)
+    runner._validate_coverage_floor(
+        baseline,
+        generated,
+        runner._coverage_floor_migration("coverage-floor-migration.json"),
+    )
+
+
+@pytest.mark.parametrize("link_position", ("leaf", "parent"))
+def test_phase16_coverage_floor_migration_rejects_external_symlinks_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    link_position: str,
+) -> None:
+    """An external record cannot authorize a floor reduction through a symlink."""
+    runner = _load_phase16_runner()
+    destination = _manifest_destination(runner, monkeypatch, tmp_path)
+    generated = tmp_path / "generated.json"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external_record = outside / "migration.json"
+    _write_coverage_manifest(destination, 96.16, 94.50)
+    _write_coverage_manifest(generated, 96.15, 94.49)
+    external_record.write_text("external migration must not be read", encoding="utf-8")
+    original = destination.read_bytes()
+
+    if link_position == "leaf":
+        (runner.ROOT / "migration.json").symlink_to(external_record)
+        requested_migration = "migration.json"
+    else:
+        (runner.ROOT / "migrations").symlink_to(outside, target_is_directory=True)
+        requested_migration = "migrations/migration.json"
+
+    with pytest.raises(runner.VerificationError, match="must not.*symlink"):
+        migration = runner._coverage_floor_migration(requested_migration)
+        runner._export_manifest_atomically(
+            generated, "evidence/release-baseline.json", migration
+        )
+
+    assert destination.read_bytes() == original
+    assert external_record.read_text(encoding="utf-8") == "external migration must not be read"
 
 
 @pytest.mark.parametrize(
@@ -1026,7 +1072,7 @@ def test_phase16_quality_floor_migration_allows_reviewed_test_reduction(
     runner = _load_phase16_runner()
     destination = _manifest_destination(runner, monkeypatch, tmp_path)
     generated = tmp_path / "generated.json"
-    migration = tmp_path / "quality-floor-migration.json"
+    migration = destination.parent / "quality-floor-migration.json"
     _write_coverage_manifest(destination, 96.16, 94.50)
     _write_coverage_manifest(generated, 96.16, 94.50, collected=1128, passed=1128)
     migration.write_text(
@@ -1061,7 +1107,9 @@ def test_phase16_quality_floor_migration_allows_reviewed_test_reduction(
         encoding="utf-8",
     )
     runner._export_manifest_atomically(
-        generated, "evidence/release-baseline.json", migration
+        generated,
+        "evidence/release-baseline.json",
+        runner._coverage_floor_migration("evidence/quality-floor-migration.json"),
     )
 
     assert destination.read_bytes() == generated.read_bytes()

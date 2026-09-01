@@ -69,6 +69,16 @@ class VerificationError(RuntimeError):
     """Raised when an isolation precondition cannot be established."""
 
 
+class _CoverageFloorMigration:
+    """A reviewed migration record read through the repository trust boundary."""
+
+    __slots__ = ("contents", "path")
+
+    def __init__(self, path: Path, contents: bytes) -> None:
+        self.path = path
+        self.contents = contents
+
+
 def _run(
     command: Sequence[str], *, cwd: Path, env: dict[str, str], check: bool = True
 ) -> subprocess.CompletedProcess[str]:
@@ -306,6 +316,54 @@ def _open_manifest_parent(destination: Path) -> tuple[int, str]:
         raise
 
 
+def _open_existing_manifest_parent(destination: Path) -> tuple[int, str]:
+    """Open an existing repository-relative parent without creating or following."""
+    _require_manifest_descriptor_support()
+    try:
+        relative = destination.relative_to(ROOT)
+    except ValueError as exc:
+        raise VerificationError(
+            f"coverage-floor migration escapes repository root: {destination}"
+        ) from exc
+    if not relative.name or ".." in relative.parts:
+        raise VerificationError(f"invalid coverage-floor migration: {destination}")
+
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        parent_fd = os.open(ROOT, flags)
+    except OSError as exc:
+        raise VerificationError(
+            "could not open repository root without following links"
+        ) from exc
+    try:
+        root_stat = os.stat(ROOT, follow_symlinks=False)
+        if not _same_directory(os.fstat(parent_fd), root_stat):
+            raise VerificationError(
+                "repository root changed while opening coverage-floor migration"
+            )
+
+        for component in relative.parent.parts:
+            if component in ("", "."):
+                continue
+            try:
+                child_fd = os.open(component, flags, dir_fd=parent_fd)
+            except FileNotFoundError as exc:
+                raise VerificationError(
+                    f"coverage-floor migration file not found: {destination}"
+                ) from exc
+            except OSError as exc:
+                raise VerificationError(
+                    "coverage-floor migration path must not follow symlinks: "
+                    f"{component!r}"
+                ) from exc
+            os.close(parent_fd)
+            parent_fd = child_fd
+        return parent_fd, relative.name
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
 def _reject_json_constant(value: str) -> object:
     """Reject non-standard JSON constants such as ``NaN`` and ``Infinity``."""
     raise ValueError(f"non-standard JSON constant: {value}")
@@ -448,28 +506,28 @@ def _migration_quality_floor(
 
 
 def _validate_quality_floor_migration(
-    migration_path: Path,
+    migration: _CoverageFloorMigration,
     previous: dict[str, dict[str, object]],
     replacement: dict[str, dict[str, object]],
 ) -> None:
     """Require an exact, separately reviewed record for a lower quality floor."""
-    migration = _strict_json_object(
-        migration_path, label="quality-floor migration record"
+    record_document = _strict_json_bytes(
+        migration.contents, label="quality-floor migration record"
     )
     try:
-        record = migration["quality_floor_migration"]
-        if not isinstance(record, dict) or migration["schema_version"] != 2:
+        record = record_document["quality_floor_migration"]
+        if not isinstance(record, dict) or record_document["schema_version"] != 2:
             raise ValueError("unsupported schema")
         reviewed = (record["reason"], record["reviewed_by"], record["reviewed_at"])
         if not all(isinstance(value, str) and value.strip() for value in reviewed):
             raise ValueError("missing review metadata")
     except (KeyError, TypeError, ValueError) as exc:
         raise VerificationError(
-            f"invalid quality-floor migration record: {migration_path}"
+            f"invalid quality-floor migration record: {migration.path}"
         ) from exc
-    expected_previous = _migration_quality_floor(migration_path, record, "previous")
+    expected_previous = _migration_quality_floor(migration.path, record, "previous")
     expected_replacement = _migration_quality_floor(
-        migration_path, record, "replacement"
+        migration.path, record, "replacement"
     )
     if expected_previous != previous or expected_replacement != replacement:
         raise VerificationError(
@@ -481,7 +539,7 @@ def _validate_quality_floor_migration(
 def _validate_quality_floor(
     previous: dict[str, dict[str, object]] | None,
     generated: Path,
-    migration_path: Path | None = None,
+    migration: _CoverageFloorMigration | None = None,
 ) -> None:
     """Fail closed before a baseline write lowers durable quality evidence."""
     # A first write establishes durable evidence, so it receives exactly the
@@ -501,7 +559,7 @@ def _validate_quality_floor(
     }
     if not lowered_coverage and not lowered_tests:
         return
-    if migration_path is None:
+    if migration is None:
         rendered_coverage = ", ".join(
             f"{field} {before:.2f}->{after:.2f}"
             for field, (before, after) in sorted(lowered_coverage.items())
@@ -518,23 +576,55 @@ def _validate_quality_floor(
             "quality floor regression: "
             f"coverage [{rendered_coverage}]; tests [{rendered_tests}]"
         )
-    _validate_quality_floor_migration(migration_path, previous, replacement)
+    _validate_quality_floor_migration(migration, previous, replacement)
 
 
 def _validate_coverage_floor(
-    existing: Path, generated: Path, migration_path: Path | None = None
+    existing: Path,
+    generated: Path,
+    migration: _CoverageFloorMigration | None = None,
 ) -> None:
     """Validate a path-backed floor for direct tests and migration tooling."""
     previous = _quality_floor_values(existing) if existing.is_file() else None
-    _validate_quality_floor(previous, generated, migration_path)
+    _validate_quality_floor(previous, generated, migration)
 
 
-def _coverage_floor_migration(value: str) -> Path:
-    """Resolve one explicit migration record without accepting an absent path."""
+def _coverage_floor_migration(value: str) -> _CoverageFloorMigration:
+    """Read one reviewed migration record without following any path component."""
     migration = _manifest_output(value)
-    if not migration.is_file():
-        raise VerificationError(f"coverage-floor migration file not found: {value!r}")
-    return migration
+    parent_fd, migration_name = _open_existing_manifest_parent(migration)
+    file_fd: int | None = None
+    try:
+        try:
+            file_fd = os.open(
+                migration_name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError as exc:
+            raise VerificationError(
+                f"coverage-floor migration file not found: {value!r}"
+            ) from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise VerificationError(
+                    "coverage-floor migration file must not be a symlink: "
+                    f"{value!r}"
+                ) from exc
+            raise VerificationError(
+                f"could not open coverage-floor migration without following links: {value!r}"
+            ) from exc
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            raise VerificationError(
+                f"coverage-floor migration must be a regular file: {value!r}"
+            )
+        with os.fdopen(file_fd, "rb", closefd=False) as migration_file:
+            contents = migration_file.read()
+        return _CoverageFloorMigration(migration, contents)
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        os.close(parent_fd)
 
 
 def _manifest_destination_snapshot(
@@ -601,7 +691,7 @@ def _fsync_manifest_directory(parent_fd: int) -> None:
 
 
 def _export_manifest_atomically(
-    generated: Path, output: str, migration_path: Path | None = None
+    generated: Path, output: str, migration: _CoverageFloorMigration | None = None
 ) -> None:
     """Publish a validated generated manifest without following temp symlinks."""
     if not generated.is_file():
@@ -619,7 +709,7 @@ def _export_manifest_atomically(
             if existing_contents is not None
             else None
         )
-        _validate_quality_floor(previous, generated, migration_path)
+        _validate_quality_floor(previous, generated, migration)
         intended_mode = (
             existing_mode
             if existing_mode is not None
