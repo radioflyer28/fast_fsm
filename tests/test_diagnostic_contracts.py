@@ -6,10 +6,35 @@ Later-plan contracts are added as strict XFAIL rows once the tracer exists.
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import threading
+from collections.abc import Callable
+
 import pytest
 
-from fast_fsm import FSMValidator, State, StateMachine
-from fast_fsm._diagnostics import DiagnosticBudgetExceeded, DiagnosticLimits
+from fast_fsm import (
+    DiagnosticBudgetExceeded,
+    DiagnosticLimits,
+    DiagnosticStatus,
+    FSMValidator,
+    State,
+    StateMachine,
+    batch_validate,
+    compare_fsms,
+    to_json,
+)
+from fast_fsm._diagnostics import (
+    _DiagnosticBudget,
+    _dense_adjacency,
+    _generate_paths,
+    _graph_from_snapshot,
+    _sparse_adjacency,
+    _strongly_connected_components,
+    _structural_depth,
+)
 from fast_fsm.conditions import FuncCondition
 
 
@@ -27,6 +52,134 @@ def _moved_machine(
     machine.add_transition("advance", initial, middle, condition)
     machine.trigger("advance")
     return machine, initial, middle, orphan, condition
+
+
+@pytest.fixture
+def single_state_machine() -> StateMachine:
+    """A real single-state graph for the diagnostic fixture inventory."""
+    return StateMachine.from_states("only", name="single-state")
+
+
+@pytest.fixture
+def empty_machine() -> StateMachine:
+    """The smallest valid real machine: no transitions and one initial state."""
+    return StateMachine.from_states("empty", name="empty")
+
+
+@pytest.fixture
+def self_loop_machine() -> StateMachine:
+    """A real graph with a one-state cyclic SCC."""
+    machine = StateMachine.from_states("loop", name="self-loop")
+    machine.add_transition("again", "loop", "loop")
+    return machine
+
+
+@pytest.fixture
+def three_cycle_machine() -> StateMachine:
+    """A real three-member cyclic SCC."""
+    machine = StateMachine.from_states("a", "b", "c", initial="a", name="cycle")
+    machine.add_transition("ab", "a", "b")
+    machine.add_transition("bc", "b", "c")
+    machine.add_transition("ca", "c", "a")
+    return machine
+
+
+@pytest.fixture
+def multi_scc_tail_machine() -> StateMachine:
+    """Two cyclic components plus an acyclic tail for future SCC assertions."""
+    machine = StateMachine.from_states(
+        "a", "b", "c", "d", "tail", initial="a", name="multi-scc"
+    )
+    machine.add_transition("ab", "a", "b")
+    machine.add_transition("ba", "b", "a")
+    machine.add_transition("bc", "b", "c")
+    machine.add_transition("cd", "c", "d")
+    machine.add_transition("dc", "d", "c")
+    machine.add_transition("tail", "d", "tail")
+    return machine
+
+
+@pytest.fixture
+def long_chain_machine() -> StateMachine:
+    """An iterative-depth fixture longer than Python's normal recursion limit."""
+    names = tuple(f"chain-{index}" for index in range(1_100))
+    machine = StateMachine.from_states(*names, initial=names[0], name="long-chain")
+    for index in range(len(names) - 1):
+        machine.add_transition(f"next-{index}", names[index], names[index + 1])
+    return machine
+
+
+@pytest.fixture
+def high_fanout_machine() -> StateMachine:
+    """A deterministic high-fan-out DAG."""
+    names = ("root",) + tuple(f"leaf-{index}" for index in range(32))
+    machine = StateMachine.from_states(*names, initial="root", name="fanout")
+    for leaf in names[1:]:
+        machine.add_transition(f"to-{leaf}", "root", leaf)
+    return machine
+
+
+@pytest.fixture
+def sparse_zero_edge_machine() -> StateMachine:
+    """A many-state graph that must remain sparse until dense output is requested."""
+    names = tuple(f"isolated-{index}" for index in range(128))
+    return StateMachine.from_states(*names, initial=names[0], name="zero-edge")
+
+
+@pytest.fixture
+def duplicate_name_machines() -> tuple[StateMachine, StateMachine, StateMachine]:
+    """Same-label machines whose positional identities must remain distinct."""
+    return tuple(StateMachine.from_states("only", name="duplicate") for _ in range(3))  # type: ignore[return-value]
+
+
+@pytest.fixture
+def barrier_controlled_mutation() -> tuple[StateMachine, threading.Barrier]:
+    """Coordinate post-capture mutation without timing sleeps in later rows."""
+    machine, _, _, _, _ = _moved_machine()
+    return machine, threading.Barrier(2)
+
+
+@pytest.fixture
+def snapshot_call_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], int]:
+    """Install a reusable one-capture counter for later top-level callers."""
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def count_snapshot(self: StateMachine):
+        nonlocal calls
+        calls += 1
+        return original_snapshot(self)
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", count_snapshot)
+    return lambda: calls
+
+
+def _assert_exact_budget(
+    machine_factory: Callable[[], StateMachine],
+    action: Callable[[FSMValidator], object],
+    count: Callable[[DiagnosticStatus], int],
+    make_limits: Callable[[int], DiagnosticLimits],
+    forbidden_operation: Callable[[DiagnosticStatus, int], bool],
+) -> int:
+    """Prove generous, exact, and one-less boundaries for one future budget row."""
+    generous = FSMValidator(
+        machine_factory(), limits=DiagnosticLimits(max_work=100_000)
+    )
+    action(generous)
+    required = count(generous.diagnostic_status)
+    assert required > 0
+
+    exact = FSMValidator(machine_factory(), limits=make_limits(required))
+    action(exact)
+    assert count(exact.diagnostic_status) == required
+
+    exhausted = FSMValidator(machine_factory(), limits=make_limits(required - 1))
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        action(exhausted)
+    assert forbidden_operation(raised.value.status, required)
+    return required
 
 
 def test_declared_initial_reachability_reports_current_state_separately() -> None:
@@ -114,3 +267,176 @@ def test_exact_work_budget_succeeds_and_one_less_fails_redacted() -> None:
         "reachability.edge",
     }
     assert raised.value.status.work_count == required_work - 1
+
+    assert (
+        _assert_exact_budget(
+            lambda: _moved_machine(label="caller-secret-machine")[0],
+            lambda validator: validator.get_reachable_states(),
+            lambda status: status.work_count,
+            lambda limit: DiagnosticLimits(max_work=limit),
+            lambda status, limit: status.work_count == limit - 1,
+        )
+        == required_work
+    )
+
+
+def test_package_root_exports_only_diagnostic_contract_types() -> None:
+    import fast_fsm
+
+    assert fast_fsm.DiagnosticLimits is DiagnosticLimits
+    assert fast_fsm.DiagnosticStatus is DiagnosticStatus
+    assert fast_fsm.DiagnosticBudgetExceeded is DiagnosticBudgetExceeded
+    assert {
+        "DiagnosticLimits",
+        "DiagnosticStatus",
+        "DiagnosticBudgetExceeded",
+    } <= set(fast_fsm.__all__)
+    assert {name for name in fast_fsm.__all__ if name.startswith("Diagnostic")} == {
+        "DiagnosticLimits",
+        "DiagnosticStatus",
+        "DiagnosticBudgetExceeded",
+    }
+
+
+def _hash_seed_payload(seed: str) -> dict[str, object]:
+    source = """
+import json
+from fast_fsm import FSMValidator, StateMachine
+
+machine = StateMachine.from_states("a", "b", "orphan", initial="a", name="seed")
+machine.add_transition("go", "a", "b")
+validator = FSMValidator(machine)
+graph = validator._diagnostic_graph
+reachable = sorted(validator.get_reachable_states())
+print(json.dumps({
+    "states": graph.state_names,
+    "edges": [(edge.from_index, edge.trigger, edge.to_index) for edge in graph.edges],
+    "reachable": reachable,
+    "work": validator.diagnostic_status.work_count,
+}))
+"""
+    environment = {**os.environ, "PYTHONHASHSEED": seed}
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_tracer_counts_and_order_are_hash_seed_stable() -> None:
+    assert _hash_seed_payload("1") == _hash_seed_payload("2")
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-03")
+def test_scc_membership_includes_self_loops_components_and_excludes_tails(
+    multi_scc_tail_machine: StateMachine,
+    self_loop_machine: StateMachine,
+    empty_machine: StateMachine,
+) -> None:
+    multi_graph = _graph_from_snapshot(multi_scc_tail_machine._graph_snapshot())
+    self_graph = _graph_from_snapshot(self_loop_machine._graph_snapshot())
+    empty_graph = _graph_from_snapshot(empty_machine._graph_snapshot())
+
+    assert _strongly_connected_components(multi_graph, _DiagnosticBudget()) == (
+        ("a", "b"),
+        ("c", "d"),
+    )
+    assert _strongly_connected_components(self_graph, _DiagnosticBudget()) == (
+        ("loop",),
+    )
+    assert _strongly_connected_components(empty_graph, _DiagnosticBudget()) == ()
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-03")
+def test_structural_depth_uses_an_iterative_condensation_dag(
+    long_chain_machine: StateMachine,
+    three_cycle_machine: StateMachine,
+) -> None:
+    chain = _graph_from_snapshot(long_chain_machine._graph_snapshot())
+    cycle = _graph_from_snapshot(three_cycle_machine._graph_snapshot())
+
+    assert _structural_depth(chain, _DiagnosticBudget()) == {
+        "interpretation": "dag_longest_path",
+        "depth": 1_099,
+    }
+    assert _structural_depth(cycle, _DiagnosticBudget()) == {
+        "interpretation": "condensation_dag_depth",
+        "depth": 0,
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-03")
+def test_sparse_dense_paths_and_result_budget_have_distinct_boundaries(
+    sparse_zero_edge_machine: StateMachine,
+    high_fanout_machine: StateMachine,
+) -> None:
+    sparse_graph = _graph_from_snapshot(sparse_zero_edge_machine._graph_snapshot())
+    fanout_graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
+    assert _sparse_adjacency(sparse_graph, _DiagnosticBudget()) == {
+        "states": sparse_graph.state_names,
+        "edges": (),
+    }
+    with pytest.raises(DiagnosticBudgetExceeded):
+        _dense_adjacency(
+            fanout_graph, _DiagnosticBudget(DiagnosticLimits(max_dense_cells=1))
+        )
+    with pytest.raises(DiagnosticBudgetExceeded):
+        _generate_paths(
+            fanout_graph,
+            _DiagnosticBudget(DiagnosticLimits(max_path_expansions=1)),
+        )
+    with pytest.raises(DiagnosticBudgetExceeded):
+        FSMValidator(
+            high_fanout_machine, limits=DiagnosticLimits(max_results=1)
+        ).generate_test_paths()
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-04")
+def test_comparison_and_batch_preserve_duplicate_positional_identity(
+    duplicate_name_machines: tuple[StateMachine, StateMachine, StateMachine],
+) -> None:
+    comparison = compare_fsms(*duplicate_name_machines)
+    batch = batch_validate(*duplicate_name_machines, show_summary=False)
+    assert [entry["position"] for entry in comparison["entries"]] == [0, 1, 2]
+    assert [entry["name"] for entry in comparison["entries"]] == [
+        "duplicate",
+        "duplicate",
+        "duplicate",
+    ]
+    assert [entry["position"] for entry in batch["entries"]] == [0, 1, 2]
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-04")
+def test_empty_comparison_and_reports_share_one_aggregate_budget() -> None:
+    empty = compare_fsms()
+    assert empty == {
+        "entries": [],
+        "rankings": [],
+        "best_fsm": None,
+        "count": 0,
+        "total_issues": 0,
+        "avg_score": None,
+        "score_range": None,
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-06")
+def test_json_captures_one_snapshot_and_never_rereads_live_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine, _, _, _, _ = _moved_machine()
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def count_snapshot(self: StateMachine):
+        nonlocal calls
+        calls += 1
+        return original_snapshot(self)
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", count_snapshot)
+    payload = to_json(machine)
+    assert calls == 1
+    assert payload["analysis"]["status"].complete is True

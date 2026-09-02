@@ -29,6 +29,11 @@ from .core import (
 )
 from .conditions import CompiledFuncCondition, GuardCallable, GuardResult
 from .condition_templates import TimeoutCondition, CooldownCondition, ElapsedCondition
+from ._diagnostics import (
+    DiagnosticLimits,
+    DiagnosticStatus,
+    DiagnosticBudgetExceeded,
+)
 from .visualization import (
     to_mermaid,
     to_mermaid_fenced,
@@ -90,6 +95,10 @@ __all__ = [
     "TimeoutCondition",
     "CooldownCondition",
     "ElapsedCondition",
+    # Bounded diagnostics
+    "DiagnosticLimits",
+    "DiagnosticStatus",
+    "DiagnosticBudgetExceeded",
     # Visualization
     "to_mermaid",
     "to_mermaid_fenced",

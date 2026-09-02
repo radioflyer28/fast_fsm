@@ -386,13 +386,24 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
     }
     for name, fields in {
-        "_GraphTransition": {"from_state", "trigger", "to_state", "condition"},
+        "_GraphTransition": {
+            "from_state",
+            "trigger",
+            "to_state",
+            "condition",
+            "from_state_name",
+            "to_state_name",
+            "condition_name",
+        },
         "_GraphSnapshot": {
             "name",
             "initial_state",
             "graph_version",
             "states",
             "transitions",
+            "initial_state_name",
+            "current_state_name",
+            "state_names",
         },
         "_PreparedTransition": {"trigger", "sources", "target", "condition"},
     }.items():
