@@ -5,14 +5,21 @@ These tests verify the performance characteristics of the fast_fsm library
 while being compatible with mypyc compilation.
 """
 
-import pytest
-import time
-import gc
 import contextlib
+import gc
 import io
+import logging
 import sys
+import time
 
-from fast_fsm.core import AsyncStateMachine, State, StateMachine
+import pytest
+
+from fast_fsm.core import (
+    AsyncStateMachine,
+    State,
+    StateMachine,
+    configure_fsm_logging,
+)
 from fast_fsm.conditions import Condition
 from fast_fsm.condition_templates import TimeoutCondition
 
@@ -796,6 +803,55 @@ class TestMicroBenchmarks:
         # Should create conditions quickly
         assert elapsed < 1.0
         assert len(conditions) == 1000
+
+
+@pytest.mark.xfail(strict=True, reason="RED until 19-05")
+def test_disabled_trace_never_builds_or_inspects_a_payload_event():
+    """Disabled trace is a functional O(1) boundary, not a timing assertion."""
+
+    class HostilePayload:
+        def __init__(self) -> None:
+            self.repr_calls = 0
+            self.str_calls = 0
+
+        def __repr__(self) -> str:
+            self.repr_calls += 1
+            return "disabled-trace-repr-secret"
+
+        def __str__(self) -> str:
+            self.str_calls += 1
+            return "disabled-trace-str-secret"
+
+    redactor_calls = 0
+
+    def redactor(_event: dict[str, object]) -> dict[str, str]:
+        nonlocal redactor_calls
+        redactor_calls += 1
+        return {"category": "unexpected"}
+
+    logger_name = "fast_fsm.phase19.disabled_trace"
+    handle = configure_fsm_logging(
+        logging.WARNING,
+        logger_name,
+        propagate=False,
+        redactor=redactor,
+    )
+    try:
+        source = State("disabled-trace-source")
+        destination = State("disabled-trace-destination")
+        machine = StateMachine(source, name="disabled-trace", logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition("disabled-trace-trigger", source, destination)
+        payload = HostilePayload()
+
+        result = machine.trigger("disabled-trace-trigger", payload, value=payload)
+
+        assert result.success
+        assert redactor_calls == 0
+        assert payload.repr_calls == 0
+        assert payload.str_calls == 0
+    finally:
+        handle.restore()
 
 
 if __name__ == "__main__":
