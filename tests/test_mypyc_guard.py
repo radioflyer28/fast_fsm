@@ -685,8 +685,8 @@ def test_prepared_declarative_marker_compares_independent_consumer_identity() ->
         method = next(
             node
             for node in classes[class_name].body
-            if node.name == method_name
-            and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method_name
         )
         assert isinstance(method, ast.AsyncFunctionDef) is is_async
         calls = [
@@ -710,8 +710,8 @@ def test_prepared_declarative_marker_compares_independent_consumer_identity() ->
         method = next(
             node
             for node in classes[class_name].body
-            if node.name == method_name
-            and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method_name
         )
         assert [argument.arg for argument in method.args.args] == [
             "self",
