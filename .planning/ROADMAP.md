@@ -176,7 +176,7 @@
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 18-05-PLAN.md
+- [x] 18-05-PLAN.md
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -225,6 +225,6 @@
 | 15. Release Baseline & Evidence Harness | v0.3.0 | 9/9 | Complete    | 2026-08-29 |
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
-| 18. Safe Ownership & Concurrency | v0.3.0 | 4/7 | In Progress|  |
+| 18. Safe Ownership & Concurrency | v0.3.0 | 5/7 | In Progress|  |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 0/TBD | Not started | - |
 | 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/TBD | Not started | - |
