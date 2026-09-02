@@ -1,7 +1,7 @@
 # ADR-005: Safe per-machine ownership and concurrency
 
-**Status**: Accepted  
-**Date**: 2026-09-02  
+**Status**: Accepted
+**Date**: 2026-09-02
 **Deciders**: project maintainer + AI pair
 
 ---
