@@ -1,8 +1,8 @@
 ---
 phase: 18
 slug: safe-ownership-concurrency
-status: blocked
-threats_open: 2
+status: verified
+threats_open: 0
 asvs_level: 1
 block_on: high
 created: 2026-09-02
@@ -32,9 +32,9 @@ created: 2026-09-02
 |-----------|----------|-----------|----------|-------------|------------|--------|
 | T-18-01 | Tampering | Reentry admission and public writers | high | mitigate | Pre-acquisition same-owner/root rejection; complete writer-entry AST and behavioral coverage in both origins | closed |
 | T-18-02 | Denial of Service | Sync/async primitive and owner cleanup | high | mitigate | Per-instance primitives and unconditional `finally` cleanup with bounded reuse/cancellation regressions | closed |
-| T-18-03 | Tampering/DoS | Cross-loop state and hosted native evidence | high | mitigate | Permanent loop/thread binding plus a successful exact-current-SHA Python 3.10–3.14 native matrix | open |
+| T-18-03 | Tampering/DoS | Cross-loop state and hosted native evidence | high | mitigate | Permanent loop/thread binding plus a successful exact-current-SHA Python 3.10–3.14 native matrix | closed |
 | T-18-04 | Denial of Service | Causal child task reentry | high | mitigate | Context-root rejection before lock acquisition; independent-machine progress regression | closed |
-| T-18-05 | Tampering | Declarative prepared marker | high | mitigate | Validate the stored machine identity as well as source/trigger/target at consumption; add cross-machine collision regression | open |
+| T-18-05 | Tampering | Declarative prepared marker | high | mitigate | Validate the stored machine identity as well as source/trigger/target at consumption; add cross-machine collision regression | closed |
 | T-18-06 | Repudiation/Tampering | `safe_trigger()` ownership downgrade | high | mitigate | Ownership admission occurs outside ordinary exception conversion; boundary regressions require ownership errors to escape | closed |
 | T-18-07 | Denial of Service/Tampering | Cancellation windows | high | mitigate | Exactly-once failure finalization, bare cancellation propagation, unconditional cleanup, bounded waiting/owning reuse tests | closed |
 | T-18-08 | Information Disclosure | Ownership errors and logs | high | mitigate | Fixed payload-free categories with error/result/log secret-sentinel assertions | closed |
@@ -57,8 +57,13 @@ created: 2026-09-02
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-09-02 | 9 | 7 | 2 blocking | gsd-security-auditor |
+| 2026-09-02 | 9 | 9 | 0 | gsd-security-auditor |
 
 The initial audit verified fresh pure/native focused suites and the compiled performance gate. It blocked advancement because the current candidate SHA lacked hosted matrix evidence and declarative marker consumption did not compare its stored machine identity.
+
+The independent gap-closure reaudit returned `SECURED` for candidate `78650eaf6adcbc1432c9ee9ae970017285ac267b`. It verified the completed exact-SHA hosted CI run, including native CPython 3.10–3.14 jobs, and the independently sourced consumer-machine identity with production-reachable sync and async cross-machine regressions. T-18-09 remains closed as documented accepted risk AR-18-01.
+
+Audited candidate SHA: 78650eaf6adcbc1432c9ee9ae970017285ac267b
 
 ---
 
@@ -66,7 +71,7 @@ The initial audit verified fresh pure/native focused suites and the compiled per
 
 - [x] All threats have a disposition (mitigate / accept / transfer)
 - [x] Accepted risks documented in Accepted Risks Log
-- [ ] `threats_open: 0` confirmed
-- [ ] `status: verified` set in frontmatter
+- [x] `threats_open: 0` confirmed
+- [x] `status: verified` set in frontmatter
 
-**Approval:** blocked pending T-18-03 and T-18-05 mitigation verification
+**Approval:** SECURED at audited candidate `78650eaf6adcbc1432c9ee9ae970017285ac267b`
