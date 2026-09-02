@@ -133,7 +133,7 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
     tuple(
         (
             pytest.param(case, id=case.identifier)
-            if case.owner_plan == "18-03"
+            if case.owner_plan in {"18-03", "18-04"}
             else pytest.param(
                 case,
                 marks=pytest.mark.xfail(
@@ -190,22 +190,97 @@ def test_strict_red_async_ownership_representation_is_present() -> None:
     assert "_ownership_root" in source
 
 
-@pytest.mark.xfail(strict=True, reason="RED until Plan 18-04")
-def test_strict_red_all_public_writer_entries_are_owned() -> None:
-    """Plan 18-04 upgrades the Wave 0 name list to one-entry enforcement."""
+TOPOLOGY_HISTORY_WRITERS = (
+    "add_state",
+    "add_transition",
+    "add_transitions",
+    "add_bidirectional_transition",
+    "add_emergency_transition",
+    "enable_history",
+    "disable_history",
+)
+
+
+@pytest.mark.parametrize("method", TOPOLOGY_HISTORY_WRITERS)
+def test_topology_and_history_public_writer_entries_are_owned(method: str) -> None:
+    """Every Plan 04 topology/history writer must enter one ownership envelope."""
     from pathlib import Path
 
     source = (Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py").read_text()
-    for method in (
-        "add_state",
-        "add_transition",
-        "enable_history",
-        "add_listener",
-        "on_trigger",
-    ):
-        start = source.index(f"    def {method}(")
-        body = source[start : start + 800]
-        assert "_acquire_sync_ownership" in body
+    start = source.index(f"    def {method}(")
+    end = source.find("\n    def ", start + 1)
+    body = source[start:] if end == -1 else source[start:end]
+    assert "_acquire_sync_ownership" in body
+    assert "_release_sync_ownership" in body
+
+
+@pytest.mark.parametrize(
+    ("operation", "reenter"),
+    (
+        ("add_state", lambda machine, alternate: machine.add_state(alternate)),
+        (
+            "add_transition",
+            lambda machine, alternate: machine.add_transition(
+                "nested", "source", alternate
+            ),
+        ),
+        (
+            "add_transitions",
+            lambda machine, alternate: machine.add_transitions(
+                [("nested", "source", alternate)]
+            ),
+        ),
+        (
+            "add_bidirectional_transition",
+            lambda machine, alternate: machine.add_bidirectional_transition(
+                "nested", "return", "source", alternate
+            ),
+        ),
+        (
+            "add_emergency_transition",
+            lambda machine, alternate: machine.add_emergency_transition(
+                "nested", alternate
+            ),
+        ),
+        ("enable_history", lambda machine, _alternate: machine.enable_history(3)),
+        ("disable_history", lambda machine, _alternate: machine.disable_history()),
+    ),
+)
+def test_topology_and_history_reentry_is_rejected_before_mutation(
+    operation: str, reenter: object
+) -> None:
+    """An owned callback cannot open a partial topology or history write window."""
+    source = State("source")
+    destination = State("destination")
+    alternate = State("alternate")
+    machine = StateMachine(source, name=f"owned-{operation}")
+    machine.add_state(destination)
+    machine.add_transition("outer", source, destination)
+    if operation == "disable_history":
+        machine.enable_history(3)
+    graph_version = machine._graph_version
+    history_before = machine.history
+
+    def callback(*_args: object, **_kwargs: object) -> None:
+        assert callable(reenter)
+        with pytest.raises(
+            RuntimeError, match=rf"^FSM ownership violation: reentrant {operation}$"
+        ):
+            reenter(machine, alternate)
+
+    machine.on_exit("source", callback)
+
+    result = machine.trigger("outer")
+
+    assert result.success is True
+    assert machine.current_state is destination
+    assert machine._graph_version == graph_version
+    assert "alternate" not in machine._states
+    assert "nested" not in machine._transitions["source"]
+    if operation == "disable_history":
+        assert [record.trigger for record in machine.history] == ["outer"]
+    else:
+        assert machine.history == history_before
 
 
 @pytest.mark.xfail(strict=True, reason="RED until Plan 18-05")

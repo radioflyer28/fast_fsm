@@ -68,6 +68,18 @@ PHASE18_WRITER_OWNER_PLANS = {
     "safe_trigger": "18-05",
 }
 
+TOPOLOGY_HISTORY_WRITERS = frozenset(
+    {
+        "add_state",
+        "add_transition",
+        "add_transitions",
+        "add_bidirectional_transition",
+        "add_emergency_transition",
+        "enable_history",
+        "disable_history",
+    }
+)
+
 # Classes that inherit (transitively) from State or ABC but are intentionally
 # sealed — not designed for user subclassing.  Exempt from the decorator
 # requirement.  Add new entries here with a short justification comment.
@@ -513,6 +525,37 @@ def test_phase18_sync_tracer_keeps_private_per_machine_locks() -> None:
         "trigger",
     } <= methods
     assert "_sync_ownership_locks" not in source
+
+
+def test_topology_history_writers_enter_and_release_once_without_public_delegation() -> (
+    None
+):
+    """Guard the Plan 04 topology/history envelope against future bypasses."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    state_machine = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
+    )
+    methods = {
+        node.name: node
+        for node in state_machine.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    for writer in TOPOLOGY_HISTORY_WRITERS:
+        method = methods[writer]
+        self_calls = [
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ]
+        assert self_calls.count("_acquire_sync_ownership") == 1
+        assert self_calls.count("_release_sync_ownership") == 1
+        assert not (set(self_calls) & (TOPOLOGY_HISTORY_WRITERS - {writer}))
 
 
 def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
