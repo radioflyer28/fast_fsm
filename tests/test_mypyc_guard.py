@@ -719,6 +719,59 @@ def test_phase18_native_probe_requires_commands_in_their_named_steps(
         _load_phase18_native_probe()._check_ci(candidate)
 
 
+def test_phase18_native_probe_rejects_inert_or_split_pytest_commands(
+    tmp_path: Path,
+) -> None:
+    """The native test step must execute one pytest command with real test args."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_run = """run: >-
+          uv run pytest
+          tests/test_ownership_concurrency.py
+          tests/test_transition_lifecycle.py
+          tests/test_async.py
+          tests/test_mypyc_guard.py
+          -x -q"""
+    inert_run = """run: |
+          uv run pytest --collect-only -q
+          echo tests/test_ownership_concurrency.py
+          echo tests/test_transition_lifecycle.py
+          echo tests/test_async.py
+          echo tests/test_mypyc_guard.py"""
+    assert expected_run in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(workflow.replace(expected_run, inert_run), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="exactly one non-comment shell command"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+@pytest.mark.parametrize("option", ("--collect-only", "--help", "--version"))
+def test_phase18_native_probe_rejects_nonexecuting_pytest_options(
+    tmp_path: Path,
+    option: str,
+) -> None:
+    """The required test files do not make pytest inspection modes valid."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_run = """run: >-
+          uv run pytest
+          tests/test_ownership_concurrency.py
+          tests/test_transition_lifecycle.py
+          tests/test_async.py
+          tests/test_mypyc_guard.py
+          -x -q"""
+    assert expected_run in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            expected_run, expected_run.replace("-x -q", f"{option} -x -q")
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="must not use non-executing pytest option"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
 def test_phase18_native_probe_accepts_one_complete_hosted_run_among_duplicates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

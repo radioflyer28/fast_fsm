@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 
@@ -28,6 +29,10 @@ _CI_COMPILE_CORE_STEP = "Compile actual ownership core"
 _CI_NATIVE_ORIGIN_STEP = "Assert native ownership core origin"
 _CI_TEST_STEP = "Run native ownership and lifecycle semantics"
 _CI_REPRESENTATION_PROBE_STEP = "Compile and import ownership representation probe"
+_NON_EXECUTING_PYTEST_OPTIONS = frozenset(
+    ("--collect-only", "--co", "--help", "-h", "--version", "-V")
+)
+_SHELL_CONTROL_TOKENS = frozenset(("&", "&&", "|", "||", ";", "<", ">", "<<", ">>"))
 _RUNTIME_SOURCE = """\
 from __future__ import annotations
 
@@ -151,6 +156,61 @@ def _build_and_assert_native() -> None:
         _run(["uv", "run", "python", "-c", assertion], cwd=directory)
 
 
+def _parse_ownership_pytest_command(run: str) -> tuple[str, ...]:
+    """Return the one permitted pytest command from the native test step."""
+    command_lines = tuple(
+        line.strip()
+        for line in run.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    if len(command_lines) != 1:
+        raise SystemExit(
+            "CI ownership native probe test step must contain exactly one "
+            "non-comment shell command"
+        )
+
+    try:
+        lexer = shlex.shlex(command_lines[0], posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = tuple(lexer)
+    except ValueError as exc:
+        raise SystemExit(
+            "CI ownership native probe test step has invalid shell syntax"
+        ) from exc
+
+    if tokens[:3] != ("uv", "run", "pytest"):
+        raise SystemExit(
+            "CI ownership native probe test step must run exactly: uv run pytest ..."
+        )
+    if any(
+        token in _SHELL_CONTROL_TOKENS or "$" in token or "`" in token
+        for token in tokens
+    ):
+        raise SystemExit(
+            "CI ownership native probe test step must not contain shell control "
+            "operators"
+        )
+    for token in tokens[3:]:
+        if any(
+            token == option or token.startswith(f"{option}=")
+            for option in _NON_EXECUTING_PYTEST_OPTIONS
+        ):
+            raise SystemExit(
+                "CI ownership native probe test step must not use non-executing "
+                f"pytest option: {token}"
+            )
+    missing = [
+        test_file for test_file in _OWNERSHIP_TEST_FILES if test_file not in tokens
+    ]
+    if missing:
+        raise SystemExit(
+            "CI ownership native probe test step is missing pytest arguments: "
+            + ", ".join(missing)
+        )
+    return tokens
+
+
 def _check_ci(path: Path) -> None:
     try:
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -178,7 +238,7 @@ def _check_ci(path: Path) -> None:
     if not isinstance(steps, list):
         raise SystemExit("CI ownership native probe has no steps list")
 
-    def executable_step_lines(name: str) -> tuple[str, ...]:
+    def executable_step_run(name: str) -> str:
         matching_steps = [
             step
             for step in steps
@@ -194,6 +254,10 @@ def _check_ci(path: Path) -> None:
             raise SystemExit(
                 f"CI ownership native probe step has no executable run scalar: {name}"
             )
+        return run
+
+    def executable_step_lines(name: str) -> tuple[str, ...]:
+        run = executable_step_run(name)
         return tuple(
             line.strip()
             for line in run.splitlines()
@@ -225,18 +289,13 @@ def _check_ci(path: Path) -> None:
         _CI_NATIVE_ORIGIN_STEP,
         "uv run python -c ",
     )
-    test_lines = require_command(_CI_TEST_STEP, "uv run pytest")
+    _parse_ownership_pytest_command(executable_step_run(_CI_TEST_STEP))
     require_command(
         _CI_REPRESENTATION_PROBE_STEP,
         "uv run python tools/phase18_native_probe.py --build-mode compiled "
         "--assert-native",
     )
 
-    if not all(
-        any(test_file in line for line in test_lines)
-        for test_file in _OWNERSHIP_TEST_FILES
-    ):
-        raise SystemExit("CI ownership native probe is missing executable test step")
     for required in (
         "import fast_fsm.core as core",
         "origin = Path(core.__file__).resolve()",
