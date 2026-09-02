@@ -945,6 +945,14 @@ class StateMachine:
             TypeError: If ``max_entries`` is not a non-boolean integer.
             ValueError: If ``max_entries`` is zero or negative.
         """
+        owner_thread_id = self._acquire_sync_ownership("enable_history")
+        try:
+            self._enable_history_owned(max_entries)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _enable_history_owned(self, max_entries: Any) -> None:
+        """Validate and replace history while the caller owns this machine."""
         if type(max_entries) is bool or not isinstance(max_entries, int):
             raise TypeError("max_entries must be a positive integer")
         if max_entries <= 0:
@@ -954,6 +962,14 @@ class StateMachine:
 
     def disable_history(self) -> None:
         """Disable transition history recording and discard all records."""
+        owner_thread_id = self._acquire_sync_ownership("disable_history")
+        try:
+            self._disable_history_owned()
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _disable_history_owned(self) -> None:
+        """Discard history while the caller owns this machine."""
         self._history = None
 
     @property
@@ -995,6 +1011,14 @@ class StateMachine:
         Performance: O(1) - Constant time state registration
         Memory: +~32 bytes per state (slots optimization)
         """
+        owner_thread_id = self._acquire_sync_ownership("add_state")
+        try:
+            self._add_state_owned(state)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_state_owned(self, state: State) -> None:
+        """Register one state while the caller owns this machine."""
         if self._register_state(state):
             self._graph_version += 1
 
@@ -1156,6 +1180,24 @@ class StateMachine:
         unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
+        owner_thread_id = self._acquire_sync_ownership("add_transition")
+        try:
+            self._add_transition_owned(
+                trigger, from_state, to_state, condition, unless=unless
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_transition_owned(
+        self,
+        trigger: str,
+        from_state: Union[str, State, List[Union[str, State]]],
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit one transition while the caller owns this machine."""
         prepared = self._normalize_transition_request(
             trigger, from_state, to_state, condition, unless=unless
         )
@@ -1199,6 +1241,29 @@ class StateMachine:
                 ('reset', 'stopped', 'idle',    None),   # explicit None == no guard
             ])
         """
+        owner_thread_id = self._acquire_sync_ownership("add_transitions")
+        try:
+            self._add_transitions_owned(transitions)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_transitions_owned(
+        self,
+        transitions: List[
+            Union[
+                Tuple[
+                    str, Union[str, State, List[Union[str, State]]], Union[str, State]
+                ],
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, GuardCallable]],
+                ],
+            ]
+        ],
+    ) -> None:
+        """Validate and commit a complete batch while the caller owns it."""
         prepared: List[_PreparedTransition] = []
         for entry in transitions:
             if len(entry) not in (3, 4):
@@ -1249,6 +1314,34 @@ class StateMachine:
             fsm.add_bidirectional_transition('open', 'close', 'closed', 'open',
                                              unless1=is_locked)
         """
+        owner_thread_id = self._acquire_sync_ownership("add_bidirectional_transition")
+        try:
+            self._add_bidirectional_transition_owned(
+                trigger1,
+                trigger2,
+                state1,
+                state2,
+                condition1,
+                condition2,
+                unless1=unless1,
+                unless2=unless2,
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_bidirectional_transition_owned(
+        self,
+        trigger1: str,
+        trigger2: str,
+        state1: Union[str, State],
+        state2: Union[str, State],
+        condition1: Optional[Union[Condition, GuardCallable]] = None,
+        condition2: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless1: Optional[Union[Condition, GuardCallable]] = None,
+        unless2: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit both directions while the caller owns it."""
         first = self._normalize_transition_request(
             trigger1, state1, state2, condition1, unless=unless1
         )
@@ -1284,6 +1377,23 @@ class StateMachine:
             # With negation shorthand:
             fsm.add_emergency_transition('fallback', 'safe', unless=is_safe)
         """
+        owner_thread_id = self._acquire_sync_ownership("add_emergency_transition")
+        try:
+            self._add_emergency_transition_owned(
+                trigger, to_state, condition, unless=unless
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_emergency_transition_owned(
+        self,
+        trigger: str,
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit an all-state transition while the caller owns it."""
         prepared = self._normalize_transition_request(
             trigger,
             list(self._states.values()),

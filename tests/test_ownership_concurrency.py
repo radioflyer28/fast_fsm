@@ -111,7 +111,12 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
     if case.owner_plan == "18-03":
         return "_acquire_async_ownership" in source and "_ownership_root" in source
     if case.owner_plan == "18-04":
-        for method in ("add_state", "add_transition", "enable_history", "add_listener"):
+        methods = (
+            TOPOLOGY_HISTORY_WRITERS
+            if case.identifier == "OWN-05-topology-history"
+            else ("add_listener", "on_trigger")
+        )
+        for method in methods:
             start = source.index(f"    def {method}(")
             end = source.find("\n    def ", start + 1)
             body = source[start:] if end == -1 else source[start:end]
@@ -133,7 +138,8 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
     tuple(
         (
             pytest.param(case, id=case.identifier)
-            if case.owner_plan in {"18-03", "18-04"}
+            if case.owner_plan == "18-03"
+            or case.identifier == "OWN-05-topology-history"
             else pytest.param(
                 case,
                 marks=pytest.mark.xfail(
