@@ -281,8 +281,22 @@ def _gh_json(arguments: list[str]) -> object:
         raise SystemExit("GitHub CLI returned invalid workflow JSON") from exc
 
 
+def _has_successful_native_matrix(jobs: list[object]) -> bool:
+    """Return whether one successful ownership job exists for every version."""
+    for version in _SUPPORTED_PYTHONS:
+        expected_name = f"Ownership native probe · Python {version}"
+        expected_jobs = [
+            job
+            for job in jobs
+            if isinstance(job, dict) and job.get("name") == expected_name
+        ]
+        if len(expected_jobs) != 1 or expected_jobs[0].get("conclusion") != "success":
+            return False
+    return True
+
+
 def _assert_hosted_ci_sha(ref: str) -> None:
-    """Require successful native ownership jobs from one exact candidate SHA."""
+    """Require a successful native ownership matrix from an exact SHA."""
     candidate = _resolve_commit(ref)
     runs = _gh_json(
         [
@@ -306,47 +320,47 @@ def _assert_hosted_ci_sha(ref: str) -> None:
         if isinstance(run, dict)
         and run.get("headSha") == candidate
         and run.get("workflowName") == _WORKFLOW_NAME
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
     ]
-    if len(matching_runs) != 1:
+    if not matching_runs:
         raise SystemExit(
-            f"expected exactly one {_WORKFLOW_NAME} run for {candidate}, "
-            f"found {len(matching_runs)}"
+            f"no completed successful {_WORKFLOW_NAME} runs found for {candidate}"
         )
-    run = matching_runs[0]
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise SystemExit(
-            "exact-SHA CI run is not a completed success: "
-            f"status={run.get('status')!r} conclusion={run.get('conclusion')!r}"
+
+    for run in matching_runs:
+        database_id = run.get("databaseId")
+        if not isinstance(database_id, int):
+            continue
+        details = _gh_json(
+            [
+                "run",
+                "view",
+                str(database_id),
+                "--json",
+                "headSha,status,conclusion,jobs",
+            ]
         )
-    database_id = run.get("databaseId")
-    if not isinstance(database_id, int):
-        raise SystemExit("exact-SHA CI run has no numeric database ID")
-    details = _gh_json(
-        [
-            "run",
-            "view",
-            str(database_id),
-            "--json",
-            "headSha,status,conclusion,jobs",
-        ]
+        if not isinstance(details, dict) or details.get("headSha") != candidate:
+            continue
+        if (
+            details.get("status") != "completed"
+            or details.get("conclusion") != "success"
+        ):
+            continue
+        jobs = details.get("jobs")
+        if not isinstance(jobs, list):
+            continue
+        if _has_successful_native_matrix(jobs):
+            print(
+                f"Hosted CI native ownership matrix verified for exact SHA {candidate}"
+            )
+            return
+
+    raise SystemExit(
+        "no completed successful CI run contains the full native ownership matrix "
+        f"for {candidate}"
     )
-    if not isinstance(details, dict) or details.get("headSha") != candidate:
-        raise SystemExit("hosted CI details do not match the requested candidate SHA")
-    if details.get("status") != "completed" or details.get("conclusion") != "success":
-        raise SystemExit("exact-SHA CI details are not a completed success")
-    jobs = details.get("jobs")
-    if not isinstance(jobs, list):
-        raise SystemExit("exact-SHA CI details have no job inventory")
-    for version in _SUPPORTED_PYTHONS:
-        expected_name = f"Ownership native probe · Python {version}"
-        expected_jobs = [
-            job
-            for job in jobs
-            if isinstance(job, dict) and job.get("name") == expected_name
-        ]
-        if len(expected_jobs) != 1 or expected_jobs[0].get("conclusion") != "success":
-            raise SystemExit(f"native ownership job did not succeed: {expected_name}")
-    print(f"Hosted CI native ownership matrix verified for exact SHA {candidate}")
 
 
 def main() -> int:

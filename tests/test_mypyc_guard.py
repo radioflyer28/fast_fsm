@@ -719,6 +719,68 @@ def test_phase18_native_probe_requires_commands_in_their_named_steps(
         _load_phase18_native_probe()._check_ci(candidate)
 
 
+def test_phase18_native_probe_accepts_one_complete_hosted_run_among_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A push-plus-PR history is valid when one exact-SHA matrix is complete."""
+    probe = _load_phase18_native_probe()
+    candidate = "a" * 40
+    successful_jobs = [
+        {
+            "name": f"Ownership native probe · Python {version}",
+            "conclusion": "success",
+        }
+        for version in probe._SUPPORTED_PYTHONS
+    ]
+    incomplete_jobs = successful_jobs[:-1]
+
+    def fake_gh_json(arguments: list[str]) -> object:
+        if arguments[:2] == ["run", "list"]:
+            return [
+                {
+                    "databaseId": 10,
+                    "headSha": candidate,
+                    "workflowName": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "databaseId": 11,
+                    "headSha": candidate,
+                    "workflowName": "CI",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "databaseId": 12,
+                    "headSha": candidate,
+                    "workflowName": "CI",
+                    "status": "in_progress",
+                    "conclusion": None,
+                },
+            ]
+        if arguments[:3] == ["run", "view", "10"]:
+            return {
+                "headSha": candidate,
+                "status": "completed",
+                "conclusion": "success",
+                "jobs": incomplete_jobs,
+            }
+        if arguments[:3] == ["run", "view", "11"]:
+            return {
+                "headSha": candidate,
+                "status": "completed",
+                "conclusion": "success",
+                "jobs": successful_jobs,
+            }
+        pytest.fail(f"unexpected GitHub CLI request: {arguments}")
+
+    monkeypatch.setattr(probe, "_resolve_commit", lambda _ref: candidate)
+    monkeypatch.setattr(probe, "_gh_json", fake_gh_json)
+
+    probe._assert_hosted_ci_sha("HEAD")
+
+
 def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> (
     None
 ):
