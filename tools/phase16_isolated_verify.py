@@ -93,11 +93,18 @@ PHASE18_INVENTORY = (
     "tests/test_listeners.py",
     "tests/test_builder.py",
     "tests/test_async.py",
+    "tests/test_readme_examples.py",
     "tools/release_evidence.py",
     "tools/phase16_isolated_verify.py",
     "tools/phase18_native_probe.py",
     ".github/workflows/ci.yml",
     ".specify/memory/spr-core-api.md",
+    ".specify/decisions/ADR-005-safe-ownership-concurrency.md",
+    "README.md",
+    "docs/QUICK_START.md",
+    "docs/dev/architecture.md",
+    "docs/dev/testing.md",
+    "evidence/release-baseline.json",
     ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
 )
 MANIFEST_DESCRIPTOR_SUPPORT = (
@@ -1004,7 +1011,7 @@ def _suite_mode(args: argparse.Namespace) -> int:
         )
         if status:
             return status
-        return _run_suite_command(
+        status = _run_suite_command(
             build_mode="pure",
             includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
             command=(
@@ -1016,6 +1023,20 @@ def _suite_mode(args: argparse.Namespace) -> int:
                 "--json",
             ),
         )
+        if status:
+            return status
+        for command in (
+            ("task", "release-gate"),
+            ("task", "typecheck-ty"),
+        ):
+            status = _run_suite_command(
+                build_mode="pure",
+                includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
+                command=command,
+            )
+            if status:
+                return status
+        return 0
     raise AssertionError(f"unhandled suite: {args.suite}")
 
 

@@ -634,7 +634,7 @@ def test_prepared_declarative_marker_is_one_contextvar_with_machine_identity() -
 
 
 def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
-    """The adopted representation is compile-first for all supported Python rows."""
+    """The final CI matrix compiles and exercises the actual ownership core."""
     probe_source = PHASE18_NATIVE_PROBE.read_text(encoding="utf-8")
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     for required in (
@@ -643,9 +643,20 @@ def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
         "ContextVar",
         "OwnershipRepresentation",
         "--assert-native",
+        "--assert-hosted-ci-sha",
+        "gh",
+        "headSha",
     ):
         assert required in probe_source
     assert "ownership_native_probe:" in workflow
+    assert (
+        "tools/phase18_native_probe.py --check-ci .github/workflows/ci.yml" in workflow
+    )
+    assert "tests/test_ownership_concurrency.py" in workflow
+    assert (
+        "tools/phase18_native_probe.py --build-mode compiled --assert-native"
+        in workflow
+    )
     for version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
         assert f'"{version}"' in workflow
 

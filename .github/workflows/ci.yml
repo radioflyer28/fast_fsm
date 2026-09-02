@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -157,7 +157,28 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install locked native probe dependencies
         run: uv sync --locked --all-groups
-      - name: Compile and import ownership representation
+      - name: Validate ownership native matrix contract
+        run: uv run python tools/phase18_native_probe.py --check-ci .github/workflows/ci.yml
+      - name: Compile actual ownership core
+        run: uv run python setup.py build_ext --inplace -q
+      - name: Assert native ownership core origin
+        run: |
+          uv run python -c "
+          from pathlib import Path
+          import fast_fsm.core as core
+          origin = Path(core.__file__).resolve()
+          print(origin)
+          assert origin.suffix in ('.so', '.pyd', '.dll')
+          "
+      - name: Run native ownership and lifecycle semantics
+        run: >-
+          uv run pytest
+          tests/test_ownership_concurrency.py
+          tests/test_transition_lifecycle.py
+          tests/test_async.py
+          tests/test_mypyc_guard.py
+          -x -q
+      - name: Compile and import ownership representation probe
         run: uv run python tools/phase18_native_probe.py --build-mode compiled --assert-native
 
   supported_python_build:
