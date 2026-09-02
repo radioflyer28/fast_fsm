@@ -9,12 +9,25 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+import yaml
+
 
 _PROBE_MODULE = "ownership_probe_runtime"
 _SUPPORTED_PYTHONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 _WORKFLOW_NAME = "CI"
 _NATIVE_SUFFIXES = (".so", ".pyd", ".dll")
 ROOT = Path(__file__).resolve().parents[1]
+_OWNERSHIP_TEST_FILES = (
+    "tests/test_ownership_concurrency.py",
+    "tests/test_transition_lifecycle.py",
+    "tests/test_async.py",
+    "tests/test_mypyc_guard.py",
+)
+_CI_CONTRACT_STEP = "Validate ownership native matrix contract"
+_CI_COMPILE_CORE_STEP = "Compile actual ownership core"
+_CI_NATIVE_ORIGIN_STEP = "Assert native ownership core origin"
+_CI_TEST_STEP = "Run native ownership and lifecycle semantics"
+_CI_REPRESENTATION_PROBE_STEP = "Compile and import ownership representation probe"
 _RUNTIME_SOURCE = """\
 from __future__ import annotations
 
@@ -139,32 +152,102 @@ def _build_and_assert_native() -> None:
 
 
 def _check_ci(path: Path) -> None:
-    content = path.read_text()
-    if "ownership_native_probe:" not in content:
-        raise SystemExit("CI is missing the ownership_native_probe job")
     try:
-        job = content.split("  ownership_native_probe:", maxsplit=1)[1].split(
-            "\n  supported_python_build:", maxsplit=1
-        )[0]
-    except IndexError as exc:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise SystemExit(f"could not parse CI workflow: {path}") from exc
+    if not isinstance(workflow, dict):
+        raise SystemExit("CI workflow must be a mapping")
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        raise SystemExit("CI workflow has no jobs mapping")
+    job = jobs.get("ownership_native_probe")
+    if not isinstance(job, dict):
+        raise SystemExit("CI is missing the ownership_native_probe job")
+
+    strategy = job.get("strategy")
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    versions = matrix.get("python-version") if isinstance(matrix, dict) else None
+    if not isinstance(versions, list) or tuple(versions) != _SUPPORTED_PYTHONS:
         raise SystemExit(
-            "CI ownership native probe job boundary is not explicit"
-        ) from exc
-    for required in (
-        "uv run python tools/phase18_native_probe.py --check-ci .github/workflows/ci.yml",
+            "CI ownership native probe matrix must contain exactly: "
+            + ", ".join(_SUPPORTED_PYTHONS)
+        )
+
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        raise SystemExit("CI ownership native probe has no steps list")
+
+    def executable_step_lines(name: str) -> tuple[str, ...]:
+        matching_steps = [
+            step
+            for step in steps
+            if isinstance(step, dict) and step.get("name") == name
+        ]
+        if len(matching_steps) != 1:
+            raise SystemExit(
+                "CI ownership native probe must contain exactly one executable "
+                f"step named: {name}"
+            )
+        run = matching_steps[0].get("run")
+        if not isinstance(run, str):
+            raise SystemExit(
+                f"CI ownership native probe step has no executable run scalar: {name}"
+            )
+        return tuple(
+            line.strip()
+            for line in run.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+
+    for step in steps:
+        if not isinstance(step, dict):
+            raise SystemExit("CI ownership native probe has an invalid step")
+
+    def require_command(step_name: str, command: str) -> tuple[str, ...]:
+        lines = executable_step_lines(step_name)
+        if not any(line.startswith(command) for line in lines):
+            raise SystemExit(
+                "CI ownership native probe is missing executable command in "
+                f"{step_name}: {command}"
+            )
+        return lines
+
+    require_command(
+        _CI_CONTRACT_STEP,
+        "uv run python tools/phase18_native_probe.py --check-ci ",
+    )
+    require_command(
+        _CI_COMPILE_CORE_STEP,
         "uv run python setup.py build_ext --inplace -q",
-        "import fast_fsm.core as core",
-        "tests/test_ownership_concurrency.py",
-        "tests/test_transition_lifecycle.py",
-        "tests/test_async.py",
-        "tests/test_mypyc_guard.py",
-        "tools/phase18_native_probe.py --build-mode compiled --assert-native",
+    )
+    native_origin_lines = require_command(
+        _CI_NATIVE_ORIGIN_STEP,
+        "uv run python -c ",
+    )
+    test_lines = require_command(_CI_TEST_STEP, "uv run pytest")
+    require_command(
+        _CI_REPRESENTATION_PROBE_STEP,
+        "uv run python tools/phase18_native_probe.py --build-mode compiled "
+        "--assert-native",
+    )
+
+    if not all(
+        any(test_file in line for line in test_lines)
+        for test_file in _OWNERSHIP_TEST_FILES
     ):
-        if required not in job:
-            raise SystemExit(f"CI ownership native probe is missing: {required}")
-    for version in _SUPPORTED_PYTHONS:
-        if f'"{version}"' not in job:
-            raise SystemExit(f"CI is missing supported Python {version}")
+        raise SystemExit("CI ownership native probe is missing executable test step")
+    for required in (
+        "import fast_fsm.core as core",
+        "origin = Path(core.__file__).resolve()",
+        "assert origin.suffix in ('.so', '.pyd', '.dll')",
+    ):
+        if not any(required in line for line in native_origin_lines):
+            raise SystemExit(
+                "CI ownership native probe is missing executable native-origin check: "
+                + required
+            )
+
     print(f"CI ownership native probe matrix verified: {', '.join(_SUPPORTED_PYTHONS)}")
 
 

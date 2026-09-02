@@ -31,6 +31,7 @@ import stat
 import subprocess
 import sys
 import threading
+from types import ModuleType
 
 import pytest
 
@@ -43,6 +44,19 @@ PHASE18_NATIVE_PROBE = (
     Path(__file__).parent.parent / "tools" / "phase18_native_probe.py"
 )
 CI_WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
+
+
+def _load_phase18_native_probe() -> ModuleType:
+    """Import the standalone native probe without invoking its CLI."""
+    specification = importlib.util.spec_from_file_location(
+        "phase18_native_probe_for_tests", PHASE18_NATIVE_PROBE
+    )
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
 
 PHASE18_WRITER_OWNER_PLANS = {
     "trigger": "18-01",
@@ -659,6 +673,50 @@ def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
     )
     for version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
         assert f'"{version}"' in workflow
+
+
+def test_phase18_native_probe_requires_executable_workflow_commands(
+    tmp_path: Path,
+) -> None:
+    """A command mentioned only in a YAML comment cannot satisfy the contract."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    required_command = (
+        "run: uv run python tools/phase18_native_probe.py --check-ci "
+        ".github/workflows/ci.yml"
+    )
+    commented_command = (
+        "run: |\n"
+        "          # uv run python tools/phase18_native_probe.py --check-ci "
+        ".github/workflows/ci.yml"
+    )
+    assert required_command in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(required_command, commented_command), encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit, match="missing executable command"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_requires_commands_in_their_named_steps(
+    tmp_path: Path,
+) -> None:
+    """Executable commands in an unrelated step cannot satisfy the contract."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_step = "Run native ownership and lifecycle semantics"
+    assert f"name: {expected_step}" in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            f"name: {expected_step}",
+            "name: Unrelated native ownership command",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="must contain exactly one executable step"):
+        _load_phase18_native_probe()._check_ci(candidate)
 
 
 def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary() -> (
