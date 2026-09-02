@@ -866,6 +866,29 @@ def _manifest_destination(
     return destination
 
 
+@pytest.fixture(autouse=True)
+def _skip_descriptor_publication_tests_without_platform_support(
+    request: pytest.FixtureRequest,
+) -> None:
+    """Keep POSIX descriptor-publication tests out of unsupported CI jobs."""
+    name = request.node.name
+    if name == "test_phase16_baseline_write_fails_closed_without_descriptor_support":
+        return
+    if not (
+        name.startswith("test_phase16_")
+        and (
+            "baseline" in name
+            or "coverage_floor_migration" in name
+            or "quality_floor_migration" in name
+        )
+    ):
+        return
+
+    runner = _load_phase16_runner()
+    if not runner.MANIFEST_DESCRIPTOR_SUPPORT:
+        pytest.skip("secure descriptor publication is unavailable on this platform")
+
+
 def test_phase16_baseline_write_refuses_lower_coverage_before_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
