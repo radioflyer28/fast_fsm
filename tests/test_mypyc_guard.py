@@ -584,6 +584,55 @@ def test_d14_writers_enter_and_release_once_without_public_delegation() -> None:
             assert not (set(self_calls) & (public_writers - {writer}))
 
 
+def test_prepared_declarative_marker_is_one_contextvar_with_machine_identity() -> None:
+    """Guard preparation must never regress to a mutable shared scope registry."""
+    source = CORE_PY.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(CORE_PY))
+    names = {
+        target.id
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (node.targets if isinstance(node, ast.Assign) else (node.target,))
+        if isinstance(target, ast.Name)
+    }
+    functions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert "_prepared_declarative_guards" not in names
+    assert "_prepared_guard_scope_key" not in functions
+    assert "_prepared_declarative_guard" in names
+    assert "contextvars.ContextVar" in source
+    assert "id(machine)" in source
+
+    for name in (
+        "_set_prepared_declarative_guard",
+        "_reset_prepared_declarative_guard",
+        "_has_prepared_declarative_guard",
+    ):
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        calls = [
+            node.func.attr
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_prepared_declarative_guard"
+        ]
+        expected_call = (
+            "get"
+            if name == "_has_prepared_declarative_guard"
+            else ("reset" if name == "_reset_prepared_declarative_guard" else "set")
+        )
+        assert expected_call in calls
+
+
 def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
     """The adopted representation is compile-first for all supported Python rows."""
     probe_source = PHASE18_NATIVE_PROBE.read_text(encoding="utf-8")

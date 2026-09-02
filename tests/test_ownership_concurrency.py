@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+import fast_fsm.core as core
 from fast_fsm.core import AsyncStateMachine, CallbackState, State, StateMachine
 
 
@@ -143,7 +144,7 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
     tuple(
         (
             pytest.param(case, id=case.identifier)
-            if case.owner_plan == "18-03"
+            if case.owner_plan in {"18-03", "18-05"}
             or case.identifier in {"OWN-05-topology-history", "OWN-05-registrars"}
             else pytest.param(
                 case,
@@ -407,7 +408,6 @@ def test_safe_trigger_converts_ordinary_post_admission_exception_without_secret_
     assert "payload-secret" not in caplog.text
 
 
-@pytest.mark.xfail(strict=True, reason="RED until Plan 18-05")
 def test_strict_red_declarative_marker_is_context_local_and_machine_qualified() -> None:
     """Plan 18-05 replaces the shared marker registry with a ContextVar token."""
     from pathlib import Path
@@ -416,6 +416,125 @@ def test_strict_red_declarative_marker_is_context_local_and_machine_qualified() 
     assert "_prepared_declarative_guards" not in source
     assert "ContextVar" in source
     assert "_prepared_declarative_guard" in source
+
+
+def test_declarative_marker_is_machine_qualified_and_nested_context_local() -> None:
+    """Nested machine scopes restore the matching prior marker exactly."""
+    source = State("source")
+    target = State("target")
+    first = StateMachine(source, name="first-marker-machine")
+    second = StateMachine(source, name="second-marker-machine")
+    first.add_state(target)
+    second.add_state(target)
+
+    outer = core._set_prepared_declarative_guard(first, source, "advance", target)
+    try:
+        assert core._prepared_declarative_guard.get() == (
+            id(first),
+            id(source),
+            "advance",
+            id(target),
+        )
+        assert core._has_prepared_declarative_guard(source, "advance", target)
+        inner = core._set_prepared_declarative_guard(second, source, "advance", target)
+        try:
+            assert core._prepared_declarative_guard.get() == (
+                id(second),
+                id(source),
+                "advance",
+                id(target),
+            )
+            assert core._has_prepared_declarative_guard(source, "advance", target)
+        finally:
+            core._reset_prepared_declarative_guard(inner)
+        assert core._prepared_declarative_guard.get() == (
+            id(first),
+            id(source),
+            "advance",
+            id(target),
+        )
+    finally:
+        core._reset_prepared_declarative_guard(outer)
+
+    assert core._prepared_declarative_guard.get() is None
+
+
+def test_declarative_marker_isolated_for_independent_sync_threads() -> None:
+    """The same shared states cannot make independent thread markers collide."""
+    source = State("source")
+    target = State("target")
+    first = StateMachine(source, name="first-thread-machine")
+    second = StateMachine(source, name="second-thread-machine")
+    first.add_state(target)
+    second.add_state(target)
+    ready = threading.Barrier(2)
+    outcomes: list[bool] = []
+
+    def mark(machine: StateMachine) -> None:
+        token = core._set_prepared_declarative_guard(machine, source, "advance", target)
+        try:
+            ready.wait(timeout=5)
+            outcomes.append(
+                core._has_prepared_declarative_guard(source, "advance", target)
+            )
+        finally:
+            core._reset_prepared_declarative_guard(token)
+
+    first_thread = threading.Thread(target=mark, args=(first,))
+    second_thread = threading.Thread(target=mark, args=(second,))
+    first_thread.start()
+    second_thread.start()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert outcomes == [True, True]
+    assert core._prepared_declarative_guard.get() is None
+
+
+@pytest.mark.asyncio
+async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() -> None:
+    """Task-local values and explicit reset survive concurrent cancellation."""
+    source = State("source")
+    target = State("target")
+    first = StateMachine(source, name="first-task-machine")
+    second = StateMachine(source, name="second-task-machine")
+    first.add_state(target)
+    second.add_state(target)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    restored: list[bool] = []
+
+    async def mark_then_cancel() -> None:
+        token = core._set_prepared_declarative_guard(first, source, "advance", target)
+        try:
+            entered.set()
+            await release.wait()
+        finally:
+            core._reset_prepared_declarative_guard(token)
+            restored.append(
+                not core._has_prepared_declarative_guard(source, "advance", target)
+            )
+
+    async def mark_independently() -> bool:
+        token = core._set_prepared_declarative_guard(second, source, "advance", target)
+        try:
+            await entered.wait()
+            return core._has_prepared_declarative_guard(source, "advance", target)
+        finally:
+            core._reset_prepared_declarative_guard(token)
+
+    cancelled = asyncio.create_task(mark_then_cancel())
+    independent = asyncio.create_task(mark_independently())
+    await entered.wait()
+    assert await independent
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+
+    assert restored == [True]
+    assert core._prepared_declarative_guard.get() is None
 
 
 def test_sync_reentrant_callback_is_rejected_before_nested_preparation() -> None:
