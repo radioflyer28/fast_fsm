@@ -43,7 +43,8 @@ same interpreter.  Async rates intentionally have no durable floor: they are
 recorded to make the ownership path observable without inventing a scheduling
 guarantee.
 
-The regenerated release baseline records 1,358 passing pure tests, 97.87%
-total source coverage, and 97.26% `core.py` coverage.  Those are fresh
-baseline observations captured after the direct-control exception paths and
-the async ownership observation were covered.
+The regenerated release baseline records 1,379 passing pure tests, 97.89%
+total source coverage, and 97.28% `core.py` coverage.  Those are fresh
+baseline observations captured after the direct-control exception paths,
+the async ownership observation, and the Plan 18-08 marker-isolation paths
+were covered.
