@@ -13,9 +13,9 @@ from fast_fsm._diagnostics import DiagnosticBudgetExceeded, DiagnosticLimits
 from fast_fsm.conditions import FuncCondition
 
 
-def _moved_machine(*, label: str = "diagnostic-machine") -> tuple[
-    StateMachine, State, State, State, FuncCondition
-]:
+def _moved_machine(
+    *, label: str = "diagnostic-machine"
+) -> tuple[StateMachine, State, State, State, FuncCondition]:
     """Build a real machine whose runtime state differs from its initial state."""
     initial = State("initial")
     middle = State("middle")

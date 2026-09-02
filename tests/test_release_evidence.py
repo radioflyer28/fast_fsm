@@ -490,6 +490,7 @@ def test_slots_policy_recursively_classifies_every_production_class() -> None:
     assert set(registered) == {
         "fast_fsm.conditions.CompiledFuncCondition",
         "fast_fsm.core.TransitionError",
+        "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
     }
     for name, entry in registered.items():
         assert entry["has_instance_dict"] is True, name

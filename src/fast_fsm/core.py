@@ -376,6 +376,9 @@ class _GraphTransition:
     trigger: str
     to_state: "State"
     condition: Optional[Condition]
+    from_state_name: str
+    to_state_name: str
+    condition_name: Optional[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +395,9 @@ class _GraphSnapshot:
     graph_version: int
     states: Tuple["State", ...]
     transitions: Tuple[_GraphTransition, ...]
+    initial_state_name: str
+    current_state_name: str
+    state_names: Tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1030,10 +1036,33 @@ class StateMachine:
         ``to_dict()`` schemas untouched.  It is assembled from the authoritative
         dictionaries on demand, so no stale cached structural view can escape.
         """
+        # Snapshot capture is a read boundary.  A callback can request a
+        # diagnostic snapshot while it already owns the machine; capturing
+        # directly in that case avoids waiting on its own non-reentrant lock.
+        # Other callers hold the same primitive as topology writers, so they
+        # cannot observe a partially committed graph update.
+        if self._sync_owner_thread_id == threading.get_ident():
+            return self._graph_snapshot_owned()
+
+        self._sync_ownership_lock.acquire()
+        try:
+            return self._graph_snapshot_owned()
+        finally:
+            self._sync_ownership_lock.release()
+
+    def _graph_snapshot_owned(self) -> _GraphSnapshot:
+        """Capture canonical topology while a caller holds the read boundary."""
         states = tuple(state for _, state in sorted(self._states.items()))
+        state_names = tuple(state.name for state in states)
         transitions = tuple(
             _GraphTransition(
-                self._states[from_name], trigger, entry.to_state, entry.condition
+                self._states[from_name],
+                trigger,
+                entry.to_state,
+                entry.condition,
+                self._states[from_name].name,
+                entry.to_state.name,
+                entry.condition.name if entry.condition is not None else None,
             )
             for from_name, entries in sorted(self._transitions.items())
             for trigger, entry in sorted(entries.items())
@@ -1044,6 +1073,9 @@ class StateMachine:
             self._graph_version,
             states,
             transitions,
+            self._initial_state.name,
+            self._current_state.name,
+            state_names,
         )
 
     def _resolve_canonical_state(self, state: Any, *, role: str) -> State:

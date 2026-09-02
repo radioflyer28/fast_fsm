@@ -54,6 +54,9 @@ REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
     "fast_fsm.core.TransitionError": (
         "@mypyc_attr(native_class=False) preserves normal Python exception behavior."
     ),
+    "fast_fsm._diagnostics.DiagnosticBudgetExceeded": (
+        "Public bounded-diagnostic failures carry a scalar DiagnosticStatus."
+    ),
 }
 
 
@@ -2015,6 +2018,7 @@ def _slots_measurements(
         sys.path.insert(0, source_root_text)
     importlib.invalidate_caches()
     core = importlib.import_module(CORE_MODULE_NAME)
+    diagnostics = importlib.import_module("fast_fsm._diagnostics")
 
     registered_instances = {
         "fast_fsm.conditions.CompiledFuncCondition": core.CompiledFuncCondition(
@@ -2022,6 +2026,11 @@ def _slots_measurements(
         ),
         "fast_fsm.core.TransitionError": core.TransitionError(
             core.TransitionResult(False)
+        ),
+        "fast_fsm._diagnostics.DiagnosticBudgetExceeded": (
+            diagnostics.DiagnosticBudgetExceeded(
+                diagnostics.DiagnosticStatus(True, None, None, 0, 0, 0, 0)
+            )
         ),
     }
     registered = [

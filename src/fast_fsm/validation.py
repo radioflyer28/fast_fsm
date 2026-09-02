@@ -13,9 +13,16 @@ without adding overhead to the core FSM classes. Includes:
 """
 
 from typing import Dict, Set, List, Tuple, Optional, Any, Callable
-from collections import defaultdict, deque
+from collections import defaultdict
 import json
 from .core import StateMachine
+from ._diagnostics import (
+    DiagnosticLimits,
+    DiagnosticStatus,
+    _DiagnosticBudget,
+    _graph_from_snapshot,
+    _reachable_indices,
+)
 
 
 class FSMValidator:
@@ -30,10 +37,20 @@ class FSMValidator:
         "transitions",
         "events",
         "initial_state",
+        "current_state",
         "_report_name",
+        "_snapshot",
+        "_diagnostic_graph",
+        "_budget",
     )
 
-    def __init__(self, fsm: StateMachine, *, name: Optional[str] = None):
+    def __init__(
+        self,
+        fsm: StateMachine,
+        *,
+        name: Optional[str] = None,
+        limits: DiagnosticLimits | None = None,
+    ):
         """
         Initialize validator with a fast_fsm StateMachine instance.
 
@@ -43,31 +60,35 @@ class FSMValidator:
                 ``fsm.name``.  Useful when validating anonymous FSMs or
                 producing reports with a custom title.
         """
+        self._snapshot = fsm._graph_snapshot()
         self.fsm = fsm
-        self._report_name: str = name if name is not None else fsm.name
+        self._report_name: str = name if name is not None else self._snapshot.name
         self.states: Set[str] = set()
         self.transitions: Dict[str, Dict[str, Set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
         self.events: Set[str] = set()
-        self.initial_state: str = fsm.current_state.name
+        self.initial_state = self._snapshot.initial_state_name
+        self.current_state = self._snapshot.current_state_name
+        self._diagnostic_graph = _graph_from_snapshot(self._snapshot)
+        self._budget = _DiagnosticBudget(limits)
 
         # Extract FSM structure
         self._extract_fsm_structure()
 
     def _extract_fsm_structure(self) -> None:
-        """Extract states, transitions, and events from the FSM"""
-        # Get all states
-        self.states = set(self.fsm._states.keys())
+        """Populate legacy adapters from the immutable diagnostic graph."""
+        self.states = set(self._diagnostic_graph.state_names)
+        for edge in self._diagnostic_graph.edges:
+            from_state = self._diagnostic_graph.state_names[edge.from_index]
+            to_state = self._diagnostic_graph.state_names[edge.to_index]
+            self.transitions[from_state][edge.trigger].add(to_state)
+            self.events.add(edge.trigger)
 
-        # Extract transitions from the FSM's internal structure
-        for from_state, transitions in self.fsm._transitions.items():
-            for trigger, entry in transitions.items():
-                to_state = entry.to_state.name
-                self.states.add(from_state)
-                self.states.add(to_state)
-                self.transitions[from_state][trigger].add(to_state)
-                self.events.add(trigger)
+    @property
+    def diagnostic_status(self) -> DiagnosticStatus:
+        """Return scalar completion metadata for the shared diagnostic budget."""
+        return self._budget.status
 
     def get_reachable_states(self, start_state: Optional[str] = None) -> Set[str]:
         """
@@ -80,22 +101,20 @@ class FSMValidator:
             Set of reachable state names
         """
         if start_state is None:
-            start_state = self.initial_state
+            start_index = self._diagnostic_graph.initial_index
+        else:
+            try:
+                start_index = self._diagnostic_graph.state_names.index(start_state)
+            except ValueError:
+                # Preserve the legacy behavior for an unknown explicit start.
+                return {start_state}
 
-        reachable = set()
-        queue = deque([start_state])
-        reachable.add(start_state)
-
-        while queue:
-            current_state = queue.popleft()
-            for event in self.events:
-                next_states = self.transitions[current_state].get(event, set())
-                for next_state in next_states:
-                    if next_state not in reachable:
-                        reachable.add(next_state)
-                        queue.append(next_state)
-
-        return reachable
+        return {
+            self._diagnostic_graph.state_names[index]
+            for index in _reachable_indices(
+                self._diagnostic_graph, self._budget, start_index=start_index
+            )
+        }
 
     def find_unreachable_states(self) -> Set[str]:
         """Find states that cannot be reached from the initial state"""
@@ -219,7 +238,7 @@ class FSMValidator:
             "total_events": len(self.events),
             "total_transitions": total_transitions,
             "initial_state": self.initial_state,
-            "current_state": self.fsm.current_state.name,
+            "current_state": self.current_state,
             "unreachable_states": unreachable,
             "dead_states": dead_states,
             "missing_transitions": missing,
@@ -227,6 +246,7 @@ class FSMValidator:
             "is_reachable": len(unreachable) == 0,
             "has_dead_states": len(dead_states) > 0,
             "transition_matrix": self.get_transition_matrix(),
+            "diagnostic_status": self.diagnostic_status,
         }
 
     def generate_test_paths(
