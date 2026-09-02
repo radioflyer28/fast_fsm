@@ -2833,25 +2833,27 @@ class StateMachine:
 
     def safe_trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
-        Safe version of trigger that never raises exceptions.
+        Safe version of trigger with an explicit ownership-admission boundary.
 
-        Unlike :meth:`trigger`, which propagates any exception that escapes
-        callback/condition isolation (e.g. a ``BaseException`` subclass or an
-        unexpected internal error), ``safe_trigger()`` wraps the entire call in a
-        broad ``except Exception`` barrier.  Any exception that reaches this
-        barrier is caught, logged at ERROR level, and returned as a failed
-        :class:`TransitionResult`.
+        Like :meth:`trigger`, this public writer first enters the per-machine
+        ownership envelope.  Admission failures are programming and concurrency
+        errors, so they deliberately propagate before the compatibility barrier.
+        Once admitted, ordinary ``Exception`` instances escaping the owned
+        transition retain safe-trigger's value-returning compatibility behavior.
 
         **Exception semantics:**
 
         * Exceptions from user callbacks (on_enter, on_exit, listeners) and
-          conditions are *already isolated* inside :meth:`trigger` —
+          conditions are *already isolated* inside the owned transition —
           they are caught, logged at WARNING level, and result in a failed
           ``TransitionResult``.  They do **not** propagate to this barrier.
         * ``safe_trigger()`` is a last-resort safety net — it catches any
           exception that somehow escapes those inner guards (e.g. an unexpected
           internal FSM error).  Normal user code should never see exceptions
           land here.
+        * Ownership, loop, causal-root, foreign-thread, and busy-admission
+          ``RuntimeError`` instances occur before this barrier and propagate
+          with their stable redacted metadata.
         * ``BaseException`` subclasses (``KeyboardInterrupt``, ``SystemExit``)
           are **not** caught — they propagate normally.
 
@@ -2863,17 +2865,24 @@ class StateMachine:
         Returns:
             TransitionResult with detailed error information
         """
+        owner_thread_id = self._acquire_sync_ownership("safe_trigger")
         try:
-            return self.trigger(trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — last-resort safe_trigger() barrier; see docstring
-            error_msg = f"Exception during trigger '{trigger}': {e}"
-            self._logger.error("%s: %s", self._name, error_msg)
-            return TransitionResult(
-                False,
-                from_state=self.current_state_name,
-                trigger=trigger,
-                error=error_msg,
-            )
+            try:
+                return self._trigger_owned(trigger, *args, **kwargs)
+            except (
+                Exception
+            ) as cause:  # intentional post-admission compatibility barrier
+                self._logger.error(
+                    "%s: safe trigger failed type=%s", self._name, type(cause).__name__
+                )
+                return TransitionResult(
+                    False,
+                    from_state=self.current_state_name,
+                    trigger=trigger,
+                    error="Safe trigger failed",
+                )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
     def debug_info(self) -> Dict[str, Any]:
         """
