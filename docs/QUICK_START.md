@@ -330,7 +330,9 @@ snap = fsm.snapshot()        # {"state": "idle", "version": 1}
 # ... time passes ...
 fsm.restore(snap)            # teleports back; callbacks fire
 
-# Clone — same topology, fresh start, empty listeners
+# Clone — same topology; starts at the initial state with history disabled.
+# Callback/listener registries are shallow-copied into independent containers:
+# existing objects stay shared by identity, but registration changes do not cross machines.
 worker = fsm.clone()
 
 # Force & reset — bypass guards
