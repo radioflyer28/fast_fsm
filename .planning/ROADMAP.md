@@ -199,7 +199,33 @@
   4. Validation, comparison, JSON analysis, and diagram generation all describe the same immutable graph snapshot rather than independently reading mutable private dictionaries.
   5. Mermaid and PlantUML output uses collision-free identifiers and grammar-specific escaping, while trace logs redact payload values by default, accept an application redactor, and preserve application-owned handlers through reversible configuration.
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+**Wave 0** *(tracer and strict-RED harnesses; no file overlap)*
+
+- [ ] 19-01-PLAN.md — Prove one-snapshot declared-initial reachability and stage graph contracts
+- [ ] 19-02-PLAN.md — Stage hostile output/logging tests and the Phase 19 isolated suite
+
+**Wave 1** *(blocked on the relevant Wave 0 plans)*
+
+- [ ] 19-03-PLAN.md — Implement SCC/depth and sparse/dense/path budget semantics
+- [ ] 19-05-PLAN.md — Implement payload-free trace redaction and reversible logging ownership
+
+**Wave 2** *(blocked on graph semantics and Wave 0 harnesses)*
+
+- [ ] 19-04-PLAN.md — Publish positional comparison/batch and structured validation schemas
+
+**Wave 3** *(blocked on validation schemas)*
+
+- [ ] 19-06-PLAN.md — Encode collision-free diagrams and snapshot-consistent JSON/Markdown
+
+**Wave 4** *(blocked on all behavior plans)*
+
+- [ ] 19-07-PLAN.md — Publish API, architecture, testing, ADR, and SPR contracts
+
+**Wave 5** *(blocked on documentation and complete implementation)*
+
+- [ ] 19-08-PLAN.md — Refresh evidence and run the authoritative pure/compiled phase gate
 
 ### Phase 20: Installed Artifact Parity & Release Proof
 
