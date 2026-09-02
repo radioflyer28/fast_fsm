@@ -11,7 +11,7 @@ import gc
 import contextlib
 import io
 
-from fast_fsm.core import StateMachine, State
+from fast_fsm.core import AsyncStateMachine, State, StateMachine
 from fast_fsm.conditions import Condition
 from fast_fsm.condition_templates import TimeoutCondition
 
@@ -472,6 +472,88 @@ class TestAdvancedPerformance:
             f"sync ownership tracer throughput {ops_per_sec:,.0f} ops/sec is below "
             f"the {'compiled' if compiled else 'pure-Python'} floor of {floor:,}"
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.slow
+    async def test_async_ownership_uncontended_observation(self):
+        """Async ownership has a measurable uncontended observation, not a rate floor."""
+        source = State("async-ownership-source")
+        destination = State("async-ownership-destination")
+        machine = AsyncStateMachine(source, name="async_ownership_throughput")
+        machine.add_state(destination)
+        machine.add_transition(
+            "toggle", "async-ownership-source", "async-ownership-destination"
+        )
+        machine.add_transition(
+            "toggle", "async-ownership-destination", "async-ownership-source"
+        )
+
+        for _ in range(1_000):
+            assert (await machine.trigger_async("toggle")).success
+
+        gc.collect()
+        iterations = 20_000
+        with suppress_stdout():
+            start = time.perf_counter()
+            for _ in range(iterations):
+                assert (await machine.trigger_async("toggle")).success
+            elapsed = time.perf_counter() - start
+
+        ops_per_sec = iterations / elapsed
+        assert ops_per_sec > 0
+        self._assert_direct_control_callback_failures_are_best_effort()
+
+    def _assert_direct_control_callback_failures_are_best_effort(self):
+        """Control callbacks cannot interfere with an uncontended state change."""
+        from fast_fsm import CallbackState
+
+        events: list[str] = []
+
+        def broken(label: str):
+            def callback(*_args, **_kwargs):
+                events.append(label)
+                raise RuntimeError(f"force-state callback failure: {label}")
+
+            return callback
+
+        source = CallbackState("source", on_exit=broken("source-state-exit"))
+        destination = CallbackState(
+            "destination", on_enter=broken("destination-state-enter")
+        )
+        fsm = StateMachine(source, name="force-state-callback-observation")
+        fsm.add_state(destination)
+        fsm.on_exit("source", broken("source-registered-exit"))
+        fsm.on_enter("destination", broken("destination-registered-enter"))
+        fsm.on_trigger("__force__", broken("trigger"))
+
+        class Listener:
+            def before_transition(self, *_args, **_kwargs):
+                broken("before")()
+
+            def on_exit_state(self, *_args, **_kwargs):
+                broken("exit-listener")()
+
+            def on_enter_state(self, *_args, **_kwargs):
+                broken("enter-listener")()
+
+            def after_transition(self, *_args, **_kwargs):
+                broken("after")()
+
+        fsm.add_listener(Listener())
+        fsm.force_state("destination")
+
+        assert fsm.current_state is destination
+        assert events == [
+            "before",
+            "source-state-exit",
+            "source-registered-exit",
+            "exit-listener",
+            "destination-state-enter",
+            "destination-registered-enter",
+            "enter-listener",
+            "after",
+            "trigger",
+        ]
 
     @pytest.mark.slow
     def test_lifecycle_success_trigger_throughput(self):

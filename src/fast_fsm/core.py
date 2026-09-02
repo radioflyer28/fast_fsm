@@ -53,15 +53,17 @@ from .conditions import (
 _PreparedDeclarativeGuard = Tuple[int, int, str, int]
 _prepared_declarative_guard: contextvars.ContextVar[
     Optional[_PreparedDeclarativeGuard]
-] = contextvars.ContextVar("_prepared_declarative_guard", default=None)
+] = contextvars.ContextVar[Optional[_PreparedDeclarativeGuard]](
+    "_prepared_declarative_guard", default=None
+)
 
 
 # A task created by an owned async callback inherits this marker.  The marker
 # identifies a causal dispatch scope rather than a concrete Task so a parent
 # that awaits a child task cannot deadlock the machine behind itself.
-_ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar(
-    "_ownership_root", default=None
-)
+_ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar[
+    Optional[object]
+]("_ownership_root", default=None)
 
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a

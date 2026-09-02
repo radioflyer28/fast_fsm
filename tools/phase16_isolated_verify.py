@@ -841,7 +841,7 @@ def _suite_mode(args: argparse.Namespace) -> int:
             )
         tempdir, source_tree, env, _ = _prepare_tree(
             build_mode="pure",
-            includes=("tools/phase16_isolated_verify.py", *PHASE17_INVENTORY),
+            includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
         )
         try:
             status = _run(
