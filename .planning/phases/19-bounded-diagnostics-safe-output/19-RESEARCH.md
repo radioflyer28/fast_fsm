@@ -448,22 +448,42 @@ if logger.isEnabledFor(TRACE_LEVEL):
 | A6 | Redactor output accepts only bounded scalars after filtering. | Pattern 7 | Low; this is a recommended defense-in-depth constraint. |
 | A7 | Exact default budget numbers are selected only after deterministic calibration tests. | Pattern 2 | High if skipped; arbitrary defaults could break ordinary use or fail to constrain adversarial graphs. |
 
-## Open Questions
+## Resolved Questions
 
-1. **What exact default limits should be public?**
-   - What we know: limits must be finite, deterministic, complete ordinary examples, and exhaust adversarial generated graphs.
-   - What's unclear: exact counts are not knowable until the shared accounting rules and fixtures exist.
-   - Recommendation: make calibration an explicit implementation task: record the maximum ordinary fixture count, select documented headroom, then pin exact-pass and one-less-fails tests. Do not ask the user; this is delegated discretion.
+The three plan-time questions below are resolved policy, not executor choices.
+Implementation must preserve these selections and prove them with the cited plans.
 
-2. **Should incomplete structured results be returned anywhere by default?**
-   - What we know: structured results may expose incomplete status; legacy shapes must raise and no result may silently truncate.
-   - What's unclear: partial validation issue lists may be less useful than a uniform exception.
-   - Recommendation: return incomplete metadata only from an explicitly named structured analysis sibling; keep existing public helpers fail-closed on budget exhaustion for the first release.
+1. **Exact public default limits — RESOLVED.** `DiagnosticLimits` ships explicit,
+   finite integer defaults for `max_work`, `max_results`, `max_dense_cells`, and
+   `max_path_expansions`. Per D-05 and D-10, Plan 19-03 obtains the exact required
+   counts from the committed ordinary repository fixtures, selects fixed headroom
+   below the committed adversarial exhaustion cases, and then freezes the selected
+   numbers as source constants. The exact shipped numbers are acceptance data: Plan
+   19-03 must pin them in tests, Plan 19-07 must publish them in API docs and SPRs,
+   and Plan 19-08 must record the corresponding exact-pass/one-less evidence. No
+   dynamic, elapsed-time, environment-derived, or undocumented default satisfies
+   this resolution.
 
-3. **How should caller-supplied `adjacency_matrix` compatibility work?**
-   - What we know: combining it blindly with a fresh graph violates snapshot consistency.
-   - What's unclear: current consumers may pass matrices without version/fingerprint metadata.
-   - Recommendation: validate full state/edge equivalence under budget or raise a fixed incompatibility error; document `include_adjacency=True` as the safe replacement.
+2. **Incomplete-result policy — RESOLVED.** Per D-06, structured validation,
+   comparison, batch, report, and JSON analysis results expose explicit
+   `DiagnosticStatus` completeness, exhausted stage/dimension, and deterministic
+   counters; any incomplete structured section is visibly marked and cannot
+   masquerade as complete. Established list, set, scalar, diagram, dense-matrix,
+   printing, or other legacy shapes that cannot carry that metadata return no
+   partial payload and raise the documented fixed-message redacted
+   `DiagnosticBudgetExceeded`. Plans 19-03 and 19-04 establish the validator/API
+   boundary, and Plan 19-06 applies the same boundary to JSON, diagrams, and
+   documents. Broad fallback to `None` or silent truncation is prohibited.
+
+3. **Caller-supplied adjacency compatibility — RESOLVED.** Plan 19-06 keeps the
+   existing `adjacency_matrix` argument only when the supplied ordered states,
+   transitions, and complete matrix are fully equivalent to the single captured
+   snapshot under the same aggregate budget. Compatible input is accepted;
+   missing, stale, reordered, partial, or otherwise incompatible input is rejected
+   before composition with one fixed non-leaking budget/mismatch error. The safe
+   generated path is `include_adjacency=True`, which derives the preflighted dense
+   data from that same snapshot. No best-effort merge or independent recapture is
+   permitted.
 
 ## Environment Availability
 
