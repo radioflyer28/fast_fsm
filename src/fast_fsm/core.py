@@ -46,11 +46,14 @@ from .conditions import (
 
 
 # The machine-owned dispatch seam evaluates a declarative decorator guard before
-# invoking state policy. The per-task marker suppresses only the base
-# declarative class's duplicate evaluation for one exact source/trigger/target
-# tuple. A marker is restored after each dispatch so nested policy calls retain
-# the outer state safely in both pure Python and mypyc builds.
-_prepared_declarative_guards: Dict[Optional[int], Tuple[int, str, int]] = {}
+# invoking state policy. The context-local marker suppresses only the base
+# declarative class's duplicate evaluation for one exact machine/source/trigger/
+# target tuple. A token restores the outer marker after every nested, exceptional,
+# or cancelled scope in both pure Python and mypyc builds.
+_PreparedDeclarativeGuard = Tuple[int, int, str, int]
+_prepared_declarative_guard: contextvars.ContextVar[
+    Optional[_PreparedDeclarativeGuard]
+] = contextvars.ContextVar("_prepared_declarative_guard", default=None)
 
 
 # A task created by an owned async callback inherits this marker.  The marker
@@ -98,44 +101,33 @@ _LIFECYCLE_STAGES: Tuple[str, ...] = (
 )
 
 
-def _prepared_guard_scope_key() -> Optional[int]:
-    """Return a task-local key, or the synchronous dispatch scope key."""
-    try:
-        task = asyncio.current_task()
-    except RuntimeError:
-        return None
-    return id(task) if task is not None else None
-
-
 def _set_prepared_declarative_guard(
-    source_state: "State", trigger: str, to_state: "State"
-) -> Tuple[Optional[int], Optional[Tuple[int, str, int]]]:
-    """Mark one dispatch guard as prepared and return its restoration token."""
-    scope_key = _prepared_guard_scope_key()
-    previous = _prepared_declarative_guards.get(scope_key)
-    _prepared_declarative_guards[scope_key] = (
-        id(source_state),
-        trigger,
-        id(to_state),
+    machine: "StateMachine", source_state: "State", trigger: str, to_state: "State"
+) -> contextvars.Token[Optional[_PreparedDeclarativeGuard]]:
+    """Mark one machine-qualified guard and return its ContextVar token."""
+    return _prepared_declarative_guard.set(
+        (
+            id(machine),
+            id(source_state),
+            trigger,
+            id(to_state),
+        )
     )
-    return scope_key, previous
 
 
 def _reset_prepared_declarative_guard(
-    scope_key: Optional[int], previous: Optional[Tuple[int, str, int]]
+    token: contextvars.Token[Optional[_PreparedDeclarativeGuard]],
 ) -> None:
-    """Restore the task-local marker after one policy callback returns."""
-    if previous is None:
-        del _prepared_declarative_guards[scope_key]
-    else:
-        _prepared_declarative_guards[scope_key] = previous
+    """Restore the precise outer marker after one policy callback returns."""
+    _prepared_declarative_guard.reset(token)
 
 
 def _has_prepared_declarative_guard(
     source_state: "State", trigger: str, to_state: "State"
 ) -> bool:
     """Return whether this base declarative check already ran in machine dispatch."""
-    return _prepared_declarative_guards.get(_prepared_guard_scope_key()) == (
+    marker = _prepared_declarative_guard.get()
+    return marker is not None and marker[1:] == (
         id(source_state),
         trigger,
         id(to_state),
@@ -1867,15 +1859,13 @@ class StateMachine:
         source_state = self._current_state
         if not isinstance(source_state, DeclarativeState):
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
-        scope_key, previous = _set_prepared_declarative_guard(
-            source_state, trigger, to_state
-        )
+        token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
         try:
             # Preserve the public subclass hook. DeclarativeState itself sees
             # the narrow context and skips only its duplicate decorator guard.
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         finally:
-            _reset_prepared_declarative_guard(scope_key, previous)
+            _reset_prepared_declarative_guard(token)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -3438,9 +3428,7 @@ class AsyncStateMachine(StateMachine):
                     trigger, to_state, *args, **kwargs
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
-        scope_key, previous = _set_prepared_declarative_guard(
-            source_state, trigger, to_state
-        )
+        token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
         try:
             if hasattr(source_state, "can_transition_async"):
                 return await source_state.can_transition_async(
@@ -3448,7 +3436,7 @@ class AsyncStateMachine(StateMachine):
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         finally:
-            _reset_prepared_declarative_guard(scope_key, previous)
+            _reset_prepared_declarative_guard(token)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one owned async transition with permanent-loop admission."""
