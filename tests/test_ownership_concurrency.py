@@ -385,13 +385,10 @@ def test_safe_trigger_converts_ordinary_post_admission_exception_without_secret_
 ) -> None:
     """The compatibility barrier stays inside the already-admitted operation."""
 
-    class ExplodingMachine(StateMachine):
-        def _trigger_owned(
-            self, trigger: str, *args: object, **kwargs: object
-        ) -> object:
-            raise ValueError("ordinary-cause-secret")
-
-    machine = ExplodingMachine(State("source"), name="safe-trigger-conversion")
+    machine = StateMachine(State("source"), name="safe-trigger-conversion")
+    # Reach a true post-admission internal fault without subclassing the mypyc
+    # native class; compiled and pure origins then exercise the same barrier.
+    machine._transitions["source"] = {"advance": object()}  # type: ignore[dict-item]
 
     result = machine.safe_trigger(
         "advance", "argument-secret", payload="payload-secret"
