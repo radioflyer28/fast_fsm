@@ -1,8 +1,8 @@
 # Phase 19: Bounded Diagnostics & Safe Output - Pattern Map
 
 **Mapped:** 2026-09-02  
-**Files analyzed:** 25 planned/modified files
-**Analogs found:** 24 / 25 (the new diagnostics module has no exact implementation analog)
+**Files analyzed:** 26 planned/modified files
+**Analogs found:** 25 / 26 (the new diagnostics module has no exact implementation analog)
 
 ## File Classification
 
@@ -22,6 +22,7 @@
 | `tests/test_release_evidence.py` | tooling regression test | subprocess/file-I/O manifest validation | existing evidence CLI tests in same file | role match |
 | `tests/test_performance_benchmarks.py` | performance regression test | batch measurement | existing trigger throughput tests in same file | exact |
 | `tools/phase16_isolated_verify.py` | verification harness | subprocess + isolated file overlay | existing Phase 18 suite branch and inventory | exact |
+| `README.md` | public entry-point documentation | user-facing API discovery + tested examples | existing Visualization, Serialization & Introspection, and Validation feature sections plus `tests/test_readme_examples.py` | exact documentation and verification pattern |
 | `docs/api/validation.md` | API documentation | request-response contract | existing validator/adjacency documentation | exact |
 | `docs/api/visualization.md` | API documentation | text-output contract | existing renderer usage notes | exact |
 | `docs/api/core.md` | API documentation | logging/configuration contract | existing autodoc core page | role match |
@@ -37,7 +38,7 @@
 `tests/test_graph_invariants.py` is an unchanged verification dependency, not a
 Phase 19 new/modified file. Plan 19-01 and the validation strategy run
 it to protect existing snapshot and mypyc invariants, but no Phase 19 task owns
-a content edit to that file. It is therefore excluded from the 25-file plan
+a content edit to that file. It is therefore excluded from the 26-file plan
 union and remains a focused analog/verification input below.
 
 ## Pattern Assignments
@@ -601,6 +602,15 @@ copy the generated manifest atomically, and review the diff before committing.
 
 ### Documentation, memory, ADR, and evidence files
 
+**README analog:** `README.md:461-548` already presents visualization,
+serialization/introspection, and design-time validation as concise
+consumer-facing feature sections before routing readers to deeper reference
+material. Extend that same feature-oriented structure with the shipped Phase 19
+limits/status/budget, positional batch/comparison, grammar-specific rendering,
+metadata-only trace redaction, and reversible logging contracts. Preserve the
+existing runnable-example style and keep any changed example covered by
+`tests/test_readme_examples.py`, the established README verification analog.
+
 **API docs analogs:** `docs/api/validation.md:1-20` establishes zero-runtime
 overhead and sparse/dense prose; `docs/api/validation.md:87-139` documents
 schemas and autodoc functions. `docs/api/visualization.md:1-71` documents
@@ -712,6 +722,6 @@ fail-closed. Application handlers always remain application-owned.
 **Analog search scope:** `src/fast_fsm`, `tests`, `tools`, `docs`,
 `.specify/memory`, `.specify/decisions`, `.planning/phases/17-*`, and release
 evidence artifacts.  
-**Files scanned:** 25 planned/modified candidates plus focused source/test/docs
+**Files scanned:** 26 planned/modified candidates plus focused source/test/docs
 analogs.  
 **Pattern extraction date:** 2026-09-02
