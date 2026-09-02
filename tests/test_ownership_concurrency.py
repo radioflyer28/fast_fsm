@@ -117,7 +117,12 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
             else REGISTRAR_WRITERS
         )
         for method in methods:
-            start = source.index(f"    def {method}(")
+            class_start = (
+                source.index("class AsyncStateMachine")
+                if method in {"on_enter_async", "on_exit_async"}
+                else source.index("class StateMachine")
+            )
+            start = source.index(f"    def {method}(", class_start)
             end = source.find("\n    def ", start + 1)
             body = source[start:] if end == -1 else source[start:end]
             if "_acquire_sync_ownership" not in body:

@@ -354,7 +354,7 @@ def test_failure_observers_continue_after_baseexceptions_without_recursion(
 
 
 def test_failure_observer_registration_starts_with_the_next_sync_failure() -> None:
-    """An observer cannot extend the current failure-finalization pass."""
+    """Owned observer registration rejects; external registration stays ordered."""
     machine = StateMachine(State("source"), name="observer-snapshot-sync")
     events: list[str] = []
 
@@ -363,7 +363,10 @@ def test_failure_observer_registration_starts_with_the_next_sync_failure() -> No
 
     def registering_observer(*_args: object, **_kwargs: object) -> None:
         events.append("registered")
-        machine.on_failed(added_observer)
+        with pytest.raises(
+            RuntimeError, match=r"^FSM ownership violation: reentrant on_failed$"
+        ):
+            machine.on_failed(added_observer)
 
     machine.on_failed(registering_observer)
 
@@ -371,6 +374,7 @@ def test_failure_observer_registration_starts_with_the_next_sync_failure() -> No
     assert first.stage == "resolution"
     assert events == ["registered"]
 
+    machine.on_failed(added_observer)
     second = machine.trigger("missing")
     assert second.stage == "resolution"
     assert events == ["registered", "registered", "added"]
@@ -1005,7 +1009,7 @@ async def test_async_failure_observer_cancellation_cannot_replace_the_cause() ->
 
 @pytest.mark.asyncio
 async def test_cancellation_observer_registration_starts_with_next_failure() -> None:
-    """A cancellation observer snapshot excludes registrations made in its pass."""
+    """Async-owned observer registration rejects; the next snapshot is ordered."""
     source = State("source")
     destination = State("destination")
     machine = AsyncStateMachine(source, name="observer-snapshot-cancellation")
@@ -1024,7 +1028,8 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
 
     def registering_observer(*_args: object, **_kwargs: object) -> None:
         events.append("registered")
-        machine.on_failed(added_observer)
+        with pytest.raises(RuntimeError, match=r"^FSM ownership violation:"):
+            machine.on_failed(added_observer)
 
     machine.on_exit_async("source", block)
     machine.on_failed(registering_observer)
@@ -1036,6 +1041,7 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
         await first_task
     assert events == ["registered"]
 
+    machine.on_failed(added_observer)
     started.clear()
     second_task = asyncio.create_task(machine.trigger_async("advance"))
     await started.wait()

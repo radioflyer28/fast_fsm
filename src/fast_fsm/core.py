@@ -1485,6 +1485,14 @@ class StateMachine:
 
             fsm.add_listener(TransitionLogger())
         """
+        owner_thread_id = self._acquire_sync_ownership("add_listener")
+        try:
+            self._add_listener_owned(*listeners)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_listener_owned(self, *listeners: Any) -> None:
+        """Extract and register listener methods while the caller owns this machine."""
         for listener in listeners:
             fn = getattr(listener, "before_transition", None)
             if callable(fn):
@@ -1519,6 +1527,14 @@ class StateMachine:
 
             fsm.on_enter("running", lambda from_s, t, **kw: print("entered running"))
         """
+        owner_thread_id = self._acquire_sync_ownership("on_enter")
+        try:
+            self._on_enter_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_enter_owned(self, state_name: str, callback: Any) -> None:
+        """Append one enter callback while the caller owns this machine."""
         if state_name not in self._state_enter_callbacks:
             self._state_enter_callbacks[state_name] = []
         self._state_enter_callbacks[state_name].append(callback)
@@ -1542,6 +1558,14 @@ class StateMachine:
 
             fsm.on_exit("running", lambda to_s, t, **kw: print("left running"))
         """
+        owner_thread_id = self._acquire_sync_ownership("on_exit")
+        try:
+            self._on_exit_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_exit_owned(self, state_name: str, callback: Any) -> None:
+        """Append one exit callback while the caller owns this machine."""
         if state_name not in self._state_exit_callbacks:
             self._state_exit_callbacks[state_name] = []
         self._state_exit_callbacks[state_name].append(callback)
@@ -1552,6 +1576,14 @@ class StateMachine:
         Args:
             callback: Callable ``fn(source, target, trigger, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("after_transition")
+        try:
+            self._after_transition_owned(callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _after_transition_owned(self, callback: Any) -> None:
+        """Append one post-transition callback while the caller owns it."""
         self._after_listeners.append(callback)
 
     def on_failed(self, callback: Any) -> None:
@@ -1560,6 +1592,14 @@ class StateMachine:
         Args:
             callback: Callable ``fn(trigger, from_state, error, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("on_failed")
+        try:
+            self._on_failed_owned(callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_failed_owned(self, callback: Any) -> None:
+        """Append one failure observer while the caller owns this machine."""
         self._on_failed_callbacks.append(callback)
 
     def on_trigger(self, trigger_name: str, callback: Any) -> None:
@@ -1569,6 +1609,14 @@ class StateMachine:
             trigger_name: The trigger name to watch.
             callback: Callable ``fn(from_state, to_state, trigger, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("on_trigger")
+        try:
+            self._on_trigger_owned(trigger_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_trigger_owned(self, trigger_name: str, callback: Any) -> None:
+        """Append one trigger callback while the caller owns this machine."""
         if trigger_name not in self._trigger_callbacks:
             self._trigger_callbacks[trigger_name] = []
         self._trigger_callbacks[trigger_name].append(callback)
@@ -3063,6 +3111,14 @@ class AsyncStateMachine(StateMachine):
 
             fsm.on_enter_async("running", log_entry)
         """
+        owner_thread_id = self._acquire_sync_ownership("on_enter_async")
+        try:
+            self._on_enter_async_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_enter_async_owned(self, state_name: str, callback: Any) -> None:
+        """Append one async enter callback while the caller owns this machine."""
         if state_name not in self._state_enter_async_callbacks:
             self._state_enter_async_callbacks[state_name] = []
         self._state_enter_async_callbacks[state_name].append(callback)
@@ -3091,6 +3147,14 @@ class AsyncStateMachine(StateMachine):
 
             fsm.on_exit_async("running", log_exit)
         """
+        owner_thread_id = self._acquire_sync_ownership("on_exit_async")
+        try:
+            self._on_exit_async_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_exit_async_owned(self, state_name: str, callback: Any) -> None:
+        """Append one async exit callback while the caller owns this machine."""
         if state_name not in self._state_exit_async_callbacks:
             self._state_exit_async_callbacks[state_name] = []
         self._state_exit_async_callbacks[state_name].append(callback)
