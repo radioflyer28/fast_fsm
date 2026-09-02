@@ -29,6 +29,12 @@ _CI_COMPILE_CORE_STEP = "Compile actual ownership core"
 _CI_NATIVE_ORIGIN_STEP = "Assert native ownership core origin"
 _CI_TEST_STEP = "Run native ownership and lifecycle semantics"
 _CI_REPRESENTATION_PROBE_STEP = "Compile and import ownership representation probe"
+_NATIVE_PROBE_JOB_NAME = "Ownership native probe · Python ${{ matrix.python-version }}"
+_NATIVE_PROBE_JOB_ENV = {"FAST_FSM_BUILD_MODE": "compiled"}
+_NATIVE_PROBE_JOB_KEYS = frozenset(
+    {"name", "runs-on", "strategy", "env", "steps", "continue-on-error"}
+)
+_NATIVE_PROBE_STEP_KEYS = frozenset({"name", "run", "continue-on-error"})
 _RUNTIME_SOURCE = """\
 from __future__ import annotations
 
@@ -204,6 +210,99 @@ def _parse_exact_command(
     return tokens
 
 
+def _require_native_probe_execution_context(
+    workflow: dict[object, object], job: dict[object, object]
+) -> None:
+    """Require the fixed Actions context that executes the native commands.
+
+    The required commands are security evidence, not configurable workflow hooks.
+    Keeping the context allowlisted prevents Actions metadata or environment values
+    from skipping a command, accepting its failure, or changing its Python/uv/pytest
+    behavior outside the exact argv contract.
+    """
+    for scope_name, scope in (("workflow", workflow), ("job", job)):
+        if "defaults" in scope:
+            raise SystemExit(
+                f"CI ownership native probe must not define {scope_name} defaults"
+            )
+
+    if "env" in workflow:
+        raise SystemExit(
+            "CI ownership native probe must not define workflow environment overrides"
+        )
+
+    if "if" in job:
+        raise SystemExit(
+            "CI ownership native probe job must not define an if condition"
+        )
+    if job.get("continue-on-error", False) is not False:
+        raise SystemExit(
+            "CI ownership native probe job must not continue after an error"
+        )
+    unexpected_job_keys = set(job).difference(_NATIVE_PROBE_JOB_KEYS)
+    if unexpected_job_keys:
+        raise SystemExit(
+            "CI ownership native probe job has unsupported execution metadata: "
+            + ", ".join(sorted(unexpected_job_keys))
+        )
+    if job.get("name") != _NATIVE_PROBE_JOB_NAME:
+        raise SystemExit("CI ownership native probe job name must remain fixed")
+    if job.get("runs-on") != "ubuntu-latest":
+        raise SystemExit(
+            "CI ownership native probe job runner must remain ubuntu-latest"
+        )
+    if job.get("strategy") != {
+        "fail-fast": False,
+        "matrix": {"python-version": list(_SUPPORTED_PYTHONS)},
+    }:
+        raise SystemExit("CI ownership native probe job strategy must remain fixed")
+    if job.get("env") != _NATIVE_PROBE_JOB_ENV:
+        raise SystemExit(
+            "CI ownership native probe job environment must exactly set "
+            "FAST_FSM_BUILD_MODE=compiled; PYTEST_ADDOPTS and Python/uv/pytest "
+            "overrides are forbidden"
+        )
+
+
+def _required_step_run(step_name: str, steps: list[object]) -> str:
+    """Return a required run scalar only after validating its whole step mapping."""
+    matching_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == step_name
+    ]
+    if len(matching_steps) != 1:
+        raise SystemExit(
+            "CI ownership native probe must contain exactly one executable "
+            f"step named: {step_name}"
+        )
+
+    step = matching_steps[0]
+    if "if" in step:
+        raise SystemExit(
+            f"CI ownership native probe required step must not define an if condition: "
+            f"{step_name}"
+        )
+    if step.get("continue-on-error", False) is not False:
+        raise SystemExit(
+            "CI ownership native probe required step must not continue after an "
+            f"error: {step_name}"
+        )
+    unexpected_step_keys = set(step).difference(_NATIVE_PROBE_STEP_KEYS)
+    if unexpected_step_keys:
+        raise SystemExit(
+            f"CI ownership native probe step has unsupported execution metadata: "
+            f"{step_name}: " + ", ".join(sorted(unexpected_step_keys))
+        )
+
+    run = step.get("run")
+    if not isinstance(run, str):
+        raise SystemExit(
+            f"CI ownership native probe step has no executable run scalar: {step_name}"
+        )
+    return run
+
+
 def _check_ci(path: Path) -> None:
     try:
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -217,6 +316,7 @@ def _check_ci(path: Path) -> None:
     job = jobs.get("ownership_native_probe")
     if not isinstance(job, dict):
         raise SystemExit("CI is missing the ownership_native_probe job")
+    _require_native_probe_execution_context(workflow, job)
 
     strategy = job.get("strategy")
     matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
@@ -230,24 +330,6 @@ def _check_ci(path: Path) -> None:
     steps = job.get("steps")
     if not isinstance(steps, list):
         raise SystemExit("CI ownership native probe has no steps list")
-
-    def executable_step_run(name: str) -> str:
-        matching_steps = [
-            step
-            for step in steps
-            if isinstance(step, dict) and step.get("name") == name
-        ]
-        if len(matching_steps) != 1:
-            raise SystemExit(
-                "CI ownership native probe must contain exactly one executable "
-                f"step named: {name}"
-            )
-        run = matching_steps[0].get("run")
-        if not isinstance(run, str):
-            raise SystemExit(
-                f"CI ownership native probe step has no executable run scalar: {name}"
-            )
-        return run
 
     for step in steps:
         if not isinstance(step, dict):
@@ -311,7 +393,7 @@ def _check_ci(path: Path) -> None:
     )
     for step_name, description, expected_tokens in required_commands:
         _parse_exact_command(
-            executable_step_run(step_name),
+            _required_step_run(step_name, steps),
             description=description,
             expected_tokens=expected_tokens,
         )

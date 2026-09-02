@@ -814,6 +814,79 @@ def test_phase18_native_probe_rejects_shell_controls_in_core_evidence_steps(
         _load_phase18_native_probe()._check_ci(candidate)
 
 
+def test_phase18_native_probe_rejects_conditional_required_steps(
+    tmp_path: Path,
+) -> None:
+    """Required native evidence cannot be skipped through Actions metadata."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_step = (
+        "name: Compile actual ownership core\n"
+        "        run: uv run python setup.py build_ext --inplace -q"
+    )
+    assert expected_step in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            expected_step,
+            "name: Compile actual ownership core\n"
+            "        if: false\n"
+            "        run: uv run python setup.py build_ext --inplace -q",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="must not define an if condition"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_rejects_failure_tolerant_required_steps(
+    tmp_path: Path,
+) -> None:
+    """Required native evidence cannot ignore a compilation failure."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_step = (
+        "name: Compile actual ownership core\n"
+        "        run: uv run python setup.py build_ext --inplace -q"
+    )
+    assert expected_step in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            expected_step,
+            "name: Compile actual ownership core\n"
+            "        continue-on-error: true\n"
+            "        run: uv run python setup.py build_ext --inplace -q",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="must not continue after an error"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_rejects_pytest_environment_override(
+    tmp_path: Path,
+) -> None:
+    """The exact pytest argv cannot be changed through PYTEST_ADDOPTS."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_environment = "    env:\n      FAST_FSM_BUILD_MODE: compiled\n    steps:"
+    assert expected_environment in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            expected_environment,
+            "    env:\n"
+            "      FAST_FSM_BUILD_MODE: compiled\n"
+            "      PYTEST_ADDOPTS: --collect-only\n"
+            "    steps:",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="PYTEST_ADDOPTS"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
 def test_phase18_native_probe_accepts_the_real_workflow_contract() -> None:
     """The checked-in folded workflow scalar parses to the allowlisted argv."""
     _load_phase18_native_probe()._check_ci(CI_WORKFLOW)
