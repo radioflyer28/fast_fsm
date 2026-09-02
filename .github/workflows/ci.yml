@@ -162,14 +162,7 @@ jobs:
       - name: Compile actual ownership core
         run: uv run python setup.py build_ext --inplace -q
       - name: Assert native ownership core origin
-        run: |
-          uv run python -c "
-          from pathlib import Path
-          import fast_fsm.core as core
-          origin = Path(core.__file__).resolve()
-          print(origin)
-          assert origin.suffix in ('.so', '.pyd', '.dll')
-          "
+        run: uv run python tools/phase18_native_probe.py --assert-core-native
       - name: Run native ownership and lifecycle semantics
         run: >-
           uv run pytest

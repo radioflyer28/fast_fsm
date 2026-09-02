@@ -152,16 +152,37 @@ def _build_and_assert_native() -> None:
         _run(["uv", "run", "python", "-c", assertion], cwd=directory)
 
 
-def _parse_ownership_pytest_command(run: str) -> tuple[str, ...]:
-    """Return the one permitted pytest command from the native test step."""
+def _assert_core_native() -> None:
+    """Print and require the installed core module to be a native extension."""
+    import fast_fsm.core as core
+
+    origin = Path(core.__file__).resolve()
+    print(origin)
+    if origin.suffix not in _NATIVE_SUFFIXES:
+        raise SystemExit(
+            f"fast_fsm.core must resolve to a native extension, got: {origin}"
+        )
+
+
+def _parse_exact_command(
+    run: str,
+    *,
+    description: str,
+    expected_tokens: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return one shell command only when its parsed argv exactly matches."""
     command_lines = tuple(
         line.strip()
         for line in run.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
+    if not command_lines:
+        raise SystemExit(
+            f"CI ownership native probe is missing executable command in {description}"
+        )
     if len(command_lines) != 1:
         raise SystemExit(
-            "CI ownership native probe test step must contain exactly one "
+            f"CI ownership native probe {description} step must contain exactly one "
             "non-comment shell command"
         )
 
@@ -172,21 +193,13 @@ def _parse_ownership_pytest_command(run: str) -> tuple[str, ...]:
         tokens = tuple(lexer)
     except ValueError as exc:
         raise SystemExit(
-            "CI ownership native probe test step has invalid shell syntax"
+            f"CI ownership native probe {description} step has invalid shell syntax"
         ) from exc
 
-    expected_tokens = (
-        "uv",
-        "run",
-        "pytest",
-        *_OWNERSHIP_TEST_FILES,
-        "-x",
-        "-q",
-    )
     if tokens != expected_tokens:
         raise SystemExit(
-            "CI ownership native probe test step must exactly match the required "
-            "pytest argv: " + " ".join(expected_tokens)
+            f"CI ownership native probe {description} step must exactly match the "
+            f"required {description} argv: " + " ".join(expected_tokens)
         )
     return tokens
 
@@ -236,56 +249,72 @@ def _check_ci(path: Path) -> None:
             )
         return run
 
-    def executable_step_lines(name: str) -> tuple[str, ...]:
-        run = executable_step_run(name)
-        return tuple(
-            line.strip()
-            for line in run.splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        )
-
     for step in steps:
         if not isinstance(step, dict):
             raise SystemExit("CI ownership native probe has an invalid step")
 
-    def require_command(step_name: str, command: str) -> tuple[str, ...]:
-        lines = executable_step_lines(step_name)
-        if not any(line.startswith(command) for line in lines):
-            raise SystemExit(
-                "CI ownership native probe is missing executable command in "
-                f"{step_name}: {command}"
-            )
-        return lines
-
-    require_command(
-        _CI_CONTRACT_STEP,
-        "uv run python tools/phase18_native_probe.py --check-ci ",
+    required_commands = (
+        (
+            _CI_CONTRACT_STEP,
+            "contract self-check",
+            (
+                "uv",
+                "run",
+                "python",
+                "tools/phase18_native_probe.py",
+                "--check-ci",
+                ".github/workflows/ci.yml",
+            ),
+        ),
+        (
+            _CI_COMPILE_CORE_STEP,
+            "actual-core compile",
+            (
+                "uv",
+                "run",
+                "python",
+                "setup.py",
+                "build_ext",
+                "--inplace",
+                "-q",
+            ),
+        ),
+        (
+            _CI_NATIVE_ORIGIN_STEP,
+            "core-origin assertion",
+            (
+                "uv",
+                "run",
+                "python",
+                "tools/phase18_native_probe.py",
+                "--assert-core-native",
+            ),
+        ),
+        (
+            _CI_TEST_STEP,
+            "pytest",
+            ("uv", "run", "pytest", *_OWNERSHIP_TEST_FILES, "-x", "-q"),
+        ),
+        (
+            _CI_REPRESENTATION_PROBE_STEP,
+            "representation probe",
+            (
+                "uv",
+                "run",
+                "python",
+                "tools/phase18_native_probe.py",
+                "--build-mode",
+                "compiled",
+                "--assert-native",
+            ),
+        ),
     )
-    require_command(
-        _CI_COMPILE_CORE_STEP,
-        "uv run python setup.py build_ext --inplace -q",
-    )
-    native_origin_lines = require_command(
-        _CI_NATIVE_ORIGIN_STEP,
-        "uv run python -c ",
-    )
-    _parse_ownership_pytest_command(executable_step_run(_CI_TEST_STEP))
-    require_command(
-        _CI_REPRESENTATION_PROBE_STEP,
-        "uv run python tools/phase18_native_probe.py --build-mode compiled "
-        "--assert-native",
-    )
-
-    for required in (
-        "import fast_fsm.core as core",
-        "origin = Path(core.__file__).resolve()",
-        "assert origin.suffix in ('.so', '.pyd', '.dll')",
-    ):
-        if not any(required in line for line in native_origin_lines):
-            raise SystemExit(
-                "CI ownership native probe is missing executable native-origin check: "
-                + required
-            )
+    for step_name, description, expected_tokens in required_commands:
+        _parse_exact_command(
+            executable_step_run(step_name),
+            description=description,
+            expected_tokens=expected_tokens,
+        )
 
     print(f"CI ownership native probe matrix verified: {', '.join(_SUPPORTED_PYTHONS)}")
 
@@ -406,6 +435,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-mode", choices=("compiled",))
     parser.add_argument("--assert-native", action="store_true")
+    parser.add_argument("--assert-core-native", action="store_true")
     parser.add_argument("--check-ci", type=Path)
     parser.add_argument("--assert-hosted-ci-sha")
     args = parser.parse_args()
@@ -414,15 +444,19 @@ def main() -> int:
         _check_ci(args.check_ci)
     if args.assert_native:
         _build_and_assert_native()
+    if args.assert_core_native:
+        _assert_core_native()
     if args.assert_hosted_ci_sha is not None:
         _assert_hosted_ci_sha(args.assert_hosted_ci_sha)
     if (
         args.check_ci is None
         and not args.assert_native
+        and not args.assert_core_native
         and args.assert_hosted_ci_sha is None
     ):
         parser.error(
-            "select --assert-native, --check-ci, and/or --assert-hosted-ci-sha"
+            "select --assert-native, --assert-core-native, --check-ci, and/or "
+            "--assert-hosted-ci-sha"
         )
     return 0
 

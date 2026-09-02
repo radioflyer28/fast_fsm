@@ -657,6 +657,7 @@ def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
         "ContextVar",
         "OwnershipRepresentation",
         "--assert-native",
+        "--assert-core-native",
         "--assert-hosted-ci-sha",
         "gh",
         "headSha",
@@ -671,6 +672,7 @@ def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
         "tools/phase18_native_probe.py --build-mode compiled --assert-native"
         in workflow
     )
+    assert "tools/phase18_native_probe.py --assert-core-native" in workflow
     for version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
         assert f'"{version}"' in workflow
 
@@ -778,6 +780,37 @@ def test_phase18_native_probe_rejects_extra_pytest_options_and_shell_controls(
     )
 
     with pytest.raises(SystemExit, match="must exactly match the required pytest argv"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+@pytest.mark.parametrize(
+    ("step_name", "command"),
+    (
+        (
+            "Compile actual ownership core",
+            "uv run python setup.py build_ext --inplace -q",
+        ),
+        (
+            "Assert native ownership core origin",
+            "uv run python tools/phase18_native_probe.py --assert-core-native",
+        ),
+    ),
+)
+def test_phase18_native_probe_rejects_shell_controls_in_core_evidence_steps(
+    tmp_path: Path,
+    step_name: str,
+    command: str,
+) -> None:
+    """Core compilation and native-origin assertion cannot mask failures."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    expected_run = f"name: {step_name}\n        run: {command}"
+    assert expected_run in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(expected_run, f"{expected_run} || true"), encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit, match="must exactly match the required"):
         _load_phase18_native_probe()._check_ci(candidate)
 
 
