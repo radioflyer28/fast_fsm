@@ -62,7 +62,7 @@ class _BlockingAsyncCondition(AsyncCondition):
     async def check_async(self, **kwargs: object) -> bool:
         self._started.set()
         try:
-            await self._release.wait()
+            await asyncio.wait_for(self._release.wait(), timeout=5)
         except asyncio.CancelledError as cancellation:
             self.cancellation = cancellation
             raise
@@ -920,7 +920,7 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
         events.append(label)
         started.set()
         try:
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=5)
         except asyncio.CancelledError as cancellation:
             observed_cancellation.append(cancellation)
             raise
@@ -977,29 +977,35 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
     )
 
     pending = asyncio.create_task(machine.trigger_async("advance"))
-    await started.wait()
-    pending.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await pending
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, timeout=5)
 
-    if boundary == "guard":
-        assert condition is not None
-        assert isinstance(condition, _BlockingAsyncCondition)
-        assert isinstance(condition.cancellation, asyncio.CancelledError)
-    else:
-        assert len(observed_cancellation) == 1
-        assert isinstance(observed_cancellation[0], asyncio.CancelledError)
-    assert observer_events == [
-        ("advance", "source", f"Transition cancelled at {expected_stage}"),
-        ("advance", "source", f"Transition cancelled at {expected_stage}"),
-    ]
-    assert machine.current_state is (destination if expected_committed else source)
-    assert len(machine.history) == int(expected_committed)
-    assert "trigger-callback" not in events
-    assert "after-transition" not in events
-    assert machine._async_owner_task is None
-    assert machine._async_owner_root is None
-    assert not machine._async_ownership_lock.locked()
+        if boundary == "guard":
+            assert condition is not None
+            assert isinstance(condition, _BlockingAsyncCondition)
+            assert isinstance(condition.cancellation, asyncio.CancelledError)
+        else:
+            assert len(observed_cancellation) == 1
+            assert isinstance(observed_cancellation[0], asyncio.CancelledError)
+        assert observer_events == [
+            ("advance", "source", f"Transition cancelled at {expected_stage}"),
+            ("advance", "source", f"Transition cancelled at {expected_stage}"),
+        ]
+        assert machine.current_state is (destination if expected_committed else source)
+        assert len(machine.history) == int(expected_committed)
+        assert "trigger-callback" not in events
+        assert "after-transition" not in events
+        assert machine._async_owner_task is None
+        assert machine._async_owner_root is None
+        assert not machine._async_ownership_lock.locked()
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -1049,7 +1055,7 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
 
     async def block(*_args: object, **_kwargs: object) -> None:
         started.set()
-        await release.wait()
+        await asyncio.wait_for(release.wait(), timeout=5)
 
     def added_observer(*_args: object, **_kwargs: object) -> None:
         events.append("added")
@@ -1063,17 +1069,28 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
     machine.on_failed(registering_observer)
 
     first_task = asyncio.create_task(machine.trigger_async("advance"))
-    await started.wait()
-    first_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first_task
-    assert events == ["registered"]
+    second_task = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        first_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first_task, timeout=5)
+        assert events == ["registered"]
 
-    machine.on_failed(added_observer)
-    started.clear()
-    second_task = asyncio.create_task(machine.trigger_async("advance"))
-    await started.wait()
-    second_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await second_task
-    assert events == ["registered", "registered", "added"]
+        machine.on_failed(added_observer)
+        started.clear()
+        second_task = asyncio.create_task(machine.trigger_async("advance"))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        second_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(second_task, timeout=5)
+        assert events == ["registered", "registered", "added"]
+    finally:
+        release.set()
+        for task in (first_task, second_task):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (first_task, second_task) if task is not None),
+            return_exceptions=True,
+        )

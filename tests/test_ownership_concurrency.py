@@ -507,7 +507,7 @@ async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() ->
         token = core._set_prepared_declarative_guard(first, source, "advance", target)
         try:
             entered.set()
-            await release.wait()
+            await asyncio.wait_for(release.wait(), timeout=5)
         finally:
             core._reset_prepared_declarative_guard(token)
             restored.append(
@@ -517,18 +517,25 @@ async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() ->
     async def mark_independently() -> bool:
         token = core._set_prepared_declarative_guard(second, source, "advance", target)
         try:
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), timeout=5)
             return core._has_prepared_declarative_guard(source, "advance", target)
         finally:
             core._reset_prepared_declarative_guard(token)
 
     cancelled = asyncio.create_task(mark_then_cancel())
     independent = asyncio.create_task(mark_independently())
-    await entered.wait()
-    assert await independent
-    cancelled.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert await asyncio.wait_for(independent, timeout=5)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled, timeout=5)
+    finally:
+        release.set()
+        for task in (cancelled, independent):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(cancelled, independent, return_exceptions=True)
 
     assert restored == [True]
     assert core._prepared_declarative_guard.get() is None
@@ -1071,30 +1078,42 @@ async def test_async_same_loop_tasks_serialize_without_blocking_heartbeat() -> N
 
     async def hold_owner(*_args: object, **_kwargs: object) -> None:
         owner_entered.set()
-        await release_owner.wait()
+        await asyncio.wait_for(release_owner.wait(), timeout=5)
 
     machine.on_exit_async("source", hold_owner)
     owner = asyncio.create_task(machine.trigger_async("advance"))
-    await owner_entered.wait()
+    waiter = None
+    beat = None
+    try:
+        await asyncio.wait_for(owner_entered.wait(), timeout=5)
 
-    async def wait_for_machine() -> object:
-        waiter_attempted.set()
-        return await machine.trigger_async("advance")
+        async def wait_for_machine() -> object:
+            waiter_attempted.set()
+            return await machine.trigger_async("advance")
 
-    waiter = asyncio.create_task(wait_for_machine())
-    await waiter_attempted.wait()
+        waiter = asyncio.create_task(wait_for_machine())
+        await asyncio.wait_for(waiter_attempted.wait(), timeout=5)
 
-    async def heartbeat() -> None:
-        heartbeat_ran.set()
+        async def heartbeat() -> None:
+            heartbeat_ran.set()
 
-    beat = asyncio.create_task(heartbeat())
-    await heartbeat_ran.wait()
-    await beat
-    assert not waiter.done()
+        beat = asyncio.create_task(heartbeat())
+        await asyncio.wait_for(heartbeat_ran.wait(), timeout=5)
+        await asyncio.wait_for(beat, timeout=5)
+        assert not waiter.done()
 
-    release_owner.set()
-    assert (await owner).success
-    assert not (await waiter).success
+        release_owner.set()
+        assert (await asyncio.wait_for(owner, timeout=5)).success
+        assert not (await asyncio.wait_for(waiter, timeout=5)).success
+    finally:
+        release_owner.set()
+        for task in (owner, waiter, beat):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (owner, waiter, beat) if task is not None),
+            return_exceptions=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -1112,44 +1131,60 @@ async def test_async_waiting_and_owning_cancellation_release_for_reuse() -> None
 
     async def hold_first_exit(*_args: object, **_kwargs: object) -> None:
         owner_entered.set()
-        await release_owner.wait()
+        await asyncio.wait_for(release_owner.wait(), timeout=5)
 
     machine.on_exit_async("source", hold_first_exit)
     owner = asyncio.create_task(machine.trigger_async("advance"))
-    await owner_entered.wait()
+    waiter = None
+    cancelled_owner = None
+    try:
+        await asyncio.wait_for(owner_entered.wait(), timeout=5)
 
-    async def wait_for_owner() -> object:
-        waiter_attempted.set()
-        return await machine.trigger_async("advance")
+        async def wait_for_owner() -> object:
+            waiter_attempted.set()
+            return await machine.trigger_async("advance")
 
-    waiter = asyncio.create_task(wait_for_owner())
-    await waiter_attempted.wait()
-    waiter.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiter
+        waiter = asyncio.create_task(wait_for_owner())
+        await asyncio.wait_for(waiter_attempted.wait(), timeout=5)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(waiter, timeout=5)
 
-    release_owner.set()
-    assert (await owner).success
-    assert (await machine.trigger_async("return")).success
+        release_owner.set()
+        assert (await asyncio.wait_for(owner, timeout=5)).success
+        assert (
+            await asyncio.wait_for(machine.trigger_async("return"), timeout=5)
+        ).success
 
-    cancellation_entered = asyncio.Event()
-    cancel_once = True
+        cancellation_entered = asyncio.Event()
+        cancel_once = True
 
-    async def cancel_owner_once(*_args: object, **_kwargs: object) -> None:
-        nonlocal cancel_once
-        if cancel_once:
-            cancel_once = False
-            cancellation_entered.set()
-            await asyncio.Event().wait()
+        async def cancel_owner_once(*_args: object, **_kwargs: object) -> None:
+            nonlocal cancel_once
+            if cancel_once:
+                cancel_once = False
+                cancellation_entered.set()
+                await asyncio.wait_for(asyncio.Event().wait(), timeout=5)
 
-    machine.on_exit_async("source", cancel_owner_once)
-    cancelled_owner = asyncio.create_task(machine.trigger_async("advance"))
-    await cancellation_entered.wait()
-    cancelled_owner.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled_owner
+        machine.on_exit_async("source", cancel_owner_once)
+        cancelled_owner = asyncio.create_task(machine.trigger_async("advance"))
+        await asyncio.wait_for(cancellation_entered.wait(), timeout=5)
+        cancelled_owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(cancelled_owner, timeout=5)
 
-    assert (await machine.trigger_async("advance")).success
+        assert (
+            await asyncio.wait_for(machine.trigger_async("advance"), timeout=5)
+        ).success
+    finally:
+        release_owner.set()
+        for task in (owner, waiter, cancelled_owner):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (owner, waiter, cancelled_owner) if task is not None),
+            return_exceptions=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -1222,15 +1257,21 @@ async def test_bound_async_machine_sync_writers_follow_idle_thread_policy() -> N
 
     async def hold_owner(*_args: object, **_kwargs: object) -> None:
         owner_entered.set()
-        await release_owner.wait()
+        await asyncio.wait_for(release_owner.wait(), timeout=5)
 
     machine.on_exit_async("source", hold_owner)
     owner = asyncio.create_task(machine.trigger_async("advance"))
-    await owner_entered.wait()
-    with pytest.raises(RuntimeError, match="async machine busy"):
-        machine.force_state("destination")
-    release_owner.set()
-    assert (await owner).success
+    try:
+        await asyncio.wait_for(owner_entered.wait(), timeout=5)
+        with pytest.raises(RuntimeError, match="async machine busy"):
+            machine.force_state("destination")
+        release_owner.set()
+        assert (await asyncio.wait_for(owner, timeout=5)).success
+    finally:
+        release_owner.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
 
 
 @pytest.mark.asyncio
