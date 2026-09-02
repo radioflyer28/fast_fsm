@@ -6,8 +6,8 @@
 # Full test suite (merge gate)
 uv run pytest tests/ -x -q
 
-# Phase 17 lifecycle source-tree parity, origin, performance, and pure release gate
-uv run python tools/phase16_isolated_verify.py --suite phase17
+# Phase 18 ownership source-tree parity, origin, performance, and pure release gate
+uv run python tools/phase16_isolated_verify.py --suite phase18
 
 # Single test file
 uv run pytest tests/test_basic_functionality.py -x -q
@@ -27,6 +27,7 @@ tests/
 ├── test_basic_functionality.py     # Core FSM: states, transitions, errors
 ├── test_graph_invariants.py         # Canonical registry, atomicity, snapshots
 ├── test_transition_lifecycle.py     # Sync/async lifecycle, result, observer, cancellation matrix
+├── test_ownership_concurrency.py    # Ownership, reentry, loop, writer, and cleanup matrix
 ├── test_builder.py                  # Builder lifecycle and declarative dispatch
 ├── test_async.py                    # Async guards, dispatch, and history parity
 ├── test_advanced_functionality.py  # History, callbacks, introspection
@@ -217,6 +218,57 @@ cancellation. They also retain the Phase 16 graph/builder/guard/declarative
 compatibility matrix. Reentrancy and ownership are Phase 18, diagnostic and
 logging architecture is Phase 19, and installed-wheel parity is Phase 20; do
 not treat source-tree conformance as installed-artifact proof.
+
+## Phase 18 Ownership and Concurrency Verification
+
+[`tools/phase16_isolated_verify.py`](../../tools/phase16_isolated_verify.py)
+extends the source-tree protocol with the `phase18` suite:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase18
+```
+
+The runner archives committed `HEAD`, overlays the declared Phase 18 inventory,
+and verifies two fresh origins. Pure mode refuses a native shadow before import;
+compiled mode builds `core.py` first and asserts a fresh native module origin.
+Developer-checkout extension shadows are neither deleted nor treated as
+evidence. For a narrow work-in-progress check, use task mode with every
+uncommitted file that the command needs overlaid explicitly:
+
+```bash
+uv run python tools/phase16_isolated_verify.py \
+  --mode task --build-mode pure \
+  --include src/fast_fsm/core.py \
+  --include tests/test_ownership_concurrency.py -- \
+  uv run pytest tests/test_ownership_concurrency.py -x -q
+```
+
+Wave 0 created an executable ownership table. Each later plan removed only its
+own `xfail(strict=True)` rows, ran the focused selection and observed a real
+behavioral RED before production changes, then made that row GREEN. An XPASS
+was a failure. Plan 18-04 tightened the temporary writer-name inventory to a
+structural assertion that every public writer has one admission boundary and
+delegates only to already-owned private bodies. This protocol prevents a stale
+test from being mistaken for ownership proof.
+
+The deterministic matrix covers direct and callback-originated writes, two
+sync threads, independent same-loop tasks, causal child-task reentry,
+cross-loop rejection, the D-12 first-use reservation race, normal exceptions,
+`BaseException`, cancellation while waiting/owning, and every state/history
+commit boundary. It uses barriers, events, and explicit task handshakes—never
+timing sleeps. It also proves context-local declarative markers, inline sync
+callbacks, same-slot awaited async callbacks, complete registration coverage,
+slot layout, O(1) ownership operations, and the compiled `trigger()` floor of
+at least 200,000 operations/second.
+
+The final local gate includes the full sequential suite, Ruff, blocking mypy,
+advisory ty, docs/doctests, the slots audit, release-baseline freshness, and
+fresh pure/compiled source-tree execution. The final external gate is a hosted
+native ownership matrix for Python 3.10 through 3.14 whose successful run
+names the exact SHA of the implementation. A queued, running, cancelled,
+skipped, failed, or stale-SHA run is not completion evidence. Phase 19 owns
+diagnostic snapshot consistency; Phase 20 separately proves installed-wheel
+and sdist parity.
 
 ## Type-Checking Authority
 

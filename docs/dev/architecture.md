@@ -209,9 +209,56 @@ rolls back a commit. History remains disabled with `None` and no normal-path
 buffer allocation; enabled history uses `deque(maxlen=...)` and its public
 property returns a chronological defensive `list` copy.
 
-Reentrancy and caller ownership/serialization remain Phase 18. Diagnostic and
-logging architecture remains Phase 19. Fresh source-tree parity is documented
-below, but installed-wheel parity remains Phase 20.
+### Safe Ownership and Concurrency
+
+Phase 18 makes every public machine write an ownership-admitted operation while
+preserving the Phase 17 lifecycle. The implementation has one private body per
+operation: the public boundary admits once, then delegates to an
+already-owned body. Public methods must never obtain ownership by calling
+another public writer (`safe_trigger()`/`trigger()`, `reset()`/`force_state()`,
+and `restore()`/`force_state()` are the important delegation seams).
+
+The synchronous admission flow first checks the per-instance owner marker,
+then acquires that machine's private lock, installs ownership, executes the
+complete operation, and clears/releases in `finally`. It covers preparation,
+guards, lifecycle callbacks, commit, history, topology updates, and final
+result construction. A same-owner call raises a redacted `RuntimeError` before
+preparation; independent threads serialize a full write. The per-machine lock
+does not promise fairness, a timeout, queue order, or sharing between machines.
+
+Async control first gets the running loop and permanently binds or validates
+the exact loop identity. It then checks the machine's active causal root before
+awaiting its per-instance asyncio lock. After admission it stores the current
+task/root, runs the private async body, resets the module-level `ContextVar`
+token and owner state in `finally`, and releases the lock. A callback-created
+child task inherits the root and is rejected as reentrant before it can wait
+behind its parent. No thread lock is held across an await; cancellation while
+waiting never installs an owner, and cancellation while owning releases it
+without changing the Phase 17 state/history boundary.
+
+Inherited synchronous writers on `AsyncStateMachine` use the D-12 admission
+gate. The short, non-awaiting per-instance gate atomically installs or checks
+reservations during first-use configuration and is never held across an await,
+callback, lifecycle, or mutation body. Before binding it permits ordinary
+configuration under sync ownership. After binding it requires the bound-loop
+thread while idle, rejects async-owned or foreign-loop/thread callers, and
+never blocks an event loop. This makes loop identity permanent rather than a
+lock implementation detail.
+
+The policy applies to transitions, direct control, graph and history writers,
+and all listener/callback/failure-observer registrars. Synchronous async
+callbacks remain inline on the event-loop thread, and async callbacks are
+awaited at their corresponding lifecycle slots; no automatic offload occurs.
+`safe_trigger()` performs ownership admission outside its ordinary
+`Exception`-to-result boundary, so ownership misuse is a precondition
+`RuntimeError` while post-admission ordinary failures still return a value.
+Messages use stable categories only and exclude user payloads and cause text.
+
+The model does not add a global/shared lock, reentry queue, fairness protocol,
+timeout, loop transfer, cross-field read snapshot, or worker scheduler. Phase
+19 owns diagnostic snapshot consistency; Phase 20 owns installed-artifact
+parity. Fresh source-tree pure/native evidence is not an installed-artifact
+claim.
 
 ## mypyc Selective Compilation
 
