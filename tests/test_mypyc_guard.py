@@ -717,7 +717,7 @@ def test_phase18_native_probe_requires_commands_in_their_named_steps(
         encoding="utf-8",
     )
 
-    with pytest.raises(SystemExit, match="must contain exactly one executable step"):
+    with pytest.raises(SystemExit, match="must exactly match the required named step"):
         _load_phase18_native_probe()._check_ci(candidate)
 
 
@@ -884,6 +884,52 @@ def test_phase18_native_probe_rejects_pytest_environment_override(
     )
 
     with pytest.raises(SystemExit, match="PYTEST_ADDOPTS"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_rejects_github_env_injection_step(
+    tmp_path: Path,
+) -> None:
+    """No unrecognized step can persist a pytest override through GITHUB_ENV."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    pytest_step = "      - name: Run native ownership and lifecycle semantics"
+    assert pytest_step in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            pytest_step,
+            "      - name: Inject pytest collection-only override\n"
+            "        run: echo PYTEST_ADDOPTS=--collect-only >> $GITHUB_ENV\n"
+            + pytest_step,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="exactly 8 ordered steps"):
+        _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_rejects_mutated_dependency_install_step(
+    tmp_path: Path,
+) -> None:
+    """The fixed setup command cannot be weakened through a changed argv."""
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    install_step = (
+        "name: Install locked native probe dependencies\n"
+        "        run: uv sync --locked --all-groups"
+    )
+    assert install_step in workflow
+    candidate = tmp_path / "ci.yml"
+    candidate.write_text(
+        workflow.replace(
+            install_step,
+            "name: Install locked native probe dependencies\n"
+            "        run: uv sync --all-groups",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="required dependency install argv"):
         _load_phase18_native_probe()._check_ci(candidate)
 
 

@@ -31,10 +31,25 @@ _CI_TEST_STEP = "Run native ownership and lifecycle semantics"
 _CI_REPRESENTATION_PROBE_STEP = "Compile and import ownership representation probe"
 _NATIVE_PROBE_JOB_NAME = "Ownership native probe · Python ${{ matrix.python-version }}"
 _NATIVE_PROBE_JOB_ENV = {"FAST_FSM_BUILD_MODE": "compiled"}
-_NATIVE_PROBE_JOB_KEYS = frozenset(
-    {"name", "runs-on", "strategy", "env", "steps", "continue-on-error"}
-)
-_NATIVE_PROBE_STEP_KEYS = frozenset({"name", "run", "continue-on-error"})
+_NATIVE_PROBE_JOB_STRATEGY = {
+    "fail-fast": False,
+    "matrix": {"python-version": list(_SUPPORTED_PYTHONS)},
+}
+_NATIVE_PROBE_JOB_KEYS = frozenset({"name", "runs-on", "strategy", "env", "steps"})
+_NATIVE_PROBE_RUN_STEP_KEYS = frozenset({"name", "run"})
+_CI_CHECKOUT_STEP = {
+    "uses": "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+    "with": {"fetch-depth": 0},
+}
+_CI_SETUP_UV_STEP = {
+    "uses": "astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86",
+    "with": {
+        "version": "0.12.6",
+        "python-version": "${{ matrix.python-version }}",
+    },
+}
+_CI_INSTALL_STEP = "Install locked native probe dependencies"
+_CI_INSTALL_COMMAND = ("uv", "sync", "--locked", "--all-groups")
 _RUNTIME_SOURCE = """\
 from __future__ import annotations
 
@@ -210,6 +225,21 @@ def _parse_exact_command(
     return tokens
 
 
+def _exact_workflow_value(actual: object, expected: object) -> bool:
+    """Compare YAML values without accepting type-coerced equivalents."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _exact_workflow_value(actual[key], value) for key, value in expected.items()
+        )
+    if isinstance(expected, (list, tuple)):
+        return len(actual) == len(expected) and all(
+            _exact_workflow_value(item, value) for item, value in zip(actual, expected)
+        )
+    return actual == expected
+
+
 def _require_native_probe_execution_context(
     workflow: dict[object, object], job: dict[object, object]
 ) -> None:
@@ -239,6 +269,10 @@ def _require_native_probe_execution_context(
         raise SystemExit(
             "CI ownership native probe job must not continue after an error"
         )
+    if "continue-on-error" in job:
+        raise SystemExit(
+            "CI ownership native probe job must not define continue-on-error"
+        )
     unexpected_job_keys = set(job).difference(_NATIVE_PROBE_JOB_KEYS)
     if unexpected_job_keys:
         raise SystemExit(
@@ -251,12 +285,9 @@ def _require_native_probe_execution_context(
         raise SystemExit(
             "CI ownership native probe job runner must remain ubuntu-latest"
         )
-    if job.get("strategy") != {
-        "fail-fast": False,
-        "matrix": {"python-version": list(_SUPPORTED_PYTHONS)},
-    }:
+    if not _exact_workflow_value(job.get("strategy"), _NATIVE_PROBE_JOB_STRATEGY):
         raise SystemExit("CI ownership native probe job strategy must remain fixed")
-    if job.get("env") != _NATIVE_PROBE_JOB_ENV:
+    if not _exact_workflow_value(job.get("env"), _NATIVE_PROBE_JOB_ENV):
         raise SystemExit(
             "CI ownership native probe job environment must exactly set "
             "FAST_FSM_BUILD_MODE=compiled; PYTEST_ADDOPTS and Python/uv/pytest "
@@ -264,20 +295,21 @@ def _require_native_probe_execution_context(
         )
 
 
-def _required_step_run(step_name: str, steps: list[object]) -> str:
-    """Return a required run scalar only after validating its whole step mapping."""
-    matching_steps = [
-        step
-        for step in steps
-        if isinstance(step, dict) and step.get("name") == step_name
-    ]
-    if len(matching_steps) != 1:
+def _require_exact_step_mapping(
+    step: object, *, expected: dict[str, object], position: int, description: str
+) -> None:
+    """Require one fixed preparation step without accepting extra metadata."""
+    if not _exact_workflow_value(step, expected):
         raise SystemExit(
-            "CI ownership native probe must contain exactly one executable "
-            f"step named: {step_name}"
+            "CI ownership native probe step "
+            f"{position} must exactly match the fixed {description} mapping"
         )
 
-    step = matching_steps[0]
+
+def _required_step_run(step: object, *, step_name: str, position: int) -> str:
+    """Return a run scalar only from its fixed position and full mapping."""
+    if not isinstance(step, dict):
+        raise SystemExit(f"CI ownership native probe step {position} must be a mapping")
     if "if" in step:
         raise SystemExit(
             f"CI ownership native probe required step must not define an if condition: "
@@ -288,11 +320,22 @@ def _required_step_run(step_name: str, steps: list[object]) -> str:
             "CI ownership native probe required step must not continue after an "
             f"error: {step_name}"
         )
-    unexpected_step_keys = set(step).difference(_NATIVE_PROBE_STEP_KEYS)
+    if "continue-on-error" in step:
+        raise SystemExit(
+            "CI ownership native probe required step must not define "
+            f"continue-on-error: {step_name}"
+        )
+    unexpected_step_keys = set(step).difference(_NATIVE_PROBE_RUN_STEP_KEYS)
     if unexpected_step_keys:
         raise SystemExit(
             f"CI ownership native probe step has unsupported execution metadata: "
             f"{step_name}: " + ", ".join(sorted(unexpected_step_keys))
+        )
+
+    if set(step) != _NATIVE_PROBE_RUN_STEP_KEYS or step.get("name") != step_name:
+        raise SystemExit(
+            "CI ownership native probe step "
+            f"{position} must exactly match the required named step: {step_name}"
         )
 
     run = step.get("run")
@@ -330,12 +373,12 @@ def _check_ci(path: Path) -> None:
     steps = job.get("steps")
     if not isinstance(steps, list):
         raise SystemExit("CI ownership native probe has no steps list")
-
-    for step in steps:
-        if not isinstance(step, dict):
-            raise SystemExit("CI ownership native probe has an invalid step")
-
     required_commands = (
+        (
+            _CI_INSTALL_STEP,
+            "dependency install",
+            _CI_INSTALL_COMMAND,
+        ),
         (
             _CI_CONTRACT_STEP,
             "contract self-check",
@@ -391,9 +434,32 @@ def _check_ci(path: Path) -> None:
             ),
         ),
     )
-    for step_name, description, expected_tokens in required_commands:
+    expected_step_count = 2 + len(required_commands)
+    if len(steps) != expected_step_count:
+        raise SystemExit(
+            "CI ownership native probe must contain exactly "
+            f"{expected_step_count} ordered steps"
+        )
+
+    _require_exact_step_mapping(
+        steps[0],
+        expected=_CI_CHECKOUT_STEP,
+        position=1,
+        description="checkout",
+    )
+    _require_exact_step_mapping(
+        steps[1],
+        expected=_CI_SETUP_UV_STEP,
+        position=2,
+        description="setup-uv",
+    )
+    for position, (step_name, description, expected_tokens) in enumerate(
+        required_commands, start=3
+    ):
         _parse_exact_command(
-            _required_step_run(step_name, steps),
+            _required_step_run(
+                steps[position - 1], step_name=step_name, position=position
+            ),
             description=description,
             expected_tokens=expected_tokens,
         )
