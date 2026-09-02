@@ -1,8 +1,8 @@
 # Phase 19: Bounded Diagnostics & Safe Output - Pattern Map
 
 **Mapped:** 2026-09-02  
-**Files analyzed:** 26 planned/modified files  
-**Analogs found:** 25 / 26 (the new diagnostics module has no exact implementation analog)
+**Files analyzed:** 25 planned/modified files
+**Analogs found:** 24 / 25 (the new diagnostics module has no exact implementation analog)
 
 ## File Classification
 
@@ -18,7 +18,6 @@
 | `tests/test_logging_config.py` | integration/security regression test | event-driven logging/configuration | existing real-handler tests in same file | exact |
 | `tests/test_validation.py` | regression/schema test | graph analysis + batch response | existing validation tests in same file | exact |
 | `tests/test_visualization.py` | regression/golden test | renderer/JSON output | existing rendering tests in same file | exact |
-| `tests/test_graph_invariants.py` | snapshot/invariant regression test | synchronized read + identity | existing graph fingerprint/snapshot tests in same file | exact |
 | `tests/test_mypyc_guard.py` | structural/compile test | static AST + subprocess | existing slot and compilation guards in same file | exact |
 | `tests/test_release_evidence.py` | tooling regression test | subprocess/file-I/O manifest validation | existing evidence CLI tests in same file | role match |
 | `tests/test_performance_benchmarks.py` | performance regression test | batch measurement | existing trigger throughput tests in same file | exact |
@@ -34,6 +33,12 @@
 | `.specify/decisions/ADR-006-bounded-diagnostics-safe-output.md` | decision record | durable cross-module contract | `ADR-005-safe-ownership-concurrency.md` | exact documentation convention |
 | `evidence/release-baseline.json` | generated evidence artifact | batch measurement/reporting | current release baseline and Phase 17 evidence workflow | exact |
 | `.planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md` | phase evidence record | batch measurement/reporting | `17-PERFORMANCE-EVIDENCE.md` | exact |
+
+`tests/test_graph_invariants.py` is an unchanged verification dependency, not a
+Phase 19 new/modified file. Plan 19-01 and the validation strategy run
+it to protect existing snapshot and mypyc invariants, but no Phase 19 task owns
+a content edit to that file. It is therefore excluded from the 25-file plan
+union and remains a focused analog/verification input below.
 
 ## Pattern Assignments
 
@@ -707,6 +712,6 @@ fail-closed. Application handlers always remain application-owned.
 **Analog search scope:** `src/fast_fsm`, `tests`, `tools`, `docs`,
 `.specify/memory`, `.specify/decisions`, `.planning/phases/17-*`, and release
 evidence artifacts.  
-**Files scanned:** 26 planned/modified candidates plus focused source/test/docs
+**Files scanned:** 25 planned/modified candidates plus focused source/test/docs
 analogs.  
 **Pattern extraction date:** 2026-09-02
