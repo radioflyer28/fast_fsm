@@ -4,17 +4,17 @@ milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
 current_phase: 18
 current_phase_name: Safe Ownership & Concurrency
-status: executing
-stopped_at: Completed 18-06-PLAN.md
-last_updated: "2026-09-02T02:39:09.278Z"
+status: verifying
+stopped_at: Completed 18-07-PLAN.md
+last_updated: "2026-09-02T05:07:24.666Z"
 last_activity: 2026-09-01
 last_activity_desc: Phase 18 execution started
-state_head: 3e36298c0da72cf2be2cb9da6948676d2e79eadf
+state_head: ef1832371dc95820966ae23c684cedd806770a79
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 26
-  completed_plans: 25
+  completed_plans: 26
   percent: 50
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 Phase: 18 (Safe Ownership & Concurrency) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-01 — Phase 18 execution started
 
 Progress: [█████░░░░░] 50%
@@ -73,6 +73,7 @@ Progress: [█████░░░░░] 50%
 | Phase 18 P04 | 13m | 2 tasks | 7 files |
 | Phase 18 P05 | 17m | 2 tasks | 5 files |
 | Phase 18 P06 | 33m | 2 tasks | 5 files |
+| Phase 18 P07 | 1h 25m | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 18]: [Phase 18]: safe_trigger admits ownership before ordinary Exception conversion, so redacted ownership RuntimeError values propagate rather than become results.
 - [Phase 18]: Declarative guard preparation uses a token-reset ContextVar marker containing machine, source, trigger, and target identity.
 - [Phase 18]: [Phase 18] Publish safe_trigger ownership admission as a redacted RuntimeError before ordinary value conversion, and document scheduler, snapshot, transfer, offload, and artifact exclusions.
+- [Phase 18]: Phase 18 closure accepts hosted ownership proof only when its exact SHA and all Python 3.10-3.14 native jobs succeed; coverage runs observe semantics while uninstrumented jobs enforce performance floors.
 
 ### Pending Todos
 
@@ -135,6 +137,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-02T02:39:09.132Z
-Stopped at: Completed 18-06-PLAN.md
+Last session: 2026-09-02T05:07:24.532Z
+Stopped at: Completed 18-07-PLAN.md
 Resume file: None
