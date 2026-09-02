@@ -71,6 +71,7 @@ PHASE18_WRITER_OWNER_PLANS = {
 D14_WRITER_ENTRY_POINTS = {
     "StateMachine": {
         "trigger": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "safe_trigger": ("_acquire_sync_ownership", "_release_sync_ownership"),
         "force_state": ("_acquire_sync_ownership", "_release_sync_ownership"),
         "reset": ("_acquire_sync_ownership", "_release_sync_ownership"),
         "restore": ("_acquire_sync_ownership", "_release_sync_ownership"),

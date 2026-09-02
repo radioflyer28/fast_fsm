@@ -305,13 +305,12 @@ def test_topology_and_history_reentry_is_rejected_before_mutation(
         assert machine.history == history_before
 
 
-@pytest.mark.xfail(strict=True, reason="RED until Plan 18-05")
 def test_strict_red_safe_trigger_keeps_ownership_errors_outside_conversion() -> None:
     """Plan 18-05 makes a nested safe trigger raise instead of return a result."""
     machine: StateMachine
 
     def on_exit(*_args: object, **_kwargs: object) -> None:
-        with pytest.raises(RuntimeError, match="reentrant trigger"):
+        with pytest.raises(RuntimeError, match="reentrant safe_trigger"):
             machine.safe_trigger("nested", payload="safe-secret")
 
     source = CallbackState("source", on_exit=on_exit)
@@ -324,6 +323,88 @@ def test_strict_red_safe_trigger_keeps_ownership_errors_outside_conversion() -> 
     machine.add_transition("nested", "source", "alternate")
 
     assert machine.trigger("outer").success is True
+
+
+def test_safe_trigger_direct_admission_is_redacted_and_releases_for_reuse() -> None:
+    """safe_trigger admits once before conversion and leaves the machine reusable."""
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, name="safe-trigger-direct")
+    machine.add_state(destination)
+    machine.add_transition("advance", "source", "destination")
+
+    owner_thread_id = machine._acquire_sync_ownership("test-owner")
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match=r"^FSM ownership violation: reentrant safe_trigger$",
+        ) as raised:
+            machine.safe_trigger(
+                "trigger-secret", "argument-secret", payload="payload-secret"
+            )
+    finally:
+        machine._release_sync_ownership(owner_thread_id)
+
+    assert "trigger-secret" not in str(raised.value)
+    assert "argument-secret" not in str(raised.value)
+    assert "payload-secret" not in str(raised.value)
+    assert machine.safe_trigger("advance").success is True
+
+
+@pytest.mark.asyncio
+async def test_safe_trigger_rejects_busy_async_machine_before_conversion() -> None:
+    """A synchronous safe write cannot bypass a live async ownership envelope."""
+    source = State("source")
+    destination = State("destination")
+    alternate = State("alternate")
+    machine = AsyncStateMachine(source, name="safe-trigger-async")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", "source", "destination")
+    machine.add_transition("nested", "source", "alternate")
+
+    async def reenter(*_args: object, **_kwargs: object) -> None:
+        with pytest.raises(
+            RuntimeError, match=r"^FSM ownership violation: async machine busy$"
+        ) as raised:
+            machine.safe_trigger(
+                "nested-secret", "argument-secret", payload="payload-secret"
+            )
+        assert "nested-secret" not in str(raised.value)
+        assert "argument-secret" not in str(raised.value)
+        assert "payload-secret" not in str(raised.value)
+
+    machine.on_exit_async("source", reenter)
+
+    assert (await machine.trigger_async("outer")).success is True
+
+
+def test_safe_trigger_converts_ordinary_post_admission_exception_without_secret_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The compatibility barrier stays inside the already-admitted operation."""
+
+    class ExplodingMachine(StateMachine):
+        def _trigger_owned(
+            self, trigger: str, *args: object, **kwargs: object
+        ) -> object:
+            raise ValueError("ordinary-cause-secret")
+
+    machine = ExplodingMachine(State("source"), name="safe-trigger-conversion")
+
+    result = machine.safe_trigger(
+        "advance", "argument-secret", payload="payload-secret"
+    )
+
+    assert result.success is False
+    assert result.from_state == "source"
+    assert result.to_state is None
+    assert result.trigger == "advance"
+    assert result.error == "Safe trigger failed"
+    assert "ordinary-cause-secret" not in result.error
+    assert "ordinary-cause-secret" not in caplog.text
+    assert "argument-secret" not in caplog.text
+    assert "payload-secret" not in caplog.text
 
 
 @pytest.mark.xfail(strict=True, reason="RED until Plan 18-05")

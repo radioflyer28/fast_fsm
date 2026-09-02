@@ -403,6 +403,33 @@ def test_sync_failure_observer_reentry_is_rejected_inside_the_outer_finalizer() 
     assert events == ["nested-rejected", "later-observer"]
 
 
+def test_uncaught_safe_trigger_reentry_uses_the_outer_lifecycle_stage() -> None:
+    """Ownership admission escapes safe_trigger and belongs to the outer stage."""
+    machine: StateMachine
+
+    def reenter(*_args: object, **_kwargs: object) -> None:
+        machine.safe_trigger("nested", payload="nested-secret")
+
+    source = CallbackState("source", on_exit=reenter)
+    destination = State("destination")
+    alternate = State("alternate")
+    machine = StateMachine(source, name="safe-trigger-stage")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", "source", "destination")
+    machine.add_transition("nested", "source", "alternate")
+
+    result = machine.trigger("outer", payload="outer-secret")
+
+    assert result.success is False
+    assert result.stage == "source-exit"
+    assert result.committed is False
+    assert result.cause is not None
+    assert "nested-secret" not in result.error
+    assert "outer-secret" not in result.error
+    assert "nested-secret" not in str(result.cause)
+
+
 def test_sync_commit_failure_is_precommit_and_finalized_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
