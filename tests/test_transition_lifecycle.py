@@ -22,6 +22,33 @@ from fast_fsm.core import (
 )
 
 
+_ASYNC_TEST_TIMEOUT = 5
+
+
+async def _cleanup_spawned_tasks(*tasks: asyncio.Task[object] | None) -> None:
+    """Cancel spawned tasks without allowing a deferred cancellation to hang a test."""
+    active_tasks = tuple(task for task in tasks if task is not None)
+    for task in active_tasks:
+        if not task.done():
+            task.cancel()
+    if not active_tasks:
+        return
+
+    _, pending = await asyncio.wait(active_tasks, timeout=_ASYNC_TEST_TIMEOUT)
+    if pending:
+        pending_names = ", ".join(task.get_name() for task in pending)
+        raise AssertionError(
+            "spawned task cleanup exceeded "
+            f"{_ASYNC_TEST_TIMEOUT} seconds; pending tasks: {pending_names}"
+        )
+
+    for task in active_tasks:
+        try:
+            task.result()
+        except BaseException:
+            pass
+
+
 class LifecycleRecorder:
     """Record observable callback order without mocking the machine."""
 
@@ -1003,9 +1030,7 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
         assert not machine._async_ownership_lock.locked()
     finally:
         release.set()
-        if not pending.done():
-            pending.cancel()
-        await asyncio.gather(pending, return_exceptions=True)
+        await _cleanup_spawned_tasks(pending)
 
 
 @pytest.mark.asyncio
@@ -1087,10 +1112,4 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
         assert events == ["registered", "registered", "added"]
     finally:
         release.set()
-        for task in (first_task, second_task):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (first_task, second_task) if task is not None),
-            return_exceptions=True,
-        )
+        await _cleanup_spawned_tasks(first_task, second_task)

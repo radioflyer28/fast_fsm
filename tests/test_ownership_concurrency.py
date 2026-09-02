@@ -10,6 +10,33 @@ import fast_fsm.core as core
 from fast_fsm.core import AsyncStateMachine, CallbackState, State, StateMachine
 
 
+_ASYNC_TEST_TIMEOUT = 5
+
+
+async def _cleanup_spawned_tasks(*tasks: asyncio.Task[object] | None) -> None:
+    """Cancel spawned tasks without allowing a deferred cancellation to hang a test."""
+    active_tasks = tuple(task for task in tasks if task is not None)
+    for task in active_tasks:
+        if not task.done():
+            task.cancel()
+    if not active_tasks:
+        return
+
+    _, pending = await asyncio.wait(active_tasks, timeout=_ASYNC_TEST_TIMEOUT)
+    if pending:
+        pending_names = ", ".join(task.get_name() for task in pending)
+        raise AssertionError(
+            "spawned task cleanup exceeded "
+            f"{_ASYNC_TEST_TIMEOUT} seconds; pending tasks: {pending_names}"
+        )
+
+    for task in active_tasks:
+        try:
+            task.result()
+        except BaseException:
+            pass
+
+
 @dataclass(frozen=True)
 class OwnershipContractCase:
     """One requirement/probe row and the plan that turns it green."""
@@ -532,10 +559,7 @@ async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() ->
             await asyncio.wait_for(cancelled, timeout=5)
     finally:
         release.set()
-        for task in (cancelled, independent):
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(cancelled, independent, return_exceptions=True)
+        await _cleanup_spawned_tasks(cancelled, independent)
 
     assert restored == [True]
     assert core._prepared_declarative_guard.get() is None
@@ -1107,13 +1131,7 @@ async def test_async_same_loop_tasks_serialize_without_blocking_heartbeat() -> N
         assert not (await asyncio.wait_for(waiter, timeout=5)).success
     finally:
         release_owner.set()
-        for task in (owner, waiter, beat):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (owner, waiter, beat) if task is not None),
-            return_exceptions=True,
-        )
+        await _cleanup_spawned_tasks(owner, waiter, beat)
 
 
 @pytest.mark.asyncio
@@ -1178,13 +1196,7 @@ async def test_async_waiting_and_owning_cancellation_release_for_reuse() -> None
         ).success
     finally:
         release_owner.set()
-        for task in (owner, waiter, cancelled_owner):
-            if task is not None and not task.done():
-                task.cancel()
-        await asyncio.gather(
-            *(task for task in (owner, waiter, cancelled_owner) if task is not None),
-            return_exceptions=True,
-        )
+        await _cleanup_spawned_tasks(owner, waiter, cancelled_owner)
 
 
 @pytest.mark.asyncio
@@ -1269,9 +1281,34 @@ async def test_bound_async_machine_sync_writers_follow_idle_thread_policy() -> N
         assert (await asyncio.wait_for(owner, timeout=5)).success
     finally:
         release_owner.set()
-        if not owner.done():
-            owner.cancel()
-        await asyncio.gather(owner, return_exceptions=True)
+        await _cleanup_spawned_tasks(owner)
+
+
+@pytest.mark.asyncio
+async def test_spawned_task_cleanup_fails_when_cancellation_is_deferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup reports a stuck task instead of awaiting its teardown forever."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def defer_cancellation() -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    task = asyncio.create_task(defer_cancellation())
+    await asyncio.wait_for(entered.wait(), timeout=_ASYNC_TEST_TIMEOUT)
+    cleanup_timeout = _ASYNC_TEST_TIMEOUT
+    monkeypatch.setitem(globals(), "_ASYNC_TEST_TIMEOUT", 0)
+    try:
+        with pytest.raises(AssertionError, match="pending tasks"):
+            await _cleanup_spawned_tasks(task)
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=cleanup_timeout)
 
 
 @pytest.mark.asyncio
