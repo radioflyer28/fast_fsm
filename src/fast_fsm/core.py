@@ -48,13 +48,20 @@ from .conditions import (
 # The machine-owned dispatch seam evaluates a declarative decorator guard before
 # invoking state policy. The context-local marker suppresses only the base
 # declarative class's duplicate evaluation for one exact machine/source/trigger/
-# target tuple. A token restores the outer marker after every nested, exceptional,
-# or cancelled scope in both pure Python and mypyc builds.
+# target tuple. A separate context-local consumer identity is installed by each
+# enclosing public machine-dispatch boundary, so a nested machine cannot consume
+# another machine's live preparation marker. Tokens restore both scopes after
+# every nested, exceptional, or cancelled path in pure Python and mypyc builds.
 _PreparedDeclarativeGuard = Tuple[int, int, str, int]
 _prepared_declarative_guard: contextvars.ContextVar[
     Optional[_PreparedDeclarativeGuard]
 ] = contextvars.ContextVar[Optional[_PreparedDeclarativeGuard]](
     "_prepared_declarative_guard", default=None
+)
+_declarative_consumer_machine_id: contextvars.ContextVar[Optional[int]] = (
+    contextvars.ContextVar[Optional[int]](
+        "_declarative_consumer_machine_id", default=None
+    )
 )
 
 
@@ -129,10 +136,10 @@ def _has_prepared_declarative_guard(
 ) -> bool:
     """Return whether this base declarative check already ran in machine dispatch."""
     marker = _prepared_declarative_guard.get()
-    return marker is not None and marker[1:] == (
-        id(source_state),
-        trigger,
-        id(to_state),
+    return (
+        marker is not None
+        and marker[0] == _declarative_consumer_machine_id.get()
+        and marker[1:] == (id(source_state), trigger, id(to_state))
     )
 
 
@@ -1697,24 +1704,28 @@ class StateMachine:
         Performance: O(1) - Direct dictionary lookup + condition check
         Use this for validation before expensive operations.
         """
-        prepared = self._prepare_transition(trigger, args, kwargs)
-        if isinstance(prepared, TransitionResult):
-            return False
-
-        entry = prepared.entry
-        if entry.condition:
-            assert prepared.condition_kwargs is not None
-            if not self._evaluate_condition_sync(
-                entry.condition, prepared.args, prepared.condition_kwargs
-            ):
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            prepared = self._prepare_transition(trigger, args, kwargs)
+            if isinstance(prepared, TransitionResult):
                 return False
 
-        if not self._evaluate_declarative_condition_sync(prepared):
-            return False
+            entry = prepared.entry
+            if entry.condition:
+                assert prepared.condition_kwargs is not None
+                if not self._evaluate_condition_sync(
+                    entry.condition, prepared.args, prepared.condition_kwargs
+                ):
+                    return False
 
-        return self._can_transition_after_declarative_guard(
-            trigger, entry.to_state, args, kwargs
-        )
+            if not self._evaluate_declarative_condition_sync(prepared):
+                return False
+
+            return self._can_transition_after_declarative_guard(
+                trigger, entry.to_state, args, kwargs
+            )
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     def _prepare_transition(
         self, trigger: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]
@@ -2671,11 +2682,15 @@ class StateMachine:
         Returns:
             TransitionResult indicating success or failure
         """
-        owner_thread_id = self._acquire_sync_ownership("trigger")
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
-            return self._trigger_owned(trigger, *args, **kwargs)
+            owner_thread_id = self._acquire_sync_ownership("trigger")
+            try:
+                return self._trigger_owned(trigger, *args, **kwargs)
+            finally:
+                self._release_sync_ownership(owner_thread_id)
         finally:
-            self._release_sync_ownership(owner_thread_id)
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     def _trigger_owned(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one ordinary trigger while its caller owns this machine."""
@@ -2857,24 +2872,30 @@ class StateMachine:
         Returns:
             TransitionResult with detailed error information
         """
-        owner_thread_id = self._acquire_sync_ownership("safe_trigger")
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
+            owner_thread_id = self._acquire_sync_ownership("safe_trigger")
             try:
-                return self._trigger_owned(trigger, *args, **kwargs)
-            except (
-                Exception
-            ) as cause:  # intentional post-admission compatibility barrier
-                self._logger.error(
-                    "%s: safe trigger failed type=%s", self._name, type(cause).__name__
-                )
-                return TransitionResult(
-                    False,
-                    from_state=self.current_state_name,
-                    trigger=trigger,
-                    error="Safe trigger failed",
-                )
+                try:
+                    return self._trigger_owned(trigger, *args, **kwargs)
+                except (
+                    Exception
+                ) as cause:  # intentional post-admission compatibility barrier
+                    self._logger.error(
+                        "%s: safe trigger failed type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+                    return TransitionResult(
+                        False,
+                        from_state=self.current_state_name,
+                        trigger=trigger,
+                        error="Safe trigger failed",
+                    )
+            finally:
+                self._release_sync_ownership(owner_thread_id)
         finally:
-            self._release_sync_ownership(owner_thread_id)
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     def debug_info(self) -> Dict[str, Any]:
         """
@@ -3393,27 +3414,31 @@ class AsyncStateMachine(StateMachine):
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
-        self._bind_or_check_async_loop("can_trigger_async")
-        prepared = self._prepare_transition(trigger, args, kwargs)
-        if isinstance(prepared, TransitionResult):
-            return False
-
-        entry = prepared.entry
-        condition = entry.condition
-
-        if condition:
-            assert prepared.condition_kwargs is not None
-            if not await self._evaluate_condition_async(
-                condition, prepared.args, prepared.condition_kwargs
-            ):
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            self._bind_or_check_async_loop("can_trigger_async")
+            prepared = self._prepare_transition(trigger, args, kwargs)
+            if isinstance(prepared, TransitionResult):
                 return False
 
-        if not await self._evaluate_declarative_condition_async(prepared):
-            return False
+            entry = prepared.entry
+            condition = entry.condition
 
-        return await self._can_transition_after_declarative_guard_async(
-            trigger, entry.to_state, args, kwargs
-        )
+            if condition:
+                assert prepared.condition_kwargs is not None
+                if not await self._evaluate_condition_async(
+                    condition, prepared.args, prepared.condition_kwargs
+                ):
+                    return False
+
+            if not await self._evaluate_declarative_condition_async(prepared):
+                return False
+
+            return await self._can_transition_after_declarative_guard_async(
+                trigger, entry.to_state, args, kwargs
+            )
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     async def _can_transition_after_declarative_guard_async(
         self,
@@ -3442,13 +3467,17 @@ class AsyncStateMachine(StateMachine):
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one owned async transition with permanent-loop admission."""
-        owner_task, owner_root, token = await self._acquire_async_ownership(
-            "trigger_async"
-        )
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
-            return await self._trigger_async_owned(trigger, *args, **kwargs)
+            owner_task, owner_root, token = await self._acquire_async_ownership(
+                "trigger_async"
+            )
+            try:
+                return await self._trigger_async_owned(trigger, *args, **kwargs)
+            finally:
+                self._release_async_ownership(owner_task, owner_root, token)
         finally:
-            self._release_async_ownership(owner_task, owner_root, token)
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     async def _trigger_async_owned(
         self, trigger: str, *args, **kwargs
