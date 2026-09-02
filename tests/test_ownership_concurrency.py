@@ -443,7 +443,7 @@ def test_strict_red_declarative_marker_is_context_local_and_machine_qualified() 
 
 
 def test_declarative_marker_is_machine_qualified_and_nested_context_local() -> None:
-    """Nested machine scopes restore the matching prior marker exactly."""
+    """Nested preparation scopes restore their provenance without authorizing use."""
     source = State("source")
     target = State("target")
     first = StateMachine(source, name="first-marker-machine")
@@ -459,7 +459,7 @@ def test_declarative_marker_is_machine_qualified_and_nested_context_local() -> N
             "advance",
             id(target),
         )
-        assert core._has_prepared_declarative_guard(source, "advance", target)
+        assert not core._has_prepared_declarative_guard(source, "advance", target)
         inner = core._set_prepared_declarative_guard(second, source, "advance", target)
         try:
             assert core._prepared_declarative_guard.get() == (
@@ -468,7 +468,7 @@ def test_declarative_marker_is_machine_qualified_and_nested_context_local() -> N
                 "advance",
                 id(target),
             )
-            assert core._has_prepared_declarative_guard(source, "advance", target)
+            assert not core._has_prepared_declarative_guard(source, "advance", target)
         finally:
             core._reset_prepared_declarative_guard(inner)
         assert core._prepared_declarative_guard.get() == (
@@ -513,7 +513,7 @@ def test_declarative_marker_isolated_for_independent_sync_threads() -> None:
 
     assert not first_thread.is_alive()
     assert not second_thread.is_alive()
-    assert outcomes == [True, True]
+    assert outcomes == [False, False]
     assert core._prepared_declarative_guard.get() is None
 
 
@@ -553,7 +553,7 @@ async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() ->
     independent = asyncio.create_task(mark_independently())
     try:
         await asyncio.wait_for(entered.wait(), timeout=5)
-        assert await asyncio.wait_for(independent, timeout=5)
+        assert not await asyncio.wait_for(independent, timeout=5)
         cancelled.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(cancelled, timeout=5)
@@ -562,6 +562,121 @@ async def test_declarative_marker_isolated_for_async_tasks_and_cancellation() ->
         await _cleanup_spawned_tasks(cancelled, independent)
 
     assert restored == [True]
+    assert core._prepared_declarative_guard.get() is None
+
+
+def test_sync_cross_machine_consumer_rejects_outer_preparation_marker() -> None:
+    """Nested public dispatch cannot consume another machine's marker."""
+    guard_calls: list[str] = []
+    outer_dispatch = [False]
+    nested_dispatch = [False]
+    recursive_condition = [False]
+
+    def condition(*args, **kwargs) -> bool:
+        guard_calls.append("guard")
+        if not nested_dispatch[0] or recursive_condition[0]:
+            return True
+        recursive_condition[0] = True
+        try:
+            return core.DeclarativeState.can_transition(
+                source, "advance", target, *args, **kwargs
+            )
+        finally:
+            recursive_condition[0] = False
+
+    class SharedDeclarativeState(core.DeclarativeState):
+        @core.transition(
+            "advance",
+            from_state="source",
+            to_state="target",
+            condition=condition,
+        )
+        def handle_advance(self, *args, **kwargs) -> bool:
+            return True
+
+        def can_transition(self, trigger, to_state, *args, **kwargs) -> bool:
+            if not outer_dispatch[0]:
+                outer_dispatch[0] = True
+                nested_dispatch[0] = True
+                try:
+                    assert second.can_trigger("advance")
+                finally:
+                    nested_dispatch[0] = False
+                    outer_dispatch[0] = False
+            return super().can_transition(trigger, to_state, *args, **kwargs)
+
+    source = SharedDeclarativeState("source")
+    target = State("target")
+    first = StateMachine(source, name="outer-marker-machine")
+    second = StateMachine(source, name="inner-marker-machine")
+    for machine in (first, second):
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+    result = first.trigger("advance")
+
+    assert result.success
+    assert guard_calls == ["guard", "guard", "guard"]
+    assert core._prepared_declarative_guard.get() is None
+
+
+@pytest.mark.asyncio
+async def test_async_cross_machine_consumer_rejects_outer_preparation_marker() -> None:
+    """Async nested public dispatch cannot consume another machine's marker."""
+    guard_calls: list[str] = []
+    outer_dispatch = [False]
+    nested_dispatch = [False]
+    recursive_condition = [False]
+
+    async def condition(*args, **kwargs) -> bool:
+        guard_calls.append("guard")
+        if not nested_dispatch[0] or recursive_condition[0]:
+            return True
+        recursive_condition[0] = True
+        try:
+            return await core.AsyncDeclarativeState.can_transition_async(
+                source, "advance", target, *args, **kwargs
+            )
+        finally:
+            recursive_condition[0] = False
+
+    class SharedAsyncDeclarativeState(core.AsyncDeclarativeState):
+        @core.transition(
+            "advance",
+            from_state="source",
+            to_state="target",
+            condition=condition,
+        )
+        async def handle_advance(self, *args, **kwargs) -> bool:
+            return True
+
+        async def can_transition_async(
+            self, trigger, to_state, *args, **kwargs
+        ) -> bool:
+            if not outer_dispatch[0]:
+                outer_dispatch[0] = True
+                nested_dispatch[0] = True
+                try:
+                    assert await second.can_trigger_async("advance")
+                finally:
+                    nested_dispatch[0] = False
+                    outer_dispatch[0] = False
+            return await super().can_transition_async(
+                trigger, to_state, *args, **kwargs
+            )
+
+    source = SharedAsyncDeclarativeState("source")
+    target = State("target")
+    first = AsyncStateMachine(source, name="outer-async-marker-machine")
+    second = AsyncStateMachine(source, name="inner-async-marker-machine")
+    for machine in (first, second):
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+    result = await first.trigger_async("advance")
+
+    assert result.success
+    assert guard_calls == ["guard", "guard", "guard"]
     assert core._prepared_declarative_guard.get() is None
 
 

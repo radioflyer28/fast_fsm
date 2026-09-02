@@ -647,6 +647,94 @@ def test_prepared_declarative_marker_is_one_contextvar_with_machine_identity() -
         assert expected_call in calls
 
 
+def test_prepared_declarative_marker_compares_independent_consumer_identity() -> None:
+    """Preparation provenance and active dispatch stay at distinct seams."""
+    source = CORE_PY.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(CORE_PY))
+    module_names = {
+        target.id
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (node.targets if isinstance(node, ast.Assign) else (node.target,))
+        if isinstance(target, ast.Name)
+    }
+    assert "_declarative_consumer_machine_id" in module_names
+
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    setter_source = ast.unparse(functions["_set_prepared_declarative_guard"])
+    assert "_prepared_declarative_guard.set" in setter_source
+    assert "_declarative_consumer_machine_id" not in setter_source
+
+    consumer_source = ast.unparse(functions["_has_prepared_declarative_guard"])
+    assert "marker[0]" in consumer_source
+    assert "_declarative_consumer_machine_id.get()" in consumer_source
+
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    public_dispatch = (
+        ("StateMachine", "can_trigger", False),
+        ("StateMachine", "trigger", False),
+        ("StateMachine", "safe_trigger", False),
+        ("AsyncStateMachine", "can_trigger_async", True),
+        ("AsyncStateMachine", "trigger_async", True),
+    )
+    for class_name, method_name, is_async in public_dispatch:
+        method = next(
+            node
+            for node in classes[class_name].body
+            if node.name == method_name
+            and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+        assert isinstance(method, ast.AsyncFunctionDef) is is_async
+        calls = [
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "_declarative_consumer_machine_id"
+        ]
+        assert "set" in calls
+        assert "reset" in calls
+        assert any(isinstance(node, ast.Try) for node in ast.walk(method))
+
+    for class_name in ("State", "DeclarativeState", "AsyncDeclarativeState"):
+        method_name = (
+            "can_transition_async"
+            if class_name == "AsyncDeclarativeState"
+            else "can_transition"
+        )
+        method = next(
+            node
+            for node in classes[class_name].body
+            if node.name == method_name
+            and isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+        assert [argument.arg for argument in method.args.args] == [
+            "self",
+            "trigger",
+            "to_state",
+        ]
+        assert method.args.vararg is not None
+        assert method.args.kwarg is not None
+        assert not method.args.kwonlyargs
+
+    mutable_registries = [
+        target.id
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(node.value, (ast.Dict, ast.List, ast.Set))
+        for target in (node.targets if isinstance(node, ast.Assign) else (node.target,))
+        if isinstance(target, ast.Name)
+        and "declarative" in target.id
+        and "registry" in target.id
+    ]
+    assert not mutable_registries
+
+
 def test_phase18_native_probe_and_supported_matrix_are_present() -> None:
     """The final CI matrix compiles and exercises the actual ownership core."""
     probe_source = PHASE18_NATIVE_PROBE.read_text(encoding="utf-8")
