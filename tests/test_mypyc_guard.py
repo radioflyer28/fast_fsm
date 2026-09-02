@@ -745,12 +745,21 @@ def test_phase18_native_probe_rejects_inert_or_split_pytest_commands(
         _load_phase18_native_probe()._check_ci(candidate)
 
 
-@pytest.mark.parametrize("option", ("--collect-only", "--help", "--version"))
-def test_phase18_native_probe_rejects_nonexecuting_pytest_options(
+@pytest.mark.parametrize(
+    "suffix",
+    (
+        "--collect-only",
+        "--help",
+        "--version",
+        "-o addopts=--collect-only",
+        "|& true",
+    ),
+)
+def test_phase18_native_probe_rejects_extra_pytest_options_and_shell_controls(
     tmp_path: Path,
-    option: str,
+    suffix: str,
 ) -> None:
-    """The required test files do not make pytest inspection modes valid."""
+    """The native test command accepts only its exact executing argv contract."""
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     expected_run = """run: >-
           uv run pytest
@@ -763,13 +772,18 @@ def test_phase18_native_probe_rejects_nonexecuting_pytest_options(
     candidate = tmp_path / "ci.yml"
     candidate.write_text(
         workflow.replace(
-            expected_run, expected_run.replace("-x -q", f"{option} -x -q")
+            expected_run, expected_run.replace("-x -q", f"-x -q {suffix}")
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(SystemExit, match="must not use non-executing pytest option"):
+    with pytest.raises(SystemExit, match="must exactly match the required pytest argv"):
         _load_phase18_native_probe()._check_ci(candidate)
+
+
+def test_phase18_native_probe_accepts_the_real_workflow_contract() -> None:
+    """The checked-in folded workflow scalar parses to the allowlisted argv."""
+    _load_phase18_native_probe()._check_ci(CI_WORKFLOW)
 
 
 def test_phase18_native_probe_accepts_one_complete_hosted_run_among_duplicates(

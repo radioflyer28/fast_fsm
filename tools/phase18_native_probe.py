@@ -29,10 +29,6 @@ _CI_COMPILE_CORE_STEP = "Compile actual ownership core"
 _CI_NATIVE_ORIGIN_STEP = "Assert native ownership core origin"
 _CI_TEST_STEP = "Run native ownership and lifecycle semantics"
 _CI_REPRESENTATION_PROBE_STEP = "Compile and import ownership representation probe"
-_NON_EXECUTING_PYTEST_OPTIONS = frozenset(
-    ("--collect-only", "--co", "--help", "-h", "--version", "-V")
-)
-_SHELL_CONTROL_TOKENS = frozenset(("&", "&&", "|", "||", ";", "<", ">", "<<", ">>"))
 _RUNTIME_SOURCE = """\
 from __future__ import annotations
 
@@ -179,34 +175,18 @@ def _parse_ownership_pytest_command(run: str) -> tuple[str, ...]:
             "CI ownership native probe test step has invalid shell syntax"
         ) from exc
 
-    if tokens[:3] != ("uv", "run", "pytest"):
+    expected_tokens = (
+        "uv",
+        "run",
+        "pytest",
+        *_OWNERSHIP_TEST_FILES,
+        "-x",
+        "-q",
+    )
+    if tokens != expected_tokens:
         raise SystemExit(
-            "CI ownership native probe test step must run exactly: uv run pytest ..."
-        )
-    if any(
-        token in _SHELL_CONTROL_TOKENS or "$" in token or "`" in token
-        for token in tokens
-    ):
-        raise SystemExit(
-            "CI ownership native probe test step must not contain shell control "
-            "operators"
-        )
-    for token in tokens[3:]:
-        if any(
-            token == option or token.startswith(f"{option}=")
-            for option in _NON_EXECUTING_PYTEST_OPTIONS
-        ):
-            raise SystemExit(
-                "CI ownership native probe test step must not use non-executing "
-                f"pytest option: {token}"
-            )
-    missing = [
-        test_file for test_file in _OWNERSHIP_TEST_FILES if test_file not in tokens
-    ]
-    if missing:
-        raise SystemExit(
-            "CI ownership native probe test step is missing pytest arguments: "
-            + ", ".join(missing)
+            "CI ownership native probe test step must exactly match the required "
+            "pytest argv: " + " ".join(expected_tokens)
         )
     return tokens
 
