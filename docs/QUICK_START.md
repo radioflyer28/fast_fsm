@@ -515,6 +515,40 @@ cancelled, failure observers run once for the reached stage and the original
 pre-commit cancellation leaves source/history unchanged, while post-commit
 cancellation leaves the destination and its committed record intact.
 
+### Ownership and concurrent callers
+
+Treat a machine as one independently owned writer. `trigger()`,
+`safe_trigger()`, direct state control (`force_state()`, `reset()`, and
+`restore()`), graph/history changes, and listener/callback registration are
+all writes. They share one ownership boundary; read helpers intentionally do
+not create a stable multi-field snapshot.
+
+- A regular `StateMachine` serializes independent threads for the entire
+  operation. Do not call a writer again from one of that machine's callbacks:
+  same-owner reentry raises a redacted `RuntimeError` before it evaluates a
+  guard, runs a callback, or changes state/history. After any success,
+  exception, or `BaseException`, the owner marker and lock are released.
+- An `AsyncStateMachine` permanently chooses the running event loop of its
+  first async control operation. Use it only from that loop. Independent tasks
+  wait asynchronously, so they do not block the event loop; an owned callback
+  and a child task it creates are causally reentrant and raise `RuntimeError`
+  instead of waiting. Waiting/owning cancellation remains normal
+  `asyncio.CancelledError` propagation with the existing pre/post-commit
+  state and history truth.
+- With `safe_trigger()`, ownership, loop, causal-root, foreign-thread, and
+  busy checks happen before its compatibility catch and therefore raise
+  `RuntimeError`. Ordinary failures after admission still produce the familiar
+  `TransitionResult` value. Error text names only a stable operation category,
+  never application arguments, payloads, causes, or arbitrary exception text.
+- Synchronous callbacks on async machines run inline on the loop thread;
+  async callbacks are awaited at their normal lifecycle slots. Fast FSM never
+  silently transfers a machine to another loop or offloads callbacks.
+
+Do not depend on fairness, timeouts, queue ordering, loop transfer, automatic
+worker offload, or a cross-field read snapshot. Those scheduling and snapshot
+guarantees are deliberately outside the API; Phase 19 owns diagnostics and
+Phase 20 owns installed-artifact parity.
+
 ## 📊 Performance Guide
 
 Fast FSM is optimized for speed and memory:

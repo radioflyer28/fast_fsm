@@ -417,6 +417,47 @@ transition, or invoke later lifecycle callbacks. Cancellation before commit
 leaves the source/history untouched; cancellation after commit leaves the
 destination and its one history record intact.
 
+### Ownership, Concurrency, and Reentry
+
+Fast FSM serializes **each machine independently**. This is an ownership
+contract for public writes, not a global scheduler:
+
+- `trigger()`, `safe_trigger()`, `force_state()`, `reset()`, `restore()`, graph
+  mutators, history enable/disable, and listener/callback/failure-observer
+  registration all share the same per-machine ownership policy. Reads remain
+  available, but do not promise a cross-field topology or diagnostic snapshot.
+- On `StateMachine`, independent threads serialize one complete write at a
+  time. A same-thread call made from an owned callback (or another owned write)
+  raises a redacted `RuntimeError` before validation, preparation, a guard,
+  callback, or mutation runs. Ownership is released after every result,
+  ordinary exception, and `BaseException` without altering the existing
+  state/history commit boundary.
+- On `AsyncStateMachine`, the first async control operation permanently binds
+  the machine to its running event loop. Independent tasks on that loop wait
+  with an asyncio-native per-machine lock, so the event loop remains
+  responsive. A foreign loop/thread, a direct reentry, or a child task created
+  by an owned callback raises `RuntimeError` before lock acquisition; child
+  tasks inherit the causal ownership root rather than waiting behind their
+  parent. Cancellation while waiting propagates unchanged and never installs
+  ownership; cancellation while owning follows the lifecycle's `finally`
+  cleanup and Phase 17 state/history rules.
+- `safe_trigger()` performs ownership, loop, causal-root, foreign-thread, and
+  busy preconditions **before** its ordinary exception-conversion catch, so
+  misuse raises `RuntimeError`. Ordinary post-admission `Exception` failures
+  still return the usual value result. Ownership messages use stable operation
+  categories only; they never contain trigger arguments, callback payloads,
+  causes, or arbitrary exception text.
+- Synchronous callbacks on an async machine run inline on its event-loop
+  thread. Registered async callbacks are awaited at their matching lifecycle
+  slots. Fast FSM does not infer blocking work or automatically offload a
+  callback to a worker.
+
+This contract intentionally makes **no** fairness, timeout, queue-order,
+loop-transfer, automatic-offload, cross-field-snapshot, or installed-artifact
+promise. Queueing reentry, loop transfer, and worker offload are future design
+work; stable diagnostic snapshots are Phase 19, and installed-wheel/sdist
+parity is Phase 20.
+
 ### Visualization
 
 Generate Mermaid state diagrams, PlantUML diagrams, and self-contained Markdown documents:
