@@ -432,8 +432,8 @@ def test_staged_writer_inventory_names_every_phase18_public_write() -> None:
     }
 
 
-def test_phase18_sync_tracer_keeps_slots_private_body_and_no_global_lock() -> None:
-    """The production tracer has one private sync-admission representation."""
+def test_phase18_sync_tracer_keeps_private_per_machine_locks() -> None:
+    """Ownership locks are slotted instance fields, never module-global state."""
     source = CORE_PY.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(CORE_PY))
     state_machine = next(
@@ -441,18 +441,66 @@ def test_phase18_sync_tracer_keeps_slots_private_body_and_no_global_lock() -> No
         for node in ast.walk(tree)
         if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
     )
-    slots = next(
-        node.value
-        for node in state_machine.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__slots__"
-            for target in node.targets
-        )
+    async_machine = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "AsyncStateMachine"
     )
-    assert isinstance(slots, ast.Tuple)
-    slot_names = {item.value for item in slots.elts if isinstance(item, ast.Constant)}
-    assert {"_sync_ownership_lock", "_sync_owner_thread_id"} <= slot_names
+
+    def slot_names(class_node: ast.ClassDef) -> set[str]:
+        slots = next(
+            node.value
+            for node in class_node.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "__slots__"
+                for target in node.targets
+            )
+        )
+        assert isinstance(slots, ast.Tuple)
+        return {item.value for item in slots.elts if isinstance(item, ast.Constant)}
+
+    def self_lock_assignments(class_node: ast.ClassDef, attribute: str) -> int:
+        initializer = next(
+            node
+            for node in class_node.body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        return sum(
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and target.attr == attribute
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "threading"
+            and node.value.func.attr == "Lock"
+            for node in ast.walk(initializer)
+        )
+
+    module_lock_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == "threading"
+        and node.value.func.attr == "Lock"
+    ]
+    assert module_lock_assignments == []
+
+    assert {"_sync_ownership_lock", "_sync_owner_thread_id"} <= slot_names(
+        state_machine
+    )
+    assert "_async_admission_lock" in slot_names(async_machine)
+    assert self_lock_assignments(state_machine, "_sync_ownership_lock") == 1
+    assert self_lock_assignments(async_machine, "_async_admission_lock") == 1
     methods = {
         node.name
         for node in state_machine.body
@@ -464,7 +512,6 @@ def test_phase18_sync_tracer_keeps_slots_private_body_and_no_global_lock() -> No
         "_trigger_owned",
         "trigger",
     } <= methods
-    assert source.count("threading.Lock()") == 1
     assert "_sync_ownership_locks" not in source
 
 
