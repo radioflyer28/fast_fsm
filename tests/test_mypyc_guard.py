@@ -68,17 +68,38 @@ PHASE18_WRITER_OWNER_PLANS = {
     "safe_trigger": "18-05",
 }
 
-TOPOLOGY_HISTORY_WRITERS = frozenset(
-    {
-        "add_state",
-        "add_transition",
-        "add_transitions",
-        "add_bidirectional_transition",
-        "add_emergency_transition",
-        "enable_history",
-        "disable_history",
-    }
-)
+D14_WRITER_ENTRY_POINTS = {
+    "StateMachine": {
+        "trigger": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "force_state": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "reset": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "restore": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "add_state": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "add_transition": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "add_transitions": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "add_bidirectional_transition": (
+            "_acquire_sync_ownership",
+            "_release_sync_ownership",
+        ),
+        "add_emergency_transition": (
+            "_acquire_sync_ownership",
+            "_release_sync_ownership",
+        ),
+        "enable_history": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "disable_history": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "add_listener": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "on_enter": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "on_exit": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "after_transition": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "on_failed": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "on_trigger": ("_acquire_sync_ownership", "_release_sync_ownership"),
+    },
+    "AsyncStateMachine": {
+        "trigger_async": ("_acquire_async_ownership", "_release_async_ownership"),
+        "on_enter_async": ("_acquire_sync_ownership", "_release_sync_ownership"),
+        "on_exit_async": ("_acquire_sync_ownership", "_release_sync_ownership"),
+    },
+}
 
 # Classes that inherit (transitively) from State or ABC but are intentionally
 # sealed — not designed for user subclassing.  Exempt from the decorator
@@ -527,35 +548,39 @@ def test_phase18_sync_tracer_keeps_private_per_machine_locks() -> None:
     assert "_sync_ownership_locks" not in source
 
 
-def test_topology_history_writers_enter_and_release_once_without_public_delegation() -> (
-    None
-):
-    """Guard the Plan 04 topology/history envelope against future bypasses."""
+def test_d14_writers_enter_and_release_once_without_public_delegation() -> None:
+    """Every D-14 write has one auditable entry and private owned body."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
-    state_machine = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
-    )
-    methods = {
+    classes = {
         node.name: node
-        for node in state_machine.body
-        if isinstance(node, ast.FunctionDef)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name in D14_WRITER_ENTRY_POINTS
+    }
+    public_writers = {
+        writer
+        for entry_points in D14_WRITER_ENTRY_POINTS.values()
+        for writer in entry_points
     }
 
-    for writer in TOPOLOGY_HISTORY_WRITERS:
-        method = methods[writer]
-        self_calls = [
-            node.func.attr
-            for node in ast.walk(method)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "self"
-        ]
-        assert self_calls.count("_acquire_sync_ownership") == 1
-        assert self_calls.count("_release_sync_ownership") == 1
-        assert not (set(self_calls) & (TOPOLOGY_HISTORY_WRITERS - {writer}))
+    for class_name, entry_points in D14_WRITER_ENTRY_POINTS.items():
+        methods = {
+            node.name: node
+            for node in classes[class_name].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for writer, (acquire, release) in entry_points.items():
+            method = methods[writer]
+            self_calls = [
+                node.func.attr
+                for node in ast.walk(method)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+            ]
+            assert self_calls.count(acquire) == 1
+            assert self_calls.count(release) == 1
+            assert not (set(self_calls) & (public_writers - {writer}))
 
 
 def test_phase18_native_probe_and_supported_matrix_are_present() -> None:

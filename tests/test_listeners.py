@@ -8,6 +8,8 @@ AsyncStateMachine integration, and real-world patterns.
 All tests use real FSM components — no mocking.
 """
 
+import pytest
+
 from fast_fsm.core import AsyncStateMachine, State, StateMachine
 
 
@@ -104,6 +106,85 @@ class TestListenerRegistration:
         fsm.add_listener(ExitOnly())
         fsm.trigger("start")
         assert log == ["idle"]
+
+
+class TestOwnedRegistration:
+    """Public registrars are writes, even while tuple snapshots stay defensive."""
+
+    @staticmethod
+    def _listener() -> object:
+        class AfterOnly:
+            def after_transition(self, *_args, **_kwargs):
+                pass
+
+        return AfterOnly()
+
+    @pytest.mark.parametrize(
+        ("operation", "register"),
+        (
+            (
+                "add_listener",
+                lambda fsm: fsm.add_listener(TestOwnedRegistration._listener()),
+            ),
+            (
+                "on_enter",
+                lambda fsm: fsm.on_enter("running", lambda *_args, **_kwargs: None),
+            ),
+            (
+                "on_exit",
+                lambda fsm: fsm.on_exit("idle", lambda *_args, **_kwargs: None),
+            ),
+            (
+                "after_transition",
+                lambda fsm: fsm.after_transition(lambda *_args, **_kwargs: None),
+            ),
+            ("on_failed", lambda fsm: fsm.on_failed(lambda *_args, **_kwargs: None)),
+            (
+                "on_trigger",
+                lambda fsm: fsm.on_trigger("start", lambda *_args, **_kwargs: None),
+            ),
+        ),
+    )
+    def test_sync_registrars_reject_callback_time_mutation(self, operation, register):
+        fsm = _make_fsm()
+        errors = []
+
+        def reenter(*_args, **_kwargs):
+            try:
+                register(fsm)
+            except RuntimeError as cause:
+                errors.append(cause)
+
+        fsm.on_exit("idle", reenter)
+
+        result = fsm.trigger("start")
+
+        assert result.success is True
+        assert [str(cause) for cause in errors] == [
+            f"FSM ownership violation: reentrant {operation}"
+        ]
+
+    def test_failed_observer_reentry_is_rejected_and_next_snapshot_is_ordered(self):
+        fsm = _make_fsm()
+        calls = []
+
+        def second(*_args, **_kwargs):
+            calls.append("second")
+
+        def first(*_args, **_kwargs):
+            with pytest.raises(
+                RuntimeError, match=r"^FSM ownership violation: reentrant on_failed$"
+            ):
+                fsm.on_failed(second)
+            calls.append("first")
+
+        fsm.on_failed(first)
+        assert fsm.trigger("missing").success is False
+        assert calls == ["first"]
+
+        fsm.on_failed(second)
+        assert fsm.trigger("missing").success is False
+        assert calls == ["first", "first", "second"]
 
 
 # ---------------------------------------------------------------------------

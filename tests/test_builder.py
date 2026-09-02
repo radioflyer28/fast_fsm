@@ -1555,6 +1555,62 @@ class TestFSMBuilderCallbacks:
         assert builder._machine is None
 
 
+class TestOwnershipConstructionIndependence:
+    """Publication creates machines, not shared ownership primitives."""
+
+    @staticmethod
+    def _assert_sync_independence(*machines: StateMachine) -> None:
+        assert len({id(machine._sync_ownership_lock) for machine in machines}) == len(
+            machines
+        )
+        assert all(machine._sync_owner_thread_id is None for machine in machines)
+
+    def test_builder_factories_and_clones_have_distinct_sync_ownership(self):
+        builder = FSMBuilder(State("builder-start"))
+        builder.add_state(State("builder-finish"))
+        builder.add_transition("go", "builder-start", "builder-finish")
+        built = builder.build()
+        quick = StateMachine.quick_build(
+            "quick-start", [("go", "quick-start", "quick-finish")]
+        )
+        configured = StateMachine.from_dict(
+            {
+                "initial": "config-start",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "config-start",
+                        "to": "config-finish",
+                    }
+                ],
+            }
+        )
+        clone = built.clone()
+
+        self._assert_sync_independence(built, quick, configured, clone)
+
+    def test_async_builder_and_clone_reset_all_ownership_metadata(self):
+        async def callback(*_args, **_kwargs):
+            pass
+
+        builder = FSMBuilder(State("source"))
+        builder.add_state(State("destination"))
+        builder.add_transition("go", "source", "destination")
+        builder.on_enter_async("destination", callback)
+        machine = builder.build()
+
+        assert isinstance(machine, AsyncStateMachine)
+        clone = machine.clone()
+        assert machine._sync_ownership_lock is not clone._sync_ownership_lock
+        assert machine._async_ownership_lock is not clone._async_ownership_lock
+        assert machine._async_admission_lock is not clone._async_admission_lock
+        for owned in (machine, clone):
+            assert owned._bound_loop is None
+            assert owned._bound_loop_thread_id is None
+            assert owned._async_owner_task is None
+            assert owned._async_owner_root is None
+
+
 # ---------------------------------------------------------------------------
 # FSMBuilder publication transaction
 # ---------------------------------------------------------------------------

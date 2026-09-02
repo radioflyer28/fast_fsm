@@ -114,7 +114,7 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
         methods = (
             TOPOLOGY_HISTORY_WRITERS
             if case.identifier == "OWN-05-topology-history"
-            else ("add_listener", "on_trigger")
+            else REGISTRAR_WRITERS
         )
         for method in methods:
             start = source.index(f"    def {method}(")
@@ -139,7 +139,7 @@ def _future_contract_row_is_implemented(case: OwnershipContractCase) -> bool:
         (
             pytest.param(case, id=case.identifier)
             if case.owner_plan == "18-03"
-            or case.identifier == "OWN-05-topology-history"
+            or case.identifier in {"OWN-05-topology-history", "OWN-05-registrars"}
             else pytest.param(
                 case,
                 marks=pytest.mark.xfail(
@@ -204,6 +204,17 @@ TOPOLOGY_HISTORY_WRITERS = (
     "add_emergency_transition",
     "enable_history",
     "disable_history",
+)
+
+REGISTRAR_WRITERS = (
+    "add_listener",
+    "on_enter",
+    "on_exit",
+    "after_transition",
+    "on_failed",
+    "on_trigger",
+    "on_enter_async",
+    "on_exit_async",
 )
 
 
@@ -1018,3 +1029,44 @@ async def test_bound_async_machine_sync_writers_follow_idle_thread_policy() -> N
         machine.force_state("destination")
     release_owner.set()
     assert (await owner).success
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "register"),
+    (
+        (
+            "on_enter_async",
+            lambda machine: machine.on_enter_async(
+                "destination", lambda *_args, **_kwargs: None
+            ),
+        ),
+        (
+            "on_exit_async",
+            lambda machine: machine.on_exit_async(
+                "source", lambda *_args, **_kwargs: None
+            ),
+        ),
+    ),
+)
+async def test_async_registrars_reject_owned_callback_reentry(
+    operation: str, register: object
+) -> None:
+    """Async callback registration must not mutate an async-owned machine."""
+    source = State("source")
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name=f"owned-{operation}")
+    machine.add_state(destination)
+    machine.add_transition("outer", source, destination)
+
+    async def reenter(*_args: object, **_kwargs: object) -> None:
+        assert callable(register)
+        with pytest.raises(RuntimeError, match=r"^FSM ownership violation:"):
+            register(machine)
+
+    machine.on_exit_async("source", reenter)
+
+    result = await machine.trigger_async("outer")
+
+    assert result.success is True
+    assert machine.current_state is destination
