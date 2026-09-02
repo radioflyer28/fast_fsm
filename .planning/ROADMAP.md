@@ -221,7 +221,7 @@
 
 **Wave 4** *(blocked on all behavior plans)*
 
-- [ ] 19-07-PLAN.md — Publish API, architecture, testing, ADR, and SPR contracts
+- [ ] 19-07-PLAN.md — Publish README/API, architecture, testing, ADR, and SPR contracts
 
 **Wave 5** *(blocked on documentation and complete implementation)*
 
