@@ -2366,9 +2366,13 @@ def _run_checked(
     )
     if completed.returncode:
         rendered = " ".join(arguments)
+        output = "\n".join(
+            part
+            for part in (completed.stdout.strip(), completed.stderr.strip())
+            if part
+        )
         raise EvidenceError(
-            f"Evidence subprocess failed ({completed.returncode}): {rendered}\n"
-            f"{completed.stderr.strip()}"
+            f"Evidence subprocess failed ({completed.returncode}): {rendered}\n{output}"
         )
     return completed.stdout
 
