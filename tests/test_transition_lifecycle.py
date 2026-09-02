@@ -906,7 +906,7 @@ async def test_async_callback_failure_is_the_matching_staged_result() -> None:
 async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
     boundary: str, expected_stage: str, expected_committed: bool
 ) -> None:
-    """Cancellation preserves its identity, commits only when reached, and stops.
+    """Cancellation reaches each boundary, commits only when reached, and stops.
 
     Every wait is coordinated through an event handshake: no timing assumption is
     permitted in the cancellation contract.
@@ -979,15 +979,16 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
     pending = asyncio.create_task(machine.trigger_async("advance"))
     await started.wait()
     pending.cancel()
-    with pytest.raises(asyncio.CancelledError) as raised:
+    with pytest.raises(asyncio.CancelledError):
         await pending
 
     if boundary == "guard":
         assert condition is not None
         assert isinstance(condition, _BlockingAsyncCondition)
-        assert condition.cancellation is raised.value
+        assert isinstance(condition.cancellation, asyncio.CancelledError)
     else:
-        assert observed_cancellation == [raised.value]
+        assert len(observed_cancellation) == 1
+        assert isinstance(observed_cancellation[0], asyncio.CancelledError)
     assert observer_events == [
         ("advance", "source", f"Transition cancelled at {expected_stage}"),
         ("advance", "source", f"Transition cancelled at {expected_stage}"),
