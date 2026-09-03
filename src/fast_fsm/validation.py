@@ -20,8 +20,11 @@ from ._diagnostics import (
     DiagnosticLimits,
     DiagnosticStatus,
     _DiagnosticBudget,
+    _dense_adjacency,
+    _generate_paths,
     _graph_from_snapshot,
     _reachable_indices,
+    _sparse_adjacency,
     _strongly_connected_components,
     _structural_depth,
 )
@@ -179,28 +182,48 @@ class FSMValidator:
 
     def find_missing_transitions(self) -> List[Tuple[str, str]]:
         """Find state-event combinations with no defined transitions"""
-        missing = []
-        for state in self.states:
-            for event in self.events:
-                if not self.transitions[state][event]:
-                    missing.append((state, event))
+        missing: List[Tuple[str, str]] = []
+        event_names = tuple(sorted(self.events))
+        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
+            outgoing_events = {
+                self._diagnostic_graph.edges[edge_index].trigger
+                for edge_index in self._diagnostic_graph.forward[state_index]
+            }
+            for event_name in event_names:
+                self._budget.reserve_work(stage="missing.transition.cell")
+                if event_name not in outgoing_events:
+                    self._budget.reserve_result(stage="missing.transition.result")
+                    missing.append((state_name, event_name))
         return missing
 
-    def get_transition_matrix(self) -> Dict[str, Dict[str, List[str]]]:
+    def _operation_budget(self, limits: DiagnosticLimits | None) -> _DiagnosticBudget:
+        """Use the shared ledger unless a caller requests a fresh top-level cap."""
+        return self._budget if limits is None else _DiagnosticBudget(limits)
+
+    def get_sparse_adjacency(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> Dict[str, Any]:
+        """Return the default ordered sparse graph representation."""
+        return _sparse_adjacency(self._diagnostic_graph, self._operation_budget(limits))
+
+    def get_transition_matrix(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> Dict[str, Dict[str, List[str]]]:
         """
         Generate complete transition matrix showing all state-event combinations.
 
         Returns:
             Nested dict: {state: {event: [target_states]}}
         """
-        matrix: Dict[str, Dict[str, List[str]]] = {}
-        for state in self.states:
-            matrix[state] = {}
-            for event in self.events:
-                matrix[state][event] = list(self.transitions[state][event])
-        return matrix
+        return _dense_adjacency(
+            self._diagnostic_graph,
+            self._operation_budget(limits),
+            representation="transition",
+        )  # type: ignore[return-value]
 
-    def get_adjacency_matrix(self) -> Dict[str, Any]:
+    def get_adjacency_matrix(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> Dict[str, Any]:
         """
         Generate a full N×N adjacency matrix with stable state/event ordering.
 
@@ -220,44 +243,14 @@ class FSMValidator:
               transition indices (into ``transitions``) from state ``i`` to
               state ``j``; an empty list means no direct transition
         """
-        sorted_states: List[str] = sorted(self.states)
-        sorted_events: List[str] = sorted(self.events)
-        state_idx: Dict[str, int] = {s: i for i, s in enumerate(sorted_states)}
-        event_idx: Dict[str, int] = {e: i for i, e in enumerate(sorted_events)}
+        return _dense_adjacency(self._diagnostic_graph, self._operation_budget(limits))  # type: ignore[return-value]
 
-        # Flat transitions list — deterministic order: from_state × event × to_state
-        transitions_list: List[Dict[str, Any]] = []
-        t_idx = 0
-        for from_state in sorted_states:
-            for event in sorted_events:
-                for to_state in sorted(self.transitions[from_state].get(event, set())):
-                    transitions_list.append(
-                        {
-                            "idx": t_idx,
-                            "from_state_idx": state_idx[from_state],
-                            "from_state": from_state,
-                            "to_state_idx": state_idx[to_state],
-                            "to_state": to_state,
-                            "event_idx": event_idx[event],
-                            "event": event,
-                        }
-                    )
-                    t_idx += 1
-
-        # N×N adjacency matrix: matrix[i][j] = [transition_idx, ...]
-        n = len(sorted_states)
-        matrix: List[List[List[int]]] = [[[] for _ in range(n)] for _ in range(n)]
-        for t in transitions_list:
-            matrix[t["from_state_idx"]][t["to_state_idx"]].append(t["idx"])
-
-        return {
-            "states": sorted_states,
-            "events": sorted_events,
-            "transitions": transitions_list,
-            "matrix": matrix,
-        }
-
-    def validate_completeness(self) -> Dict[str, Any]:
+    def validate_completeness(
+        self,
+        *,
+        limits: DiagnosticLimits | None = None,
+        include_dense: bool = False,
+    ) -> Dict[str, Any]:
         """
         Perform comprehensive FSM validation analysis.
 
@@ -271,11 +264,27 @@ class FSMValidator:
             if event in self.transitions[state]
         )
 
-        unreachable = self.find_unreachable_states()
+        budget = self._operation_budget(limits)
+        reachable = {
+            self._diagnostic_graph.state_names[index]
+            for index in _reachable_indices(self._diagnostic_graph, budget)
+        }
+        unreachable = self.states - reachable
         dead_states = self.find_dead_states()
-        missing = self.find_missing_transitions()
+        missing: List[Tuple[str, str]] = []
+        event_names = tuple(sorted(self.events))
+        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
+            outgoing_events = {
+                self._diagnostic_graph.edges[edge_index].trigger
+                for edge_index in self._diagnostic_graph.forward[state_index]
+            }
+            for event_name in event_names:
+                budget.reserve_work(stage="missing.transition.cell")
+                if event_name not in outgoing_events:
+                    budget.reserve_result(stage="missing.transition.result")
+                    missing.append((state_name, event_name))
 
-        return {
+        report: Dict[str, Any] = {
             "fsm_name": self._report_name,
             "total_states": len(self.states),
             "total_events": len(self.events),
@@ -288,12 +297,22 @@ class FSMValidator:
             "is_complete": len(missing) == 0,
             "is_reachable": len(unreachable) == 0,
             "has_dead_states": len(dead_states) > 0,
-            "transition_matrix": self.get_transition_matrix(),
-            "diagnostic_status": self.diagnostic_status,
+            "sparse_adjacency": _sparse_adjacency(self._diagnostic_graph, budget),
+            "diagnostic_status": budget.status,
         }
+        if include_dense:
+            report["transition_matrix"] = _dense_adjacency(
+                self._diagnostic_graph, budget, representation="transition"
+            )
+        return report
 
     def generate_test_paths(
-        self, max_length: int = 10, max_paths: int = 50
+        self,
+        max_length: int = 10,
+        max_paths: int = 50,
+        *,
+        max_expansions: int | None = None,
+        limits: DiagnosticLimits | None = None,
     ) -> List[List[Tuple[str, str, str]]]:
         """
         Generate test paths through the FSM for testing purposes.
@@ -305,24 +324,14 @@ class FSMValidator:
         Returns:
             List of paths, where each path is [(from_state, event, to_state), ...]
         """
-        paths: List[List[Tuple[str, str, str]]] = []
-
-        def dfs_paths(current_state: str, path: List[Tuple[str, str, str]], depth: int):
-            if depth >= max_length or len(paths) >= max_paths:
-                return
-
-            for event in self.events:
-                next_states = self.transitions[current_state].get(event, set())
-                for next_state in next_states:
-                    new_path = path + [(current_state, event, next_state)]
-                    paths.append(new_path.copy())
-
-                    # Continue exploring
-                    if depth < max_length - 1:
-                        dfs_paths(next_state, new_path, depth + 1)
-
-        dfs_paths(self.initial_state, [], 0)
-        return paths[:max_paths]
+        paths = _generate_paths(
+            self._diagnostic_graph,
+            self._operation_budget(limits),
+            max_length=max_length,
+            max_paths=max_paths,
+            max_expansions=max_expansions,
+        )
+        return [list(path) for path in paths]
 
     def check_determinism(self) -> Dict[str, Any]:
         """

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from .core import _GraphSnapshot
@@ -19,10 +19,15 @@ if TYPE_CHECKING:
 class DiagnosticLimits:
     """Finite, deterministic ceilings for one diagnostic operation."""
 
-    max_work: int = 100_000
-    max_results: int = 10_000
-    max_dense_cells: int = 1_000_000
-    max_path_expansions: int = 100_000
+    DEFAULT_MAX_WORK: ClassVar[int] = 50_000
+    DEFAULT_MAX_RESULTS: ClassVar[int] = 10_000
+    DEFAULT_MAX_DENSE_CELLS: ClassVar[int] = 200_000
+    DEFAULT_MAX_PATH_EXPANSIONS: ClassVar[int] = 20_000
+
+    max_work: int = DEFAULT_MAX_WORK
+    max_results: int = DEFAULT_MAX_RESULTS
+    max_dense_cells: int = DEFAULT_MAX_DENSE_CELLS
+    max_path_expansions: int = DEFAULT_MAX_PATH_EXPANSIONS
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -129,11 +134,25 @@ class _DiagnosticBudget:
     def reserve_dense_cells(self, *, stage: str, amount: int = 1) -> None:
         self._reserve("max_dense_cells", "_dense_cell_count", stage, amount)
 
-    def reserve_path_expansion(self, *, stage: str, amount: int = 1) -> None:
-        self._reserve("max_path_expansions", "_path_expansion_count", stage, amount)
+    def reserve_path_expansion(
+        self, *, stage: str, amount: int = 1, maximum: int | None = None
+    ) -> None:
+        self._reserve(
+            "max_path_expansions",
+            "_path_expansion_count",
+            stage,
+            amount,
+            limit_override=maximum,
+        )
 
     def _reserve(
-        self, dimension: str, counter_name: str, stage: str, amount: int
+        self,
+        dimension: str,
+        counter_name: str,
+        stage: str,
+        amount: int,
+        *,
+        limit_override: int | None = None,
     ) -> None:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             raise ValueError(
@@ -141,6 +160,16 @@ class _DiagnosticBudget:
             )
         current = getattr(self, counter_name)
         limit = getattr(self.limits, dimension)
+        if limit_override is not None:
+            if (
+                isinstance(limit_override, bool)
+                or not isinstance(limit_override, int)
+                or limit_override < 0
+            ):
+                raise ValueError(
+                    "diagnostic reservation limit must be a non-negative integer"
+                )
+            limit = min(limit, limit_override)
         if current + amount > limit:
             self._complete = False
             self._exhausted_dimension = dimension
@@ -248,9 +277,9 @@ def _all_strongly_connected_components(
         budget.reserve_work(stage="scc.reverse.visit")
         reverse_seen[start_index] = True
         component: list[int] = []
-        stack = [start_index]
-        while stack:
-            state_index = stack.pop()
+        reverse_stack: list[int] = [start_index]
+        while reverse_stack:
+            state_index = reverse_stack.pop()
             component.append(state_index)
             for edge_index in graph.reverse[state_index]:
                 budget.reserve_work(stage="scc.reverse.edge")
@@ -258,7 +287,7 @@ def _all_strongly_connected_components(
                 if not reverse_seen[next_index]:
                     budget.reserve_work(stage="scc.reverse.visit")
                     reverse_seen[next_index] = True
-                    stack.append(next_index)
+                    reverse_stack.append(next_index)
 
         components.append(tuple(sorted(component)))
 
@@ -382,16 +411,151 @@ def _structural_depth(
     }
 
 
-def _sparse_adjacency(*args: object, **kwargs: object) -> object:
-    """Reserved for the strict-RED sparse contract implemented in Plan 19-03."""
-    raise NotImplementedError("sparse diagnostics are implemented in Plan 19-03")
+def _ordered_event_names(graph: _DiagnosticGraph) -> tuple[str, ...]:
+    """Return deterministic event labels without materializing state-event cells."""
+    return tuple(sorted({edge.trigger for edge in graph.edges}))
 
 
-def _dense_adjacency(*args: object, **kwargs: object) -> object:
-    """Reserved for the strict-RED dense contract implemented in Plan 19-03."""
-    raise NotImplementedError("dense diagnostics are implemented in Plan 19-03")
+def _sparse_adjacency(
+    graph: _DiagnosticGraph, budget: _DiagnosticBudget
+) -> dict[str, object]:
+    """Return ordered O(V+E) graph rows without constructing a dense matrix."""
+    event_names = _ordered_event_names(graph)
+    budget.reserve_result(stage="sparse.states", amount=len(graph.state_names))
+    budget.reserve_result(stage="sparse.events", amount=len(event_names))
+    budget.reserve_result(stage="sparse.edges", amount=len(graph.edges))
+    event_indices = {event: index for index, event in enumerate(event_names)}
+    edge_rows: list[dict[str, int | str | None]] = []
+    for edge_index, edge in enumerate(graph.edges):
+        budget.reserve_work(stage="sparse.edge")
+        edge_rows.append(
+            {
+                "idx": edge_index,
+                "from_state_idx": edge.from_index,
+                "from_state": graph.state_names[edge.from_index],
+                "to_state_idx": edge.to_index,
+                "to_state": graph.state_names[edge.to_index],
+                "event_idx": event_indices[edge.trigger],
+                "event": edge.trigger,
+                "condition": edge.condition_name,
+            }
+        )
+    return {
+        "states": graph.state_names,
+        "events": event_names,
+        "edges": tuple(edge_rows),
+    }
 
 
-def _generate_paths(*args: object, **kwargs: object) -> object:
-    """Reserved for the strict-RED path contract implemented in Plan 19-03."""
-    raise NotImplementedError("path diagnostics are implemented in Plan 19-03")
+def _allocate_dense_matrix(state_count: int) -> list[list[list[int]]]:
+    """Allocate the compatibility matrix only after its full-cell preflight."""
+    return [[[] for _ in range(state_count)] for _ in range(state_count)]
+
+
+def _dense_adjacency(
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    representation: str = "adjacency",
+) -> object:
+    """Materialize one preflighted dense compatibility representation."""
+    state_names = graph.state_names
+    event_names = _ordered_event_names(graph)
+    state_count = len(state_names)
+
+    if representation == "transition":
+        required_cells = state_count * len(event_names)
+        budget.reserve_dense_cells(
+            stage="dense.transition.preflight", amount=required_cells
+        )
+        transition_matrix: dict[str, dict[str, list[str]]] = {
+            state_name: {event_name: [] for event_name in event_names}
+            for state_name in state_names
+        }
+        for edge in graph.edges:
+            budget.reserve_work(stage="dense.transition.edge")
+            budget.reserve_result(stage="dense.transition.result")
+            transition_matrix[state_names[edge.from_index]][edge.trigger].append(
+                state_names[edge.to_index]
+            )
+        return transition_matrix
+
+    if representation != "adjacency":
+        raise ValueError("unknown dense diagnostic representation")
+
+    required_cells = state_count * state_count
+    budget.reserve_dense_cells(stage="dense.adjacency.preflight", amount=required_cells)
+    adjacency_matrix = _allocate_dense_matrix(state_count)
+    event_indices = {event: index for index, event in enumerate(event_names)}
+    transitions: list[dict[str, int | str]] = []
+    for edge_index, edge in enumerate(graph.edges):
+        budget.reserve_work(stage="dense.adjacency.edge")
+        budget.reserve_result(stage="dense.adjacency.transition")
+        transitions.append(
+            {
+                "idx": edge_index,
+                "from_state_idx": edge.from_index,
+                "from_state": state_names[edge.from_index],
+                "to_state_idx": edge.to_index,
+                "to_state": state_names[edge.to_index],
+                "event_idx": event_indices[edge.trigger],
+                "event": edge.trigger,
+            }
+        )
+        adjacency_matrix[edge.from_index][edge.to_index].append(edge_index)
+    return {
+        "states": list(state_names),
+        "events": list(event_names),
+        "transitions": transitions,
+        "matrix": adjacency_matrix,
+    }
+
+
+def _generate_paths(
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    max_length: int = 10,
+    max_paths: int = 50,
+    max_expansions: int | None = None,
+) -> tuple[tuple[tuple[str, str, str], ...], ...]:
+    """Enumerate deterministic paths with iterative frames and bounded expansion."""
+    for value in (max_length, max_paths):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("path limits must be non-negative integers")
+    if max_expansions is not None and (
+        isinstance(max_expansions, bool)
+        or not isinstance(max_expansions, int)
+        or max_expansions < 0
+    ):
+        raise ValueError("max_expansions must be a non-negative integer")
+    if graph.initial_index is None or max_length == 0 or max_paths == 0:
+        return ()
+
+    paths: list[tuple[tuple[str, str, str], ...]] = []
+    frames: list[tuple[int, int, tuple[tuple[str, str, str], ...]]] = [
+        (graph.initial_index, 0, ())
+    ]
+    while frames and len(paths) < max_paths:
+        state_index, edge_offset, path = frames.pop()
+        outgoing = graph.forward[state_index]
+        if len(path) >= max_length or edge_offset >= len(outgoing):
+            continue
+
+        frames.append((state_index, edge_offset + 1, path))
+        edge = graph.edges[outgoing[edge_offset]]
+        budget.reserve_path_expansion(stage="path.expand", maximum=max_expansions)
+        budget.reserve_work(stage="path.expand")
+        budget.reserve_result(stage="path.result")
+        next_path = path + (
+            (
+                graph.state_names[edge.from_index],
+                edge.trigger,
+                graph.state_names[edge.to_index],
+            ),
+        )
+        paths.append(next_path)
+        if len(next_path) < max_length:
+            frames.append((edge.to_index, 0, next_path))
+
+    return tuple(paths)
