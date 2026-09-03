@@ -330,7 +330,6 @@ def test_tracer_counts_and_order_are_hash_seed_stable() -> None:
     assert _hash_seed_payload("1") == _hash_seed_payload("2")
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-03")
 def test_scc_membership_includes_self_loops_components_and_excludes_tails(
     multi_scc_tail_machine: StateMachine,
     self_loop_machine: StateMachine,
@@ -350,7 +349,6 @@ def test_scc_membership_includes_self_loops_components_and_excludes_tails(
     assert _strongly_connected_components(empty_graph, _DiagnosticBudget()) == ()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-03")
 def test_structural_depth_uses_an_iterative_condensation_dag(
     long_chain_machine: StateMachine,
     three_cycle_machine: StateMachine,
@@ -366,6 +364,48 @@ def test_structural_depth_uses_an_iterative_condensation_dag(
         "interpretation": "condensation_dag_depth",
         "depth": 0,
     }
+
+
+def test_scc_work_boundary_is_exact_and_fails_before_the_next_visit(
+    multi_scc_tail_machine: StateMachine,
+) -> None:
+    """SCC traversal consumes deterministic shared work before each action."""
+    graph = _graph_from_snapshot(multi_scc_tail_machine._graph_snapshot())
+
+    generous_budget = _DiagnosticBudget(DiagnosticLimits(max_work=10_000))
+    _strongly_connected_components(graph, generous_budget)
+    required_work = generous_budget.status.work_count
+
+    exact_budget = _DiagnosticBudget(DiagnosticLimits(max_work=required_work))
+    assert _strongly_connected_components(graph, exact_budget) == (("a", "b"), ("c", "d"))
+    assert exact_budget.status.work_count == required_work
+
+    exhausted_budget = _DiagnosticBudget(
+        DiagnosticLimits(max_work=required_work - 1)
+    )
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        _strongly_connected_components(graph, exhausted_budget)
+
+    assert raised.value.status.exhausted_dimension == "max_work"
+    assert raised.value.status.work_count == required_work - 1
+    assert raised.value.status.exhausted_stage in {
+        "scc.forward.visit",
+        "scc.forward.edge",
+        "scc.reverse.visit",
+        "scc.reverse.edge",
+    }
+
+
+def test_validator_cycle_adapter_returns_deterministic_closed_scc_paths(
+    multi_scc_tail_machine: StateMachine,
+    self_loop_machine: StateMachine,
+) -> None:
+    """The legacy path-shaped adapter is derived from canonical SCC membership."""
+    assert FSMValidator(multi_scc_tail_machine).find_cycles() == [
+        ["a", "b", "a"],
+        ["c", "d", "c"],
+    ]
+    assert FSMValidator(self_loop_machine).find_cycles() == [["loop", "loop"]]
 
 
 @pytest.mark.xfail(strict=True, reason="RED until 19-03")

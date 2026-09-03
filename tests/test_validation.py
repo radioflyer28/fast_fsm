@@ -614,6 +614,17 @@ class TestCoverageGaps:
         for cycle in cycles:
             assert cycle[0] == cycle[-1]
 
+    def test_longest_path_uses_structural_depth_for_a_cyclic_graph(self):
+        """Cyclic complexity reports a bounded condensation-DAG depth."""
+        fsm = StateMachine.quick_build(
+            "a",
+            [("ab", "a", "b"), ("ba", "b", "a"), ("tail", "b", "tail")],
+            name="CyclicDepth",
+        )
+        validator = EnhancedFSMValidator(fsm)
+
+        assert validator._find_longest_path() == 1
+
     # ------------------------------------------------------------------
     # print_validation_report – ">10 more" branch (line 292)
     # and cycles branch (lines 301-303)
