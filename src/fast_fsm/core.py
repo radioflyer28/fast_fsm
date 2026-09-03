@@ -23,6 +23,7 @@ from typing import (
     Any,
     Callable,
     List,
+    Mapping,
     Sequence,
     Union,
     Tuple,
@@ -108,6 +109,157 @@ _LIFECYCLE_STAGES: Tuple[str, ...] = (
     _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
     _LIFECYCLE_STAGE_AFTER_TRANSITION,
 )
+
+
+_FSM_TRACE_LEVEL = logging.DEBUG - 5
+_FSM_TRACE_KEY_LIMIT = 50
+_FSM_TRACE_KEY_LENGTH_LIMIT = 100
+_FSM_TRACE_STRING_LIMIT = 200
+_FSM_TRACE_ALLOWED_OUTPUT_KEYS = frozenset(("operation", "stage", "result", "detail"))
+_fsm_logging_generation = 0
+
+
+@dataclass(frozen=True, slots=True)
+class FSMTraceEvent:
+    """Ephemeral raw transition context visible only to an explicit redactor.
+
+    The default trace path never constructs this value. In particular, the raw
+    values below must never be copied into a ``LogRecord``.
+    """
+
+    operation: str
+    stage: str
+    result: str
+    trigger: Optional[str]
+    source_state: Optional[str]
+    destination_state: Optional[str]
+    positional_args: Tuple[Any, ...]
+    keyword_args: Mapping[str, Any]
+    error: Optional[BaseException]
+
+
+FSMTraceRedactor = Callable[[FSMTraceEvent], Mapping[str, object] | None]
+
+
+def _next_fsm_logging_generation() -> int:
+    """Return the next monotonic generation for one library configuration."""
+    global _fsm_logging_generation
+    _fsm_logging_generation += 1
+    return _fsm_logging_generation
+
+
+def _trace_keyword_names(keyword_args: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Return bounded keyword labels without inspecting caller-provided values."""
+    names: List[str] = []
+    for key in keyword_args:
+        if (
+            isinstance(key, str)
+            and not key.startswith("_")
+            and len(key) <= _FSM_TRACE_KEY_LENGTH_LIMIT
+        ):
+            names.append(key)
+            if len(names) == _FSM_TRACE_KEY_LIMIT:
+                break
+    return tuple(names)
+
+
+def _validate_fsm_trace_output(
+    output: Mapping[str, object] | None,
+) -> Optional[Dict[str, object]]:
+    """Accept only bounded scalar redactor output or fail closed."""
+    if output is None or not isinstance(output, Mapping):
+        return None
+
+    safe_output: Dict[str, object] = {}
+    for key, value in output.items():
+        if key not in _FSM_TRACE_ALLOWED_OUTPUT_KEYS:
+            return None
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            return None
+        if isinstance(value, str) and len(value) > _FSM_TRACE_STRING_LIMIT:
+            return None
+        safe_output[key] = value
+    return safe_output
+
+
+def _library_trace_redactor(logger: logging.Logger) -> Optional[FSMTraceRedactor]:
+    """Return the redactor attached to the current marked library handler."""
+    for handler in logger.handlers:
+        marker = getattr(handler, "_fast_fsm_marker", None)
+        if isinstance(marker, _FSMStreamHandler):
+            return marker.redactor
+    return None
+
+
+def _emit_fsm_trace(
+    logger: logging.Logger,
+    *,
+    operation: str,
+    stage: str,
+    result: str,
+    trigger: Optional[str],
+    source_state: Optional[str],
+    destination_state: Optional[str],
+    positional_args: Tuple[Any, ...],
+    keyword_args: Mapping[str, Any],
+    error: Optional[BaseException],
+) -> None:
+    """Emit metadata-only trace output or an explicitly redacted variant."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        return
+
+    trace_fields: Dict[str, object] = {
+        "trace_operation": operation,
+        "trace_stage": stage,
+        "trace_result": result,
+        "trace_arg_count": len(positional_args),
+        "trace_keyword_names": _trace_keyword_names(keyword_args),
+    }
+    redactor = _library_trace_redactor(logger)
+    if redactor is not None:
+        try:
+            output = _validate_fsm_trace_output(
+                redactor(
+                    FSMTraceEvent(
+                        operation=operation,
+                        stage=stage,
+                        result=result,
+                        trigger=trigger,
+                        source_state=source_state,
+                        destination_state=destination_state,
+                        positional_args=positional_args,
+                        keyword_args=keyword_args,
+                        error=error,
+                    )
+                )
+            )
+        except BaseException:
+            output = None
+        if output is None:
+            trace_fields = {
+                "trace_operation": "redaction_failure",
+                "trace_stage": "redaction_failure",
+                "trace_result": "failure",
+                "trace_arg_count": 0,
+                "trace_keyword_names": (),
+            }
+        else:
+            for key, value in output.items():
+                trace_fields[f"trace_{key}"] = value
+
+    logger.log(_FSM_TRACE_LEVEL, "fsm_trace", extra=trace_fields)
+
+
+def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy DEBUG diagnostics out of metadata-only TRACE configuration."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        logger.debug(message, *args)
+
+
+def _emit_legacy_warning(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy WARNING diagnostics out of redacted TRACE configuration."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        logger.warning(message, *args)
 
 
 def _set_prepared_declarative_guard(
@@ -2414,7 +2566,8 @@ class StateMachine:
                     )
 
         # Log transition start
-        self._logger.debug(
+        _emit_legacy_debug(
+            self._logger,
             "%s: Executing transition %s --[%s]--> %s",
             self._name,
             old_state.name,
@@ -2539,8 +2692,13 @@ class StateMachine:
                 )
 
         # Log successful transition (main transition log)
-        self._logger.debug(
-            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
         )
 
         # Post-commit: trigger-specific callbacks precede after listeners.
@@ -2718,7 +2876,24 @@ class StateMachine:
         try:
             owner_thread_id = self._acquire_sync_ownership("trigger")
             try:
-                return self._trigger_owned(trigger, *args, **kwargs)
+                trace_result = self._trigger_owned(trigger, *args, **kwargs)
+                _emit_fsm_trace(
+                    self._logger,
+                    operation="trigger",
+                    stage=(
+                        trace_result.stage
+                        if trace_result.stage in _LIFECYCLE_STAGES
+                        else "complete"
+                    ),
+                    result="success" if trace_result.success else "failure",
+                    trigger=trigger,
+                    source_state=trace_result.from_state,
+                    destination_state=trace_result.to_state,
+                    positional_args=args,
+                    keyword_args=kwargs,
+                    error=trace_result.cause,
+                )
+                return trace_result
             finally:
                 self._release_sync_ownership(owner_thread_id)
         finally:
@@ -2737,7 +2912,8 @@ class StateMachine:
         # Check condition with logging
         if condition:
             condition_name = str(condition)
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "%s: Evaluating condition '%s' for '%s' -> '%s'",
                 self._name,
                 condition_name,
@@ -2749,7 +2925,8 @@ class StateMachine:
                 condition_result = self._evaluate_condition_sync(
                     condition, prepared.args, prepared.condition_kwargs
                 )
-                self._logger.debug(
+                _emit_legacy_debug(
+                    self._logger,
                     "%s: Condition '%s' result: %s",
                     self._name,
                     condition_name,
@@ -2772,8 +2949,11 @@ class StateMachine:
                     )
             except Exception as cause:  # guard failure is a truthful result
                 error_msg = "Transition guard raised an exception"
-                self._logger.warning(
-                    "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
                 )
                 return self._finalize_failure(
                     self._build_failure_result(
@@ -2792,8 +2972,11 @@ class StateMachine:
             )
         except Exception as cause:
             error_msg = "Transition guard raised an exception"
-            self._logger.warning(
-                "%s: FAILED guard type=%s", self._name, type(cause).__name__
+            _emit_legacy_warning(
+                self._logger,
+                "%s: FAILED guard type=%s",
+                self._name,
+                type(cause).__name__,
             )
             return self._finalize_failure(
                 self._build_failure_result(
@@ -2819,7 +3002,8 @@ class StateMachine:
             )
 
         # Check if source state allows transition
-        self._logger.debug(
+        _emit_legacy_debug(
+            self._logger,
             "%s: Checking if state '%s' allows transition '%s'",
             self._name,
             current_name,
@@ -2831,7 +3015,8 @@ class StateMachine:
             )
         except Exception as cause:
             error_msg = "State permission raised an exception"
-            self._logger.warning(
+            _emit_legacy_warning(
+                self._logger,
                 "%s: FAILED state-permission type=%s",
                 self._name,
                 type(cause).__name__,
@@ -3260,7 +3445,8 @@ class AsyncStateMachine(StateMachine):
                     committed=False,
                 )
 
-        self._logger.debug(
+        _emit_legacy_debug(
+            self._logger,
             "%s: Executing async transition %s --[%s]--> %s",
             self._name,
             old_state.name,
@@ -3404,8 +3590,13 @@ class AsyncStateMachine(StateMachine):
                     cause=declarative_result.cause,
                 )
 
-        self._logger.debug(
-            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
         )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_TRIGGER_CALLBACK
@@ -3505,7 +3696,24 @@ class AsyncStateMachine(StateMachine):
                 "trigger_async"
             )
             try:
-                return await self._trigger_async_owned(trigger, *args, **kwargs)
+                trace_result = await self._trigger_async_owned(trigger, *args, **kwargs)
+                _emit_fsm_trace(
+                    self._logger,
+                    operation="trigger_async",
+                    stage=(
+                        trace_result.stage
+                        if trace_result.stage in _LIFECYCLE_STAGES
+                        else "complete"
+                    ),
+                    result="success" if trace_result.success else "failure",
+                    trigger=trigger,
+                    source_state=trace_result.from_state,
+                    destination_state=trace_result.to_state,
+                    positional_args=args,
+                    keyword_args=kwargs,
+                    error=trace_result.cause,
+                )
+                return trace_result
             finally:
                 self._release_async_ownership(owner_task, owner_root, token)
         finally:
@@ -4602,11 +4810,65 @@ class FSMBuilder:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _FSMStreamHandler:
+    """Slotted identity/generation marker attached to a library stream handler."""
+
+    generation: int
+    redactor: Optional[FSMTraceRedactor]
+
+
+class FSMLoggingHandle:
+    """One library-owned logging configuration that may be removed once."""
+
+    __slots__ = (
+        "_logger",
+        "_handler",
+        "_prior_level",
+        "_prior_propagate",
+        "_configured_level",
+        "_configured_propagate",
+        "_generation",
+        "_restored",
+    )
+
+    def __init__(
+        self,
+        logger: logging.Logger,
+        handler: Optional[logging.StreamHandler],
+        prior_level: int,
+        prior_propagate: bool,
+        configured_level: int,
+        configured_propagate: bool,
+        generation: int,
+    ) -> None:
+        self._logger = logger
+        self._handler = handler
+        self._prior_level = prior_level
+        self._prior_propagate = prior_propagate
+        self._configured_level = configured_level
+        self._configured_propagate = configured_propagate
+        self._generation = generation
+        self._restored = False
+
+    def restore(self) -> None:
+        """Remove this handler once; generation-safe value restoration follows."""
+        if self._restored:
+            return
+        self._restored = True
+        if self._handler is not None and self._handler in self._logger.handlers:
+            self._logger.removeHandler(self._handler)
+            self._handler.close()
+
+
 def configure_fsm_logging(
     level: int = logging.WARNING,
     logger_name: str = "fast_fsm",
     format_string: str = "%(message)s",
-) -> None:
+    *,
+    propagate: Optional[bool] = None,
+    redactor: Optional[FSMTraceRedactor] = None,
+) -> FSMLoggingHandle:
     """
     Configure logging for FSM instances.
 
@@ -4638,22 +4900,44 @@ def configure_fsm_logging(
         configure_fsm_logging(logging.INFO, 'fast_fsm.TrafficLight')
     """
     logger = logging.getLogger(logger_name)
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    generation = _next_fsm_logging_generation()
+    for existing_handler in tuple(logger.handlers):
+        marker = getattr(existing_handler, "_fast_fsm_marker", None)
+        if isinstance(marker, _FSMStreamHandler):
+            logger.removeHandler(existing_handler)
+            existing_handler.close()
+
     logger.setLevel(level)
+    if propagate is not None:
+        logger.propagate = propagate
 
-    # Remove existing handlers to avoid duplicates
-    logger.handlers.clear()
-
-    # Only add handler if we want to see output
+    handler: Optional[logging.StreamHandler] = None
     if level <= logging.INFO:
         handler = logging.StreamHandler()
+        setattr(handler, "_fast_fsm_marker", _FSMStreamHandler(generation, redactor))
         formatter = logging.Formatter(format_string)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
+    return FSMLoggingHandle(
+        logger,
+        handler,
+        prior_level,
+        prior_propagate,
+        level,
+        logger.propagate,
+        generation,
+    )
 
 
 def set_fsm_logging_level(
-    verbosity: str = "warning", logger_name: str = "fast_fsm"
-) -> None:
+    verbosity: str = "warning",
+    logger_name: str = "fast_fsm",
+    *,
+    propagate: Optional[bool] = None,
+    redactor: Optional[FSMTraceRedactor] = None,
+) -> FSMLoggingHandle:
     """
     Set FSM logging level using standard Python logging level names.
 
@@ -4694,7 +4978,9 @@ def set_fsm_logging_level(
             f"Valid options: {list(level_map.keys())}"
         )
 
-    configure_fsm_logging(level_map[key], logger_name)
+    return configure_fsm_logging(
+        level_map[key], logger_name, propagate=propagate, redactor=redactor
+    )
 
 
 # Convenience factory functions

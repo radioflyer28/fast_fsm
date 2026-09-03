@@ -21,6 +21,9 @@ from .core import (
     DeclarativeState,
     AsyncDeclarativeState,
     transition,
+    FSMTraceEvent,
+    FSMTraceRedactor,
+    FSMLoggingHandle,
     configure_fsm_logging,
     set_fsm_logging_level,
     simple_fsm,
@@ -85,6 +88,9 @@ __all__ = [
     "AsyncDeclarativeState",
     "transition",
     # Logging configuration
+    "FSMTraceEvent",
+    "FSMTraceRedactor",
+    "FSMLoggingHandle",
     "configure_fsm_logging",
     "set_fsm_logging_level",
     # Convenience functions

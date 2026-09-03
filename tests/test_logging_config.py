@@ -12,6 +12,7 @@ import pytest
 
 from fast_fsm.core import (
     AsyncStateMachine,
+    FSMTraceEvent,
     State,
     StateMachine,
     configure_fsm_logging,
@@ -278,24 +279,22 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
     logger = logging.getLogger(logger_name)
     application_handler = CaptureHandler()
     logger.addHandler(application_handler)
-    redactor_events: list[dict[str, object]] = []
+    redactor_events: list[FSMTraceEvent] = []
 
-    def redactor(event: dict[str, object]) -> dict[str, str]:
+    def redactor(event: FSMTraceEvent) -> dict[str, str]:
         redactor_events.append(event)
-        assert set(event) <= {
+        assert tuple(event.__dataclass_fields__) == (
             "operation",
             "stage",
             "result",
             "trigger",
-            "source",
-            "destination",
-            "args",
-            "kwargs",
-            "arg_count",
-            "keyword_names",
-            "exception",
-        }
-        return {"category": "trusted-redaction", "detail": "allowed"}
+            "source_state",
+            "destination_state",
+            "positional_args",
+            "keyword_args",
+            "error",
+        )
+        return {"operation": "trusted-redaction", "detail": "allowed"}
 
     try:
         handle = configure_fsm_logging(
@@ -311,7 +310,7 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
             application_handler, hostile_payload, capsys.readouterr().err
         )
         assert any(
-            record_dict.get("category") == "trusted-redaction"
+            record_dict.get("trace_operation") == "trusted-redaction"
             for _message, _args, record_dict, _formatted in application_handler.records
         )
         handle.restore()
@@ -353,8 +352,7 @@ def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
             assert hostile_payload not in args
             assert hostile_payload not in record_dict.values()
             assert (
-                "redaction_failure" in formatted
-                or "redaction_failure" in str(message)
+                record_dict.get("trace_operation") == "redaction_failure"
                 or not application_handler.records
             )
         handle.restore()

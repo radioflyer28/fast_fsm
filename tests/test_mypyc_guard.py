@@ -434,6 +434,71 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         } == fields
 
 
+def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:
+    """Trace metadata must not allocate a raw event before its level check."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    event = classes.get("FSMTraceEvent")
+    assert event is not None
+    decorator = next(
+        (
+            item
+            for item in event.decorator_list
+            if isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Name)
+            and item.func.id == "dataclass"
+        ),
+        None,
+    )
+    assert decorator is not None
+    keywords = {
+        keyword.arg: keyword.value.value
+        for keyword in decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    }
+    assert keywords == {"frozen": True, "slots": True}
+    assert [
+        item.target.id
+        for item in event.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+    ] == [
+        "operation",
+        "stage",
+        "result",
+        "trigger",
+        "source_state",
+        "destination_state",
+        "positional_args",
+        "keyword_args",
+        "error",
+    ]
+
+    emit = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_emit_fsm_trace"
+    )
+    guard = next(node for node in emit.body if not isinstance(node, ast.Expr))
+    assert isinstance(guard, ast.If)
+    assert isinstance(guard.test, ast.UnaryOp)
+    assert isinstance(guard.test.op, ast.Not)
+    assert isinstance(guard.test.operand, ast.Call)
+    assert isinstance(guard.test.operand.func, ast.Attribute)
+    assert guard.test.operand.func.attr == "isEnabledFor"
+    assert any(isinstance(node, ast.Return) for node in guard.body)
+
+    event_call = next(
+        node
+        for node in ast.walk(emit)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "FSMTraceEvent"
+    )
+    assert event_call.lineno > guard.lineno
+
+
 def test_state_machine_graph_version_remains_in_slots() -> None:
     """Graph topology versioning must not add a dynamic instance dictionary."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
