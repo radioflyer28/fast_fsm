@@ -805,7 +805,6 @@ class TestMicroBenchmarks:
         assert len(conditions) == 1000
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 def test_disabled_trace_never_builds_or_inspects_a_payload_event():
     """Disabled trace is a functional O(1) boundary, not a timing assertion."""
 

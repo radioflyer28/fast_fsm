@@ -202,7 +202,6 @@ class TestConfigureFsmLogging:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 def test_default_trace_records_are_metadata_only_for_sync_results(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -230,7 +229,6 @@ def test_default_trace_records_are_metadata_only_for_sync_results(
         application_handler.close()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 @pytest.mark.asyncio
 async def test_default_trace_records_are_metadata_only_for_async_results(
     capsys: pytest.CaptureFixture[str],
@@ -271,7 +269,6 @@ async def test_default_trace_records_are_metadata_only_for_async_results(
         application_handler.close()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 def test_custom_redactor_receives_only_minimum_event_and_safe_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -323,7 +320,6 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
         application_handler.close()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 @pytest.mark.parametrize(
     "redactor",
     (
