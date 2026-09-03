@@ -20,3 +20,8 @@
 - `ValidationIssue(severity, category, message)` — severity ∈ {error, warning, info, debug}.
 - Upper-triangular matrix was rejected: directed graphs have cycles and asymmetric edges; full N×N adjacency matrix used instead (ADR-001).
 - User-annotation for sparsity (`sparse=True` flag) was rejected: users don't self-identify; auto-detection preferred (ADR-001).
+- Phase 19 validators capture one scalar graph snapshot and thread one shared `DiagnosticLimits` ledger through graph helpers. Legacy list/scalar helpers raise the fixed-message `DiagnosticBudgetExceeded` rather than return a partial result.
+- `_strongly_connected_components()` is iterative Kosaraju over snapshot-ordered forward/reverse adjacency. It returns every cyclic SCC exactly once: components and members are ordered by lowest snapshot index; size-one SCCs appear only for self-loops.
+- SCC traversal reserves `max_work` before forward/reverse vertex visits and edge examinations, and reserves `max_results` before publishing canonical cyclic membership. Exact limits succeed; one-less limits fail before the next action with scalar status metadata.
+- `_structural_depth()` uses an iterative topological dynamic program over deduplicated SCC-condensation edges. It reports `dag_longest_path` for acyclic graphs and `condensation_dag_depth` for cyclic graphs; the latter never promises a longest simple path inside an SCC.
+- `FSMValidator.find_cycles()` remains a path-shaped compatibility adapter, but it derives its deterministic closed representatives from the canonical iterative SCC membership; `EnhancedFSMValidator._find_longest_path()` consumes the structural-depth adapter.

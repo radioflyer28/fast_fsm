@@ -377,12 +377,13 @@ def test_scc_work_boundary_is_exact_and_fails_before_the_next_visit(
     required_work = generous_budget.status.work_count
 
     exact_budget = _DiagnosticBudget(DiagnosticLimits(max_work=required_work))
-    assert _strongly_connected_components(graph, exact_budget) == (("a", "b"), ("c", "d"))
+    assert _strongly_connected_components(graph, exact_budget) == (
+        ("a", "b"),
+        ("c", "d"),
+    )
     assert exact_budget.status.work_count == required_work
 
-    exhausted_budget = _DiagnosticBudget(
-        DiagnosticLimits(max_work=required_work - 1)
-    )
+    exhausted_budget = _DiagnosticBudget(DiagnosticLimits(max_work=required_work - 1))
     with pytest.raises(DiagnosticBudgetExceeded) as raised:
         _strongly_connected_components(graph, exhausted_budget)
 

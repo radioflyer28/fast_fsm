@@ -13,7 +13,7 @@ without adding overhead to the core FSM classes. Includes:
 """
 
 from typing import Dict, Set, List, Tuple, Optional, Any, Callable
-from collections import defaultdict
+from collections import defaultdict, deque
 import json
 from .core import StateMachine
 from ._diagnostics import (
@@ -22,7 +22,50 @@ from ._diagnostics import (
     _DiagnosticBudget,
     _graph_from_snapshot,
     _reachable_indices,
+    _strongly_connected_components,
+    _structural_depth,
 )
+
+
+def _closed_cycle_path(
+    state_indices: tuple[int, ...], graph: Any, budget: _DiagnosticBudget
+) -> List[str]:
+    """Build one deterministic closed path for a canonical cyclic SCC."""
+    start_index = state_indices[0]
+    members = set(state_indices)
+    for edge_index in graph.forward[start_index]:
+        budget.reserve_work(stage="cycle.adapter.edge")
+        next_index = graph.edges[edge_index].to_index
+        if next_index not in members:
+            continue
+        if next_index == start_index:
+            name = graph.state_names[start_index]
+            return [name, name]
+
+        parents: Dict[int, int | None] = {next_index: None}
+        pending = deque([next_index])
+        while pending:
+            current_index = pending.popleft()
+            budget.reserve_work(stage="cycle.adapter.visit")
+            if current_index == start_index:
+                reverse_path: List[int] = []
+                cursor: int | None = start_index
+                while cursor is not None:
+                    reverse_path.append(cursor)
+                    cursor = parents[cursor]
+                return [
+                    graph.state_names[state_index]
+                    for state_index in (start_index, *reversed(reverse_path))
+                ]
+
+            for candidate_edge_index in graph.forward[current_index]:
+                budget.reserve_work(stage="cycle.adapter.edge")
+                candidate_index = graph.edges[candidate_edge_index].to_index
+                if candidate_index in members and candidate_index not in parents:
+                    parents[candidate_index] = current_index
+                    pending.append(candidate_index)
+
+    raise RuntimeError("diagnostic cycle path unavailable")
 
 
 class FSMValidator:
@@ -307,36 +350,21 @@ class FSMValidator:
         Returns:
             List of cycles, where each cycle is a list of states
         """
-        cycles = []
-        visited = set()
-        rec_stack = set()
-
-        def dfs_cycles(state: str, path: List[str]):
-            if state in rec_stack:
-                # Found a cycle
-                cycle_start = path.index(state)
-                cycle = path[cycle_start:] + [state]
-                cycles.append(cycle)
-                return
-
-            if state in visited:
-                return
-
-            visited.add(state)
-            rec_stack.add(state)
-
-            for event in self.events:
-                next_states = self.transitions[state].get(event, set())
-                for next_state in next_states:
-                    dfs_cycles(next_state, path + [state])
-
-            rec_stack.remove(state)
-
-        for state in self.states:
-            if state not in visited:
-                dfs_cycles(state, [])
-
-        return cycles
+        components = _strongly_connected_components(
+            self._diagnostic_graph, self._budget
+        )
+        state_indices = {
+            name: state_index
+            for state_index, name in enumerate(self._diagnostic_graph.state_names)
+        }
+        return [
+            _closed_cycle_path(
+                tuple(state_indices[name] for name in component),
+                self._diagnostic_graph,
+                self._budget,
+            )
+            for component in components
+        ]
 
     def print_validation_report(self) -> None:
         """Print a comprehensive validation report"""
@@ -460,6 +488,7 @@ class EnhancedFSMValidator(FSMValidator):
         design_style_threshold: float = DEFAULT_DESIGN_STYLE_THRESHOLD,
         min_transitions_for_style: int = DEFAULT_MIN_TRANSITIONS_FOR_STYLE,
         completeness_weight: float = DEFAULT_COMPLETENESS_WEIGHT,
+        limits: DiagnosticLimits | None = None,
     ):
         """
         Args:
@@ -479,6 +508,9 @@ class EnhancedFSMValidator(FSMValidator):
                 the pure structural score regardless of this value, because
                 missing transitions are expected in sparse designs.
 
+            limits: Optional finite diagnostic budget shared by this validator's
+                graph analysis helpers.
+
                 Example: ``completeness_weight=0.2`` gives
                 ``overall_score = 0.8 * structural + 0.2 * completeness``.
 
@@ -491,7 +523,7 @@ class EnhancedFSMValidator(FSMValidator):
         self._design_style_threshold: float = design_style_threshold
         self._min_transitions_for_style: int = min_transitions_for_style
         self._completeness_weight: float = completeness_weight
-        super().__init__(fsm, name=name)
+        super().__init__(fsm, name=name, limits=limits)
         self.issues: List[ValidationIssue] = []
         self.recommendations: List[str] = []
         self.metrics: Dict[str, Any] = {}
@@ -706,24 +738,9 @@ class EnhancedFSMValidator(FSMValidator):
             )
 
     def _find_longest_path(self) -> int:
-        """Find the longest acyclic path in the FSM"""
-
-        def dfs_longest(state: str, visited: Set[str]) -> int:
-            if state in visited:
-                return 0  # Cycle detected, stop here
-
-            visited.add(state)
-            max_depth = 0
-
-            for event in self.events:
-                next_states = self.transitions[state].get(event, set())
-                for next_state in next_states:
-                    depth = 1 + dfs_longest(next_state, visited.copy())
-                    max_depth = max(max_depth, depth)
-
-            return max_depth
-
-        return dfs_longest(self.initial_state, set())
+        """Return DAG depth or explicitly condensed cyclic structural depth."""
+        depth = _structural_depth(self._diagnostic_graph, self._budget)
+        return int(depth["depth"])
 
     def _generate_recommendations(self) -> None:
         """Generate smart recommendations based on analysis"""

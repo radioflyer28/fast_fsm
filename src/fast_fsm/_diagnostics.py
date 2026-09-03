@@ -207,14 +207,179 @@ def _reachable_indices(
     return tuple(index for index, is_seen in enumerate(seen) if is_seen)
 
 
-def _strongly_connected_components(*args: object, **kwargs: object) -> object:
-    """Reserved for the strict-RED SCC contract implemented in Plan 19-03."""
-    raise NotImplementedError("SCC diagnostics are implemented in Plan 19-03")
+def _all_strongly_connected_components(
+    graph: _DiagnosticGraph, budget: _DiagnosticBudget
+) -> tuple[tuple[int, ...], ...]:
+    """Return all snapshot-indexed SCCs with iterative Kosaraju passes."""
+    state_count = len(graph.state_names)
+    forward_seen = [False] * state_count
+    finish_order: list[int] = []
+
+    for start_index in range(state_count):
+        if forward_seen[start_index]:
+            continue
+
+        budget.reserve_work(stage="scc.forward.visit")
+        forward_seen[start_index] = True
+        stack: list[tuple[int, int]] = [(start_index, 0)]
+        while stack:
+            state_index, edge_offset = stack[-1]
+            outgoing = graph.forward[state_index]
+            if edge_offset == len(outgoing):
+                finish_order.append(state_index)
+                stack.pop()
+                continue
+
+            edge_index = outgoing[edge_offset]
+            stack[-1] = (state_index, edge_offset + 1)
+            budget.reserve_work(stage="scc.forward.edge")
+            next_index = graph.edges[edge_index].to_index
+            if not forward_seen[next_index]:
+                budget.reserve_work(stage="scc.forward.visit")
+                forward_seen[next_index] = True
+                stack.append((next_index, 0))
+
+    reverse_seen = [False] * state_count
+    components: list[tuple[int, ...]] = []
+    for start_index in reversed(finish_order):
+        if reverse_seen[start_index]:
+            continue
+
+        budget.reserve_work(stage="scc.reverse.visit")
+        reverse_seen[start_index] = True
+        component: list[int] = []
+        stack = [start_index]
+        while stack:
+            state_index = stack.pop()
+            component.append(state_index)
+            for edge_index in graph.reverse[state_index]:
+                budget.reserve_work(stage="scc.reverse.edge")
+                next_index = graph.edges[edge_index].from_index
+                if not reverse_seen[next_index]:
+                    budget.reserve_work(stage="scc.reverse.visit")
+                    reverse_seen[next_index] = True
+                    stack.append(next_index)
+
+        components.append(tuple(sorted(component)))
+
+    return tuple(sorted(components, key=lambda component: component[0]))
 
 
-def _structural_depth(*args: object, **kwargs: object) -> object:
-    """Reserved for the strict-RED depth contract implemented in Plan 19-03."""
-    raise NotImplementedError("depth diagnostics are implemented in Plan 19-03")
+def _cyclic_component_indices(
+    graph: _DiagnosticGraph, budget: _DiagnosticBudget
+) -> tuple[tuple[int, ...], ...]:
+    """Return every cyclic component, ordered by its first snapshot index."""
+    cyclic_components: list[tuple[int, ...]] = []
+    for component in _all_strongly_connected_components(graph, budget):
+        if len(component) > 1:
+            cyclic_components.append(component)
+            continue
+
+        state_index = component[0]
+        has_self_loop = False
+        for edge_index in graph.forward[state_index]:
+            budget.reserve_work(stage="scc.classify.edge")
+            if graph.edges[edge_index].to_index == state_index:
+                has_self_loop = True
+                break
+        if has_self_loop:
+            cyclic_components.append(component)
+
+    return tuple(cyclic_components)
+
+
+def _strongly_connected_components(
+    graph: _DiagnosticGraph, budget: _DiagnosticBudget
+) -> tuple[tuple[str, ...], ...]:
+    """Return all and only cyclic SCC members in stable snapshot order."""
+    components = _cyclic_component_indices(graph, budget)
+    budget.reserve_result(
+        stage="scc.membership", amount=sum(len(component) for component in components)
+    )
+    return tuple(
+        tuple(graph.state_names[state_index] for state_index in component)
+        for component in components
+    )
+
+
+def _structural_depth(
+    graph: _DiagnosticGraph, budget: _DiagnosticBudget
+) -> dict[str, str | int]:
+    """Compute iterative longest depth on the SCC condensation DAG.
+
+    A cyclic graph reports the depth between its condensed components rather than
+    claiming an exponential longest-simple-path calculation inside an SCC.
+    """
+    components = _all_strongly_connected_components(graph, budget)
+    component_index_by_state = [0] * len(graph.state_names)
+    has_cycle = False
+    for component_index, component in enumerate(components):
+        if len(component) > 1:
+            has_cycle = True
+        for state_index in component:
+            component_index_by_state[state_index] = component_index
+
+    component_edges: list[list[int]] = [[] for _ in components]
+    seen_component_edges: set[tuple[int, int]] = set()
+    for edge in graph.edges:
+        budget.reserve_work(stage="depth.condense.edge")
+        source_component = component_index_by_state[edge.from_index]
+        target_component = component_index_by_state[edge.to_index]
+        if source_component == target_component:
+            if edge.from_index == edge.to_index:
+                has_cycle = True
+            continue
+        component_edge = (source_component, target_component)
+        if component_edge not in seen_component_edges:
+            seen_component_edges.add(component_edge)
+            component_edges[source_component].append(target_component)
+
+    for targets in component_edges:
+        targets.sort()
+
+    indegree = [0] * len(components)
+    for targets in component_edges:
+        for target_component in targets:
+            budget.reserve_work(stage="depth.indegree.edge")
+            indegree[target_component] += 1
+
+    ready = deque(
+        component_index
+        for component_index, degree in enumerate(indegree)
+        if degree == 0
+    )
+    topological_order: list[int] = []
+    while ready:
+        component_index = ready.popleft()
+        budget.reserve_work(stage="depth.topological.component")
+        topological_order.append(component_index)
+        for target_component in component_edges[component_index]:
+            budget.reserve_work(stage="depth.topological.edge")
+            indegree[target_component] -= 1
+            if indegree[target_component] == 0:
+                ready.append(target_component)
+
+    depths = [0] * len(components)
+    for component_index in reversed(topological_order):
+        budget.reserve_work(stage="depth.memo.component")
+        for target_component in component_edges[component_index]:
+            budget.reserve_work(stage="depth.memo.edge")
+            depths[component_index] = max(
+                depths[component_index], 1 + depths[target_component]
+            )
+
+    initial_component = (
+        component_index_by_state[graph.initial_index]
+        if graph.initial_index is not None
+        else None
+    )
+    budget.reserve_result(stage="depth.result")
+    return {
+        "interpretation": (
+            "condensation_dag_depth" if has_cycle else "dag_longest_path"
+        ),
+        "depth": 0 if initial_component is None else depths[initial_component],
+    }
 
 
 def _sparse_adjacency(*args: object, **kwargs: object) -> object:
