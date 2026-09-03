@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Phase 16/17 checks in an asserted pure or compiled temporary checkout.
+"""Run isolated evidence checks in asserted pure or compiled temporary checkouts.
 
 The developer checkout may intentionally contain native build shadows.  This helper
 never imports Fast FSM itself: it exports ``HEAD`` to a fresh temporary tree, overlays
@@ -106,6 +106,37 @@ PHASE18_INVENTORY = (
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
     ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+)
+PHASE19_INVENTORY = (
+    "src/fast_fsm/core.py",
+    "src/fast_fsm/_diagnostics.py",
+    "src/fast_fsm/validation.py",
+    "src/fast_fsm/visualization.py",
+    "src/fast_fsm/__init__.py",
+    "tests/test_diagnostic_contracts.py",
+    "tests/test_output_safety.py",
+    "tests/test_logging_config.py",
+    "tests/test_performance_benchmarks.py",
+    "tests/test_release_evidence.py",
+    "tests/test_validation.py",
+    "tests/test_visualization.py",
+    "tests/test_mypyc_guard.py",
+    "tests/test_graph_invariants.py",
+    "tests/test_readme_examples.py",
+    "tools/release_evidence.py",
+    "tools/phase16_isolated_verify.py",
+    "README.md",
+    "docs/api/validation.md",
+    "docs/api/visualization.md",
+    "docs/api/core.md",
+    "docs/dev/architecture.md",
+    "docs/dev/testing.md",
+    ".specify/memory/spr-core-api.md",
+    ".specify/memory/spr-validation.md",
+    ".specify/memory/spr-visualization.md",
+    ".specify/decisions/ADR-006-bounded-diagnostics-safe-output.md",
+    "evidence/release-baseline.json",
+    ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
 )
 MANIFEST_DESCRIPTOR_SUPPORT = (
     all(
@@ -841,7 +872,7 @@ def _suite_mode(args: argparse.Namespace) -> int:
             )
         tempdir, source_tree, env, _ = _prepare_tree(
             build_mode="pure",
-            includes=("tools/phase16_isolated_verify.py", *PHASE18_INVENTORY),
+            includes=("tools/phase16_isolated_verify.py", *PHASE19_INVENTORY),
         )
         try:
             status = _run(
@@ -1037,6 +1068,113 @@ def _suite_mode(args: argparse.Namespace) -> int:
             if status:
                 return status
         return 0
+    if args.suite == "phase19":
+        semantic = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_diagnostic_contracts.py",
+            "tests/test_output_safety.py",
+            "tests/test_logging_config.py",
+            "tests/test_performance_benchmarks.py",
+            "tests/test_validation.py",
+            "tests/test_visualization.py",
+            "tests/test_mypyc_guard.py",
+            "tests/test_graph_invariants.py",
+            "tests/test_readme_examples.py",
+            "tests/test_release_evidence.py",
+            "-x",
+            "-q",
+        )
+        includes = ("tools/phase16_isolated_verify.py", *PHASE19_INVENTORY)
+        for build_mode in ("pure", "compiled"):
+            status = _run_suite_command(
+                build_mode=build_mode,
+                includes=includes,
+                command=semantic,
+            )
+            if status:
+                return status
+        performance = (
+            "uv",
+            "run",
+            "pytest",
+            "tests/test_performance_benchmarks.py",
+            "tests/test_logging_config.py",
+            "-x",
+            "-q",
+            "-k",
+            "trace or redact or payload or handler or restore or propagation "
+            "or trigger_min_throughput",
+        )
+        status = _run_suite_command(
+            build_mode="compiled",
+            includes=includes,
+            command=performance,
+        )
+        if status:
+            return status
+        quality_files = (
+            "src/fast_fsm/core.py",
+            "src/fast_fsm/_diagnostics.py",
+            "src/fast_fsm/validation.py",
+            "src/fast_fsm/visualization.py",
+            "src/fast_fsm/__init__.py",
+            "tests/test_diagnostic_contracts.py",
+            "tests/test_output_safety.py",
+            "tests/test_logging_config.py",
+            "tests/test_performance_benchmarks.py",
+            "tests/test_release_evidence.py",
+            "tests/test_validation.py",
+            "tests/test_visualization.py",
+            "tests/test_mypyc_guard.py",
+        )
+        pure_commands = (
+            (
+                "uv",
+                "run",
+                "python",
+                "tools/release_evidence.py",
+                "slots-policy",
+                "--json",
+            ),
+            ("uv", "run", "ruff", "format", "--check", *quality_files),
+            ("uv", "run", "ruff", "check", *quality_files),
+            ("task", "typecheck-mypy"),
+            ("task", "typecheck-ty"),
+            (
+                "uv",
+                "run",
+                "sphinx-build",
+                "-b",
+                "html",
+                "docs",
+                "docs/_build/html",
+                "-W",
+                "--keep-going",
+            ),
+            (
+                "uv",
+                "run",
+                "sphinx-build",
+                "-b",
+                "doctest",
+                "docs",
+                "docs/_build/doctest",
+            ),
+            ("uv", "run", "pytest", "tests/", "-x", "-q"),
+            ("task", "release-gate"),
+            ("task", "release-baseline-check"),
+        )
+        for command in pure_commands:
+            status = _run_suite_command(
+                build_mode="pure",
+                includes=includes,
+                command=command,
+            )
+            if status:
+                return status
+        return 0
     raise AssertionError(f"unhandled suite: {args.suite}")
 
 
@@ -1056,6 +1194,7 @@ def _parser() -> argparse.ArgumentParser:
             "phase16",
             "phase17",
             "phase18",
+            "phase19",
         ),
     )
     parser.add_argument("command", nargs=argparse.REMAINDER)

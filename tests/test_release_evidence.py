@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from copy import deepcopy
 import json
 import os
@@ -11,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Iterable
 from zipfile import ZipFile
 
@@ -23,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import tools.release_evidence as release_evidence  # noqa: E402
+import tools.phase16_isolated_verify as isolated_verify  # noqa: E402
 from tools.release_evidence import (  # noqa: E402
     REGISTERED_SLOTS_EXCEPTIONS,
     EvidenceError,
@@ -2454,3 +2457,256 @@ def test_release_workflow_gates_artifacts_without_publishing_a_pure_wheel() -> N
     assert "FAST_FSM_BUILD_MODE: pure" in workflow
     assert "uv sync --locked" in workflow
     assert "py3-none-any" not in workflow
+
+
+def _phase19_planned_paths() -> frozenset[str]:
+    """Return the complete inventory union declared by Phase 19 plans."""
+    phase_dir = ROOT / ".planning" / "phases" / "19-bounded-diagnostics-safe-output"
+    paths: set[str] = set()
+    for plan_path in sorted(phase_dir.glob("19-*-PLAN.md")):
+        frontmatter = plan_path.read_text(encoding="utf-8").split("---", 2)[1]
+        plan = yaml.safe_load(frontmatter)
+        paths.update(plan["files_modified"])
+    return frozenset(paths)
+
+
+def _phase19_args(*, suite: str = "phase19") -> argparse.Namespace:
+    """Build the suite-only namespace used by the isolated verifier."""
+    return argparse.Namespace(
+        suite=suite,
+        manifest_output=None,
+        coverage_floor_migration=None,
+    )
+
+
+def test_phase19_parser_accepts_new_suite_without_removing_existing_choices() -> None:
+    """Phase 19 is an additive suite choice with all prior suites preserved."""
+    parser = isolated_verify._parser()
+    suite_action = next(action for action in parser._actions if action.dest == "suite")
+
+    assert parser.parse_args(("--suite", "phase19")).suite == "phase19"
+    assert set(suite_action.choices) >= {
+        "graph",
+        "baseline-write",
+        "baseline-check",
+        "phase16",
+        "phase17",
+        "phase18",
+        "phase19",
+    }
+
+
+def test_phase19_inventory_covers_every_planned_candidate_and_verifier_input() -> None:
+    """The exact overlay cannot silently omit a Phase 19 delivery artifact."""
+    required = _phase19_planned_paths() | {
+        "tools/phase16_isolated_verify.py",
+        "tools/release_evidence.py",
+        "tests/test_graph_invariants.py",
+    }
+
+    missing = required - set(isolated_verify.PHASE19_INVENTORY)
+    assert not missing, f"PHASE19_INVENTORY omits: {sorted(missing)}"
+
+
+def test_phase19_baseline_write_uses_phase19_inventory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A regenerated baseline overlays the candidate, not the prior phase."""
+    calls: dict[str, object] = {}
+    source_tree = tmp_path / "source-tree"
+    source_tree.mkdir()
+
+    def prepare_tree(
+        **kwargs: object,
+    ) -> tuple[object, Path, dict[str, str], tuple[str, ...]]:
+        includes = tuple(kwargs["includes"])
+        calls["includes"] = includes
+        return SimpleNamespace(cleanup=lambda: None), source_tree, {}, includes
+
+    monkeypatch.setattr(isolated_verify, "_prepare_tree", prepare_tree)
+    monkeypatch.setattr(
+        isolated_verify,
+        "_run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(
+        isolated_verify,
+        "_export_manifest_atomically",
+        lambda _generated, _destination, _migration: calls.setdefault("exported", True),
+    )
+
+    args = _phase19_args(suite="baseline-write")
+    args.manifest_output = "evidence/release-baseline.json"
+    assert isolated_verify._suite_mode(args) == 0
+    assert calls["exported"] is True
+    assert (
+        "tools/phase16_isolated_verify.py",
+        *isolated_verify.PHASE19_INVENTORY,
+    ) == tuple(calls.get("includes", ()))
+
+
+@pytest.mark.parametrize("build_mode", ("pure", "compiled"))
+def test_phase19_origin_assertion_precedes_semantic_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, build_mode: str
+) -> None:
+    """Each isolated semantic run proves its selected origin before pytest starts."""
+    events: list[str] = []
+    semantic = ("trusted-semantic", "check")
+
+    class TemporaryDirectory:
+        """Keep the fake export available for the ordering assertion."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / f"{build_mode}-tree"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            events.append("cleanup")
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        (destination / "src" / "fast_fsm").mkdir(parents=True)
+        events.append("export")
+
+    def run(command: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
+        events.append("semantic" if command == semantic else "setup")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(
+        isolated_verify, "_assert_origin", lambda *_args: events.append("origin")
+    )
+    monkeypatch.setattr(isolated_verify, "_run", run)
+
+    assert (
+        isolated_verify._run_suite_command(
+            build_mode=build_mode,
+            includes=("tools/phase16_isolated_verify.py",),
+            command=semantic,
+        )
+        == 0
+    )
+    assert events.index("origin") < events.index("semantic")
+
+
+def test_phase19_pure_preflight_refuses_native_shadow_without_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A native shadow in an export stops before setup and is never deleted."""
+    commands: list[tuple[str, ...]] = []
+    shadow = tmp_path / "isolated" / "repo" / "src" / "fast_fsm" / "core.stale.so"
+
+    class TemporaryDirectory:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / "isolated"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            return None
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        shadow.parent.mkdir(parents=True)
+        shadow.write_bytes(b"checkout-native-shadow-must-remain")
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(
+        isolated_verify,
+        "_run",
+        lambda command, **_kwargs: commands.append(command),
+    )
+
+    with pytest.raises(
+        isolated_verify.VerificationError, match="refuses native artifacts"
+    ):
+        isolated_verify._prepare_tree(build_mode="pure", includes=())
+
+    assert shadow.read_bytes() == b"checkout-native-shadow-must-remain"
+    assert not commands
+
+
+def test_phase19_command_composition_covers_semantics_and_quality_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 19 selects distinct origins plus every mandatory final local gate."""
+    calls: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+
+    def run_suite_command(
+        *, build_mode: str, includes: tuple[str, ...], command: tuple[str, ...]
+    ) -> int:
+        calls.append((build_mode, includes, command))
+        return 0
+
+    monkeypatch.setattr(isolated_verify, "_run_suite_command", run_suite_command)
+
+    assert isolated_verify._suite_mode(_phase19_args()) == 0
+    expected_includes = (
+        "tools/phase16_isolated_verify.py",
+        *isolated_verify.PHASE19_INVENTORY,
+    )
+    semantic_calls = [
+        call
+        for call in calls
+        if call[2][:3] == ("uv", "run", "pytest")
+        and "tests/test_diagnostic_contracts.py" in call[2]
+    ]
+    assert [call[0] for call in semantic_calls] == ["pure", "compiled"]
+    assert all(call[1] == expected_includes for call in calls)
+    assert all(
+        path in semantic_calls[0][2]
+        for path in (
+            "tests/test_output_safety.py",
+            "tests/test_logging_config.py",
+            "tests/test_validation.py",
+            "tests/test_visualization.py",
+            "tests/test_mypyc_guard.py",
+            "tests/test_release_evidence.py",
+        )
+    )
+    assert any(
+        build_mode == "compiled"
+        and "tests/test_performance_benchmarks.py" in command
+        and "trigger_min_throughput" in command[-1]
+        for build_mode, _includes, command in calls
+    )
+    commands = {command for _build_mode, _includes, command in calls}
+    assert ("task", "typecheck-mypy") in commands
+    assert ("task", "typecheck-ty") in commands
+    assert ("task", "release-gate") in commands
+    assert ("task", "release-baseline-check") in commands
+    assert any("slots-policy" in command for command in commands)
+    assert any(command[:4] == ("uv", "run", "ruff", "format") for command in commands)
+    assert any(command[:4] == ("uv", "run", "ruff", "check") for command in commands)
+    assert any("sphinx-build" in command and "html" in command for command in commands)
+    assert any(
+        "sphinx-build" in command and "doctest" in command for command in commands
+    )
+    assert ("uv", "run", "pytest", "tests/", "-x", "-q") in commands
+
+
+def test_phase19_stops_on_nonzero_semantic_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing fresh-origin command cannot be hidden by later gates."""
+    calls: list[str] = []
+
+    def fail_first(*, build_mode: str, **_kwargs: object) -> int:
+        calls.append(build_mode)
+        return 73
+
+    monkeypatch.setattr(isolated_verify, "_run_suite_command", fail_first)
+
+    assert isolated_verify._suite_mode(_phase19_args()) == 73
+    assert calls == ["pure"]
