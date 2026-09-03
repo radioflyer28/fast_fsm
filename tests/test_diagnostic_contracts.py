@@ -14,6 +14,7 @@ import threading
 from collections.abc import Callable
 
 import pytest
+import fast_fsm._diagnostics as diagnostics
 
 from fast_fsm import (
     DiagnosticBudgetExceeded,
@@ -409,7 +410,6 @@ def test_validator_cycle_adapter_returns_deterministic_closed_scc_paths(
     assert FSMValidator(self_loop_machine).find_cycles() == [["loop", "loop"]]
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-03")
 def test_sparse_dense_paths_and_result_budget_have_distinct_boundaries(
     sparse_zero_edge_machine: StateMachine,
     high_fanout_machine: StateMachine,
@@ -418,6 +418,7 @@ def test_sparse_dense_paths_and_result_budget_have_distinct_boundaries(
     fanout_graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
     assert _sparse_adjacency(sparse_graph, _DiagnosticBudget()) == {
         "states": sparse_graph.state_names,
+        "events": (),
         "edges": (),
     }
     with pytest.raises(DiagnosticBudgetExceeded):
@@ -433,6 +434,118 @@ def test_sparse_dense_paths_and_result_budget_have_distinct_boundaries(
         FSMValidator(
             high_fanout_machine, limits=DiagnosticLimits(max_results=1)
         ).generate_test_paths()
+
+
+def test_dense_preflight_reserves_exact_cells_before_matrix_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+    high_fanout_machine: StateMachine,
+) -> None:
+    """A one-less dense budget cannot reach the adjacency allocator."""
+    graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
+    required_cells = len(graph.state_names) * len(graph.state_names)
+
+    exact = _DiagnosticBudget(DiagnosticLimits(max_dense_cells=required_cells))
+    adjacency = _dense_adjacency(graph, exact)
+    assert adjacency["states"] == list(graph.state_names)
+    assert exact.status.dense_cell_count == required_cells
+
+    def fail_if_allocated(*args: object, **kwargs: object) -> object:
+        raise AssertionError("dense allocation must follow successful preflight")
+
+    monkeypatch.setattr(diagnostics, "_allocate_dense_matrix", fail_if_allocated)
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        _dense_adjacency(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_dense_cells=required_cells - 1)),
+        )
+
+    assert raised.value.status.exhausted_dimension == "max_dense_cells"
+    assert raised.value.status.exhausted_stage == "dense.adjacency.preflight"
+
+
+def test_transition_matrix_preflight_uses_state_event_cells(
+    high_fanout_machine: StateMachine,
+) -> None:
+    """The legacy transition matrix charges V times ordered event count."""
+    graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
+    required_cells = len(graph.state_names) * len(
+        {edge.trigger for edge in graph.edges}
+    )
+
+    exact = _DiagnosticBudget(DiagnosticLimits(max_dense_cells=required_cells))
+    transition_matrix = _dense_adjacency(graph, exact, representation="transition")
+    assert transition_matrix["root"]["to-leaf-0"] == ["leaf-0"]
+    assert exact.status.dense_cell_count == required_cells
+
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        _dense_adjacency(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_dense_cells=required_cells - 1)),
+            representation="transition",
+        )
+
+    assert raised.value.status.exhausted_stage == "dense.transition.preflight"
+
+
+def test_iterative_paths_distinguish_length_result_and_expansion_limits(
+    high_fanout_machine: StateMachine,
+) -> None:
+    """Path caps are explicit, deterministic, and fail closed on exhaustion."""
+    graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
+    edge_count = len(graph.edges)
+
+    assert (
+        _generate_paths(
+            graph,
+            _DiagnosticBudget(),
+            max_length=0,
+            max_paths=edge_count,
+        )
+        == ()
+    )
+
+    exact_expansions = _DiagnosticBudget(
+        DiagnosticLimits(max_path_expansions=edge_count, max_results=edge_count)
+    )
+    paths = _generate_paths(
+        graph,
+        exact_expansions,
+        max_length=1,
+        max_paths=edge_count,
+    )
+    assert len(paths) == edge_count
+    assert exact_expansions.status.path_expansion_count == edge_count
+    assert exact_expansions.status.result_count == edge_count
+
+    with pytest.raises(DiagnosticBudgetExceeded) as expansion_raised:
+        _generate_paths(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_path_expansions=edge_count - 1)),
+            max_length=1,
+            max_paths=edge_count,
+        )
+    assert expansion_raised.value.status.exhausted_dimension == "max_path_expansions"
+    assert expansion_raised.value.status.exhausted_stage == "path.expand"
+
+    with pytest.raises(DiagnosticBudgetExceeded) as result_raised:
+        _generate_paths(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_results=edge_count - 1)),
+            max_length=1,
+            max_paths=edge_count,
+        )
+    assert result_raised.value.status.exhausted_dimension == "max_results"
+    assert result_raised.value.status.exhausted_stage == "path.result"
+
+
+def test_diagnostic_defaults_are_finite_and_pinned() -> None:
+    """Default ceilings are explicit calibrated constants, never wall-clock state."""
+    assert DiagnosticLimits() == DiagnosticLimits(
+        max_work=50_000,
+        max_results=10_000,
+        max_dense_cells=200_000,
+        max_path_expansions=20_000,
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="RED until 19-04")

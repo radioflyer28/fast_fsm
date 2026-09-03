@@ -145,6 +145,21 @@ class TestFSMValidator:
         assert "start" in matrix["idle"]
         assert "running" in matrix["idle"]["start"]
 
+    def test_validate_completeness_defaults_to_sparse_adjacency(
+        self, well_designed_fsm
+    ):
+        """Routine reports avoid dense V²/V×events materialization by default."""
+        result = FSMValidator(well_designed_fsm).validate_completeness()
+
+        assert "sparse_adjacency" in result
+        assert "transition_matrix" not in result
+        assert result["sparse_adjacency"]["states"] == (
+            "error",
+            "idle",
+            "paused",
+            "running",
+        )
+
     def test_validate_completeness(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
         result = v.validate_completeness()
