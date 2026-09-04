@@ -1,6 +1,6 @@
 ---
 phase: 19-bounded-diagnostics-safe-output
-reviewed: 2026-09-04T03:14:54Z
+reviewed: 2026-09-04T15:41:09Z
 depth: standard
 files_reviewed: 26
 files_reviewed_list:
@@ -31,151 +31,134 @@ files_reviewed_list:
   - tools/phase16_isolated_verify.py
   - tools/release_evidence.py
 findings:
-  critical: 5
+  critical: 4
   warning: 1
   info: 0
-  total: 6
+  total: 5
 status: issues_found
 ---
 
 # Phase 19: Code Review Report
 
-**Reviewed:** 2026-09-04T03:14:54Z
+**Reviewed:** 2026-09-04T15:41:09Z
 **Depth:** standard
 **Files Reviewed:** 26
 **Status:** issues_found
 
 ## Summary
 
-The bounded-diagnostics, renderer, logging, tests, evidence tooling, and public
-documentation changes were reviewed at standard depth. The submitted targeted
-test suite passes, but direct boundary reproductions expose five ship-blocking
-correctness/security defects: validation Markdown remains injectable, async
-TRACE failures emit caller text, parent logger redactors are ignored, renderer
-result limits do not bound rendered edges, and dense validation reports publish
-stale counters. One public docstring also demonstrates output that the new
-renderer no longer produces.
+The persisted 26-file scope was re-reviewed after the final two fix commits.
+The earlier Markdown injection, renderer result accounting, dense-status,
+parent-redactor, async-warning, stale renderer docstring, trigger-helper, and
+explicit-child propagation findings are corrected. Focused Phase 19 tests,
+Ruff lint, mypy, ty, Sphinx warnings-as-errors, doctests, and the recursive
+slots audit pass. The implementation is still not shippable: ordinary Python
+TRACE activation bypasses the new confidentiality guard, custom redactors
+swallow process-control `BaseException` values, the full suite fails its scoped
+logging-marker contract, and the committed release evidence predates the
+current tests and source positions. The formatter gate also rejects the two
+latest fix files.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Validation Markdown export permits caller-controlled grammar and raw HTML injection
+### CR-01: TRACE confidentiality depends on using the library configuration helper
 
-**File:** `src/fast_fsm/validation.py:1004-1057`
+**File:** `src/fast_fsm/core.py:275-303`
 
-**Issue:** `_export_markdown()` directly interpolates the caller-controlled FSM
-name, state names, event names, issue descriptions, locations, and
-recommendations into headings, tables, code spans, and list items. Newlines
-create arbitrary Markdown blocks, `|` breaks table structure, and raw HTML such
-as `<script>` is emitted verbatim. This contradicts ADR-006's final-sink
-Markdown encoding decision and makes a generated report unsafe to render in a
-Markdown host that permits HTML. A two-state reproduction with a report name of
-`"report\n<script>alert(1)</script>"` emits the script tag on its own physical
-line, while a state name containing `"\n# injected-heading"` creates a new
-heading and splits multiple table rows.
+**Issue:** The legacy DEBUG/INFO/WARNING/ERROR helpers suppress caller-bearing
+records only when `_has_reachable_trace_configuration()` finds a marked
+library handler. TRACE itself is enabled through the ordinary
+`logger.isEnabledFor(5)` check, so applications that configure Python logging
+directly (for example `logger.setLevel(logging.DEBUG - 5)` plus an application
+handler) receive both the metadata-only `fsm_trace` records and raw legacy
+records. A guarded transition reproduced
+`MACHINE-SECRET: Evaluating condition '<lambda>' for 'STATE-SECRET' -> 'dest'`
+and `MACHINE-SECRET: FAILED guard type=ValueError`. This violates the published
+level-based promise that TRACE output contains no machine/state/trigger names
+or caller payload, and it leaves standard logging configuration as a security
+bypass around the new helper-specific protection.
 
-**Fix:** Apply a dedicated Markdown heading/cell/text encoder at every final
-sink in `_export_markdown()` (including issue and recommendation text), ensuring
-all control characters and grammar punctuation are encoded and every caller
-value remains on one physical line. Share a small private encoding module if
-both validation and visualization need the same policy, and add the hostile
-corpus to `EnhancedFSMValidator.export_report("markdown")` tests.
+**Fix:** Treat either an effective TRACE level or a reachable library-owned
+TRACE handler as TRACE-active. For example, suppress legacy records when
+`logger.isEnabledFor(_FSM_TRACE_LEVEL) or
+_has_reachable_trace_configuration(logger)`; retain the reachable-handler
+branch for explicitly leveled children. Add exact and parent application-only
+logger tests (no `configure_fsm_logging()` call) that scan every record surface
+for machine, state, trigger, key, value, and exception sentinels.
 
-### CR-02: Async TRACE failures leak caller-controlled machine names through legacy warnings
+### CR-02: A trace redactor can swallow `KeyboardInterrupt`, `SystemExit`, and cancellation
 
-**File:** `src/fast_fsm/core.py:3797-3853`
+**File:** `src/fast_fsm/core.py:242-259`
 
-**Issue:** The async guard and state-permission exception paths call
-`self._logger.warning()` directly. At TRACE (`DEBUG - 5`), these legacy records
-are enabled alongside the metadata-only trace record and interpolate
-`self._name`. A reproduction using `name="machine-secret"` and a raising guard
-captures `"machine-secret: FAILED guard type=ValueError"` before `fsm_trace`.
-The synchronous equivalents correctly route through `_emit_legacy_warning()`,
-so this is an async-only fail-closed redaction bypass. It violates the documented
-promise that TRACE output is metadata-only and contains no caller-controlled
-names.
+**Issue:** `_emit_fsm_trace()` catches `BaseException` around the application
+redactor and converts it to fixed `redaction_failure` metadata. That includes
+process-control exceptions that must remain observable. A redactor raising
+`KeyboardInterrupt("stop")` was swallowed and a successful transition returned
+normally. In an async trigger the same pattern can consume cancellation raised
+inside the synchronous redactor callback. The Phase 19 research explicitly
+requires ordinary redactor exceptions to fail closed while `BaseException`
+emits nothing and is re-raised, so the implementation breaks both interrupt
+and cancellation semantics.
 
-**Fix:** Route every async lifecycle warning through the same TRACE-aware safe
-warning seam used by synchronous dispatch (including guard, declarative guard,
-state permission, and any observer warnings reachable during the operation), or
-replace them with fixed scalar trace categories. Add an async raising-guard test
-that scans every emitted `LogRecord`, not only the final trace record, for
-machine/state/trigger sentinels.
+**Fix:** Catch `Exception` for fixed-category redactor failure and allow
+`BaseException` subclasses to propagate without emitting a record. Add sync
+`KeyboardInterrupt`/`SystemExit` and async cancellation regressions that also
+verify no raw or partial trace record is delivered.
 
-### CR-03: A redactor configured on `fast_fsm` is ignored by normal child machine loggers
+### CR-03: The full test suite fails after the handler marker schema changed
 
-**File:** `src/fast_fsm/core.py:185-191`
+**File:** `tests/test_mypyc_guard.py:502-530`
 
-**Issue:** `_library_trace_redactor()` searches only `logger.handlers`. Normal
-machines use child loggers such as `fast_fsm.FSM`, while the documented default
-configuration installs the marked handler and redactor on the parent
-`fast_fsm` logger. The record propagates to that handler, but the child logger
-does not discover its redactor. A direct reproduction with
-`configure_fsm_logging(5, "fast_fsm", redactor=...)` and a default-named machine
-emits `fsm_trace` while invoking the redactor zero times. Thus the primary
-documented configuration silently discards explicit redaction behavior.
+**Issue:** Commit `668ed9d` added `configured_level` to
+`_FSMStreamHandler`, but the scoped AST contract still requires exactly
+`["generation", "redactor"]`. Both `uv run pytest tests/ -x -q` and the
+release-baseline check stop at
+`test_phase19_logging_marker_and_handle_stay_slotted_and_owned` with this
+assertion failure. The focused logging suite misses the regression, so the
+repository's mandatory full-suite and Phase 19 authoritative gates are red.
 
-**Fix:** Resolve the effective marked handler along the logging parent chain,
-respecting `propagate=False`, or attach immutable redactor configuration at a
-logger-independent library registry keyed by the effective configured logger.
-Test both exact-logger and parent-logger configurations, plus an intervening
-non-propagating logger.
+**Fix:** Update the structural expectation to include `configured_level` and
+assert its intended role/type, then rerun the complete pure and compiled Phase
+19 semantic gates rather than only `tests/test_logging_config.py`.
 
-### CR-04: `max_results` does not bound Mermaid or PlantUML transition output
+### CR-04: Release evidence is stale relative to the post-review fixes
 
-**File:** `src/fast_fsm/visualization.py:120-146`
+**File:** `evidence/release-baseline.json:68-71`
 
-**Issue:** The Mermaid renderer reserves results only for state IDs and then
-emits every transition without a result reservation. The PlantUML renderer has
-the same defect at lines 160-192. Consequently `DiagnosticLimits(max_results=2)`
-successfully returns a two-state Mermaid diagram containing five transition
-rows, rather than raising before the first over-budget result. The finite
-`max_results` ceiling therefore does not bound these legacy string outputs as
-ADR-006 and the visualization API documentation promise.
+**Issue:** The manifest still records 1,476 collected/passing tests, while the
+current checkout collects 1,487. Its slots inventory also records pre-fix
+source locations (for example `DiagnosticBudgetExceeded` at line 57 instead of
+the current line 70, and the logging marker/handle before their current
+locations). The baseline was refreshed before the subsequent review-fix
+commits added tests and source lines. Even after CR-03 is repaired, the
+read-only evidence comparison will reject these stable-field differences, so
+the checked-in artifact does not describe the submitted implementation.
 
-**Fix:** Define and consistently count each emitted diagram result (state row,
-initial/final marker, transition row, and any title/delimiter policy) before
-appending it. Thread the same ledger through fenced/document composition and add
-exact/one-less tests for transition-heavy Mermaid and PlantUML output.
-
-### CR-05: Dense validation status is captured before dense work and reports false counters
-
-**File:** `src/fast_fsm/validation.py:338-365`
-
-**Issue:** `validate_completeness()` stores `budget.status` in the report at line
-360, then performs optional dense allocation and edge/result accounting at
-lines 362-365. On a successful two-state dense report, the returned status says
-`dense_cell_count == 0` while the validator's actual ledger says `2` (for the
-`V x events` transition matrix). The structured result therefore publishes
-non-truthful completion counters, directly violating the diagnostic status
-contract.
-
-**Fix:** Build optional dense output first and assign
-`report["diagnostic_status"] = budget.status` only after all report work
-succeeds. Add a regression assertion
-that the returned status equals `validator.diagnostic_status` and includes the
-expected dense cell and result counts.
+**Fix:** After all source/test fixes are complete and the full suite passes,
+regenerate the pure release baseline through the repository's isolated
+baseline-write workflow, review the manifest diff, and rerun
+`task release-baseline-check`.
 
 ## Warnings
 
-### WR-01: Renderer docstrings show obsolete, non-reproducible diagram output
+### WR-01: The latest TRACE fixes fail the repository formatting gate
 
-**File:** `src/fast_fsm/visualization.py:223-234`
+**File:** `src/fast_fsm/core.py:275-279`
 
-**Issue:** The `to_mermaid()` example still claims the renderer emits direct
-state-name identifiers (`idle --> running`), while Phase 19 now emits explicit
-state declarations and opaque IDs (`state "idle" as s0`, `s0 --> s1`). The
-PlantUML and fenced examples repeat the stale shape at lines 266-278 and
-482-495. These docstrings are surfaced by autodoc and teach consumers to expect
-output that cannot be produced by the reviewed implementation.
+**Issue:** `uv run ruff format --check` reports that both
+`src/fast_fsm/core.py` and `tests/test_logging_config.py` would be reformatted.
+The diff includes the helper condition at lines 275-279, new diagnostic calls
+around lines 2140-2150 and 4149-4600, and the new logging tests around lines
+385-410. Phase 19's authoritative verifier runs this check before the full
+suite, so the current fixes do not satisfy the project's quality gate.
 
-**Fix:** Update all three examples to the exact opaque-ID output and keep them
-under executable doctest or snapshot coverage so future renderer changes cannot
-silently stale the public docs.
+**Fix:** Run Ruff formatting on the two files, inspect the formatting-only
+diff, and rerun the format and lint checks.
 
 ---
 
-_Reviewed: 2026-09-04T03:14:54Z_
+_Reviewed: 2026-09-04T15:41:09Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
