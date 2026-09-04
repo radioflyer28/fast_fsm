@@ -6,6 +6,7 @@ All tests use real logging infrastructure — no mocking.
 
 import asyncio
 import logging
+from pathlib import Path
 import uuid
 from typing import Any
 
@@ -984,6 +985,22 @@ def test_restore_does_not_overwrite_application_changes_after_configuration() ->
         assert not logger.handlers
     finally:
         handle.restore()
+
+
+def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
+    """Public redactor docs must preserve the fail-closed control-flow boundary."""
+
+    root = Path(__file__).resolve().parent.parent
+    documented_files = (
+        root / "docs" / "api" / "core.md",
+        root / "README.md",
+        root / ".specify" / "memory" / "spr-core-api.md",
+    )
+    for path in documented_files:
+        document = " ".join(path.read_text(encoding="utf-8").lower().split())
+        assert "ordinary `exception`" in document
+        assert "`baseexception` subclasses" in document
+        assert "emit no trace record and are re-raised" in document
 
 
 # ---------------------------------------------------------------------------

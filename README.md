@@ -558,10 +558,13 @@ An explicit `FSMTraceRedactor` receives one ephemeral frozen `FSMTraceEvent`
 with exactly `operation`, `stage`, `result`, `trigger`, `source_state`,
 `destination_state`, `positional_args`, `keyword_args`, and `error`. It may
 return only the scalar keys `operation`, `stage`, `result`, and `detail`; text
-is capped at 200 characters. A raising redactor, `None`/non-mapping result,
-forbidden key, non-scalar value, or oversized string fails closed by emitting
-only the fixed `redaction_failure` metadata—never a raw fallback. This is a
-fail-closed boundary, not best-effort formatting.
+is capped at 200 characters. An ordinary `Exception` raised by a redactor,
+`None`/non-mapping result, forbidden key, non-scalar value, or oversized
+string fails closed by emitting only the fixed `redaction_failure`
+metadata—never a raw fallback. `BaseException` subclasses (including
+`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`) are not
+converted: they emit no trace record and are re-raised. This is a fail-closed
+boundary, not best-effort formatting.
 
 `configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
 format_string="%(message)s", *, propagate=None, redactor=None)` returns an
