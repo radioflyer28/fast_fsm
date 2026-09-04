@@ -358,12 +358,12 @@ class FSMValidator:
             "structural_depth": depth["depth"],
             "depth_interpretation": depth["interpretation"],
             "sparse_adjacency": _sparse_adjacency(self._diagnostic_graph, budget),
-            "diagnostic_status": budget.status,
         }
         if include_dense:
             report["transition_matrix"] = _dense_adjacency(
                 self._diagnostic_graph, budget, representation="transition"
             )
+        report["diagnostic_status"] = budget.status
         return report
 
     def generate_test_paths(

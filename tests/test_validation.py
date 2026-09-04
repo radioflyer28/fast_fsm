@@ -202,6 +202,17 @@ class TestFSMValidator:
         report = validator.validate_completeness(include_dense=True)
         assert report["transition_matrix"]["idle"]["start"] == ["running"]
 
+    def test_dense_report_status_reflects_completed_dense_work(self):
+        """Structured report status is captured after optional dense generation."""
+        fsm = StateMachine.quick_build("source", [("advance", "source", "target")])
+        validator = FSMValidator(fsm)
+
+        report = validator.validate_completeness(include_dense=True)
+
+        assert report["diagnostic_status"] == validator.diagnostic_status
+        assert report["diagnostic_status"].dense_cell_count == 2
+        assert report["diagnostic_status"].result_count > 0
+
     def test_validate_completeness(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
         result = v.validate_completeness()
