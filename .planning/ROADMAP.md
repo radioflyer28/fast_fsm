@@ -240,7 +240,27 @@
   4. Benchmarks cover every performance-sensitive core phase, compiled `trigger()` remains at least 200,000 operations/sec, core runtime operations remain O(1), and diagnostics enforce their separate budgets.
   5. Package metadata, `fast_fsm.__version__`, changelog, documentation, release tag, quality gates, and published artifacts all identify and substantiate v0.3.0.
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+**Wave 1**
+
+- [ ] 20-01-PLAN.md — Prove checkout-independent installed pure/compiled conformance and expand the shared hardened oracle
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 20-02-PLAN.md — Fail closed on compiled intent and prove bounded sdist pure/compiled derivations
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 20-03-PLAN.md — Aggregate the exact artifact matrix, align v0.3.0 identity, and consolidate historical evidence
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 20-04-PLAN.md — Prove O(1) runtime contracts and gate installed native compiled throughput
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 20-05-PLAN.md — Wire matching-native CI evidence, exact aggregation, tag identity, and the release authorization gate
 
 ## Progress
 
@@ -253,4 +273,4 @@
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | Complete    | 2026-09-04 |
-| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/TBD | Not started | - |
+| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/5 | Not started | - |
