@@ -14,7 +14,10 @@ from dataclasses import dataclass
 
 import pytest
 
+import fast_fsm.visualization as visualization
 from fast_fsm import (
+    DiagnosticBudgetExceeded,
+    DiagnosticLimits,
     FuncCondition,
     State,
     StateMachine,
@@ -89,8 +92,7 @@ def _render(renderer: str, machine: StateMachine, title: str) -> str:
     if renderer == "fenced":
         return to_mermaid_fenced(machine, title=title)
     if renderer == "document":
-        adjacency = FSMValidator(machine).get_adjacency_matrix()
-        return to_mermaid_document(machine, title=title, adjacency_matrix=adjacency)
+        return to_mermaid_document(machine, title=title)
     if renderer == "json":
         return json.dumps(to_json(machine), sort_keys=True, ensure_ascii=True)
     raise AssertionError(f"unknown renderer: {renderer}")
@@ -373,3 +375,94 @@ def test_old_sanitizer_collisions_receive_unique_opaque_ids(renderer: str) -> No
     assert aliases == ("s0", "s1")
     assert len(set(aliases)) == 2
     _assert_physical_line_containment(renderer, output)
+
+
+def test_fenced_renderer_composes_the_private_snapshot_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fenced output must not call a public renderer that could recapture."""
+
+    machine = _snapshot_machine()
+
+    def public_renderer_must_not_be_called(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("fenced output recaptured through to_mermaid")
+
+    monkeypatch.setattr(visualization, "to_mermaid", public_renderer_must_not_be_called)
+    assert "stateDiagram-v2" in to_mermaid_fenced(machine)
+
+
+def test_document_composes_private_fenced_output_and_captures_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Document output keeps one snapshot instead of chaining public helpers."""
+
+    machine = _snapshot_machine()
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def capture_once(instance: StateMachine):
+        nonlocal calls
+        calls += 1
+        return original_snapshot(instance)
+
+    def public_fence_must_not_be_called(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("document output recaptured through to_mermaid_fenced")
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", capture_once)
+    monkeypatch.setattr(
+        visualization, "to_mermaid_fenced", public_fence_must_not_be_called
+    )
+    assert "stateDiagram-v2" in to_mermaid_document(machine)
+    assert calls == 1
+
+
+def test_json_uses_one_snapshot_and_publishes_sparse_structured_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON must not derive live traversal facts after its single capture."""
+
+    machine = _snapshot_machine()
+    assert machine.trigger("advance").success is True
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def capture_once(instance: StateMachine):
+        nonlocal calls
+        calls += 1
+        return original_snapshot(instance)
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", capture_once)
+    payload = to_json(machine)
+
+    assert calls == 1
+    assert payload["topology"]["initial"] == "initial"
+    assert payload["topology"]["current"] == "next"
+    assert payload["topology"]["sparse_adjacency"]["states"] == ["initial", "next"]
+    assert payload["analysis"]["cyclic_components"] == []
+    assert payload["analysis"]["structural_depth"] == 1
+    assert payload["analysis"]["depth_interpretation"] == "dag_longest_path"
+    assert payload["analysis"]["diagnostic_status"]["complete"] is True
+    assert "adjacency_matrix" not in payload["topology"]
+
+
+def test_dense_output_is_opt_in_preflighted_and_stale_matrices_are_rejected() -> None:
+    """Dense compatibility data needs an explicit budgeted request or exact match."""
+
+    machine = _snapshot_machine()
+    exact = DiagnosticLimits(max_dense_cells=4)
+    payload = to_json(machine, include_adjacency=True, limits=exact)
+    assert payload["topology"]["adjacency_matrix"]["matrix"] == [[[], [0]], [[], []]]
+
+    with pytest.raises(DiagnosticBudgetExceeded):
+        to_json(
+            machine,
+            include_adjacency=True,
+            limits=DiagnosticLimits(max_dense_cells=3),
+        )
+
+    adjacency = FSMValidator(machine).get_adjacency_matrix()
+    machine.add_state(State("late"))
+    with pytest.raises(
+        ValueError, match="adjacency matrix does not match captured snapshot"
+    ):
+        to_mermaid_document(machine, adjacency_matrix=adjacency)
