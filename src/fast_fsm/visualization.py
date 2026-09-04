@@ -18,13 +18,20 @@ Example::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections import defaultdict
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, cast
 
 from ._diagnostics import (
     DiagnosticLimits,
     _DiagnosticBudget,
     _DiagnosticGraph,
+    _dense_adjacency,
     _graph_from_snapshot,
+    _reachable_indices,
+    _sparse_adjacency,
+    _strongly_connected_components,
+    _structural_depth,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +66,22 @@ def _escape_plantuml_text(value: str) -> str:
             if ord(character) <= 0xFFFF
             else f"\\U{ord(character):08X}"
         )
+        for character in value
+    )
+
+
+def _escape_markdown_heading(value: str) -> str:
+    """Encode one caller heading as inert Markdown text on one physical line."""
+    return "".join(
+        character if character in _SAFE_DIAGRAM_TEXT else f"&#x{ord(character):04X};"
+        for character in value
+    )
+
+
+def _escape_markdown_cell(value: str) -> str:
+    """Encode one caller table cell as inert Markdown text on one physical line."""
+    return "".join(
+        character if character in _SAFE_DIAGRAM_TEXT else f"&#x{ord(character):04X};"
         for character in value
     )
 
@@ -264,140 +287,170 @@ def to_plantuml(
     )
 
 
-def to_json(fsm: "StateMachine") -> dict:
+def _quality_from_snapshot(
+    fsm: "StateMachine",
+    snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+) -> dict[str, object]:
+    """Build legacy quality fields without a second snapshot or budget ledger."""
+    from .validation import EnhancedFSMValidator
+
+    validator = EnhancedFSMValidator.__new__(EnhancedFSMValidator)
+    validator._design_style_threshold = (
+        EnhancedFSMValidator.DEFAULT_DESIGN_STYLE_THRESHOLD
+    )
+    validator._min_transitions_for_style = (
+        EnhancedFSMValidator.DEFAULT_MIN_TRANSITIONS_FOR_STYLE
+    )
+    validator._completeness_weight = EnhancedFSMValidator.DEFAULT_COMPLETENESS_WEIGHT
+    validator._snapshot = snapshot
+    validator.fsm = fsm
+    validator._report_name = snapshot.name
+    validator.states = set(graph.state_names)
+    validator.transitions = defaultdict(lambda: defaultdict(set))
+    validator.events = set()
+    validator.initial_state = graph.initial_state_name
+    validator.current_state = graph.current_state_name
+    validator._diagnostic_graph = graph
+    validator._budget = budget
+    for edge in graph.edges:
+        from_state = graph.state_names[edge.from_index]
+        to_state = graph.state_names[edge.to_index]
+        validator.transitions[from_state][edge.trigger].add(to_state)
+        validator.events.add(edge.trigger)
+    validator.issues = []
+    validator.recommendations = []
+    validator.metrics = {}
+    validator._analyze_comprehensive()
+    score = validator.get_validation_score()
+    issues = sorted(
+        (
+            {
+                "severity": issue.severity,
+                "category": issue.category,
+                "message": issue.description,
+            }
+            for issue in validator.issues
+        ),
+        key=lambda issue: (
+            str(issue["severity"]),
+            str(issue["category"]),
+            str(issue["message"]),
+        ),
+    )
+    return {
+        "completeness_score": score["completeness_score"],
+        "structural_score": score["structural_score"],
+        "overall_score": score["overall_score"],
+        "grade": score["grade"],
+        "issues": issues,
+    }
+
+
+def _to_json_from_snapshot(
+    fsm: "StateMachine",
+    snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    include_adjacency: bool,
+) -> dict[str, object]:
+    """Return stable structured JSON data from one snapshot, graph, and ledger."""
+    reachable_indices = _reachable_indices(graph, budget)
+    reachable_set = set(reachable_indices)
+    unreachable: list[str] = []
+    terminal: list[str] = []
+    for state_index, state_name in enumerate(graph.state_names):
+        budget.reserve_work(stage="json.state")
+        if state_index not in reachable_set:
+            budget.reserve_result(stage="json.unreachable")
+            unreachable.append(state_name)
+        if not graph.forward[state_index]:
+            budget.reserve_result(stage="json.terminal")
+            terminal.append(state_name)
+
+    components = _strongly_connected_components(graph, budget)
+    depth = _structural_depth(graph, budget)
+    sparse = _sparse_adjacency(graph, budget)
+    sparse_states = cast(tuple[str, ...], sparse["states"])
+    sparse_events = cast(tuple[str, ...], sparse["events"])
+    sparse_edges = cast(tuple[dict[str, object], ...], sparse["edges"])
+    sparse_topology = {
+        "states": list(sparse_states),
+        "events": list(sparse_events),
+        "edges": [dict(edge) for edge in sparse_edges],
+    }
+    transitions: list[dict[str, object]] = []
+    for edge in graph.edges:
+        budget.reserve_work(stage="json.transition")
+        transitions.append(
+            {
+                "trigger": edge.trigger,
+                "from": graph.state_names[edge.from_index],
+                "to": graph.state_names[edge.to_index],
+                "has_guard": edge.condition_name is not None,
+            }
+        )
+
+    topology: dict[str, object] = {
+        "states": list(graph.state_names),
+        "initial": graph.initial_state_name,
+        "current": graph.current_state_name,
+        "transitions": transitions,
+        "sparse_adjacency": sparse_topology,
+    }
+    if include_adjacency:
+        topology["adjacency_matrix"] = _dense_adjacency(graph, budget)
+
+    cyclic_members = [
+        state_name for component in components for state_name in component
+    ]
+    quality = _quality_from_snapshot(fsm, snapshot, graph, budget)
+    status = asdict(budget.status)
+    return {
+        "topology": topology,
+        "analysis": {
+            "reachability": {
+                "reachable": [graph.state_names[index] for index in reachable_indices],
+                "unreachable": unreachable,
+                "terminal": terminal,
+            },
+            "cycles": {
+                "has_cycles": bool(components),
+                "states_in_cycles": cyclic_members,
+            },
+            "cyclic_components": [list(component) for component in components],
+            "structural_depth": depth["depth"],
+            "depth_interpretation": depth["interpretation"],
+            "diagnostic_status": status,
+            "quality": quality,
+        },
+    }
+
+
+def to_json(
+    fsm: "StateMachine",
+    *,
+    limits: DiagnosticLimits | None = None,
+    include_adjacency: bool = False,
+) -> dict[str, object]:
+    """Return a stable, bounded JSON-ready topology and structural analysis.
+
+    The returned ``topology`` declares ``initial`` separately from the runtime
+    ``current`` state, preserves snapshot order, and uses sparse adjacency by
+    default.  Set ``include_adjacency=True`` for the preflighted dense
+    compatibility matrix.  Budget exhaustion raises ``DiagnosticBudgetExceeded``
+    rather than returning a partial payload.
     """
-    Return a JSON-serialisable dict describing FSM topology plus analysis.
-
-    The output is designed for consumption by coding agents and programmatic
-    tooling.  Sections:
-
-    - ``topology`` — states, initial state, transitions (with ``has_guard``)
-    - ``analysis.reachability`` — reachable / unreachable / terminal state lists
-    - ``analysis.cycles`` — whether cycles exist and which states participate
-    - ``analysis.quality`` — ``EnhancedFSMValidator`` scores (``None`` if the
-      validation module is unavailable)
-
-    ``validation.py`` is imported lazily so this function adds zero import-time
-    cost when the module is not installed or not needed.
-
-    Args:
-        fsm: The state machine to inspect.
-
-    Returns:
-        A plain dict safe for ``json.dumps()``.
-
-    Example::
-
-        >>> from fast_fsm import StateMachine, to_json
-        >>> fsm = StateMachine.quick_build(
-        ...     "idle",
-        ...     [("start", "idle", "running"), ("stop", "running", "idle")],
-        ... )
-        >>> data = to_json(fsm)
-        >>> data["topology"]["initial"]
-        'idle'
-    """
-    # --- Topology -----------------------------------------------------------
-    initial_name = next(iter(fsm._states))
-    states_list = sorted(fsm._states.keys())
-    transitions_list: list[dict] = []
-
-    for from_name, triggers in fsm._transitions.items():
-        for trigger_name, entry in triggers.items():
-            transitions_list.append(
-                {
-                    "trigger": trigger_name,
-                    "from": from_name,
-                    "to": entry.to_state.name,
-                    "has_guard": entry.condition is not None,
-                }
-            )
-
-    topology = {
-        "states": states_list,
-        "initial": initial_name,
-        "transitions": transitions_list,
-    }
-
-    # --- Reachability (BFS) -------------------------------------------------
-    reachable: set[str] = set()
-    queue = [initial_name]
-    while queue:
-        current = queue.pop()
-        if current in reachable:
-            continue
-        reachable.add(current)
-        for _trigger, entry in fsm._transitions.get(current, {}).items():
-            to_name = entry.to_state.name
-            if to_name not in reachable:
-                queue.append(to_name)
-
-    unreachable = sorted(set(fsm._states.keys()) - reachable)
-    terminal = sorted(s for s in fsm._states if not fsm._transitions.get(s))
-
-    reachability = {
-        "reachable": sorted(reachable),
-        "unreachable": unreachable,
-        "terminal": terminal,
-    }
-
-    # --- Cycle detection (DFS with colour) ----------------------------------
-    WHITE, GREY, BLACK = 0, 1, 2
-    colour: dict[str, int] = {s: WHITE for s in fsm._states}
-    states_in_cycles: set[str] = set()
-
-    def _dfs(node: str) -> None:
-        colour[node] = GREY
-        for _trigger, entry in fsm._transitions.get(node, {}).items():
-            successor = entry.to_state.name
-            if colour.get(successor) == GREY:
-                # Back-edge → cycle involving both nodes
-                states_in_cycles.add(node)
-                states_in_cycles.add(successor)
-            elif colour.get(successor) == WHITE:
-                _dfs(successor)
-        colour[node] = BLACK
-
-    for state_name in fsm._states:
-        if colour[state_name] == WHITE:
-            _dfs(state_name)
-
-    cycles = {
-        "has_cycles": bool(states_in_cycles),
-        "states_in_cycles": sorted(states_in_cycles),
-    }
-
-    # --- Quality (lazy import) ----------------------------------------------
-    quality = None
-    try:
-        from fast_fsm.validation import EnhancedFSMValidator
-
-        v = EnhancedFSMValidator(fsm)
-        score_data = v.get_validation_score()
-        quality = {
-            "completeness_score": score_data.get("completeness_score"),
-            "structural_score": score_data.get("structural_score"),
-            "overall_score": score_data.get("overall_score"),
-            "grade": score_data.get("grade"),
-            "issues": [
-                {
-                    "severity": issue.severity,
-                    "category": issue.category,
-                    "message": issue.description,
-                }
-                for issue in v.issues
-            ],
-        }
-    except Exception:
-        quality = None
-
-    analysis = {
-        "reachability": reachability,
-        "cycles": cycles,
-        "quality": quality,
-    }
-
-    return {"topology": topology, "analysis": analysis}
+    snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
+    return _to_json_from_snapshot(
+        fsm,
+        snapshot,
+        graph,
+        budget,
+        include_adjacency=include_adjacency,
+    )
 
 
 def to_mermaid_fenced(
@@ -405,6 +458,7 @@ def to_mermaid_fenced(
     *,
     title: str | None = None,
     show_conditions: bool = True,
+    limits: DiagnosticLimits | None = None,
 ) -> str:
     """
     Like :func:`to_mermaid` but wraps the output in ````mermaid`` fences for
@@ -415,6 +469,7 @@ def to_mermaid_fenced(
         title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
         show_conditions: When ``True``, condition names are appended to
             transition labels.  Defaults to ``True``.
+        limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
         A Markdown fenced code block string::
@@ -439,8 +494,104 @@ def to_mermaid_fenced(
             running --> idle : stop
         ```
     """
-    diagram = to_mermaid(fsm, title=title, show_conditions=show_conditions)
+    snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
+    return _to_mermaid_fenced_from_snapshot(
+        snapshot,
+        graph,
+        budget,
+        title=title,
+        show_conditions=show_conditions,
+    )
+
+
+def _to_mermaid_fenced_from_snapshot(
+    snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    title: str | None,
+    show_conditions: bool,
+) -> str:
+    """Fence one already-rendered snapshot diagram without another capture."""
+    diagram = _to_mermaid_from_snapshot(
+        snapshot,
+        graph,
+        budget,
+        title=title,
+        show_conditions=show_conditions,
+    )
     return f"```mermaid\n{diagram}\n```"
+
+
+def _adjacency_mismatch() -> ValueError:
+    """Return the fixed, non-leaking compatibility failure for stale matrices."""
+    return ValueError("adjacency matrix does not match captured snapshot")
+
+
+def _validate_adjacency_matrix(
+    adjacency_matrix: object,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+) -> dict[str, object]:
+    """Verify a caller's dense matrix against this exact captured graph."""
+    if not isinstance(adjacency_matrix, dict):
+        raise _adjacency_mismatch()
+
+    states = adjacency_matrix.get("states")
+    transitions = adjacency_matrix.get("transitions")
+    matrix = adjacency_matrix.get("matrix")
+    expected_states = list(graph.state_names)
+    expected_events = sorted({edge.trigger for edge in graph.edges})
+    if (
+        not isinstance(states, list)
+        or states != expected_states
+        or not isinstance(transitions, list)
+        or not isinstance(matrix, list)
+        or (
+            "events" in adjacency_matrix
+            and adjacency_matrix["events"] != expected_events
+        )
+    ):
+        raise _adjacency_mismatch()
+
+    state_count = len(expected_states)
+    budget.reserve_dense_cells(
+        stage="document.adjacency.preflight", amount=state_count * state_count
+    )
+    if len(matrix) != state_count or any(
+        not isinstance(row, list) or len(row) != state_count for row in matrix
+    ):
+        raise _adjacency_mismatch()
+
+    expected_cells: dict[tuple[int, int], list[int]] = {}
+    for edge_index, edge in enumerate(graph.edges):
+        budget.reserve_work(stage="document.adjacency.transition")
+        expected_transition = {
+            "idx": edge_index,
+            "from_state_idx": edge.from_index,
+            "from_state": graph.state_names[edge.from_index],
+            "to_state_idx": edge.to_index,
+            "to_state": graph.state_names[edge.to_index],
+            "event_idx": expected_events.index(edge.trigger),
+            "event": edge.trigger,
+        }
+        if (
+            edge_index >= len(transitions)
+            or transitions[edge_index] != expected_transition
+        ):
+            raise _adjacency_mismatch()
+        expected_cells.setdefault((edge.from_index, edge.to_index), []).append(
+            edge_index
+        )
+    if len(transitions) != len(graph.edges):
+        raise _adjacency_mismatch()
+
+    for source_index, row in enumerate(matrix):
+        for target_index, cell in enumerate(row):
+            budget.reserve_work(stage="document.adjacency.cell")
+            if cell != expected_cells.get((source_index, target_index), []):
+                raise _adjacency_mismatch()
+    return adjacency_matrix
 
 
 def to_mermaid_document(
@@ -449,6 +600,8 @@ def to_mermaid_document(
     title: str | None = None,
     show_conditions: bool = True,
     adjacency_matrix: "dict | None" = None,
+    include_adjacency: bool = False,
+    limits: DiagnosticLimits | None = None,
 ) -> str:
     """
     Generate a self-contained Markdown document for a StateMachine.
@@ -479,43 +632,119 @@ def to_mermaid_document(
         A Markdown string suitable for saving as ``.md`` or rendering in any
         Markdown viewer.
     """
-    heading = title or getattr(fsm, "name", "FSM")
-    lines: list[str] = [f"# {heading}", ""]
+    snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
+    return _to_mermaid_document_from_snapshot(
+        snapshot,
+        graph,
+        budget,
+        title=title,
+        show_conditions=show_conditions,
+        adjacency_matrix=adjacency_matrix,
+        include_adjacency=include_adjacency,
+    )
 
+
+def _to_mermaid_document_from_snapshot(
+    snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    title: str | None,
+    show_conditions: bool,
+    adjacency_matrix: object,
+    include_adjacency: bool,
+) -> str:
+    """Compose the full Markdown document from one graph and one ledger."""
+    heading = snapshot.name if title is None else title
+    lines: list[str] = [f"# {_escape_markdown_heading(heading)}", ""]
     lines.extend(["## State Diagram", ""])
-    lines.append(to_mermaid_fenced(fsm, show_conditions=show_conditions))
+    lines.append(
+        _to_mermaid_fenced_from_snapshot(
+            snapshot,
+            graph,
+            budget,
+            title=None,
+            show_conditions=show_conditions,
+        )
+    )
 
+    dense_data: dict[str, object] | None = None
     if adjacency_matrix is not None:
-        sorted_states: list[str] = adjacency_matrix.get("states", [])
-        transitions_list: list[dict] = adjacency_matrix.get("transitions", [])
-        matrix: list[list[list[int]]] = adjacency_matrix.get("matrix", [])
+        dense_data = _validate_adjacency_matrix(adjacency_matrix, graph, budget)
+    elif include_adjacency:
+        dense_data = _dense_adjacency(graph, budget)  # type: ignore[assignment]
 
-        if sorted_states:
-            lines.extend(["", "## State Adjacency Matrix", ""])
-            header = "| → | " + " | ".join(sorted_states) + " |"
-            separator = "|---|" + "|".join(["---"] * len(sorted_states)) + "|"
-            lines.append(header)
-            lines.append(separator)
-            for i, from_state in enumerate(sorted_states):
-                row_cells: list[str] = []
-                for j in range(len(sorted_states)):
-                    t_indices = matrix[i][j]
-                    if t_indices:
-                        events_in_cell = [
-                            transitions_list[idx]["event"] for idx in t_indices
-                        ]
-                        row_cells.append(", ".join(f"`{e}`" for e in events_in_cell))
-                    else:
-                        row_cells.append("—")
-                lines.append(f"| **{from_state}** | " + " | ".join(row_cells) + " |")
+    if dense_data is None:
+        return "\n".join(lines)
 
-        if transitions_list:
-            lines.extend(["", "## Transitions", ""])
-            lines.append("| # | From | Event | To |")
-            lines.append("|---|------|-------|----|")
-            for t in transitions_list:
-                lines.append(
-                    f"| {t['idx']} | {t['from_state']} | `{t['event']}` | {t['to_state']} |"
-                )
+    states = dense_data["states"]
+    transitions = dense_data["transitions"]
+    matrix = dense_data["matrix"]
+    if (
+        not isinstance(states, list)
+        or not isinstance(transitions, list)
+        or not isinstance(matrix, list)
+    ):
+        raise _adjacency_mismatch()
+
+    if states:
+        lines.extend(["", "## State Adjacency Matrix", ""])
+        header_cells = [_escape_markdown_cell(str(state)) for state in states]
+        lines.append("| → | " + " | ".join(header_cells) + " |")
+        lines.append("|---|" + "|".join(["---"] * len(states)) + "|")
+        for source_index, state_name in enumerate(states):
+            row_cells: list[str] = []
+            row = matrix[source_index]
+            if not isinstance(row, list):
+                raise _adjacency_mismatch()
+            for transition_indices in row:
+                if not isinstance(transition_indices, list):
+                    raise _adjacency_mismatch()
+                if transition_indices:
+                    events: list[str] = []
+                    for transition_index in transition_indices:
+                        if (
+                            not isinstance(transition_index, int)
+                            or transition_index < 0
+                            or transition_index >= len(transitions)
+                            or not isinstance(transitions[transition_index], dict)
+                        ):
+                            raise _adjacency_mismatch()
+                        event = transitions[transition_index].get("event")
+                        if not isinstance(event, str):
+                            raise _adjacency_mismatch()
+                        events.append(f"`{_escape_markdown_cell(event)}`")
+                    row_cells.append(", ".join(events))
+                else:
+                    row_cells.append("—")
+            lines.append(
+                f"| **{_escape_markdown_cell(str(state_name))}** | "
+                + " | ".join(row_cells)
+                + " |"
+            )
+
+    if transitions:
+        lines.extend(["", "## Transitions", ""])
+        lines.append("| # | From | Event | To |")
+        lines.append("|---|------|-------|----|")
+        for transition in transitions:
+            if not isinstance(transition, dict):
+                raise _adjacency_mismatch()
+            index = transition.get("idx")
+            from_state = transition.get("from_state")
+            event = transition.get("event")
+            to_state = transition.get("to_state")
+            if (
+                not isinstance(index, int)
+                or not isinstance(from_state, str)
+                or not isinstance(event, str)
+                or not isinstance(to_state, str)
+            ):
+                raise _adjacency_mismatch()
+            lines.append(
+                f"| {index} | {_escape_markdown_cell(from_state)} | "
+                f"`{_escape_markdown_cell(event)}` | "
+                f"{_escape_markdown_cell(to_state)} |"
+            )
 
     return "\n".join(lines)

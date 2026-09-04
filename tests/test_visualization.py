@@ -295,11 +295,12 @@ class TestToMermaidDocumentWithMatrix:
         doc = to_mermaid_document(fsm, adjacency_matrix=adj)
         assert "stateDiagram-v2" in doc
 
-    def test_empty_adjacency_dict_does_not_crash(self, simple_fsm):
-        """Passing an empty dict should not raise."""
-        doc = to_mermaid_document(simple_fsm, adjacency_matrix={})
-        assert isinstance(doc, str)
-        assert "## State Diagram" in doc
+    def test_empty_adjacency_dict_is_rejected(self, simple_fsm):
+        """A supplied matrix must represent this exact captured snapshot."""
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(simple_fsm, adjacency_matrix={})
 
 
 # ---------------------------------------------------------------------------

@@ -684,7 +684,6 @@ def test_validate_and_score_captures_once_and_carries_status(
     assert result["diagnostic_status"].complete is True
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
 def test_json_captures_one_snapshot_and_never_rereads_live_topology(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -700,4 +699,4 @@ def test_json_captures_one_snapshot_and_never_rereads_live_topology(
     monkeypatch.setattr(StateMachine, "_graph_snapshot", count_snapshot)
     payload = to_json(machine)
     assert calls == 1
-    assert payload["analysis"]["status"].complete is True
+    assert payload["analysis"]["diagnostic_status"]["complete"] is True
