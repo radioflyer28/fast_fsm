@@ -4992,22 +4992,37 @@ def configure_fsm_logging(
     propagate: Optional[bool] = None,
     redactor: Optional[FSMTraceRedactor] = None,
 ) -> FSMLoggingHandle:
-    """
-    Configure logging for FSM instances.
+    """Configure a named Fast FSM logger and return its reversible handle.
 
     Args:
-        level: Logging level (e.g., logging.DEBUG, logging.INFO, logging.WARNING)
-        logger_name: Name of the logger to configure. Can use wildcards:
-                    - 'fast_fsm' for all FSMs with default naming
-                    - 'fast_fsm.MyFSM' for a specific named FSM
-                    - 'traffic_light' for FSMs with custom logger names
-        format_string: Format string for log messages
+        level: Logging level to set (for example, ``logging.DEBUG`` or
+            ``logging.WARNING``).
+        logger_name: Name of the logger to configure, such as ``"fast_fsm"``
+            for the default hierarchy or a specific named FSM logger.
+        format_string: Formatter applied to the library-owned stream handler.
+        propagate: ``None`` preserves the logger's current propagation setting;
+            a Boolean explicitly sets it.
+        redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
+            ordinary ``Exception`` from the redactor emits fixed
+            ``redaction_failure`` metadata. A ``BaseException`` is not caught:
+            it emits no trace record and is re-raised.
+
+    Returns:
+        FSMLoggingHandle: A reversible handle that removes only its exact
+            library-owned handler. ``restore()`` conditionally restores the
+            prior level and propagation only while this configuration remains
+            current.
 
     Logging Levels for FSM:
         - WARNING: No FSM logging (default)
         - INFO: Successful transitions and failures
         - DEBUG: + condition evaluation, state validation
-        - DEBUG-5 (5): + trigger attempts with arguments (ultra-verbose)
+        - DEBUG-5 (5): metadata-only TRACE records with fixed
+          ``trace_operation``, ``trace_stage``, and ``trace_result``
+          categories, ``trace_arg_count``, and capped sanitized
+          ``trace_keyword_names``. They never contain trigger/state names,
+          positional or keyword values, exception payloads, or object
+          representations.
 
     Examples:
         # Enable transition logging
@@ -5016,7 +5031,7 @@ def configure_fsm_logging(
         # Enable detailed debugging
         configure_fsm_logging(logging.DEBUG, 'fast_fsm')
 
-        # Enable ultra-verbose logging
+        # Enable metadata-only TRACE logging
         configure_fsm_logging(5, 'fast_fsm')  # DEBUG-5 level
 
         # Enable logging for a specific named FSM

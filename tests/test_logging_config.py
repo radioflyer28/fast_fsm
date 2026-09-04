@@ -5,6 +5,7 @@ All tests use real logging infrastructure — no mocking.
 """
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 import uuid
@@ -1015,6 +1016,39 @@ def test_core_spr_documents_trace_handler_marker_schema() -> None:
     assert "_FSMStreamHandler(generation, redactor, configured_level)" in document
     assert "reachable library TRACE configuration from DEBUG/INFO handlers" in document
     assert "legacy payload-bearing records must be suppressed" in document
+
+
+def test_configure_logging_docstring_matches_its_public_contract() -> None:
+    """Autodoc must expose the signature, safe TRACE, and restore contracts."""
+
+    signature = inspect.signature(configure_fsm_logging)
+    assert list(signature.parameters) == [
+        "level",
+        "logger_name",
+        "format_string",
+        "propagate",
+        "redactor",
+    ]
+    assert signature.parameters["propagate"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["redactor"].kind is inspect.Parameter.KEYWORD_ONLY
+
+    documentation = inspect.getdoc(configure_fsm_logging)
+    assert documentation is not None
+    for field in (
+        "propagate:",
+        "redactor:",
+        "Returns:",
+        "FSMLoggingHandle:",
+        "trace_operation",
+        "trace_stage",
+        "trace_result",
+        "trace_arg_count",
+        "trace_keyword_names",
+        "redaction_failure",
+        "BaseException",
+        "emits no trace record and is re-raised",
+    ):
+        assert field in documentation
 
 
 # ---------------------------------------------------------------------------
