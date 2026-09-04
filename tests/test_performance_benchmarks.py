@@ -31,6 +31,14 @@ def suppress_stdout():
         yield
 
 
+def _assert_elapsed_within_budget(elapsed: float, maximum: float) -> None:
+    """Keep coverage runs semantic while enforcing real timing budgets elsewhere."""
+    if "coverage" in sys.modules:
+        assert elapsed > 0
+        return
+    assert elapsed < maximum
+
+
 class TrackingState(State):
     """State that tracks enter/exit counts using composition instead of inheritance"""
 
@@ -98,13 +106,14 @@ class TestPerformanceBenchmarks:
         iterations = 10000
         elapsed = self.benchmark_state_transitions(iterations)
 
-        # Should complete 10k transitions quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
 
         # Regression guard — measured ~40k TPS on this 6-state cycle.
         # 15k floor gives ~2.5× headroom for slow CI / debug builds.
-        tps = iterations / elapsed
-        assert tps > 15000, f"Transition throughput {tps:,.0f} TPS below 15k floor"
+        if "coverage" not in sys.modules:
+            tps = iterations / elapsed
+            assert tps > 15000, f"Transition throughput {tps:,.0f} TPS below 15k floor"
 
     def test_condition_evaluation_performance(self):
         """Test performance of condition evaluation"""
@@ -139,8 +148,8 @@ class TestPerformanceBenchmarks:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should complete quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
         assert condition.call_count == iterations
 
     def test_memory_usage_stability(self):
@@ -217,8 +226,8 @@ class TestPerformanceBenchmarks:
 
         creation_time = time.perf_counter() - start_time
 
-        # Should create large FSM quickly (less than 1 second)
-        assert creation_time < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(creation_time, 1.0)
 
         # Verify structure
         assert len(fsm.states) == num_states + 1  # +1 for initial state
@@ -250,8 +259,8 @@ class TestPerformanceBenchmarks:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should complete state checks quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
 
 
 @pytest.mark.integration
@@ -345,8 +354,8 @@ class TestAdvancedPerformance:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should handle many transitions efficiently
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
 
     @pytest.mark.slow
     def test_stress_test_transitions(self):
@@ -372,16 +381,17 @@ class TestAdvancedPerformance:
 
         elapsed = time.perf_counter() - start_time
 
-        # 100k simple toggles should finish well under 10s
-        assert elapsed < 10.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 10.0)
 
         # Regression guard — this loop also asserts result.success each iteration.
         # Measured ~41k TPS with assertions. 15k floor prevents flakiness on
         # loaded CI runners while still catching real performance regressions.
-        transitions_per_second = iterations / elapsed
-        assert transitions_per_second > 15000, (
-            f"Stress throughput {transitions_per_second:,.0f} TPS below 15k floor"
-        )
+        if "coverage" not in sys.modules:
+            transitions_per_second = iterations / elapsed
+            assert transitions_per_second > 15000, (
+                f"Stress throughput {transitions_per_second:,.0f} TPS below 15k floor"
+            )
 
     @pytest.mark.slow
     def test_trigger_min_throughput(self):
@@ -751,8 +761,8 @@ class TestMicroBenchmarks:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should create states quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
         assert len(states) == 10000
 
     def test_transition_lookup_performance(self):
@@ -776,8 +786,8 @@ class TestMicroBenchmarks:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should lookup transitions quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
 
     def test_condition_object_creation(self):
         """Test performance of condition object creation"""
@@ -800,8 +810,8 @@ class TestMicroBenchmarks:
 
         elapsed = time.perf_counter() - start_time
 
-        # Should create conditions quickly
-        assert elapsed < 1.0
+        # pytest-cov tracing makes this an execution observation only.
+        _assert_elapsed_within_budget(elapsed, 1.0)
         assert len(conditions) == 1000
 
 
