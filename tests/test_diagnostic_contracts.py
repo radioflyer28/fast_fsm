@@ -548,7 +548,6 @@ def test_diagnostic_defaults_are_finite_and_pinned() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-04")
 def test_comparison_and_batch_preserve_duplicate_positional_identity(
     duplicate_name_machines: tuple[StateMachine, StateMachine, StateMachine],
 ) -> None:
@@ -560,21 +559,55 @@ def test_comparison_and_batch_preserve_duplicate_positional_identity(
         "duplicate",
         "duplicate",
     ]
+    assert comparison["rankings"] == [
+        {"position": 0, "name": "duplicate", "score": 66.7},
+        {"position": 1, "name": "duplicate", "score": 66.7},
+        {"position": 2, "name": "duplicate", "score": 66.7},
+    ]
+    assert comparison["best_fsm"] == {"position": 0, "name": "duplicate"}
+    assert all(entry["diagnostic_status"].complete for entry in comparison["entries"])
+    assert batch["count"] == 3
     assert [entry["position"] for entry in batch["entries"]] == [0, 1, 2]
+    assert [entry["name"] for entry in batch["entries"]] == [
+        "duplicate",
+        "duplicate",
+        "duplicate",
+    ]
+    assert all(entry["validator"].diagnostic_status.complete for entry in batch["entries"])
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-04")
-def test_empty_comparison_and_reports_share_one_aggregate_budget() -> None:
+def test_empty_comparison_returns_exact_structured_undefined_aggregates() -> None:
     empty = compare_fsms()
     assert empty == {
         "entries": [],
         "rankings": [],
         "best_fsm": None,
-        "count": 0,
-        "total_issues": 0,
-        "avg_score": None,
-        "score_range": None,
+        "comparison_metrics": {
+            "count": 0,
+            "total_issues": 0,
+            "avg_score": None,
+            "score_range": None,
+            "diagnostic_status": DiagnosticStatus(
+                complete=True,
+                exhausted_dimension=None,
+                exhausted_stage=None,
+                work_count=0,
+                result_count=0,
+                dense_cell_count=0,
+                path_expansion_count=0,
+            ),
+        },
     }
+
+
+def test_comparison_captures_each_input_once(
+    duplicate_name_machines: tuple[StateMachine, StateMachine, StateMachine],
+    snapshot_call_counter: Callable[[], int],
+) -> None:
+    comparison = compare_fsms(*duplicate_name_machines)
+
+    assert snapshot_call_counter() == 3
+    assert [entry["position"] for entry in comparison["entries"]] == [0, 1, 2]
 
 
 @pytest.mark.xfail(strict=True, reason="RED until 19-06")

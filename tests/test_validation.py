@@ -398,22 +398,29 @@ class TestConvenienceFunctions:
 
     def test_compare_fsms(self, well_designed_fsm, problematic_fsm, minimal_fsm):
         comparison = compare_fsms(well_designed_fsm, problematic_fsm, minimal_fsm)
+        assert "entries" in comparison
         assert "rankings" in comparison
         assert "best_fsm" in comparison
         assert "comparison_metrics" in comparison
         assert len(comparison["rankings"]) == 3
         # Rankings should be sorted by score descending
-        scores = [score for _, score in comparison["rankings"]]
+        scores = [entry["score"] for entry in comparison["rankings"]]
         assert scores == sorted(scores, reverse=True)
+        assert [entry["position"] for entry in comparison["entries"]] == [0, 1, 2]
 
     def test_batch_validate(self, well_designed_fsm, problematic_fsm, capsys):
         validators = batch_validate(
             well_designed_fsm, problematic_fsm, show_summary=True
         )
-        assert isinstance(validators, dict)
-        assert "GoodFSM" in validators
-        assert "ProblematicFSM" in validators
-        assert isinstance(validators["GoodFSM"], EnhancedFSMValidator)
+        assert validators["count"] == 2
+        assert [entry["name"] for entry in validators["entries"]] == [
+            "GoodFSM",
+            "ProblematicFSM",
+        ]
+        assert all(
+            isinstance(entry["validator"], EnhancedFSMValidator)
+            for entry in validators["entries"]
+        )
         # show_summary=True should produce console output
         captured = capsys.readouterr()
         assert "Batch Validation" in captured.out
@@ -422,7 +429,7 @@ class TestConvenienceFunctions:
         validators = batch_validate(well_designed_fsm, show_summary=False)
         captured = capsys.readouterr()
         assert captured.out == ""
-        assert len(validators) == 1
+        assert validators["count"] == 1
 
     def test_fsm_lint(self, problematic_fsm, capsys):
         fsm_lint(problematic_fsm, fix_mode=False)
@@ -463,7 +470,7 @@ class TestEdgeCases:
     def test_compare_single_fsm(self, well_designed_fsm):
         """Comparing a single FSM should still work."""
         result = compare_fsms(well_designed_fsm)
-        assert result["best_fsm"] == "GoodFSM"
+        assert result["best_fsm"] == {"position": 0, "name": "GoodFSM"}
         assert len(result["rankings"]) == 1
 
     def test_export_json_is_valid(self, problematic_fsm):
@@ -560,9 +567,11 @@ class TestValidationReportGaps:
         results = batch_validate(
             gap_well_designed_fsm, gap_problematic_fsm, show_summary=False
         )
-        assert len(results) == 2
-        assert "good_fsm" in results
-        assert "problematic" in results
+        assert results["count"] == 2
+        assert [entry["name"] for entry in results["entries"]] == [
+            "good_fsm",
+            "problematic",
+        ]
 
     def test_validation_score(self, gap_well_designed_fsm):
         """get_validation_score returns expected structure."""
