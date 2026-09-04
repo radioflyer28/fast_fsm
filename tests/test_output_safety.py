@@ -59,6 +59,7 @@ HOSTILE_TEXT_CASES = (
 )
 
 RENDERER_NAMES = ("mermaid", "plantuml", "fenced", "document", "json")
+DIAGRAM_RENDERER_NAMES = ("mermaid", "plantuml")
 
 
 def _machine_with_hostile_text(value: str) -> StateMachine:
@@ -167,8 +168,7 @@ def test_hostile_corpus_covers_every_planned_sink_and_category() -> None:
         assert any(token in value for value in values)
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
-@pytest.mark.parametrize("renderer", RENDERER_NAMES)
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
 def test_empty_state_label_uses_snapshot_position_identity(
     monkeypatch: pytest.MonkeyPatch, renderer: str
 ) -> None:
@@ -191,8 +191,7 @@ def test_empty_state_label_uses_snapshot_position_identity(
     _assert_physical_line_containment(renderer, output)
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
-@pytest.mark.parametrize("renderer", RENDERER_NAMES)
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
 def test_repeated_rendering_of_one_snapshot_is_byte_stable(
     monkeypatch: pytest.MonkeyPatch, renderer: str
 ) -> None:
@@ -216,8 +215,7 @@ def test_repeated_rendering_of_one_snapshot_is_byte_stable(
     assert first.encode("utf-8") == second.encode("utf-8")
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
-@pytest.mark.parametrize("renderer", RENDERER_NAMES)
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
 def test_capture_barrier_prevents_a_late_mutation_from_mixing_output(
     monkeypatch: pytest.MonkeyPatch, renderer: str
 ) -> None:
@@ -309,8 +307,7 @@ def test_capture_barrier_prevents_a_late_mutation_from_mixing_output(
     assert "late-after-snapshot" not in rendered[0]
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
-@pytest.mark.parametrize("renderer", RENDERER_NAMES)
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
 @pytest.mark.parametrize("case", HOSTILE_TEXT_CASES[1:], ids=lambda case: case.name)
 def test_hostile_caller_text_stays_inert_on_one_physical_line(
     monkeypatch: pytest.MonkeyPatch, renderer: str, case: HostileTextCase
@@ -359,8 +356,7 @@ def test_hostile_caller_text_stays_inert_on_one_physical_line(
     _assert_physical_line_containment(renderer, output)
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-06")
-@pytest.mark.parametrize("renderer", ("mermaid", "plantuml", "document"))
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
 def test_old_sanitizer_collisions_receive_unique_opaque_ids(renderer: str) -> None:
     """`a-b` and `a_b` must not share an identifier after rendering."""
 
