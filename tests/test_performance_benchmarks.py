@@ -9,9 +9,9 @@ import contextlib
 import gc
 import io
 import logging
-import sys
 import time
 
+import coverage
 import pytest
 
 from fast_fsm.core import (
@@ -31,12 +31,44 @@ def suppress_stdout():
         yield
 
 
+def _coverage_active() -> bool:
+    """Return whether coverage.py is actively collecting this process."""
+    return coverage.Coverage.current() is not None
+
+
 def _assert_elapsed_within_budget(elapsed: float, maximum: float) -> None:
-    """Keep coverage runs semantic while enforcing real timing budgets elsewhere."""
-    if "coverage" in sys.modules:
+    """Keep measured coverage runs semantic while enforcing real timing budgets."""
+    if _coverage_active():
         assert elapsed > 0
         return
     assert elapsed < maximum
+
+
+def test_timing_budget_is_enforced_when_pytest_cov_is_imported_but_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Importing pytest-cov alone must not disable an absolute timing budget."""
+    import pytest_cov.plugin  # noqa: F401
+
+    monkeypatch.setattr(
+        coverage.Coverage,
+        "current",
+        classmethod(lambda cls: None),
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_elapsed_within_budget(1.0, 0.5)
+
+
+def test_timing_budget_is_semantic_while_coverage_is_collecting() -> None:
+    """A real active coverage session still relaxes unstable timing assertions."""
+    measurement = coverage.Coverage(data_file=None)
+    measurement.start()
+    try:
+        assert _coverage_active()
+        _assert_elapsed_within_budget(1.0, 0.5)
+    finally:
+        measurement.stop()
 
 
 class TrackingState(State):
@@ -111,7 +143,7 @@ class TestPerformanceBenchmarks:
 
         # Regression guard — measured ~40k TPS on this 6-state cycle.
         # 15k floor gives ~2.5× headroom for slow CI / debug builds.
-        if "coverage" not in sys.modules:
+        if not _coverage_active():
             tps = iterations / elapsed
             assert tps > 15000, f"Transition throughput {tps:,.0f} TPS below 15k floor"
 
@@ -387,7 +419,7 @@ class TestAdvancedPerformance:
         # Regression guard — this loop also asserts result.success each iteration.
         # Measured ~41k TPS with assertions. 15k floor prevents flakiness on
         # loaded CI runners while still catching real performance regressions.
-        if "coverage" not in sys.modules:
+        if not _coverage_active():
             transitions_per_second = iterations / elapsed
             assert transitions_per_second > 15000, (
                 f"Stress throughput {transitions_per_second:,.0f} TPS below 15k floor"
@@ -447,7 +479,7 @@ class TestAdvancedPerformance:
             and core_spec.origin is not None
             and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
         )
-        if "coverage" in sys.modules:
+        if _coverage_active():
             assert ops_per_sec > 0
             return
 
@@ -491,7 +523,7 @@ class TestAdvancedPerformance:
             and core_spec.origin is not None
             and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
         )
-        if "coverage" in sys.modules:
+        if _coverage_active():
             assert ops_per_sec > 0
             return
 
@@ -612,7 +644,7 @@ class TestAdvancedPerformance:
             and core_spec.origin is not None
             and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
         )
-        if "coverage" in sys.modules:
+        if _coverage_active():
             assert ops_per_sec > 0
             return
 
@@ -730,7 +762,7 @@ class TestAdvancedPerformance:
         # slower on some supported CPython versions.  The release suite still
         # exercises this transition path under coverage, while the dedicated
         # uninstrumented raw and ownership gates enforce PERF-01 throughput.
-        if "coverage" in sys.modules:
+        if _coverage_active():
             assert ops_per_sec > 0
             return
 

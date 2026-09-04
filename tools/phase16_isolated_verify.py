@@ -1099,6 +1099,8 @@ def _suite_mode(args: argparse.Namespace) -> int:
             "uv",
             "run",
             "pytest",
+            "-p",
+            "no:cov",
             "tests/test_performance_benchmarks.py",
             "tests/test_logging_config.py",
             "-x",
