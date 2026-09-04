@@ -159,6 +159,11 @@ class TestFSMValidator:
             "paused",
             "running",
         )
+        assert result["diagnostic_status"].complete is True
+        assert "structural_depth" in result
+        assert "depth_interpretation" in result
+        assert "cyclic_components" in result
+        assert "states_in_cycles" in result
 
     def test_validate_completeness(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
@@ -394,6 +399,7 @@ class TestConvenienceFunctions:
         assert "grade" in result
         assert "status" in result
         assert "top_recommendations" in result
+        assert result["diagnostic_status"].complete is True
         assert result["status"] in ("good", "needs_attention", "critical")
 
     def test_compare_fsms(self, well_designed_fsm, problematic_fsm, minimal_fsm):

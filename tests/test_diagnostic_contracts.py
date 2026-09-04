@@ -26,6 +26,7 @@ from fast_fsm import (
     batch_validate,
     compare_fsms,
     to_json,
+    validate_and_score,
 )
 from fast_fsm._diagnostics import (
     _DiagnosticBudget,
@@ -611,6 +612,65 @@ def test_comparison_captures_each_input_once(
 
     assert snapshot_call_counter() == 3
     assert [entry["position"] for entry in comparison["entries"]] == [0, 1, 2]
+
+
+def test_structured_report_has_complete_snapshot_analysis_metadata(
+    multi_scc_tail_machine: StateMachine,
+) -> None:
+    report = FSMValidator(multi_scc_tail_machine).validate_completeness()
+
+    assert report["initial_state"] == "a"
+    assert report["current_state"] == "a"
+    assert report["cyclic_components"] == (("a", "b"), ("c", "d"), ("tail",))
+    assert report["states_in_cycles"] == ("a", "b", "c", "d", "tail")
+    assert report["structural_depth"] == 2
+    assert report["depth_interpretation"] == "condensation_dag_depth"
+    assert report["sparse_adjacency"]["states"] == ("a", "b", "c", "d", "tail")
+    assert report["diagnostic_status"].complete is True
+
+
+def test_report_uses_one_aggregate_budget_without_nested_resets() -> None:
+    def make_machine() -> StateMachine:
+        return StateMachine.quick_build(
+            "a",
+            [("ab", "a", "b"), ("ba", "b", "a"), ("tail", "b", "tail")],
+            name="aggregate-budget",
+        )
+
+    generous = FSMValidator(make_machine(), limits=DiagnosticLimits(max_work=100_000))
+    generous_report = generous.validate_completeness()
+    required = generous_report["diagnostic_status"].work_count
+    assert required > 0
+
+    exact = FSMValidator(make_machine(), limits=DiagnosticLimits(max_work=required))
+    assert exact.validate_completeness()["diagnostic_status"].work_count == required
+
+    exhausted = FSMValidator(
+        make_machine(), limits=DiagnosticLimits(max_work=required - 1)
+    )
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        exhausted.validate_completeness()
+    assert raised.value.status.work_count == required - 1
+    assert raised.value.status.exhausted_stage is not None
+
+
+def test_validate_and_score_captures_once_and_carries_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine, _, _, _, _ = _moved_machine()
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def count_snapshot(self: StateMachine):
+        nonlocal calls
+        calls += 1
+        return original_snapshot(self)
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", count_snapshot)
+    result = validate_and_score(machine)
+
+    assert calls == 1
+    assert result["diagnostic_status"].complete is True
 
 
 @pytest.mark.xfail(strict=True, reason="RED until 19-06")
