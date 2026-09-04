@@ -148,6 +148,29 @@ def _next_fsm_logging_generation() -> int:
     return _fsm_logging_generation
 
 
+def _validate_fsm_logging_level(level: int) -> int:
+    """Validate a logging level without relying on an untyped stdlib private API."""
+    return cast(int, getattr(logging, "_checkLevel")(level))
+
+
+def _prepare_fsm_logging_handler(
+    configured_level: int, format_string: str
+) -> Optional[logging.StreamHandler]:
+    """Build a complete library handler before changing any logger state."""
+    if configured_level > logging.INFO:
+        return None
+
+    handler: Optional[logging.StreamHandler] = None
+    try:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(format_string))
+    except BaseException:
+        if handler is not None:
+            handler.close()
+        raise
+    return handler
+
+
 def _trace_keyword_names(keyword_args: Mapping[str, Any]) -> Tuple[str, ...]:
     """Return bounded keyword labels without inspecting caller-provided values."""
     names: List[str] = []
@@ -5037,6 +5060,8 @@ def configure_fsm_logging(
         # Enable logging for a specific named FSM
         configure_fsm_logging(logging.INFO, 'fast_fsm.TrafficLight')
     """
+    configured_level = _validate_fsm_logging_level(level)
+    handler = _prepare_fsm_logging_handler(configured_level, format_string)
     logger = logging.getLogger(logger_name)
     previous_generation = getattr(logger, "_fast_fsm_generation", None)
     previous_level = getattr(logger, "_fast_fsm_configured_level", None)
@@ -5052,38 +5077,43 @@ def configure_fsm_logging(
     else:
         prior_propagate = logger.propagate
     generation = _next_fsm_logging_generation()
+
+    try:
+        logger.setLevel(configured_level)
+        setattr(logger, "_fast_fsm_generation", generation)
+        setattr(logger, "_fast_fsm_prior_level", prior_level)
+        setattr(logger, "_fast_fsm_prior_propagate", prior_propagate)
+        setattr(logger, "_fast_fsm_configured_level", configured_level)
+        setattr(logger, "_fast_fsm_configured_propagate", propagate)
+        if propagate is not None:
+            logger.propagate = propagate
+        if handler is not None:
+            setattr(
+                handler,
+                "_fast_fsm_marker",
+                _FSMStreamHandler(generation, redactor, configured_level),
+            )
+            logger.addHandler(handler)
+    except BaseException:
+        if handler is not None:
+            if handler in logger.handlers:
+                logger.removeHandler(handler)
+            handler.close()
+        raise
+
     for existing_handler in tuple(logger.handlers):
+        if existing_handler is handler:
+            continue
         marker = getattr(existing_handler, "_fast_fsm_marker", None)
         if isinstance(marker, _FSMStreamHandler):
             logger.removeHandler(existing_handler)
             existing_handler.close()
-
-    logger.setLevel(level)
-    setattr(logger, "_fast_fsm_generation", generation)
-    setattr(logger, "_fast_fsm_prior_level", prior_level)
-    setattr(logger, "_fast_fsm_prior_propagate", prior_propagate)
-    setattr(logger, "_fast_fsm_configured_level", level)
-    setattr(logger, "_fast_fsm_configured_propagate", propagate)
-    if propagate is not None:
-        logger.propagate = propagate
-
-    handler: Optional[logging.StreamHandler] = None
-    if level <= logging.INFO:
-        handler = logging.StreamHandler()
-        setattr(
-            handler,
-            "_fast_fsm_marker",
-            _FSMStreamHandler(generation, redactor, level),
-        )
-        formatter = logging.Formatter(format_string)
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
     return FSMLoggingHandle(
         logger,
         handler,
         prior_level,
         prior_propagate,
-        level,
+        configured_level,
         propagate,
         generation,
     )

@@ -1003,6 +1003,50 @@ def test_restore_does_not_overwrite_application_changes_after_configuration() ->
         handle.restore()
 
 
+def test_rejected_configuration_preserves_prior_handle_and_logger_state() -> None:
+    """Invalid caller input must not disturb a reversible owned configuration."""
+
+    logger_name = _logger_name("failure-atomic")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    owned_handler = handle._handler
+    assert owned_handler is not None
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    expected_handlers = tuple(logger.handlers)
+    expected_metadata = {
+        name: getattr(logger, name) for name in metadata_names
+    }
+
+    try:
+        with pytest.raises((TypeError, ValueError)):
+            configure_fsm_logging("not-a-level", logger_name)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            configure_fsm_logging(logging.INFO, logger_name, "%( ")
+
+        assert tuple(logger.handlers) == expected_handlers
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+        assert owned_handler._closed is False
+        assert {
+            name: getattr(logger, name) for name in metadata_names
+        } == expected_metadata
+
+        handle.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        handle.restore()
+
+
 def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
     """Public redactor docs must preserve the fail-closed control-flow boundary."""
 
