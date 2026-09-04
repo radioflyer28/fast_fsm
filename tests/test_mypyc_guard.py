@@ -547,7 +547,7 @@ def test_phase19_logging_marker_and_handle_stay_slotted_and_owned() -> None:
     )
     assert [
         argument.id for argument in marker_call.args if isinstance(argument, ast.Name)
-    ] == ["generation", "redactor", "level"]
+    ] == ["generation", "redactor", "configured_level"]
 
     handle = classes.get("FSMLoggingHandle")
     assert handle is not None
