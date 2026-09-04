@@ -1087,6 +1087,51 @@ def test_failed_commit_closes_candidate_and_restores_logger_state(
         assert not hasattr(logger, name)
 
 
+def test_failed_commit_preserves_existing_owned_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed replacement must leave the current owned handle usable."""
+
+    logger_name = _logger_name("commit-failure-existing")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    owned_handler = handle._handler
+    assert owned_handler is not None
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    expected_metadata = {name: getattr(logger, name) for name in metadata_names}
+
+    def reject_candidate(_handler: logging.Handler) -> None:
+        raise RuntimeError("handler installation failed")
+
+    monkeypatch.setattr(logger, "addHandler", reject_candidate)
+    try:
+        with pytest.raises(RuntimeError, match="handler installation failed"):
+            configure_fsm_logging(logging.DEBUG, logger_name, propagate=True)
+
+        assert logger.handlers == [owned_handler]
+        assert owned_handler._closed is False
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+        assert {
+            name: getattr(logger, name) for name in metadata_names
+        } == expected_metadata
+
+        handle.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        handle.restore()
+
+
 def test_concurrent_configurations_publish_one_coherent_owned_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
