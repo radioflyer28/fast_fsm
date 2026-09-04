@@ -6,6 +6,8 @@ All tests verify the generated Mermaid/Markdown string structure without
 rendering it.
 """
 
+import copy
+
 import pytest
 
 from fast_fsm import StateMachine, State, FuncCondition, to_mermaid
@@ -301,6 +303,54 @@ class TestToMermaidDocumentWithMatrix:
             ValueError, match="adjacency matrix does not match captured snapshot"
         ):
             to_mermaid_document(simple_fsm, adjacency_matrix={})
+
+    def test_opt_in_adjacency_is_derived_from_the_captured_snapshot(self, simple_fsm):
+        document = to_mermaid_document(simple_fsm, include_adjacency=True)
+
+        assert "## State Adjacency Matrix" in document
+        assert "## Transitions" in document
+
+    def test_malformed_adjacency_inputs_fail_with_the_fixed_contract(
+        self, fsm_and_matrix
+    ):
+        """Each stale or malformed dense shape is rejected without rendering it."""
+        fsm, adjacency = fsm_and_matrix
+
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=[])
+
+        wrong_shape = copy.deepcopy(adjacency)
+        wrong_shape["matrix"] = []
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_shape)
+
+        wrong_transition = copy.deepcopy(adjacency)
+        wrong_transition["transitions"][0] = {}
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_transition)
+
+        extra_transition = copy.deepcopy(adjacency)
+        extra_transition["transitions"].append({})
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=extra_transition)
+
+        wrong_cell = copy.deepcopy(adjacency)
+        for row in wrong_cell["matrix"]:
+            for cell in row:
+                if cell:
+                    cell.clear()
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_cell)
 
 
 # ---------------------------------------------------------------------------

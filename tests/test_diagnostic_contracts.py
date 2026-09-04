@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -558,6 +559,59 @@ def test_diagnostic_defaults_are_finite_and_pinned() -> None:
         max_dense_cells=200_000,
         max_path_expansions=20_000,
     )
+
+
+def test_diagnostic_limits_reject_invalid_reservations_and_representations(
+    self_loop_machine: StateMachine,
+) -> None:
+    """Public limit validation and internal reserve seams fail closed on bad caps."""
+    graph = _graph_from_snapshot(self_loop_machine._graph_snapshot())
+
+    with pytest.raises(ValueError, match="max_work must be a non-negative integer"):
+        DiagnosticLimits(max_work=True)
+
+    budget = _DiagnosticBudget()
+    with pytest.raises(ValueError, match="reservation amount"):
+        budget.reserve_work(stage="test", amount=True)
+    with pytest.raises(ValueError, match="reservation limit"):
+        budget.reserve_path_expansion(stage="test", maximum=True)
+    budget.reserve_path_expansion(stage="test", amount=0, maximum=0)
+
+    with pytest.raises(ValueError, match="unknown dense diagnostic representation"):
+        _dense_adjacency(graph, _DiagnosticBudget(), representation="unknown")
+    with pytest.raises(ValueError, match="path limits"):
+        _generate_paths(graph, _DiagnosticBudget(), max_length=True)
+    with pytest.raises(ValueError, match="max_expansions"):
+        _generate_paths(graph, _DiagnosticBudget(), max_expansions=True)
+
+
+def test_cycle_path_skips_non_component_edges_before_closing_cycle() -> None:
+    """A canonical SCC path ignores an earlier outgoing edge to another component."""
+    machine = StateMachine.quick_build(
+        "a",
+        [
+            ("aa-exit", "a", "outside"),
+            ("ab", "a", "b"),
+            ("ba", "b", "a"),
+        ],
+        name="cycle-with-exit",
+    )
+
+    assert FSMValidator(machine).find_cycles() == [["a", "b", "a"]]
+
+
+def test_reachability_without_a_declared_initial_is_empty(
+    empty_machine: StateMachine,
+) -> None:
+    """A malformed legacy snapshot cannot invent a reachability root."""
+    graph = replace(
+        _graph_from_snapshot(empty_machine._graph_snapshot()), initial_index=None
+    )
+    budget = _DiagnosticBudget()
+
+    assert diagnostics._reachable_indices(graph, budget) == ()
+    assert budget.status.work_count == 0
+    assert budget.status.result_count == 0
 
 
 def test_comparison_and_batch_preserve_duplicate_positional_identity(

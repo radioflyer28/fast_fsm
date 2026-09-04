@@ -323,8 +323,11 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
     (
         lambda _event: (_ for _ in ()).throw(ValueError(EXCEPTION_SENTINEL)),
         lambda _event: {"unsafe": POSITIONAL_SENTINEL, "nested": object()},
+        lambda _event: [],
+        lambda _event: {"detail": object()},
+        lambda _event: {"detail": "x" * 201},
     ),
-    ids=("raising", "invalid-output"),
+    ids=("raising", "unknown-key", "non-mapping", "nested-value", "long-string"),
 )
 def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
     capsys: pytest.CaptureFixture[str], redactor: object
@@ -354,6 +357,38 @@ def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
                 record_dict.get("trace_operation") == "redaction_failure"
                 or not application_handler.records
             )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_trace_keyword_names_are_bounded_before_records_are_emitted() -> None:
+    """Trace records retain at most fifty safe keyword labels, never their values."""
+    logger_name = _logger_name("keyword-bound")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False, redactor=None
+        )
+        machine = StateMachine(State("source"), logger_name=logger_name)
+        machine.add_state(State("destination"))
+        machine.add_transition("go", "source", "destination")
+        keyword_args = {f"field_{index}": index for index in range(51)}
+        keyword_args["_private"] = "ignored"
+        keyword_args["x" * 101] = "ignored"
+
+        assert machine.trigger("go", **keyword_args).success
+        names = [
+            record[2]["trace_keyword_names"]
+            for record in application_handler.records
+            if "trace_keyword_names" in record[2]
+        ]
+        assert any(len(entry) == 50 for entry in names)
+        assert all("_private" not in entry for entry in names)
+        assert all("x" * 101 not in entry for entry in names)
         handle.restore()
     finally:
         logger.removeHandler(application_handler)

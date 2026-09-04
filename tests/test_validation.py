@@ -14,6 +14,7 @@ import pytest
 from fast_fsm import (
     StateMachine,
     State,
+    TransitionRecord,
     simple_fsm,
     FSMValidator,
     EnhancedFSMValidator,
@@ -105,6 +106,21 @@ def complex_fsm():
 class TestFSMValidator:
     """Tests for the base FSMValidator."""
 
+    def test_core_constructor_history_and_batch_inputs_fail_closed(self):
+        """Core validation keeps invalid state and transition shapes out of the graph."""
+        with pytest.raises(TypeError, match="initial_state must be a State instance"):
+            StateMachine("not-a-state")  # type: ignore[arg-type]
+
+        record = TransitionRecord("source", "go", "destination", 0.0)
+        assert repr(record) == (
+            "TransitionRecord(from_state='source', trigger='go', to_state='destination')"
+        )
+
+        machine = StateMachine.from_states("source", "destination")
+        with pytest.raises(ValueError, match="contain 3 or 4 items"):
+            machine.add_transitions([("go", "source")])  # type: ignore[list-item]
+        assert not machine.can_trigger("go")
+
     def test_extract_states_and_events(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
         assert "idle" in v.states
@@ -116,6 +132,13 @@ class TestFSMValidator:
         v = FSMValidator(well_designed_fsm)
         reachable = v.get_reachable_states()
         assert reachable == v.states  # all states should be reachable
+
+    def test_unknown_explicit_start_preserves_legacy_singleton_result(
+        self, well_designed_fsm
+    ):
+        assert FSMValidator(well_designed_fsm).get_reachable_states("missing") == {
+            "missing"
+        }
 
     def test_unreachable_states_detected(self, problematic_fsm):
         v = FSMValidator(problematic_fsm)
@@ -164,6 +187,20 @@ class TestFSMValidator:
         assert "depth_interpretation" in result
         assert "cyclic_components" in result
         assert "states_in_cycles" in result
+
+    def test_sparse_adjacency_wrapper_and_dense_report_are_explicit(
+        self, well_designed_fsm
+    ):
+        """Sparse output is a wrapper, while dense compatibility data is opt-in."""
+        validator = FSMValidator(well_designed_fsm)
+        assert validator.get_sparse_adjacency()["states"] == (
+            "error",
+            "idle",
+            "paused",
+            "running",
+        )
+        report = validator.validate_completeness(include_dense=True)
+        assert report["transition_matrix"]["idle"]["start"] == ["running"]
 
     def test_validate_completeness(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
