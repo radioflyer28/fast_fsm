@@ -1003,6 +1003,20 @@ def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
         assert "emit no trace record and are re-raised" in document
 
 
+def test_core_spr_documents_trace_handler_marker_schema() -> None:
+    """The living API memory must preserve the private TRACE marker contract."""
+
+    root = Path(__file__).resolve().parent.parent
+    document = " ".join(
+        (root / ".specify" / "memory" / "spr-core-api.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "_FSMStreamHandler(generation, redactor, configured_level)" in document
+    assert "reachable library TRACE configuration from DEBUG/INFO handlers" in document
+    assert "legacy payload-bearing records must be suppressed" in document
+
+
 # ---------------------------------------------------------------------------
 # set_fsm_logging_level
 # ---------------------------------------------------------------------------
