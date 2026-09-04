@@ -29,6 +29,7 @@ POSITIONAL_SENTINEL = "positional-secret-19"
 KEYWORD_SENTINEL = "keyword-secret-19"
 EXCEPTION_SENTINEL = "exception-secret-19"
 REPR_SENTINEL = "repr-secret-19"
+MACHINE_SENTINEL = "machine-secret-19"
 RAW_SENTINELS = (
     TRIGGER_SENTINEL,
     SOURCE_SENTINEL,
@@ -37,6 +38,7 @@ RAW_SENTINELS = (
     KEYWORD_SENTINEL,
     EXCEPTION_SENTINEL,
     REPR_SENTINEL,
+    MACHINE_SENTINEL,
 )
 
 
@@ -260,6 +262,63 @@ async def test_default_trace_records_are_metadata_only_for_async_results(
             sensitive=KEYWORD_SENTINEL,
         )
         assert result.success
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_trace_suppresses_legacy_failure_warnings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed async guard cannot leak caller data through any warning record."""
+
+    logger_name = _logger_name("async-failure")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    def raise_failure_observer(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(EXCEPTION_SENTINEL)
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=None,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = AsyncStateMachine(
+            source,
+            name=MACHINE_SENTINEL,
+            logger_name=logger_name,
+        )
+        machine.add_state(destination)
+        machine.add_transition(
+            TRIGGER_SENTINEL,
+            source,
+            destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        machine.on_failed(raise_failure_observer)
+
+        result = await machine.trigger_async(
+            TRIGGER_SENTINEL,
+            hostile_payload,
+            sensitive=KEYWORD_SENTINEL,
+        )
+
+        assert not result.success
         _assert_no_raw_payload(
             application_handler, hostile_payload, capsys.readouterr().err
         )

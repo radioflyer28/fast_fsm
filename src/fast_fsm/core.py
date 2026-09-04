@@ -2531,7 +2531,8 @@ class StateMachine:
                     **kwargs,
                 )
             except BaseException as observer_error:
-                self._logger.warning(
+                _emit_legacy_warning(
+                    self._logger,
                     "%s: failure observer failed stage=%s index=%d type=%s",
                     self._name,
                     result.stage,
@@ -3794,8 +3795,11 @@ class AsyncStateMachine(StateMachine):
                             kwargs,
                         )
                 except Exception as cause:
-                    self._logger.warning(
-                        "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: FAILED guard type=%s",
+                        self._name,
+                        type(cause).__name__,
                     )
                     return self._finalize_failure(
                         self._build_failure_result(
@@ -3815,8 +3819,11 @@ class AsyncStateMachine(StateMachine):
                     )
                 )
             except Exception as cause:
-                self._logger.warning(
-                    "%s: FAILED guard type=%s", self._name, type(cause).__name__
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
                 )
                 return self._finalize_failure(
                     self._build_failure_result(
@@ -3846,7 +3853,8 @@ class AsyncStateMachine(StateMachine):
                     trigger, to_state, args, kwargs
                 )
             except Exception as cause:
-                self._logger.warning(
+                _emit_legacy_warning(
+                    self._logger,
                     "%s: FAILED state-permission type=%s",
                     self._name,
                     type(cause).__name__,
@@ -3998,7 +4006,8 @@ def _invoke_declarative_handler_for_transition(
     try:
         raw_result = method(*args, **kwargs)
     except Exception as cause:
-        logger.warning(
+        _emit_legacy_warning(
+            logger,
             "State '%s': declarative handler failed stage=%s type=%s",
             source_state.name,
             _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
@@ -4031,7 +4040,8 @@ async def _invoke_declarative_handler_for_transition_async(
             else method(*args, **kwargs)
         )
     except Exception as cause:
-        logger.warning(
+        _emit_legacy_warning(
+            logger,
             "State '%s': declarative handler failed stage=%s type=%s",
             source_state.name,
             _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
