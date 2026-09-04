@@ -22,6 +22,7 @@ from ._diagnostics import (
     DiagnosticStatus,
     _DiagnosticBudget,
     _dense_adjacency,
+    _escape_markdown_text,
     _generate_paths,
     _graph_from_snapshot,
     _reachable_indices,
@@ -1002,7 +1003,7 @@ class EnhancedFSMValidator(FSMValidator):
         )
 
         lines = [
-            f"# FSM Validation Report: {self._report_name}",
+            f"# FSM Validation Report: {_escape_markdown_text(self._report_name)}",
             "",
             f"**Design Style:** {score['design_style'].capitalize()}",
             f"**Structural Score:** {score['structural_score']}/100 (Grade: {score['grade']}) — reachability, determinism, dead states",
@@ -1021,7 +1022,11 @@ class EnhancedFSMValidator(FSMValidator):
         # Full adjacency matrix table
         if sorted_states:
             lines.extend(["", "## State Adjacency Matrix", ""])
-            header = "| → | " + " | ".join(sorted_states) + " |"
+            header = (
+                "| → | "
+                + " | ".join(_escape_markdown_text(state) for state in sorted_states)
+                + " |"
+            )
             separator = "|---|" + "|".join(["---"] * len(sorted_states)) + "|"
             lines.append(header)
             lines.append(separator)
@@ -1033,10 +1038,19 @@ class EnhancedFSMValidator(FSMValidator):
                         events_in_cell = [
                             transitions_list[idx]["event"] for idx in t_indices
                         ]
-                        row_cells.append(", ".join(f"`{e}`" for e in events_in_cell))
+                        row_cells.append(
+                            ", ".join(
+                                f"`{_escape_markdown_text(event)}`"
+                                for event in events_in_cell
+                            )
+                        )
                     else:
                         row_cells.append("—")
-                lines.append(f"| **{from_state}** | " + " | ".join(row_cells) + " |")
+                lines.append(
+                    f"| **{_escape_markdown_text(from_state)}** | "
+                    + " | ".join(row_cells)
+                    + " |"
+                )
 
         # Numbered transitions table
         if transitions_list:
@@ -1045,22 +1059,29 @@ class EnhancedFSMValidator(FSMValidator):
             lines.append("|---|------|-------|----|")
             for t in transitions_list:
                 lines.append(
-                    f"| {t['idx']} | {t['from_state']} | `{t['event']}` | {t['to_state']} |"
+                    f"| {t['idx']} | {_escape_markdown_text(t['from_state'])} | "
+                    f"`{_escape_markdown_text(t['event'])}` | "
+                    f"{_escape_markdown_text(t['to_state'])} |"
                 )
 
         # Issues
         lines.extend(["", "## Issues"])
         if self.issues:
             for issue in self.issues:
-                lines.append(f"- {issue}")
+                lines.append(f"- {_escape_markdown_text(str(issue))}")
                 if issue.recommendation:
-                    lines.append(f"  - **Fix:** {issue.recommendation}")
+                    lines.append(
+                        f"  - **Fix:** {_escape_markdown_text(issue.recommendation)}"
+                    )
         else:
             lines.append("- No issues found.")
 
         if self.recommendations:
             lines.extend(["", "## Recommendations"])
-            lines.extend(f"- {rec}" for rec in self.recommendations)
+            lines.extend(
+                f"- {_escape_markdown_text(recommendation)}"
+                for recommendation in self.recommendations
+            )
 
         return "\n".join(lines)
 

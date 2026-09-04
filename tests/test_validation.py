@@ -393,6 +393,34 @@ class TestEnhancedFSMValidator:
         assert "# FSM Validation Report" in md
         assert "Score" in md
 
+    def test_export_markdown_encodes_hostile_caller_text(self):
+        """Every caller value stays inert within its Markdown report line."""
+        hostile = "report\n<script>alert(1)</script>|`# injected"
+        source = State(hostile)
+        destination = State(f"destination-{hostile}")
+        fsm = StateMachine(source, name=hostile)
+        fsm.add_state(destination)
+        fsm.add_transition(hostile, source, destination)
+        validator = EnhancedFSMValidator(fsm)
+        validator.issues.append(
+            ValidationIssue(
+                "warning",
+                "hostile",
+                hostile,
+                location=hostile,
+                recommendation=hostile,
+            )
+        )
+        validator.recommendations.append(hostile)
+
+        markdown = validator.export_report("markdown")
+
+        assert "<script>" not in markdown
+        assert "\n# injected" not in markdown
+        assert "|`# injected" not in markdown
+        assert "&#x000A;" in markdown
+        assert "&#x003C;script&#x003E;" in markdown
+
     def test_export_text(self, well_designed_fsm):
         v = EnhancedFSMValidator(well_designed_fsm)
         text = v.export_report("text")

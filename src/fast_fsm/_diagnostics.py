@@ -15,6 +15,19 @@ if TYPE_CHECKING:
     from .core import _GraphSnapshot
 
 
+_SAFE_MARKDOWN_TEXT = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _.-"
+)
+
+
+def _escape_markdown_text(value: str) -> str:
+    """Encode caller text as inert Markdown on one physical line."""
+    return "".join(
+        character if character in _SAFE_MARKDOWN_TEXT else f"&#x{ord(character):04X};"
+        for character in value
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DiagnosticLimits:
     """Finite, deterministic ceilings for one diagnostic operation."""

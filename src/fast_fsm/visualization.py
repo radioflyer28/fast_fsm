@@ -27,6 +27,7 @@ from ._diagnostics import (
     _DiagnosticBudget,
     _DiagnosticGraph,
     _dense_adjacency,
+    _escape_markdown_text,
     _graph_from_snapshot,
     _reachable_indices,
     _sparse_adjacency,
@@ -72,18 +73,12 @@ def _escape_plantuml_text(value: str) -> str:
 
 def _escape_markdown_heading(value: str) -> str:
     """Encode one caller heading as inert Markdown text on one physical line."""
-    return "".join(
-        character if character in _SAFE_DIAGRAM_TEXT else f"&#x{ord(character):04X};"
-        for character in value
-    )
+    return _escape_markdown_text(value)
 
 
 def _escape_markdown_cell(value: str) -> str:
     """Encode one caller table cell as inert Markdown text on one physical line."""
-    return "".join(
-        character if character in _SAFE_DIAGRAM_TEXT else f"&#x{ord(character):04X};"
-        for character in value
-    )
+    return _escape_markdown_text(value)
 
 
 def _capture_diagnostic_graph(
