@@ -4,8 +4,8 @@ Tests for configure_fsm_logging and set_fsm_logging_level.
 All tests use real logging infrastructure — no mocking.
 """
 
+import ast
 import asyncio
-import inspect
 import logging
 from pathlib import Path
 import uuid
@@ -94,6 +94,17 @@ class CloseTrackingHandler(CaptureHandler):
 
 def _logger_name(label: str) -> str:
     return f"fast_fsm.phase19.{label}.{uuid.uuid4().hex}"
+
+
+def _core_function_ast(function_name: str) -> ast.FunctionDef:
+    """Return a public logging function definition from its source contract."""
+
+    source_path = Path(__file__).resolve().parent.parent / "src" / "fast_fsm" / "core.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return node
+    raise AssertionError(f"{function_name} is missing from {source_path}")
 
 
 def _contains_raw_secret(value: object, secret: str) -> bool:
@@ -1019,20 +1030,21 @@ def test_core_spr_documents_trace_handler_marker_schema() -> None:
 
 
 def test_configure_logging_docstring_matches_its_public_contract() -> None:
-    """Autodoc must expose the signature, safe TRACE, and restore contracts."""
+    """Autodoc source must expose the signature, safe TRACE, and restore contracts."""
 
-    signature = inspect.signature(configure_fsm_logging)
-    assert list(signature.parameters) == [
+    function = _core_function_ast("configure_fsm_logging")
+    assert [argument.arg for argument in function.args.posonlyargs] == []
+    assert [argument.arg for argument in function.args.args] == [
         "level",
         "logger_name",
         "format_string",
+    ]
+    assert [argument.arg for argument in function.args.kwonlyargs] == [
         "propagate",
         "redactor",
     ]
-    assert signature.parameters["propagate"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert signature.parameters["redactor"].kind is inspect.Parameter.KEYWORD_ONLY
 
-    documentation = inspect.getdoc(configure_fsm_logging)
+    documentation = ast.get_docstring(function)
     assert documentation is not None
     for field in (
         "propagate:",
