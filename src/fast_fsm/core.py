@@ -183,11 +183,16 @@ def _validate_fsm_trace_output(
 
 
 def _library_trace_redactor(logger: logging.Logger) -> Optional[FSMTraceRedactor]:
-    """Return the redactor attached to the current marked library handler."""
-    for handler in logger.handlers:
-        marker = getattr(handler, "_fast_fsm_marker", None)
-        if isinstance(marker, _FSMStreamHandler):
-            return marker.redactor
+    """Return the redactor from the first marked handler the record can reach."""
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            marker = getattr(handler, "_fast_fsm_marker", None)
+            if isinstance(marker, _FSMStreamHandler):
+                return marker.redactor
+        if not current.propagate:
+            break
+        current = current.parent
     return None
 
 

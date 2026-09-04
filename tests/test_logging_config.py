@@ -377,6 +377,61 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
         application_handler.close()
 
 
+def test_trace_redactor_follows_reachable_parent_handler() -> None:
+    """A child logger inherits its parent redactor but respects propagation stops."""
+
+    parent_name = _logger_name("redactor-parent")
+    child_name = f"{parent_name}.machine"
+    blocked_name = f"{parent_name}.blocked"
+    parent = logging.getLogger(parent_name)
+    application_handler = CaptureHandler()
+    parent.addHandler(application_handler)
+    redactor_calls = 0
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        nonlocal redactor_calls
+        redactor_calls += 1
+        return {"detail": "parent-redactor"}
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            parent_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        machine = StateMachine(State("source"), logger_name=child_name)
+        machine.add_state(State("destination"))
+        machine.add_transition("advance", "source", "destination")
+
+        assert machine.trigger("advance").success
+        assert redactor_calls == 1
+        assert any(
+            record[2].get("trace_detail") == "parent-redactor"
+            for record in application_handler.records
+        )
+
+        blocked = logging.getLogger(blocked_name)
+        blocked.setLevel(TRACE_LEVEL)
+        blocked.propagate = False
+        blocked_machine = StateMachine(
+            State("blocked-source"), logger_name=f"{blocked_name}.machine"
+        )
+        blocked_machine.add_state(State("blocked-destination"))
+        blocked_machine.add_transition(
+            "advance", "blocked-source", "blocked-destination"
+        )
+
+        assert blocked_machine.trigger("advance").success
+        assert redactor_calls == 1
+    finally:
+        logging.getLogger(blocked_name).setLevel(logging.NOTSET)
+        logging.getLogger(blocked_name).propagate = True
+        handle.restore()
+        parent.removeHandler(application_handler)
+        application_handler.close()
+
+
 @pytest.mark.parametrize(
     "redactor",
     (
