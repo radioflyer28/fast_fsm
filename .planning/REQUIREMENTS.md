@@ -50,22 +50,22 @@
 
 ### Bounded Diagnostics
 
-- [ ] **DIAG-01**: Validation always performs reachability from the machine's declared initial state, regardless of its current runtime state.
-- [ ] **DIAG-02**: Batch validation and FSM comparison preserve every input when machine names are duplicated.
-- [ ] **DIAG-03**: Comparing zero FSMs returns a documented empty result or explicit validation error instead of dividing by zero.
-- [ ] **DIAG-04**: Cycle analysis reports every state in each cycle, including all members of cycles longer than two states.
-- [ ] **DIAG-05**: Longest-path analysis uses a bounded or memoized graph algorithm rather than enumerating exponentially many acyclic paths.
-- [ ] **DIAG-06**: Diagnostic APIs can avoid unconditional dense N×N allocation and unbounded path expansion for sparse or generated graphs.
-- [ ] **DIAG-07**: When a deterministic analysis budget is exceeded, the caller receives explicit incomplete-result metadata or a documented error rather than silent partial output.
-- [ ] **DIAG-08**: Validation, comparison, JSON analysis, and visualization consume the stable graph snapshot instead of coupling independently to mutable private dictionaries.
+- [x] **DIAG-01**: Validation always performs reachability from the machine's declared initial state, regardless of its current runtime state.
+- [x] **DIAG-02**: Batch validation and FSM comparison preserve every input when machine names are duplicated.
+- [x] **DIAG-03**: Comparing zero FSMs returns a documented empty result or explicit validation error instead of dividing by zero.
+- [x] **DIAG-04**: Cycle analysis reports every state in each cycle, including all members of cycles longer than two states.
+- [x] **DIAG-05**: Longest-path analysis uses a bounded or memoized graph algorithm rather than enumerating exponentially many acyclic paths.
+- [x] **DIAG-06**: Diagnostic APIs can avoid unconditional dense N×N allocation and unbounded path expansion for sparse or generated graphs.
+- [x] **DIAG-07**: When a deterministic analysis budget is exceeded, the caller receives explicit incomplete-result metadata or a documented error rather than silent partial output.
+- [x] **DIAG-08**: Validation, comparison, JSON analysis, and visualization consume the stable graph snapshot instead of coupling independently to mutable private dictionaries.
 
 ### Safe Output and Logging
 
-- [ ] **OUT-01**: Mermaid output assigns collision-free opaque identifiers when distinct state names sanitize to the same text.
-- [ ] **OUT-02**: Mermaid and PlantUML state names, triggers, titles, Unicode, control text, and punctuation are escaped according to each target grammar.
-- [ ] **OUT-03**: Trace logging redacts trigger values by default and cannot expose raw positional or keyword payloads merely because trace mode is enabled.
-- [ ] **OUT-04**: An application can supply an explicit trace redactor when key-only default logging is insufficient.
-- [ ] **OUT-05**: `configure_fsm_logging()` preserves application-owned handlers and offers reversible library-owned configuration with deliberate propagation behavior.
+- [x] **OUT-01**: Mermaid output assigns collision-free opaque identifiers when distinct state names sanitize to the same text.
+- [x] **OUT-02**: Mermaid and PlantUML state names, triggers, titles, Unicode, control text, and punctuation are escaped according to each target grammar.
+- [x] **OUT-03**: Trace logging redacts trigger values by default and cannot expose raw positional or keyword payloads merely because trace mode is enabled.
+- [x] **OUT-04**: An application can supply an explicit trace redactor when key-only default logging is insufficient.
+- [x] **OUT-05**: `configure_fsm_logging()` preserves application-owned handlers and offers reversible library-owned configuration with deliberate propagation behavior.
 
 ### Verification and Performance
 
@@ -139,19 +139,19 @@
 | OWN-05 | Phase 18 | Complete |
 | OWN-06 | Phase 18 | Complete |
 | OWN-07 | Phase 18 | Complete |
-| DIAG-01 | Phase 19 | Pending |
-| DIAG-02 | Phase 19 | Pending |
-| DIAG-03 | Phase 19 | Pending |
-| DIAG-04 | Phase 19 | Pending |
-| DIAG-05 | Phase 19 | Pending |
-| DIAG-06 | Phase 19 | Pending |
-| DIAG-07 | Phase 19 | Pending |
-| DIAG-08 | Phase 19 | Pending |
-| OUT-01 | Phase 19 | Pending |
-| OUT-02 | Phase 19 | Pending |
-| OUT-03 | Phase 19 | Pending |
-| OUT-04 | Phase 19 | Pending |
-| OUT-05 | Phase 19 | Pending |
+| DIAG-01 | Phase 19 | Complete |
+| DIAG-02 | Phase 19 | Complete |
+| DIAG-03 | Phase 19 | Complete |
+| DIAG-04 | Phase 19 | Complete |
+| DIAG-05 | Phase 19 | Complete |
+| DIAG-06 | Phase 19 | Complete |
+| DIAG-07 | Phase 19 | Complete |
+| DIAG-08 | Phase 19 | Complete |
+| OUT-01 | Phase 19 | Complete |
+| OUT-02 | Phase 19 | Complete |
+| OUT-03 | Phase 19 | Complete |
+| OUT-04 | Phase 19 | Complete |
+| OUT-05 | Phase 19 | Complete |
 | TEST-01 | Phase 20 | Pending |
 | TEST-02 | Phase 15 | Complete |
 | TEST-03 | Phase 20 | Pending |
