@@ -1007,6 +1007,10 @@ def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
         root / "docs" / "api" / "core.md",
         root / "README.md",
         root / ".specify" / "memory" / "spr-core-api.md",
+        root
+        / ".specify"
+        / "decisions"
+        / "ADR-006-bounded-diagnostics-safe-output.md",
     )
     for path in documented_files:
         document = " ".join(path.read_text(encoding="utf-8").lower().split())

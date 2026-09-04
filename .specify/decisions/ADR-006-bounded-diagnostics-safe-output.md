@@ -73,8 +73,9 @@ configuration assumptions.
    count, and bounded safe keyword names. The minimum frozen
    `FSMTraceEvent` reaches an explicit redactor only; only bounded scalar
    `operation`, `stage`, `result`, and `detail` output is accepted. Invalid,
-   excessive, non-scalar, non-mapping, or raising redactor output becomes fixed
-   `redaction_failure` metadata without raw fallback.
+   excessive, non-scalar, non-mapping, or an ordinary `Exception` from a
+   redactor becomes fixed `redaction_failure` metadata without raw fallback.
+   `BaseException` subclasses emit no trace record and are re-raised.
 10. **D-16/D-17 — library handler ownership is reversible.**
     `configure_fsm_logging()` marks and replaces only its own stream handler,
     leaving application handler identity, filters, formatters, order, and open
