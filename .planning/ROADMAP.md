@@ -56,7 +56,7 @@
 - [x] **Phase 16: Canonical Graph & Dispatch Invariants** — make construction, builders, guards, declarative handlers, and history internally consistent (completed 2026-09-01)
 - [x] **Phase 17: Atomic Transition Lifecycle** — expose one truthful pre-commit, commit, and post-commit contract across sync and async machines (completed 2026-09-01)
 - [x] **Phase 18: Safe Ownership & Concurrency** — reject reentry and serialize independent callers with exception-safe per-machine ownership (completed 2026-09-02)
-- [ ] **Phase 19: Bounded Diagnostics & Safe Output** — produce correct bounded analysis, escaped diagrams, and non-invasive redacted logging
+- [x] **Phase 19: Bounded Diagnostics & Safe Output** — produce correct bounded analysis, escaped diagrams, and non-invasive redacted logging (completed 2026-09-04)
 - [ ] **Phase 20: Installed Artifact Parity & Release Proof** — prove shipped pure and compiled artifacts have identical semantics and meet the release contract
 
 ## Phase Details
@@ -252,5 +252,5 @@
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
-| 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | In Progress|  |
+| 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | Complete    | 2026-09-04 |
 | 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/TBD | Not started | - |

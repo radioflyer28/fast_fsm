@@ -2,45 +2,45 @@
 gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
-current_phase: 19
-current_phase_name: Bounded Diagnostics & Safe Output
-status: verifying
-stopped_at: All Phase 19 plans executed; running review and verification gates
-last_updated: "2026-09-04T03:07:45.379Z"
-last_activity: 2026-09-02
-last_activity_desc: Phase 19 execution started
-state_head: 2b5d1bb62b31eb8e1c3ad2033c29764c54a101f0
+current_phase: 20
+current_phase_name: Installed Artifact Parity & Release Proof
+status: planning
+stopped_at: Phase 19 complete, ready to plan Phase 20
+last_updated: "2026-09-04T22:32:33.964Z"
+last_activity: 2026-09-04
+last_activity_desc: Phase 19 complete, transitioned to Phase 20
+state_head: 1f5a73092a1c7f5d9bb385a32035d631f4184ff3
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 35
   completed_plans: 35
-  percent: 67
+  percent: 83
 ---
 
 # State: Fast FSM
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-29)
+See: .planning/PROJECT.md (updated 2026-09-04)
 
 **Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec and all core runtime operations O(1).
-**Current focus:** Phase 19 — Bounded Diagnostics & Safe Output
+**Current focus:** Phase 20 — Installed Artifact Parity & Release Proof
 
 ## Current Position
 
-Phase: 19 (Bounded Diagnostics & Safe Output) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-09-02 — Phase 19 execution started
+Phase: 20 — Installed Artifact Parity & Release Proof
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-04 — Phase 19 complete, transitioned to Phase 20
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 27
+- Total plans completed: 35
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -53,8 +53,9 @@ Progress: [███████░░░] 67%
 | 16 | 5 | - | - |
 | 17 | 5 | - | - |
 | 18 | 8 | - | - |
+| 19 | 8 | - | - |
 
-**Recent Trend:** Phases 15 through 18 complete; Phase 19 is ready for discussion and planning.
+**Recent Trend:** Phases 15 through 19 complete; Phase 20 is ready for discussion and planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -118,6 +119,11 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 18]: Declarative guard preparation uses a token-reset ContextVar marker containing machine, source, trigger, and target identity.
 - [Phase 18]: [Phase 18] Publish safe_trigger ownership admission as a redacted RuntimeError before ordinary value conversion, and document scheduler, snapshot, transfer, offload, and artifact exclusions.
 - [Phase 18]: Phase 18 closure accepts hosted ownership proof only when its exact SHA and all Python 3.10-3.14 native jobs succeed; coverage runs observe semantics while uninstrumented jobs enforce performance floors.
+- [Phase 19]: Diagnostics consume immutable graph snapshots and enforce deterministic budgets with explicit incomplete-result semantics.
+- [Phase 19]: Structured analysis can report incompleteness, while fixed-shape public output raises a redacted exception instead of silently truncating.
+- [Phase 19]: Mermaid and PlantUML output use grammar-specific escaping and collision-free opaque identifiers.
+- [Phase 19]: Trace logging is metadata-only by default, custom redactors fail closed, and library logging configuration preserves application-owned handlers.
+- [Phase 19]: Fresh pure and compiled exports are authoritative for semantics and performance; installed-artifact parity remains Phase 20-owned.
 
 ### Pending Todos
 
@@ -125,9 +131,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 15 must make release identity and import mode trustworthy before later evidence is accepted.
-- Phases 16–18 touch `core.py`; benchmark compiled and pure overhead before freezing each design.
-- Phase 19 must choose deterministic diagnostic budget behavior during planning.
+- Phase 20 must prove installed pure-wheel, compiled-wheel, and sdist behavior across the supported Python matrix without checkout import shadows.
+- Release identity, artifact architecture, semantic parity, and the compiled throughput floor must be asserted from installed artifacts before v0.3.0 can close.
 
 ## Deferred Items
 
@@ -140,5 +145,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-04T03:07:45.297Z
-Stopped at: All Phase 19 plans executed; running review and verification gates
+Stopped at: Phase 19 complete, ready to plan Phase 20
 Resume file: None
