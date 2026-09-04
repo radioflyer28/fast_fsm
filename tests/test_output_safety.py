@@ -352,7 +352,11 @@ def test_hostile_caller_text_stays_inert_on_one_physical_line(
 
     output = _render(renderer, machine, case.value)
 
-    assert case.value not in output
+    if renderer == "plantuml" and case.value in {"@startuml", "@enduml"}:
+        # These are the fixed outer grammar delimiters, not caller text.
+        assert output.count(case.value) == 1
+    else:
+        assert case.value not in output
     _assert_physical_line_containment(renderer, output)
 
 
@@ -364,7 +368,7 @@ def test_old_sanitizer_collisions_receive_unique_opaque_ids(renderer: str) -> No
     machine.add_state(State("a_b"))
     machine.add_transition("go", "a-b", "a_b")
     output = _render(renderer, machine, "collision")
-    aliases = tuple(re.findall(r"\\bas (s\\d+)$", output, flags=re.MULTILINE))
+    aliases = tuple(re.findall(r"\bas (s\d+)$", output, flags=re.MULTILINE))
 
     assert aliases == ("s0", "s1")
     assert len(set(aliases)) == 2

@@ -18,16 +18,158 @@ Example::
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from ._diagnostics import (
+    DiagnosticLimits,
+    _DiagnosticBudget,
+    _DiagnosticGraph,
+    _graph_from_snapshot,
+)
 
 if TYPE_CHECKING:
     from .core import StateMachine
 
 
-def _mermaid_id(name: str) -> str:
-    """Replace characters that are invalid in a Mermaid node identifier."""
-    return re.sub(r"[^A-Za-z0-9_]", "_", name)
+_SAFE_DIAGRAM_TEXT = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _.-"
+)
+
+
+def _opaque_state_ids(graph: _DiagnosticGraph) -> tuple[str, ...]:
+    """Allocate the only diagram identities from immutable snapshot position."""
+    return tuple(f"s{position}" for position in range(len(graph.state_names)))
+
+
+def _escape_mermaid_text(value: str) -> str:
+    """Encode caller text as inert Mermaid label/comment content on one line."""
+    return "".join(
+        character if character in _SAFE_DIAGRAM_TEXT else f"&#x{ord(character):04X};"
+        for character in value
+    )
+
+
+def _escape_plantuml_text(value: str) -> str:
+    """Encode caller text as inert PlantUML label/title content on one line."""
+    return "".join(
+        character
+        if character in _SAFE_DIAGRAM_TEXT
+        else (
+            f"\\u{ord(character):04X}"
+            if ord(character) <= 0xFFFF
+            else f"\\U{ord(character):08X}"
+        )
+        for character in value
+    )
+
+
+def _capture_diagnostic_graph(
+    fsm: "StateMachine", limits: DiagnosticLimits | None
+) -> tuple[Any, _DiagnosticGraph, _DiagnosticBudget]:
+    """Capture one immutable graph and initialize its one shared renderer ledger."""
+    snapshot = fsm._graph_snapshot()
+    return snapshot, _graph_from_snapshot(snapshot), _DiagnosticBudget(limits)
+
+
+def _transition_label(
+    trigger: str,
+    condition_name: str | None,
+    *,
+    show_conditions: bool,
+    escape: Any,
+) -> str:
+    """Build a label from scalar snapshot fields without evaluating conditions."""
+    label = escape(trigger)
+    if show_conditions and condition_name is not None:
+        label = f"{label} [{escape(condition_name)}]"
+    return label
+
+
+def _to_mermaid_from_snapshot(
+    _snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    title: str | None,
+    show_conditions: bool,
+) -> str:
+    """Render one already-captured graph as a collision-free Mermaid diagram."""
+    state_ids = _opaque_state_ids(graph)
+    budget.reserve_result(stage="mermaid.state_ids", amount=len(state_ids))
+    lines: list[str] = []
+    if title is not None:
+        lines.append(f"%% {_escape_mermaid_text(title)}")
+    lines.append("stateDiagram-v2")
+
+    for state_index, state_name in enumerate(graph.state_names):
+        budget.reserve_work(stage="mermaid.state")
+        lines.append(
+            f'    state "{_escape_mermaid_text(state_name)}" as {state_ids[state_index]}'
+        )
+
+    if graph.initial_index is not None:
+        lines.append(f"    [*] --> {state_ids[graph.initial_index]}")
+
+    for edge in graph.edges:
+        budget.reserve_work(stage="mermaid.edge")
+        label = _transition_label(
+            edge.trigger,
+            edge.condition_name,
+            show_conditions=show_conditions,
+            escape=_escape_mermaid_text,
+        )
+        lines.append(
+            f"    {state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}"
+        )
+
+    return "\n".join(lines)
+
+
+def _to_plantuml_from_snapshot(
+    _snapshot: Any,
+    graph: _DiagnosticGraph,
+    budget: _DiagnosticBudget,
+    *,
+    title: str | None,
+    show_conditions: bool,
+) -> str:
+    """Render one already-captured graph as a collision-free PlantUML diagram."""
+    state_ids = _opaque_state_ids(graph)
+    budget.reserve_result(stage="plantuml.state_ids", amount=len(state_ids))
+    lines: list[str] = ["@startuml"]
+    if title is not None:
+        lines.append(f"title {_escape_plantuml_text(title)}")
+
+    for state_index, state_name in enumerate(graph.state_names):
+        budget.reserve_work(stage="plantuml.state")
+        lines.append(
+            f'state "{_escape_plantuml_text(state_name)}" as {state_ids[state_index]}'
+        )
+
+    if graph.initial_index is not None:
+        lines.append(f"[*] --> {state_ids[graph.initial_index]}")
+
+    has_outgoing = [False] * len(graph.state_names)
+    for edge in graph.edges:
+        budget.reserve_work(stage="plantuml.edge")
+        has_outgoing[edge.from_index] = True
+        label = _transition_label(
+            edge.trigger,
+            edge.condition_name,
+            show_conditions=show_conditions,
+            escape=_escape_plantuml_text,
+        )
+        lines.append(
+            f"{state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}"
+        )
+
+    for state_index, has_edge in enumerate(has_outgoing):
+        if not has_edge:
+            budget.reserve_work(stage="plantuml.terminal")
+            lines.append(f"{state_ids[state_index]} --> [*]")
+
+    lines.append("@enduml")
+    return "\n".join(lines)
 
 
 def to_mermaid(
@@ -35,6 +177,7 @@ def to_mermaid(
     *,
     title: str | None = None,
     show_conditions: bool = True,
+    limits: DiagnosticLimits | None = None,
 ) -> str:
     """
     Generate a Mermaid ``stateDiagram-v2`` diagram from a StateMachine.
@@ -48,6 +191,7 @@ def to_mermaid(
         title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
         show_conditions: When ``True``, condition names are appended to
             transition labels in ``[brackets]``.  Defaults to ``True``.
+        limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
         A Mermaid ``stateDiagram-v2`` string ready to paste into any Mermaid
@@ -66,42 +210,14 @@ def to_mermaid(
             idle --> running : start
             running --> idle : stop
     """
-    lines: list[str] = []
-
-    if title:
-        lines.append(f"%% {title}")
-
-    lines.append("stateDiagram-v2")
-
-    # Pre-compute safe Mermaid IDs and emit alias declarations where needed.
-    # dict preserves insertion order, so the first entry is always the initial
-    # state (StateMachine.__init__ inserts it first).
-    state_ids: dict[str, str] = {}
-    for state_name in fsm._states:
-        sid = _mermaid_id(state_name)
-        state_ids[state_name] = sid
-        if sid != state_name:
-            lines.append(f'    state "{state_name}" as {sid}')
-
-    # Mark the initial state (first entry in _states).
-    initial_name = next(iter(fsm._states))
-    lines.append(f"    [*] --> {state_ids[initial_name]}")
-
-    # Emit one line per transition.
-    for from_name, triggers in fsm._transitions.items():
-        from_id = state_ids.get(from_name, _mermaid_id(from_name))
-        for trigger_name, entry in triggers.items():
-            to_name = entry.to_state.name
-            to_id = state_ids.get(to_name, _mermaid_id(to_name))
-            label = trigger_name
-            if show_conditions and entry.condition is not None:
-                cond_label = getattr(entry.condition, "name", None) or str(
-                    entry.condition
-                )
-                label = f"{trigger_name} [{cond_label}]"
-            lines.append(f"    {from_id} --> {to_id} : {label}")
-
-    return "\n".join(lines)
+    snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
+    return _to_mermaid_from_snapshot(
+        snapshot,
+        graph,
+        budget,
+        title=title,
+        show_conditions=show_conditions,
+    )
 
 
 def to_plantuml(
@@ -109,6 +225,7 @@ def to_plantuml(
     *,
     title: str | None = None,
     show_conditions: bool = True,
+    limits: DiagnosticLimits | None = None,
 ) -> str:
     """
     Generate a PlantUML state diagram string from a StateMachine.
@@ -118,6 +235,7 @@ def to_plantuml(
         title: Optional diagram title (rendered with the ``title`` keyword).
         show_conditions: When ``True``, condition names are appended to
             transition labels in ``[brackets]``.  Defaults to ``True``.
+        limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
         A PlantUML ``@startuml`` / ``@enduml`` string.
@@ -136,38 +254,14 @@ def to_plantuml(
         running --> idle : stop
         @enduml
     """
-    lines: list[str] = ["@startuml"]
-
-    if title:
-        lines.append(f"title {title}")
-
-    # Mark the initial state (first entry in _states).
-    initial_name = next(iter(fsm._states))
-    lines.append(f"[*] --> {initial_name}")
-
-    # Collect states that have outgoing transitions.
-    states_with_outgoing: set[str] = set()
-
-    # Emit one line per transition.
-    for from_name, triggers in fsm._transitions.items():
-        for trigger_name, entry in triggers.items():
-            states_with_outgoing.add(from_name)
-            to_name = entry.to_state.name
-            label = trigger_name
-            if show_conditions and entry.condition is not None:
-                cond_label = getattr(entry.condition, "name", None) or str(
-                    entry.condition
-                )
-                label = f"{trigger_name} [{cond_label}]"
-            lines.append(f"{from_name} --> {to_name} : {label}")
-
-    # Detect terminal states (no outgoing transitions) and mark them.
-    for state_name in fsm._states:
-        if state_name not in states_with_outgoing:
-            lines.append(f"{state_name} --> [*]")
-
-    lines.append("@enduml")
-    return "\n".join(lines)
+    snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
+    return _to_plantuml_from_snapshot(
+        snapshot,
+        graph,
+        budget,
+        title=title,
+        show_conditions=show_conditions,
+    )
 
 
 def to_json(fsm: "StateMachine") -> dict:
