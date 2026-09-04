@@ -213,6 +213,13 @@ def _has_reachable_trace_configuration(logger: logging.Logger) -> bool:
     return False
 
 
+def _trace_configuration_active(logger: logging.Logger) -> bool:
+    """Return whether effective TRACE output requires confidential diagnostics."""
+    return logger.isEnabledFor(_FSM_TRACE_LEVEL) or _has_reachable_trace_configuration(
+        logger
+    )
+
+
 def _emit_fsm_trace(
     logger: logging.Logger,
     *,
@@ -274,9 +281,7 @@ def _emit_fsm_trace(
 
 def _legacy_debug_enabled(logger: logging.Logger) -> bool:
     """Return whether legacy DEBUG formatting is both enabled and safe to emit."""
-    return logger.isEnabledFor(logging.DEBUG) and not _has_reachable_trace_configuration(
-        logger
-    )
+    return logger.isEnabledFor(logging.DEBUG) and not _trace_configuration_active(logger)
 
 
 def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> None:
@@ -287,19 +292,19 @@ def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> N
 
 def _emit_legacy_warning(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy WARNING diagnostics out of redacted TRACE configuration."""
-    if not _has_reachable_trace_configuration(logger):
+    if not _trace_configuration_active(logger):
         logger.warning(message, *args)
 
 
 def _emit_legacy_error(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy ERROR diagnostics out of redacted TRACE configuration."""
-    if not _has_reachable_trace_configuration(logger):
+    if not _trace_configuration_active(logger):
         logger.error(message, *args)
 
 
 def _emit_legacy_info(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy INFO diagnostics out of redacted TRACE configuration."""
-    if not _has_reachable_trace_configuration(logger):
+    if not _trace_configuration_active(logger):
         logger.info(message, *args)
 
 

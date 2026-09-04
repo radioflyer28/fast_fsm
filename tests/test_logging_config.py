@@ -174,6 +174,54 @@ def _sync_trace_machine(
     return success_machine, failure_machine
 
 
+def _exercise_standard_trace_confidentiality(
+    logger_name: str, hostile_payload: HostileRepr
+) -> None:
+    """Exercise success and guard failure without relying on library configuration."""
+
+    source = State(SOURCE_SENTINEL)
+    destination = State(DESTINATION_SENTINEL)
+    success_machine = StateMachine(
+        source, name=MACHINE_SENTINEL, logger_name=logger_name
+    )
+    success_machine.add_state(destination)
+    success_machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    failure_source = State(f"failure-{SOURCE_SENTINEL}")
+    failure_destination = State(f"failure-{DESTINATION_SENTINEL}")
+    failure_machine = StateMachine(
+        failure_source, name=MACHINE_SENTINEL, logger_name=logger_name
+    )
+    failure_machine.add_state(failure_destination)
+    failure_machine.add_transition(
+        f"failure-{TRIGGER_SENTINEL}",
+        failure_source,
+        failure_destination,
+        FuncCondition(raise_guard, "raising-guard"),
+    )
+    keyword_args = {
+        "safe": KEYWORD_SENTINEL,
+        PRIVATE_KEY_SENTINEL: KEYWORD_SENTINEL,
+        INVALID_KEY_SENTINEL: KEYWORD_SENTINEL,
+    }
+
+    assert success_machine.trigger(
+        TRIGGER_SENTINEL,
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        **keyword_args,
+    ).success
+    assert not failure_machine.trigger(
+        f"failure-{TRIGGER_SENTINEL}",
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        **keyword_args,
+    ).success
+
+
 # ---------------------------------------------------------------------------
 # configure_fsm_logging
 # ---------------------------------------------------------------------------
@@ -227,6 +275,66 @@ class TestConfigureFsmLogging:
 # ---------------------------------------------------------------------------
 # Phase 19 strict-RED trace redaction and ownership contracts
 # ---------------------------------------------------------------------------
+
+
+def test_application_only_exact_trace_configuration_is_confidential(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An application handler at TRACE cannot receive raw legacy diagnostics."""
+
+    logger_name = _logger_name("application-exact-trace")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    logger.addHandler(application_handler)
+    logger.setLevel(TRACE_LEVEL)
+    logger.propagate = False
+    try:
+        hostile_payload = HostileRepr()
+        _exercise_standard_trace_confidentiality(logger_name, hostile_payload)
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+    finally:
+        logger.setLevel(prior_level)
+        logger.propagate = prior_propagate
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_application_only_parent_trace_configuration_is_confidential(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A child inheriting application-only TRACE has the same confidentiality guard."""
+
+    parent_name = _logger_name("application-parent-trace")
+    child_name = f"{parent_name}.machine"
+    parent = logging.getLogger(parent_name)
+    child = logging.getLogger(child_name)
+    application_handler = CaptureHandler()
+    prior_parent_level = parent.level
+    prior_parent_propagate = parent.propagate
+    prior_child_level = child.level
+    prior_child_propagate = child.propagate
+    parent.addHandler(application_handler)
+    parent.setLevel(TRACE_LEVEL)
+    parent.propagate = False
+    child.setLevel(logging.NOTSET)
+    child.propagate = True
+    try:
+        hostile_payload = HostileRepr()
+        _exercise_standard_trace_confidentiality(child_name, hostile_payload)
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+    finally:
+        child.setLevel(prior_child_level)
+        child.propagate = prior_child_propagate
+        parent.setLevel(prior_parent_level)
+        parent.propagate = prior_parent_propagate
+        parent.removeHandler(application_handler)
+        application_handler.close()
 
 
 def test_default_trace_records_are_metadata_only_for_sync_results(
