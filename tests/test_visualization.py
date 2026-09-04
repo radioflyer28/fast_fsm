@@ -88,6 +88,34 @@ class TestToMermaidBasic:
         for line in to_mermaid(simple_fsm).splitlines():
             assert line.strip() != "" or line == ""
 
+    def test_renderer_docstrings_snapshot_opaque_id_output(self):
+        """Public examples stay synchronized with the rendered ID-based format."""
+        mermaid_snapshot = """stateDiagram-v2
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop"""
+        plantuml_snapshot = """@startuml
+        state "idle" as s0
+        state "running" as s1
+        [*] --> s0
+        s0 --> s1 : start
+        s1 --> s0 : stop
+        @enduml"""
+        fenced_snapshot = """        ```mermaid
+        stateDiagram-v2
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop
+        ```"""
+
+        assert mermaid_snapshot in to_mermaid.__doc__
+        assert plantuml_snapshot in to_plantuml.__doc__
+        assert fenced_snapshot in to_mermaid_fenced.__doc__
+
 
 # ---------------------------------------------------------------------------
 # Title

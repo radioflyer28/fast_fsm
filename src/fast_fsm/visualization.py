@@ -268,9 +268,11 @@ def to_mermaid(
         ... )
         >>> print(to_mermaid(fsm))
         stateDiagram-v2
-            [*] --> idle
-            idle --> running : start
-            running --> idle : stop
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
     return _to_mermaid_from_snapshot(
@@ -311,9 +313,11 @@ def to_plantuml(
         ... )
         >>> print(to_plantuml(fsm))
         @startuml
-        [*] --> idle
-        idle --> running : start
-        running --> idle : stop
+        state "idle" as s0
+        state "running" as s1
+        [*] --> s0
+        s0 --> s1 : start
+        s1 --> s0 : stop
         @enduml
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
@@ -528,9 +532,11 @@ def to_mermaid_fenced(
         >>> print(to_mermaid_fenced(fsm))
         ```mermaid
         stateDiagram-v2
-            [*] --> idle
-            idle --> running : start
-            running --> idle : stop
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop
         ```
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
