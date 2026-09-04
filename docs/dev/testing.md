@@ -9,6 +9,9 @@ uv run pytest tests/ -x -q
 # Phase 18 ownership source-tree parity, origin, performance, and pure release gate
 uv run python tools/phase16_isolated_verify.py --suite phase18
 
+# Phase 19 diagnostic/output/logging source-tree parity and final local gate
+uv run python tools/phase16_isolated_verify.py --suite phase19
+
 # Single test file
 uv run pytest tests/test_basic_functionality.py -x -q
 
@@ -269,6 +272,63 @@ names the exact SHA of the implementation. A queued, running, cancelled,
 skipped, failed, or stale-SHA run is not completion evidence. Phase 19 owns
 diagnostic snapshot consistency; Phase 20 separately proves installed-wheel
 and sdist parity.
+
+## Phase 19 Bounded Diagnostics and Safe Output Verification
+
+Phase 19 uses strict-RED ownership before production implementation. Each
+future contract starts as `xfail(strict=True, reason="RED until 19-NN")` with
+one named owner. That owner removes only its own marker, runs the focused
+selection and observes a genuine behavioral RED, then makes it GREEN; an XPASS
+is a failure. Before the Phase 19 final gate, no Phase 19 strict-RED marker may
+remain. Documentation-only work does not move those ownership boundaries.
+
+The diagnostic matrix checks facts by exact counters, not elapsed time. For
+each of `max_work`, `max_results`, `max_dense_cells`, and
+`max_path_expansions`, tests first record the required count under a high cap,
+prove that exact cap succeeds, then prove that one less fails before the next
+work/allocation boundary. Deterministic state/edge/result order and counters
+are also exercised in separate child interpreters with `PYTHONHASHSEED=1` and
+`PYTHONHASHSEED=2`; no timing sleep or local throughput observation is a graph
+correctness assertion.
+
+The hostile-output and logging matrix supplies punctuation collisions, empty
+labels, controls, directives, fences, Unicode, and comment markers to every
+Mermaid, PlantUML, Markdown, JSON, and caller-supplied adjacency sink. It also
+places unique payload sentinels in trigger/state/arguments/keywords/errors and
+hostile `__repr__` values, then inspects log messages, args, record mappings,
+formatter output, and both application and library handlers. Redactor output,
+failure, propagation, handler identity/order, repeated configuration, and
+in-order/out-of-order/idempotent restore are all real-handler checks.
+
+Use focused loops while changing the implementation:
+
+```bash
+uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py -x -q
+uv run pytest tests/test_validation.py tests/test_visualization.py tests/test_graph_invariants.py -x -q
+uv run pytest tests/test_mypyc_guard.py tests/test_validation.py tests/test_visualization.py tests/test_logging_config.py -x -q
+```
+
+The local final authority is:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase19
+```
+
+It archives committed `HEAD`, overlays only the declared Phase 19 inventory,
+and proves two origins before semantics: an asserted pure source tree that
+refuses native shadows and a separate freshly compiled native tree. It does
+not import from, delete, or treat a developer-checkout native extension as
+evidence. The suite also runs the relevant diagnostic/output/logging matrix,
+slots policy, compiled `trigger()` floor, Ruff, blocking mypy, advisory ty,
+HTML docs, doctests, full sequential tests, and read-only baseline freshness.
+Exact test counts and timings stay environment-labelled evidence; the durable
+performance gate remains the compiled `trigger()` floor of 200,000 operations
+per second.
+
+This is local source-tree evidence, not hosted evidence or installed-artifact
+proof. Phase 20 owns the wheel/sdist pure/native parity matrix, publication,
+and final release evidence. Do not call a passing `--suite phase19` an
+installed-wheel claim.
 
 ## Type-Checking Authority
 

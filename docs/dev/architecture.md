@@ -13,18 +13,24 @@ For the authoritative set of design rules, see the
 src/fast_fsm/
 ├── __init__.py             # Public API — every exported symbol is in __all__
 ├── core.py                 # StateMachine, AsyncStateMachine, State, FSMBuilder, …
+├── _diagnostics.py         # Interpreted scalar graph projection and bounded ledger
 ├── conditions.py           # Condition, FuncCondition, AsyncCondition
 ├── condition_templates.py  # Reusable condition builder functions
-└── validation.py           # FSMValidator, EnhancedFSMValidator, scoring, linting
+├── validation.py           # FSMValidator, EnhancedFSMValidator, scoring, linting
+└── visualization.py        # Snapshot-backed Mermaid, PlantUML, JSON, and Markdown
 ```
 
 **Import DAG (strict — no cycles):**
 
 ```text
 conditions  →  core  →  validation
+                     ↘
+_diagnostics  ←  validation, visualization
 ```
 
-`validation` may import from `core`; `core` MUST NOT import from `validation`.
+`validation` and `visualization` may import from `core` and the interpreted
+`_diagnostics` seam. `core` MUST NOT import from `validation`, `visualization`,
+or `_diagnostics`; this keeps the runtime core as one mypyc compilation unit.
 
 ## Key Classes
 
@@ -97,6 +103,52 @@ public serialization format or concurrency promise. It does not change the
 public `snapshot()` or `to_dict()` roles. Phase 18 owns concurrent topology
 ownership, Phase 19 owns snapshot consumers and diagnostic budgets, and
 FUTR-05 owns any public topology format.
+
+### Bounded Diagnostic Data Flow (Phase 19)
+
+Phase 19 keeps analysis outside the runtime lookup path. One public diagnostic
+entry point—validation, comparison, batch validation, JSON, Mermaid,
+PlantUML, fenced Mermaid, or a Markdown document—takes exactly one
+ownership-synchronized `_graph_snapshot()` and passes it through private
+from-snapshot helpers:
+
+```text
+top-level diagnostic call
+        │
+        ▼
+core.py: _graph_snapshot() ── scalar labels copied under the owner boundary
+        │                     (core does not import diagnostic code)
+        ▼
+_diagnostics.py: _DiagnosticGraph + one _DiagnosticBudget
+        │
+        ├── validation.py: reachability, SCCs, depth, comparison, batch, reports
+        └── visualization.py: JSON, Mermaid, PlantUML, fenced/document output
+```
+
+The one shared `DiagnosticLimits` ledger reserves each counted operation before
+work, result publication, dense-cell allocation, or path expansion. Its
+scalar `DiagnosticStatus` makes structured completion explicit; legacy shapes
+raise the fixed redacted `DiagnosticBudgetExceeded` rather than return an
+unlabelled partial value. Declared `initial_state` is the structural root;
+captured `current_state` is metadata only.
+
+The graph algorithms are intentionally interpreted and opt-in. Sparse rows
+are `O(V + E)`; dense `V × events` and `V²` compatibility outputs preflight
+their complete allocation; paths use iterative frames and independent
+expansion/result caps. Iterative SCC membership is the cycle oracle. Depth is
+dynamic programming over a DAG or the SCC condensation DAG, never an
+enumeration of cyclic simple paths. JSON, diagrams, fences, and documents use
+the same snapshot and budget rather than calling public helpers that recapture.
+
+`core.py` supplies only capture plus guarded trace/logging seams. It performs
+no diagnostic traversal or dense allocation, so `trigger()`, `can_trigger()`,
+`add_state()`, and `add_transition()` retain their O(1) contract. At the trace
+level, the core first checks `logger.isEnabledFor(logging.DEBUG - 5)` before
+constructing an event, traversing keys/values, looking up a handler, or calling
+a redactor. The ordinary default record is metadata-only; raw data exists only
+in the ephemeral explicit-redactor event. A marked, generation-aware library
+handler isolates reversible logging configuration from application-owned
+handlers and propagation.
 
 ### Condition System
 
@@ -339,7 +391,8 @@ Slot-protected instances eliminate `__dict__` per instance, yielding:
 ### Hot-Path Rules
 
 1. **No validation in dispatch.** `validation.py` is a design-time tool.
-   It MUST NOT be called from `trigger()` or `can_trigger()`.
+   It and `_diagnostics.py`/`visualization.py` MUST NOT be called from
+   `trigger()`, `can_trigger()`, `add_state()`, or `add_transition()`.
 2. **No iteration where lookup suffices.** Transition dispatch is a dict
    lookup, never a loop over candidates.
 3. **Lazy logging.** Logger calls are guarded to avoid string formatting
@@ -370,3 +423,8 @@ The validation module provides analysis tools that never affect runtime:
 
 All validation lives in `validation.py` and is imported separately from
 the core dispatch machinery.
+
+The supporting `_diagnostics.py` module is likewise interpreted and private:
+it supplies immutable scalar rows, reserve-before-work status accounting, SCC
+and sparse/dense/path primitives. It adds no runtime dependency and has no
+import path back into `core.py`.
