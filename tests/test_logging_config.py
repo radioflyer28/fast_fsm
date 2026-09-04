@@ -163,7 +163,6 @@ class TestConfigureFsmLogging:
         logger = logging.getLogger("fast_fsm.test_cfg_2")
         assert len(logger.handlers) >= 1
 
-    @pytest.mark.xfail(strict=True, reason="RED until 19-05")
     def test_warning_level_removes_only_library_owned_handlers(self):
         """Warning configuration must not clear application-owned handlers."""
 
@@ -361,7 +360,6 @@ def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
         application_handler.close()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 def test_application_handlers_survive_configuration_and_generation_safe_restore() -> (
     None
 ):
@@ -417,7 +415,6 @@ def test_application_handlers_survive_configuration_and_generation_safe_restore(
         second_handler.close()
 
 
-@pytest.mark.xfail(strict=True, reason="RED until 19-05")
 def test_level_setter_delegates_to_the_reversible_ownership_seam() -> None:
     """The shorthand setter must return the same restore-capable configuration handle."""
 
