@@ -4839,7 +4839,7 @@ class FSMLoggingHandle:
         prior_level: int,
         prior_propagate: bool,
         configured_level: int,
-        configured_propagate: bool,
+        configured_propagate: Optional[bool],
         generation: int,
     ) -> None:
         self._logger = logger
@@ -4852,13 +4852,23 @@ class FSMLoggingHandle:
         self._restored = False
 
     def restore(self) -> None:
-        """Remove this handler once; generation-safe value restoration follows."""
+        """Undo only this configuration's still-current library changes."""
         if self._restored:
             return
         self._restored = True
         if self._handler is not None and self._handler in self._logger.handlers:
             self._logger.removeHandler(self._handler)
             self._handler.close()
+        if getattr(self._logger, "_fast_fsm_generation", None) != self._generation:
+            return
+        if self._logger.level == self._configured_level:
+            self._logger.setLevel(self._prior_level)
+        if (
+            self._configured_propagate is not None
+            and self._logger.propagate == self._configured_propagate
+        ):
+            self._logger.propagate = self._prior_propagate
+        setattr(self._logger, "_fast_fsm_generation", None)
 
 
 def configure_fsm_logging(
@@ -4900,8 +4910,19 @@ def configure_fsm_logging(
         configure_fsm_logging(logging.INFO, 'fast_fsm.TrafficLight')
     """
     logger = logging.getLogger(logger_name)
-    prior_level = logger.level
-    prior_propagate = logger.propagate
+    previous_generation = getattr(logger, "_fast_fsm_generation", None)
+    previous_level = getattr(logger, "_fast_fsm_configured_level", None)
+    previous_propagate = getattr(logger, "_fast_fsm_configured_propagate", None)
+    if previous_generation is not None and logger.level == previous_level:
+        prior_level = getattr(logger, "_fast_fsm_prior_level", logger.level)
+    else:
+        prior_level = logger.level
+    if previous_generation is not None and (
+        previous_propagate is not None and logger.propagate == previous_propagate
+    ):
+        prior_propagate = getattr(logger, "_fast_fsm_prior_propagate", logger.propagate)
+    else:
+        prior_propagate = logger.propagate
     generation = _next_fsm_logging_generation()
     for existing_handler in tuple(logger.handlers):
         marker = getattr(existing_handler, "_fast_fsm_marker", None)
@@ -4910,6 +4931,11 @@ def configure_fsm_logging(
             existing_handler.close()
 
     logger.setLevel(level)
+    setattr(logger, "_fast_fsm_generation", generation)
+    setattr(logger, "_fast_fsm_prior_level", prior_level)
+    setattr(logger, "_fast_fsm_prior_propagate", prior_propagate)
+    setattr(logger, "_fast_fsm_configured_level", level)
+    setattr(logger, "_fast_fsm_configured_propagate", propagate)
     if propagate is not None:
         logger.propagate = propagate
 
@@ -4926,7 +4952,7 @@ def configure_fsm_logging(
         prior_level,
         prior_propagate,
         level,
-        logger.propagate,
+        propagate,
         generation,
     )
 

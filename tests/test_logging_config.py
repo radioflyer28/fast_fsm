@@ -433,6 +433,25 @@ def test_level_setter_delegates_to_the_reversible_ownership_seam() -> None:
         application_handler.close()
 
 
+def test_restore_does_not_overwrite_application_changes_after_configuration() -> None:
+    """Compare-before-restore leaves application changes authoritative."""
+
+    logger_name = _logger_name("application-change")
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.ERROR)
+    logger.propagate = True
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    try:
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = True
+        handle.restore()
+        assert logger.level == logging.CRITICAL
+        assert logger.propagate is True
+        assert not logger.handlers
+    finally:
+        handle.restore()
+
+
 # ---------------------------------------------------------------------------
 # set_fsm_logging_level
 # ---------------------------------------------------------------------------

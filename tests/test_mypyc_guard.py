@@ -499,6 +499,65 @@ def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:
     assert event_call.lineno > guard.lineno
 
 
+def test_phase19_logging_marker_and_handle_stay_slotted_and_owned() -> None:
+    """The library marker and restore handle must not use handler heuristics."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    marker = classes.get("_FSMStreamHandler")
+    assert marker is not None
+    marker_decorator = next(
+        (
+            item
+            for item in marker.decorator_list
+            if isinstance(item, ast.Call)
+            and isinstance(item.func, ast.Name)
+            and item.func.id == "dataclass"
+        ),
+        None,
+    )
+    assert marker_decorator is not None
+    assert {
+        keyword.arg: keyword.value.value
+        for keyword in marker_decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    } == {"frozen": True, "slots": True}
+    assert [
+        item.target.id
+        for item in marker.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+    ] == ["generation", "redactor"]
+
+    handle = classes.get("FSMLoggingHandle")
+    assert handle is not None
+    handle_slots = next(
+        node.value
+        for node in handle.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(handle_slots, ast.Tuple)
+    assert [
+        item.value for item in handle_slots.elts if isinstance(item, ast.Constant)
+    ] == [
+        "_logger",
+        "_handler",
+        "_prior_level",
+        "_prior_propagate",
+        "_configured_level",
+        "_configured_propagate",
+        "_generation",
+        "_restored",
+    ]
+    source = CORE_PY.read_text(encoding="utf-8")
+    assert "logger.handlers.clear()" not in source
+    assert '"_fast_fsm_marker"' in source
+
+
 def test_state_machine_graph_version_remains_in_slots() -> None:
     """Graph topology versioning must not add a dynamic instance dictionary."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
