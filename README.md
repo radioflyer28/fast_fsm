@@ -536,7 +536,7 @@ caps and the shared expansion, work, and result budgets.
 
 Diagram identity and text are separate. Mermaid and PlantUML use opaque,
 snapshot-position node IDs (`s0`, `s1`, ...) rather than labels, so labels that
-sanitize alike cannot collide. Mermaid text, PlantUML text, and Markdown
+sanitize alike remain collision-free. Mermaid text, PlantUML text, and Markdown
 headings/table cells each use their own grammar-specific, one-line encoding
 boundary for titles, state labels, triggers, and condition names. JSON and
 documents preserve snapshot order; dense JSON/document output is opt-in. A
