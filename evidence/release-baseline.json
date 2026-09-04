@@ -41,7 +41,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.08785,
+      "elapsed_seconds": 0.094055,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -51,24 +51,24 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 455324.16,
+      "ops_per_second": 425283.83,
       "warmup_operations": 2000
     }
   },
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 97.33,
-      "total_percent": 98.0
+      "core_percent": 97.47,
+      "total_percent": 98.09
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1476,
+      "collected": 1492,
       "errors": 0,
       "failed": 0,
-      "passed": 1476,
+      "passed": 1492,
       "skipped": 0
     }
   },
@@ -82,37 +82,37 @@
       {
         "classification": "registered-exception",
         "exception_reason": "Public bounded-diagnostic failures carry a scalar DiagnosticStatus.",
-        "line": 57,
+        "line": 70,
         "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
       {
         "classification": "slot-protected",
-        "line": 19,
+        "line": 32,
         "qualified_name": "fast_fsm._diagnostics.DiagnosticLimits",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
       {
         "classification": "slot-protected",
-        "line": 45,
+        "line": 58,
         "qualified_name": "fast_fsm._diagnostics.DiagnosticStatus",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
       {
         "classification": "slot-protected",
-        "line": 91,
+        "line": 104,
         "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
       {
         "classification": "slot-protected",
-        "line": 68,
+        "line": 81,
         "qualified_name": "fast_fsm._diagnostics._DiagnosticEdge",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
       {
         "classification": "slot-protected",
-        "line": 78,
+        "line": 91,
         "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
@@ -239,37 +239,37 @@
       },
       {
         "classification": "slot-protected",
-        "line": 4274,
+        "line": 4358,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 3189,
+        "line": 3251,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 656,
+        "line": 697,
         "qualified_name": "fast_fsm.core.CallbackState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4140,
+        "line": 4220,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4352,
+        "line": 4438,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4838,
+        "line": 4934,
         "qualified_name": "fast_fsm.core.FSMLoggingHandle",
         "source_path": "src/fast_fsm/core.py"
       },
@@ -281,86 +281,86 @@
       },
       {
         "classification": "slot-protected",
-        "line": 585,
+        "line": 626,
         "qualified_name": "fast_fsm.core.State",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 686,
+        "line": 727,
         "qualified_name": "fast_fsm.core.StateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 514,
+        "line": 555,
         "qualified_name": "fast_fsm.core.TransitionEntry",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "registered-exception",
         "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
-        "line": 435,
+        "line": 476,
         "qualified_name": "fast_fsm.core.TransitionError",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 490,
+        "line": 531,
         "qualified_name": "fast_fsm.core.TransitionRecord",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 454,
+        "line": 495,
         "qualified_name": "fast_fsm.core.TransitionResult",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4831,
+        "line": 4926,
         "qualified_name": "fast_fsm.core._FSMStreamHandler",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 544,
+        "line": 585,
         "qualified_name": "fast_fsm.core._GraphSnapshot",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 531,
+        "line": 572,
         "qualified_name": "fast_fsm.core._GraphTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 573,
+        "line": 614,
         "qualified_name": "fast_fsm.core._PreparedDispatch",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 563,
+        "line": 604,
         "qualified_name": "fast_fsm.core._PreparedTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 540,
+        "line": 541,
         "qualified_name": "fast_fsm.validation.EnhancedFSMValidator",
         "source_path": "src/fast_fsm/validation.py"
       },
       {
         "classification": "slot-protected",
-        "line": 98,
+        "line": 99,
         "qualified_name": "fast_fsm.validation.FSMValidator",
         "source_path": "src/fast_fsm/validation.py"
       },
       {
         "classification": "slot-protected",
-        "line": 502,
+        "line": 503,
         "qualified_name": "fast_fsm.validation.ValidationIssue",
         "source_path": "src/fast_fsm/validation.py"
       }
