@@ -1,6 +1,6 @@
 ---
 phase: 19-bounded-diagnostics-safe-output
-reviewed: 2026-09-04T15:41:09Z
+reviewed: 2026-09-04T16:27:44Z
 depth: standard
 files_reviewed: 26
 files_reviewed_list:
@@ -31,134 +31,107 @@ files_reviewed_list:
   - tools/phase16_isolated_verify.py
   - tools/release_evidence.py
 findings:
-  critical: 4
-  warning: 1
+  critical: 1
+  warning: 2
   info: 0
-  total: 5
+  total: 3
 status: issues_found
 ---
 
 # Phase 19: Code Review Report
 
-**Reviewed:** 2026-09-04T15:41:09Z
+**Reviewed:** 2026-09-04T16:27:44Z
 **Depth:** standard
 **Files Reviewed:** 26
 **Status:** issues_found
 
 ## Summary
 
-The persisted 26-file scope was re-reviewed after the final two fix commits.
-The earlier Markdown injection, renderer result accounting, dense-status,
-parent-redactor, async-warning, stale renderer docstring, trigger-helper, and
-explicit-child propagation findings are corrected. Focused Phase 19 tests,
-Ruff lint, mypy, ty, Sphinx warnings-as-errors, doctests, and the recursive
-slots audit pass. The implementation is still not shippable: ordinary Python
-TRACE activation bypasses the new confidentiality guard, custom redactors
-swallow process-control `BaseException` values, the full suite fails its scoped
-logging-marker contract, and the committed release evidence predates the
-current tests and source positions. The formatter gate also rejects the two
-latest fix files.
+The persisted 26-file scope was freshly re-reviewed after commits `e3c3a19`,
+`8ee1bd9`, and `cb10c5a`. The three findings from the preceding report are fixed
+at their cited locations: the README, public core guide, and core SPR now
+distinguish ordinary redactor failures from process-control exceptions; the SPR
+records the three-field handler marker; and `configure_fsm_logging()` documents
+metadata-only TRACE, both keyword-only controls, and its reversible handle.
+
+The iteration does not converge. The authoritative
+`uv run python tools/phase16_isolated_verify.py --suite phase19` gate passed its
+asserted-pure semantic selection but failed in the freshly compiled selection:
+the new documentation test assumes a mypyc-compiled public function supports
+`inspect.signature()`. The full sequential pure suite, focused pure logging
+suite, Ruff lint/format, slots policy, and release-baseline freshness check pass.
+The authoritative verifier could not reach its later compiled, type, docs, and
+full-suite stages after the fail-fast compiled test failure.
+
+Two documentation-contract defects also remain. ADR-006 still records the old
+unqualified redactor exception rule, and the autodoc-exposed
+`set_fsm_logging_level()` docstring still describes TRACE as ultra-verbose
+trigger attempts while omitting the new controls and return contract.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: TRACE confidentiality depends on using the library configuration helper
+### CR-01: The new docstring contract test fails against the supported compiled artifact
 
-**File:** `src/fast_fsm/core.py:275-303`
+**File:** `tests/test_logging_config.py:1024`
 
-**Issue:** The legacy DEBUG/INFO/WARNING/ERROR helpers suppress caller-bearing
-records only when `_has_reachable_trace_configuration()` finds a marked
-library handler. TRACE itself is enabled through the ordinary
-`logger.isEnabledFor(5)` check, so applications that configure Python logging
-directly (for example `logger.setLevel(logging.DEBUG - 5)` plus an application
-handler) receive both the metadata-only `fsm_trace` records and raw legacy
-records. A guarded transition reproduced
-`MACHINE-SECRET: Evaluating condition '<lambda>' for 'STATE-SECRET' -> 'dest'`
-and `MACHINE-SECRET: FAILED guard type=ValueError`. This violates the published
-level-based promise that TRACE output contains no machine/state/trigger names
-or caller payload, and it leaves standard logging configuration as a security
-bypass around the new helper-specific protection.
+**Issue:** `test_configure_logging_docstring_matches_its_public_contract()` calls
+`inspect.signature(configure_fsm_logging)`. In the freshly built mypyc artifact,
+that symbol is a built-in function without an inspectable signature, so Python
+raises `ValueError: no signature found for builtin` before the documentation
+assertions run. This is not hypothetical: the authoritative Phase 19 verifier
+reproduces it in its compiled semantic selection and exits nonzero, preventing
+the mandatory pure/fresh-compiled quality gate from completing. The test is
+therefore artifact-mode-dependent and makes the supported compiled build red.
 
-**Fix:** Treat either an effective TRACE level or a reachable library-owned
-TRACE handler as TRACE-active. For example, suppress legacy records when
-`logger.isEnabledFor(_FSM_TRACE_LEVEL) or
-_has_reachable_trace_configuration(logger)`; retain the reachable-handler
-branch for explicitly leveled children. Add exact and parent application-only
-logger tests (no `configure_fsm_logging()` call) that scan every record surface
-for machine, state, trigger, key, value, and exception sentinels.
-
-### CR-02: A trace redactor can swallow `KeyboardInterrupt`, `SystemExit`, and cancellation
-
-**File:** `src/fast_fsm/core.py:242-259`
-
-**Issue:** `_emit_fsm_trace()` catches `BaseException` around the application
-redactor and converts it to fixed `redaction_failure` metadata. That includes
-process-control exceptions that must remain observable. A redactor raising
-`KeyboardInterrupt("stop")` was swallowed and a successful transition returned
-normally. In an async trigger the same pattern can consume cancellation raised
-inside the synchronous redactor callback. The Phase 19 research explicitly
-requires ordinary redactor exceptions to fail closed while `BaseException`
-emits nothing and is re-raised, so the implementation breaks both interrupt
-and cancellation semantics.
-
-**Fix:** Catch `Exception` for fixed-category redactor failure and allow
-`BaseException` subclasses to propagate without emitting a record. Add sync
-`KeyboardInterrupt`/`SystemExit` and async cancellation regressions that also
-verify no raw or partial trace record is delivered.
-
-### CR-03: The full test suite fails after the handler marker schema changed
-
-**File:** `tests/test_mypyc_guard.py:502-530`
-
-**Issue:** Commit `668ed9d` added `configured_level` to
-`_FSMStreamHandler`, but the scoped AST contract still requires exactly
-`["generation", "redactor"]`. Both `uv run pytest tests/ -x -q` and the
-release-baseline check stop at
-`test_phase19_logging_marker_and_handle_stay_slotted_and_owned` with this
-assertion failure. The focused logging suite misses the regression, so the
-repository's mandatory full-suite and Phase 19 authoritative gates are red.
-
-**Fix:** Update the structural expectation to include `configured_level` and
-assert its intended role/type, then rerun the complete pure and compiled Phase
-19 semantic gates rather than only `tests/test_logging_config.py`.
-
-### CR-04: Release evidence is stale relative to the post-review fixes
-
-**File:** `evidence/release-baseline.json:68-71`
-
-**Issue:** The manifest still records 1,476 collected/passing tests, while the
-current checkout collects 1,487. Its slots inventory also records pre-fix
-source locations (for example `DiagnosticBudgetExceeded` at line 57 instead of
-the current line 70, and the logging marker/handle before their current
-locations). The baseline was refreshed before the subsequent review-fix
-commits added tests and source lines. Even after CR-03 is repaired, the
-read-only evidence comparison will reject these stable-field differences, so
-the checked-in artifact does not describe the submitted implementation.
-
-**Fix:** After all source/test fixes are complete and the full suite passes,
-regenerate the pure release baseline through the repository's isolated
-baseline-write workflow, review the manifest diff, and rerun
-`task release-baseline-check`.
+**Fix:** Verify the source signature structurally instead of introspecting the
+compiled callable—for example, parse `src/fast_fsm/core.py` with `ast`, locate
+`configure_fsm_logging`, and assert its positional and keyword-only argument
+names. Keep `inspect.getdoc()` only if the compiled artifact preserves the
+docstring, or read the function docstring from the same AST node. Then rerun the
+complete authoritative Phase 19 verifier.
 
 ## Warnings
 
-### WR-01: The latest TRACE fixes fail the repository formatting gate
+### WR-01: ADR-006 still promises conversion of every raising redactor
 
-**File:** `src/fast_fsm/core.py:275-279`
+**File:** `.specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:71-77`
 
-**Issue:** `uv run ruff format --check` reports that both
-`src/fast_fsm/core.py` and `tests/test_logging_config.py` would be reformatted.
-The diff includes the helper condition at lines 275-279, new diagnostic calls
-around lines 2140-2150 and 4149-4600, and the new logging tests around lines
-385-410. Phase 19's authoritative verifier runs this check before the full
-suite, so the current fixes do not satisfy the project's quality gate.
+**Issue:** Accepted decision D-15 still says that “raising redactor output”
+becomes fixed `redaction_failure` metadata. The implementation and newly updated
+public docs intentionally catch only `Exception`; `KeyboardInterrupt`,
+`SystemExit`, `asyncio.CancelledError`, and other non-`Exception`
+`BaseException` subclasses emit no record and propagate. Because this ADR is the
+durable source for the security boundary, its unqualified wording contradicts
+both runtime behavior and the documentation-contract commits.
 
-**Fix:** Run Ruff formatting on the two files, inspect the formatting-only
-diff, and rerun the format and lint checks.
+**Fix:** Qualify the conversion rule as applying to ordinary `Exception`
+failures, then state explicitly that non-`Exception` `BaseException` subclasses
+produce no trace record and are re-raised. Include ADR-006 in the existing
+documentation consistency assertion so this security decision cannot drift
+again.
+
+### WR-02: `set_fsm_logging_level()` exposes the obsolete TRACE contract through autodoc
+
+**File:** `src/fast_fsm/core.py:5099-5120`
+
+**Issue:** The public convenience function still calls TRACE “ultra-verbose
+trigger attempts,” which is inconsistent with Phase 19's metadata-only
+confidentiality contract. Its `Args` section also omits the public `propagate`
+and `redactor` keyword-only parameters, their exception behavior, and the
+returned `FSMLoggingHandle`. `docs/api/core.md` renders this docstring with
+`autofunction`, so the same API page now contains a correct manual contract and
+an incomplete, misleading generated one.
+
+**Fix:** Align this docstring with `configure_fsm_logging()`: describe the exact
+metadata-only TRACE fields and exclusions, document `propagate` and `redactor`
+including process-control propagation, and add the reversible handle return
+contract. Extend the docstring contract test to cover both public configuration
+entry points using an artifact-mode-safe source/AST check.
 
 ---
 
-_Reviewed: 2026-09-04T15:41:09Z_
+_Reviewed: 2026-09-04T16:27:44Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
