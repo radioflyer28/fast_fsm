@@ -1131,7 +1131,7 @@ def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
     for path in documented_files:
         document = " ".join(path.read_text(encoding="utf-8").lower().split())
         assert "ordinary `exception`" in document
-        assert "`baseexception` subclasses" in document
+        assert "non-`exception` `baseexception` subclasses" in document
         assert "emit no trace record and are re-raised" in document
 
 
@@ -1167,6 +1167,7 @@ def test_logging_configuration_docstrings_match_public_contracts() -> None:
 
         documentation = ast.get_docstring(function)
         assert documentation is not None
+        normalized_documentation = " ".join(documentation.split())
         for field in (
             "propagate:",
             "redactor:",
@@ -1179,9 +1180,10 @@ def test_logging_configuration_docstrings_match_public_contracts() -> None:
             "trace_keyword_names",
             "redaction_failure",
             "BaseException",
-            "emits no trace record and is re-raised",
+            "Non-``Exception`` ``BaseException`` subclasses",
+            "they emit no trace record and are re-raised",
         ):
-            assert field in documentation
+            assert field in normalized_documentation
 
 
 # ---------------------------------------------------------------------------

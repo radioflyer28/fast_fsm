@@ -91,9 +91,9 @@ Its output may contain only scalar `operation`, `stage`, `result`, and
 raised by a redactor, a non-mapping or `None` result, a forbidden key, a
 non-scalar value, or an oversized string fails closed: Fast FSM emits only
 fixed `redaction_failure` metadata and never falls back to raw payloads.
-`BaseException` subclasses (including `KeyboardInterrupt`, `SystemExit`, and
-`asyncio.CancelledError`) are not converted: they emit no trace record and are
-re-raised.
+Non-`Exception` `BaseException` subclasses (including `KeyboardInterrupt`,
+`SystemExit`, and `asyncio.CancelledError`) are not converted: they emit no
+trace record and are re-raised.
 
 `configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
 format_string="%(message)s", *, propagate=None, redactor=None)` returns

@@ -561,10 +561,10 @@ return only the scalar keys `operation`, `stage`, `result`, and `detail`; text
 is capped at 200 characters. An ordinary `Exception` raised by a redactor,
 `None`/non-mapping result, forbidden key, non-scalar value, or oversized
 string fails closed by emitting only the fixed `redaction_failure`
-metadata—never a raw fallback. `BaseException` subclasses (including
-`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`) are not
-converted: they emit no trace record and are re-raised. This is a fail-closed
-boundary, not best-effort formatting.
+metadata—never a raw fallback. Non-`Exception` `BaseException` subclasses
+(including `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`) are
+not converted: they emit no trace record and are re-raised. This is a
+fail-closed boundary, not best-effort formatting.
 
 `configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
 format_string="%(message)s", *, propagate=None, redactor=None)` returns an

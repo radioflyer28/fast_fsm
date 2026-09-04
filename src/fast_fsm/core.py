@@ -5029,8 +5029,10 @@ def configure_fsm_logging(
             a Boolean explicitly sets it.
         redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
             ordinary ``Exception`` from the redactor emits fixed
-            ``redaction_failure`` metadata. A ``BaseException`` is not caught:
-            it emits no trace record and is re-raised.
+            ``redaction_failure`` metadata. Non-``Exception``
+            ``BaseException`` subclasses (including ``KeyboardInterrupt``,
+            ``SystemExit``, and ``asyncio.CancelledError``) are not caught:
+            they emit no trace record and are re-raised.
 
     Returns:
         FSMLoggingHandle: A reversible handle that removes only its exact
@@ -5149,8 +5151,10 @@ def set_fsm_logging_level(
             a Boolean explicitly sets it.
         redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
             ordinary ``Exception`` from the redactor emits fixed
-            ``redaction_failure`` metadata. A ``BaseException`` is not caught:
-            it emits no trace record and is re-raised.
+            ``redaction_failure`` metadata. Non-``Exception``
+            ``BaseException`` subclasses (including ``KeyboardInterrupt``,
+            ``SystemExit``, and ``asyncio.CancelledError``) are not caught:
+            they emit no trace record and are re-raised.
 
     Returns:
         FSMLoggingHandle: A reversible handle that removes only its exact
