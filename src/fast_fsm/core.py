@@ -250,9 +250,16 @@ def _emit_fsm_trace(
     logger.log(_FSM_TRACE_LEVEL, "fsm_trace", extra=trace_fields)
 
 
+def _legacy_debug_enabled(logger: logging.Logger) -> bool:
+    """Return whether legacy DEBUG formatting is both enabled and safe to emit."""
+    return logger.isEnabledFor(logging.DEBUG) and not logger.isEnabledFor(
+        _FSM_TRACE_LEVEL
+    )
+
+
 def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy DEBUG diagnostics out of metadata-only TRACE configuration."""
-    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+    if _legacy_debug_enabled(logger):
         logger.debug(message, *args)
 
 
@@ -1928,7 +1935,7 @@ class StateMachine:
             error_msg = (
                 f"No transition for trigger '{trigger}' from state '{current_name}'"
             )
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
             return self._build_failure_result(
                 current_name,
                 trigger,
@@ -2911,33 +2918,38 @@ class StateMachine:
 
         # Check condition with logging
         if condition:
-            condition_name = str(condition)
-            _emit_legacy_debug(
-                self._logger,
-                "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                self._name,
-                condition_name,
-                current_name,
-                to_state.name,
-            )
+            condition_name = ""
+            if _legacy_debug_enabled(self._logger):
+                condition_name = str(condition)
+                _emit_legacy_debug(
+                    self._logger,
+                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
+                    self._name,
+                    condition_name,
+                    current_name,
+                    to_state.name,
+                )
             try:
                 assert prepared.condition_kwargs is not None
                 condition_result = self._evaluate_condition_sync(
                     condition, prepared.args, prepared.condition_kwargs
                 )
-                _emit_legacy_debug(
-                    self._logger,
-                    "%s: Condition '%s' result: %s",
-                    self._name,
-                    condition_name,
-                    condition_result,
-                )
+                if condition_name:
+                    _emit_legacy_debug(
+                        self._logger,
+                        "%s: Condition '%s' result: %s",
+                        self._name,
+                        condition_name,
+                        condition_result,
+                    )
                 if not condition_result:
                     error_msg = (
                         f"Transition guard rejected trigger '{trigger}' "
                         f"from state '{current_name}'"
                     )
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+                    _emit_legacy_debug(
+                        self._logger, "%s: FAILED - %s", self._name, error_msg
+                    )
                     return self._finalize_failure(
                         self._build_failure_result(
                             current_name,
@@ -2990,7 +3002,7 @@ class StateMachine:
             )
         if not declarative_guard_passed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
             return self._finalize_failure(
                 self._build_failure_result(
                     current_name,
@@ -3033,7 +3045,7 @@ class StateMachine:
             )
         if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
             return self._finalize_failure(
                 self._build_failure_result(
                     current_name,
@@ -3743,25 +3755,30 @@ class AsyncStateMachine(StateMachine):
 
         try:
             if condition:
-                condition_name = str(condition)
-                self._logger.debug(
-                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                    self._name,
-                    condition_name,
-                    current_name,
-                    to_state.name,
-                )
+                condition_name = ""
+                if _legacy_debug_enabled(self._logger):
+                    condition_name = str(condition)
+                    _emit_legacy_debug(
+                        self._logger,
+                        "%s: Evaluating condition '%s' for '%s' -> '%s'",
+                        self._name,
+                        condition_name,
+                        current_name,
+                        to_state.name,
+                    )
                 try:
                     assert prepared.condition_kwargs is not None
                     condition_result = await self._evaluate_condition_async(
                         condition, prepared.args, prepared.condition_kwargs
                     )
-                    self._logger.debug(
-                        "%s: Condition '%s' result: %s",
-                        self._name,
-                        condition_name,
-                        condition_result,
-                    )
+                    if condition_name:
+                        _emit_legacy_debug(
+                            self._logger,
+                            "%s: Condition '%s' result: %s",
+                            self._name,
+                            condition_name,
+                            condition_result,
+                        )
                     if not condition_result:
                         error_msg = (
                             f"Transition guard rejected trigger '{trigger}' "

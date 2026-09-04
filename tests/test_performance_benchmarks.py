@@ -821,6 +821,17 @@ def test_disabled_trace_never_builds_or_inspects_a_payload_event():
             self.str_calls += 1
             return "disabled-trace-str-secret"
 
+    class HostileCondition:
+        def __init__(self) -> None:
+            self.str_calls = 0
+
+        def __call__(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+        def __str__(self) -> str:
+            self.str_calls += 1
+            return "disabled-trace-condition-secret"
+
     redactor_calls = 0
 
     def redactor(_event: dict[str, object]) -> dict[str, str]:
@@ -840,7 +851,8 @@ def test_disabled_trace_never_builds_or_inspects_a_payload_event():
         destination = State("disabled-trace-destination")
         machine = StateMachine(source, name="disabled-trace", logger_name=logger_name)
         machine.add_state(destination)
-        machine.add_transition("disabled-trace-trigger", source, destination)
+        condition = HostileCondition()
+        machine.add_transition("disabled-trace-trigger", source, destination, condition)
         payload = HostilePayload()
 
         result = machine.trigger("disabled-trace-trigger", payload, value=payload)
@@ -849,6 +861,7 @@ def test_disabled_trace_never_builds_or_inspects_a_payload_event():
         assert redactor_calls == 0
         assert payload.repr_calls == 0
         assert payload.str_calls == 0
+        assert condition.str_calls == 0
     finally:
         handle.restore()
 
