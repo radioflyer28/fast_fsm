@@ -196,6 +196,23 @@ def _library_trace_redactor(logger: logging.Logger) -> Optional[FSMTraceRedactor
     return None
 
 
+def _has_reachable_trace_configuration(logger: logging.Logger) -> bool:
+    """Return whether propagation reaches a library handler configured for TRACE."""
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            marker = getattr(handler, "_fast_fsm_marker", None)
+            if (
+                isinstance(marker, _FSMStreamHandler)
+                and marker.configured_level <= _FSM_TRACE_LEVEL
+            ):
+                return True
+        if not current.propagate:
+            break
+        current = current.parent
+    return False
+
+
 def _emit_fsm_trace(
     logger: logging.Logger,
     *,
@@ -257,8 +274,8 @@ def _emit_fsm_trace(
 
 def _legacy_debug_enabled(logger: logging.Logger) -> bool:
     """Return whether legacy DEBUG formatting is both enabled and safe to emit."""
-    return logger.isEnabledFor(logging.DEBUG) and not logger.isEnabledFor(
-        _FSM_TRACE_LEVEL
+    return logger.isEnabledFor(logging.DEBUG) and not _has_reachable_trace_configuration(
+        logger
     )
 
 
@@ -270,19 +287,19 @@ def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> N
 
 def _emit_legacy_warning(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy WARNING diagnostics out of redacted TRACE configuration."""
-    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+    if not _has_reachable_trace_configuration(logger):
         logger.warning(message, *args)
 
 
 def _emit_legacy_error(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy ERROR diagnostics out of redacted TRACE configuration."""
-    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+    if not _has_reachable_trace_configuration(logger):
         logger.error(message, *args)
 
 
 def _emit_legacy_info(logger: logging.Logger, message: str, *args: object) -> None:
     """Keep legacy INFO diagnostics out of redacted TRACE configuration."""
-    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+    if not _has_reachable_trace_configuration(logger):
         logger.info(message, *args)
 
 
@@ -4898,6 +4915,7 @@ class _FSMStreamHandler:
 
     generation: int
     redactor: Optional[FSMTraceRedactor]
+    configured_level: int
 
 
 class FSMLoggingHandle:
@@ -5024,7 +5042,11 @@ def configure_fsm_logging(
     handler: Optional[logging.StreamHandler] = None
     if level <= logging.INFO:
         handler = logging.StreamHandler()
-        setattr(handler, "_fast_fsm_marker", _FSMStreamHandler(generation, redactor))
+        setattr(
+            handler,
+            "_fast_fsm_marker",
+            _FSMStreamHandler(generation, redactor, level),
+        )
         formatter = logging.Formatter(format_string)
         handler.setFormatter(formatter)
         logger.addHandler(handler)

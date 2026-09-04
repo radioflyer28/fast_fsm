@@ -110,11 +110,16 @@ def _contains_raw_secret(value: object, secret: str) -> bool:
 
 
 def _assert_no_raw_payload(
-    handler: CaptureHandler, hostile_payload: HostileRepr, stderr: str
+    handler: CaptureHandler,
+    hostile_payload: HostileRepr,
+    stderr: str,
+    *,
+    require_records: bool = True,
 ) -> None:
     """Scan the complete record and formatter surface for every raw secret."""
 
-    assert handler.records, "trace configuration must emit at least one fixed event"
+    if require_records:
+        assert handler.records, "trace configuration must emit at least one fixed event"
     assert hostile_payload.repr_calls == 0
     assert all(secret not in stderr for secret in RAW_SENTINELS)
 
@@ -413,6 +418,90 @@ def test_exact_trace_suppresses_trigger_and_declarative_legacy_diagnostics(
     finally:
         logger.removeHandler(application_handler)
         application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_trace_suppresses_legacy_warnings_from_explicit_child(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A parent TRACE handler suppresses raw child warnings before propagation."""
+
+    parent_name = _logger_name("parent-trace")
+    child_name = f"{parent_name}.machine"
+    parent = logging.getLogger(parent_name)
+    child = logging.getLogger(child_name)
+    parent_handler = CaptureHandler()
+    child_handler = CaptureHandler()
+    parent.addHandler(parent_handler)
+    child.addHandler(child_handler)
+    prior_child_level = child.level
+    prior_child_propagate = child.propagate
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    def raise_failure_observer(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(EXCEPTION_SENTINEL)
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, parent_name, propagate=False, redactor=None
+        )
+        child.setLevel(logging.WARNING)
+        child.propagate = True
+        hostile_payload = HostileRepr()
+
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        sync_machine = StateMachine(
+            source, name=MACHINE_SENTINEL, logger_name=child_name
+        )
+        sync_machine.add_state(destination)
+        sync_machine.add_transition(
+            TRIGGER_SENTINEL,
+            source,
+            destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        sync_machine.on_failed(raise_failure_observer)
+        assert not sync_machine.trigger(
+            TRIGGER_SENTINEL, hostile_payload, sensitive=KEYWORD_SENTINEL
+        ).success
+
+        async_source = State(SOURCE_SENTINEL)
+        async_destination = State(DESTINATION_SENTINEL)
+        async_machine = AsyncStateMachine(
+            async_source, name=MACHINE_SENTINEL, logger_name=child_name
+        )
+        async_machine.add_state(async_destination)
+        async_machine.add_transition(
+            TRIGGER_SENTINEL,
+            async_source,
+            async_destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        async_machine.on_failed(raise_failure_observer)
+        assert not (
+            await async_machine.trigger_async(
+                TRIGGER_SENTINEL, hostile_payload, sensitive=KEYWORD_SENTINEL
+            )
+        ).success
+
+        stderr = capsys.readouterr().err
+        _assert_no_raw_payload(
+            parent_handler, hostile_payload, stderr, require_records=False
+        )
+        _assert_no_raw_payload(
+            child_handler, hostile_payload, stderr, require_records=False
+        )
+        handle.restore()
+    finally:
+        child.setLevel(prior_child_level)
+        child.propagate = prior_child_propagate
+        child.removeHandler(child_handler)
+        child_handler.close()
+        parent.removeHandler(parent_handler)
+        parent_handler.close()
 
 
 def test_custom_redactor_receives_only_minimum_event_and_safe_output(
