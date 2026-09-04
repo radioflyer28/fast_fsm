@@ -1,6 +1,6 @@
 ---
 phase: 19-bounded-diagnostics-safe-output
-reviewed: 2026-09-04T16:27:44Z
+reviewed: 2026-09-04T17:52:05Z
 depth: standard
 files_reviewed: 26
 files_reviewed_list:
@@ -31,107 +31,89 @@ files_reviewed_list:
   - tools/phase16_isolated_verify.py
   - tools/release_evidence.py
 findings:
-  critical: 1
-  warning: 2
+  critical: 0
+  warning: 1
   info: 0
-  total: 3
+  total: 1
 status: issues_found
 ---
 
 # Phase 19: Code Review Report
 
-**Reviewed:** 2026-09-04T16:27:44Z
+**Reviewed:** 2026-09-04T17:52:05Z
 **Depth:** standard
 **Files Reviewed:** 26
 **Status:** issues_found
 
 ## Summary
 
-The persisted 26-file scope was freshly re-reviewed after commits `e3c3a19`,
-`8ee1bd9`, and `cb10c5a`. The three findings from the preceding report are fixed
-at their cited locations: the README, public core guide, and core SPR now
-distinguish ordinary redactor failures from process-control exceptions; the SPR
-records the three-field handler marker; and `configure_fsm_logging()` documents
-metadata-only TRACE, both keyword-only controls, and its reversible handle.
+The persisted 26-file scope was freshly re-reviewed through commit `e2e99e1`.
+All four preceding findings are fixed: rejected logging configurations preserve
+the current owned handler and reversible state, configuration and restore are
+serialized, the public redactor contract now distinguishes non-`Exception`
+`BaseException` subclasses, and the release evidence is fresh at 1,499 passing
+tests with 98.11% total and 97.52% `core.py` coverage.
 
-The iteration does not converge. The authoritative
-`uv run python tools/phase16_isolated_verify.py --suite phase19` gate passed its
-asserted-pure semantic selection but failed in the freshly compiled selection:
-the new documentation test assumes a mypyc-compiled public function supports
-`inspect.signature()`. The full sequential pure suite, focused pure logging
-suite, Ruff lint/format, slots policy, and release-baseline freshness check pass.
-The authoritative verifier could not reach its later compiled, type, docs, and
-full-suite stages after the fail-fast compiled test failure.
-
-Two documentation-contract defects also remain. ADR-006 still records the old
-unqualified redactor exception rule, and the autodoc-exposed
-`set_fsm_logging_level()` docstring still describes TRACE as ultra-verbose
-trigger attempts while omitting the new controls and return contract.
+The authoritative `uv run python tools/phase16_isolated_verify.py --suite
+phase19` command exited successfully after its pure and compiled semantic suites,
+compiled performance selection, slots audit, Ruff, mypy, ty, Sphinx
+warnings-as-errors, doctests, sequential full suite, release gate, and duplicate
+release-baseline freshness check. The review nevertheless does not converge:
+the evidence fix uses import presence to identify active coverage, while pytest
+auto-loads `pytest-cov` and therefore imports `coverage` even for the verifier's
+nominally uninstrumented compiled performance selection. Every absolute
+throughput floor in that selection returns early, so the passing verifier no
+longer proves the repository's required performance invariant.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-01: The new docstring contract test fails against the supported compiled artifact
-
-**File:** `tests/test_logging_config.py:1024`
-
-**Issue:** `test_configure_logging_docstring_matches_its_public_contract()` calls
-`inspect.signature(configure_fsm_logging)`. In the freshly built mypyc artifact,
-that symbol is a built-in function without an inspectable signature, so Python
-raises `ValueError: no signature found for builtin` before the documentation
-assertions run. This is not hypothetical: the authoritative Phase 19 verifier
-reproduces it in its compiled semantic selection and exits nonzero, preventing
-the mandatory pure/fresh-compiled quality gate from completing. The test is
-therefore artifact-mode-dependent and makes the supported compiled build red.
-
-**Fix:** Verify the source signature structurally instead of introspecting the
-compiled callable—for example, parse `src/fast_fsm/core.py` with `ast`, locate
-`configure_fsm_logging`, and assert its positional and keyword-only argument
-names. Keep `inspect.getdoc()` only if the compiled artifact preserves the
-docstring, or read the function docstring from the same AST node. Then rerun the
-complete authoritative Phase 19 verifier.
-
 ## Warnings
 
-### WR-01: ADR-006 still promises conversion of every raising redactor
+### WR-01: Pytest-cov import presence disables the uninstrumented throughput gates
 
-**File:** `.specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:71-77`
+**File:** `/private/tmp/fast-fsm-phase18-gap.nFW19F/tests/test_performance_benchmarks.py:34-39`
 
-**Issue:** Accepted decision D-15 still says that “raising redactor output”
-becomes fixed `redaction_failure` metadata. The implementation and newly updated
-public docs intentionally catch only `Exception`; `KeyboardInterrupt`,
-`SystemExit`, `asyncio.CancelledError`, and other non-`Exception`
-`BaseException` subclasses emit no record and propagate. Because this ADR is the
-durable source for the security boundary, its unqualified wording contradicts
-both runtime behavior and the documentation-contract commits.
+**Issue:** `_assert_elapsed_within_budget()` treats `"coverage" in sys.modules`
+as proof that coverage measurement is active; the primary trigger, ownership,
+lifecycle, and timing-condition gates repeat that check at lines 450, 494, 615,
+and 733. That proxy is always true in the repository's normal pytest process:
+`pytest-cov` is installed and auto-registered as a pytest entry-point plugin,
+and `pytest_cov.plugin` imports `coverage` at module import time even when pytest
+was invoked without `--cov`. A `pytest --trace-config --collect-only` probe
+confirmed `pytest_cov.plugin` is registered, while a direct plugin-import probe
+showed `"coverage" in sys.modules` is true and
+`coverage.Coverage.current()` is `None`. Consequently the supposedly
+uninstrumented compiled selection at
+`tools/phase16_isolated_verify.py:1098-1114` exits through the semantic-only
+branches and never enforces the 200,000 ops/sec release floor. This is a test
+reliability defect: a catastrophic throughput regression can pass the
+authoritative verifier.
 
-**Fix:** Qualify the conversion rule as applying to ordinary `Exception`
-failures, then state explicitly that non-`Exception` `BaseException` subclasses
-produce no trace record and are re-raised. Include ADR-006 in the existing
-documentation consistency assertion so this security decision cannot drift
-again.
+**Fix:** Detect an active measurement session rather than an imported module,
+and make the dedicated compiled performance command explicitly disable the
+auto-loaded coverage plugin. Add a regression that imports `pytest_cov.plugin`
+without starting coverage and proves the real budget branch still runs.
 
-### WR-02: `set_fsm_logging_level()` exposes the obsolete TRACE contract through autodoc
+```python
+def _coverage_active() -> bool:
+    import coverage
 
-**File:** `src/fast_fsm/core.py:5099-5120`
+    return coverage.Coverage.current() is not None
 
-**Issue:** The public convenience function still calls TRACE “ultra-verbose
-trigger attempts,” which is inconsistent with Phase 19's metadata-only
-confidentiality contract. Its `Args` section also omits the public `propagate`
-and `redactor` keyword-only parameters, their exception behavior, and the
-returned `FSMLoggingHandle`. `docs/api/core.md` renders this docstring with
-`autofunction`, so the same API page now contains a correct manual contract and
-an incomplete, misleading generated one.
 
-**Fix:** Align this docstring with `configure_fsm_logging()`: describe the exact
-metadata-only TRACE fields and exclusions, document `propagate` and `redactor`
-including process-control propagation, and add the reversible handle return
-contract. Extend the docstring contract test to cover both public configuration
-entry points using an artifact-mode-safe source/AST check.
+def _assert_elapsed_within_budget(elapsed: float, maximum: float) -> None:
+    if _coverage_active():
+        assert elapsed > 0
+        return
+    assert elapsed < maximum
+```
+
+The verifier's uninstrumented selection should additionally invoke pytest with
+its coverage plugin disabled (for example, `-p no:cov`) and include a focused
+contract proving that the compiled floor was not bypassed.
 
 ---
 
-_Reviewed: 2026-09-04T16:27:44Z_
+_Reviewed: 2026-09-04T17:52:05Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
