@@ -9,6 +9,7 @@ import contextlib
 import gc
 import io
 import logging
+import os
 import time
 
 import coverage
@@ -34,6 +35,12 @@ def suppress_stdout():
 def _coverage_active() -> bool:
     """Return whether coverage.py is actively collecting this process."""
     return coverage.Coverage.current() is not None
+
+
+def _assert_strict_throughput_is_uninstrumented() -> None:
+    """Reject coverage when the isolated verifier requests a strict floor."""
+    if os.environ.get("FAST_FSM_REQUIRE_UNINSTRUMENTED") == "1":
+        assert not _coverage_active(), "strict throughput gate is instrumented"
 
 
 def _assert_elapsed_within_budget(elapsed: float, maximum: float) -> None:
@@ -69,6 +76,21 @@ def test_timing_budget_is_semantic_while_coverage_is_collecting() -> None:
         _assert_elapsed_within_budget(1.0, 0.5)
     finally:
         measurement.stop()
+
+
+def test_strict_throughput_gate_rejects_active_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The verifier-owned strict marker must not silently relax its floor."""
+    monkeypatch.setenv("FAST_FSM_REQUIRE_UNINSTRUMENTED", "1")
+    monkeypatch.setattr(
+        coverage.Coverage,
+        "current",
+        classmethod(lambda cls: object()),
+    )
+
+    with pytest.raises(AssertionError, match="strict throughput gate is instrumented"):
+        _assert_strict_throughput_is_uninstrumented()
 
 
 class TrackingState(State):
@@ -479,6 +501,7 @@ class TestAdvancedPerformance:
             and core_spec.origin is not None
             and (core_spec.origin.endswith(".so") or core_spec.origin.endswith(".pyd"))
         )
+        _assert_strict_throughput_is_uninstrumented()
         if _coverage_active():
             assert ops_per_sec > 0
             return

@@ -274,6 +274,10 @@ def _prepare_tree(
     env["FAST_FSM_BUILD_MODE"] = build_mode
     env.pop("PYTHONPATH", None)
     env.pop("VIRTUAL_ENV", None)
+    env.pop("FAST_FSM_REQUIRE_UNINSTRUMENTED", None)
+    for key in tuple(env):
+        if key.startswith("COV_CORE_") or key == "COVERAGE_PROCESS_START":
+            env.pop(key)
     _export_head(source_tree, env)
     overlaid = _overlay(includes, source_tree)
     if build_mode == "pure":
@@ -312,13 +316,19 @@ def _task_mode(args: argparse.Namespace) -> int:
 
 
 def _run_suite_command(
-    *, build_mode: str, includes: Sequence[str], command: Sequence[str]
+    *,
+    build_mode: str,
+    includes: Sequence[str],
+    command: Sequence[str],
+    require_uninstrumented: bool = False,
 ) -> int:
     tempdir, source_tree, env, _ = _prepare_tree(
         build_mode=build_mode, includes=includes
     )
     try:
         _validate_child_command(command, source_tree)
+        if require_uninstrumented:
+            env["FAST_FSM_REQUIRE_UNINSTRUMENTED"] = "1"
         return _run(command, cwd=source_tree, env=env, check=False).returncode
     finally:
         tempdir.cleanup()
@@ -1113,6 +1123,7 @@ def _suite_mode(args: argparse.Namespace) -> int:
             build_mode="compiled",
             includes=includes,
             command=performance,
+            require_uninstrumented=True,
         )
         if status:
             return status

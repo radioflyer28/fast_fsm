@@ -2595,6 +2595,62 @@ def test_phase19_origin_assertion_precedes_semantic_command(
     assert events.index("origin") < events.index("semantic")
 
 
+def test_phase19_prepare_tree_strips_inherited_coverage_autostart_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A coverage-instrumented parent cannot start a child collector."""
+    captured: list[dict[str, str]] = []
+
+    class TemporaryDirectory:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / "isolated"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            return None
+
+    inherited_autostart = {
+        "COV_CORE_SOURCE": str(PACKAGE_SOURCE),
+        "COV_CORE_CONFIG": str(ROOT / "pyproject.toml"),
+        "COV_CORE_DATAFILE": str(tmp_path / ".coverage"),
+        "COV_CORE_BRANCH": "enabled",
+        "COVERAGE_PROCESS_START": str(ROOT / "pyproject.toml"),
+        "FAST_FSM_REQUIRE_UNINSTRUMENTED": "1",
+    }
+    for key, value in inherited_autostart.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        (destination / "src" / "fast_fsm").mkdir(parents=True)
+
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(isolated_verify, "_assert_origin", lambda *_args: None)
+
+    def run(_command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        captured.append(dict(kwargs["env"]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(isolated_verify, "_run", run)
+
+    tempdir, _source_tree, env, _overlaid = isolated_verify._prepare_tree(
+        build_mode="pure", includes=()
+    )
+    try:
+        assert not set(inherited_autostart) & set(env)
+        assert captured
+        assert not set(inherited_autostart) & set(captured[0])
+    finally:
+        tempdir.cleanup()
+
+
 def test_phase19_pure_preflight_refuses_native_shadow_without_mutation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2641,12 +2697,16 @@ def test_phase19_command_composition_covers_semantics_and_quality_gates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Phase 19 selects distinct origins plus every mandatory final local gate."""
-    calls: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+    calls: list[tuple[str, tuple[str, ...], tuple[str, ...], bool]] = []
 
     def run_suite_command(
-        *, build_mode: str, includes: tuple[str, ...], command: tuple[str, ...]
+        *,
+        build_mode: str,
+        includes: tuple[str, ...],
+        command: tuple[str, ...],
+        require_uninstrumented: bool = False,
     ) -> int:
-        calls.append((build_mode, includes, command))
+        calls.append((build_mode, includes, command, require_uninstrumented))
         return 0
 
     monkeypatch.setattr(isolated_verify, "_run_suite_command", run_suite_command)
@@ -2679,9 +2739,19 @@ def test_phase19_command_composition_covers_semantics_and_quality_gates(
         build_mode == "compiled"
         and "tests/test_performance_benchmarks.py" in command
         and "trigger_min_throughput" in command[-1]
-        for build_mode, _includes, command in calls
+        and require_uninstrumented
+        for build_mode, _includes, command, require_uninstrumented in calls
     )
-    commands = {command for _build_mode, _includes, command in calls}
+    assert all(
+        require_uninstrumented
+        == (
+            build_mode == "compiled"
+            and "tests/test_performance_benchmarks.py" in command
+            and "trigger_min_throughput" in command[-1]
+        )
+        for build_mode, _includes, command, require_uninstrumented in calls
+    )
+    commands = {command for _build_mode, _includes, command, _strict in calls}
     assert ("task", "typecheck-mypy") in commands
     assert ("task", "typecheck-ty") in commands
     assert ("task", "release-gate") in commands
