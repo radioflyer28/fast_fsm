@@ -262,7 +262,7 @@ def _emit_fsm_trace(
                     )
                 )
             )
-        except BaseException:
+        except Exception:
             output = None
         if output is None:
             trace_fields = {

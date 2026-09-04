@@ -4,6 +4,7 @@ Tests for configure_fsm_logging and set_fsm_logging_level.
 All tests use real logging infrastructure — no mocking.
 """
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -755,6 +756,110 @@ def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
                 record_dict.get("trace_operation") == "redaction_failure"
                 or not application_handler.records
             )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.parametrize(
+    "exception_type",
+    (KeyboardInterrupt, SystemExit),
+    ids=("keyboard-interrupt", "system-exit"),
+)
+def test_trace_redactor_propagates_process_control_exceptions_without_record(
+    capsys: pytest.CaptureFixture[str], exception_type: type[BaseException]
+) -> None:
+    """Interrupt-like redactor failures must escape before a trace record exists."""
+
+    logger_name = _logger_name("redactor-process-control")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        raise exception_type("stop")
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = StateMachine(source, name=MACHINE_SENTINEL, logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+        with pytest.raises(exception_type):
+            machine.trigger(
+                TRIGGER_SENTINEL,
+                POSITIONAL_SENTINEL,
+                hostile_payload,
+                sensitive=KEYWORD_SENTINEL,
+            )
+
+        assert application_handler.records == []
+        _assert_no_raw_payload(
+            application_handler,
+            hostile_payload,
+            capsys.readouterr().err,
+            require_records=False,
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_redactor_propagates_async_cancellation_without_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cancellation from the synchronous redactor must not become trace metadata."""
+
+    logger_name = _logger_name("redactor-cancellation")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        raise asyncio.CancelledError()
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = AsyncStateMachine(
+            source, name=MACHINE_SENTINEL, logger_name=logger_name
+        )
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+        with pytest.raises(asyncio.CancelledError):
+            await machine.trigger_async(
+                TRIGGER_SENTINEL,
+                POSITIONAL_SENTINEL,
+                hostile_payload,
+                sensitive=KEYWORD_SENTINEL,
+            )
+
+        assert application_handler.records == []
+        _assert_no_raw_payload(
+            application_handler,
+            hostile_payload,
+            capsys.readouterr().err,
+            require_records=False,
+        )
         handle.restore()
     finally:
         logger.removeHandler(application_handler)
