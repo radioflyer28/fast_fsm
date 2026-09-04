@@ -9,7 +9,7 @@
 
 | Property | Observation |
 | --- | --- |
-| Collection timestamp (UTC) | `2026-09-04T01:07:40Z` |
+| Collection timestamp (UTC) | `2026-09-04T02:45:40Z` |
 | Host operating system / architecture | `Darwin 25.5.0 arm64` (`macOS-26.5-arm64-arm-64bit`) |
 | Python executable and version | `.venv/bin/python3`; CPython `3.12.10` (Clang `20.1.0`) |
 | `uv` version | `0.12.6` |
@@ -28,11 +28,11 @@
 | 3 | `rg -n 'RED until 19-' tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py tests/test_performance_benchmarks.py` | Require that no Phase 19 strict-RED marker remains. | passed; no matches |
 | 4 | `uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py -x -q` | Run the complete diagnostic, output, and logging selection. | passed |
 | 5 | `uv run pytest tests/test_validation.py tests/test_visualization.py tests/test_graph_invariants.py -x -q` | Run legacy validation, rendering, and graph regressions. | passed |
-| 6 | `uv run pytest tests/ -x -q` | Run the sequential repository suite before baseline generation. | passed; 1,379 tests, 0 failures |
-| 7 | `uv run python tools/phase16_isolated_verify.py --suite baseline-write --manifest-output evidence/release-baseline.json` | Regenerate the baseline exclusively through the isolated pure writer and atomic export. | passed; isolated pure atomic export completed |
+| 6 | `uv run pytest tests/ -x -q` | Run the sequential repository suite before baseline generation. | passed in the isolated pure collector; 1,476 tests, 0 failures |
+| 7 | `uv run python tools/phase16_isolated_verify.py --suite baseline-write --manifest-output evidence/release-baseline.json` | Regenerate the baseline exclusively through the isolated pure writer and atomic export. | passed; isolated pure atomic export completed for 1,476 tests |
 | 8 | `git diff --check -- evidence/release-baseline.json` | Reject malformed generated manifest changes. | passed; no whitespace errors |
-| 9 | `git diff -- evidence/release-baseline.json` | Review the exact generated test, coverage, toolchain, and source-origin diff. | reviewed; empty diff (existing manifest already current) |
-| 10 | `task release-baseline-check` | Run the read-only pure-source baseline freshness check. | passed; reported `src/fast_fsm/core.py` |
+| 9 | `git diff -- evidence/release-baseline.json` | Review the exact generated test, coverage, toolchain, and source-origin diff. | reviewed; expected Phase 19 test/coverage facts, benchmark observation, and slots inventory changed; pure source origin and toolchain stayed current |
+| 10 | `FAST_FSM_BUILD_MODE=pure uv run python tools/release_evidence.py evidence --check --manifest evidence/release-baseline.json --build-wheel` | Run the read-only pure-source baseline freshness check. | passed; reported 1,476 tests, 98.00% total / 97.33% core coverage, and `src/fast_fsm/core.py` |
 | 11 | `PYTHONHASHSEED=0 uv run pytest tests/test_diagnostic_contracts.py -x -q -k 'budget or sparse or dense or path or depth or cycle'` | Measure exact deterministic diagnostic boundary counters with seed 0. | passed; 7 selected tests |
 | 12 | `PYTHONHASHSEED=1 uv run pytest tests/test_diagnostic_contracts.py -x -q -k 'budget or sparse or dense or path or depth or cycle'` | Confirm the same deterministic boundary behavior with seed 1. | passed; 7 selected tests and identical counter payload |
 | 13 | `uv run python tools/release_evidence.py slots-policy --json` | Audit registered slot protection and measured exceptions. | passed; three registered exceptions only; `State=40 B`, `TransitionResult=96 B` |
@@ -89,7 +89,7 @@ recorded hash seeds; timing is not used as a correctness assertion.
 | --- | --- | --- | --- |
 | Compiled `trigger()` floor | focused performance selection from checkout pure source | selection passed from `.py` source (its pure floor is `30000`); the required fresh-compiled `200000` floor is not claimed until Task 3 | pending authoritative Task 3 measurement |
 | Disabled-trace behavior | focused performance selection from checkout pure source | 3 selected tests passed; functional allocation/redaction oracle held | pending authoritative Task 3 measurement |
-| Repository benchmark | `uv run python benchmarks/benchmark_fast_fsm.py` | command exited 0 without stdout; current isolated pure baseline records `510544.6` ops/sec for 40,000 alternating `trigger()` operations | environment-labelled observation |
+| Repository benchmark | `uv run python benchmarks/benchmark_fast_fsm.py` | command exited 0 without stdout; current isolated pure baseline records `455324.16` ops/sec for 40,000 alternating `trigger()` operations | environment-labelled observation |
 | Authoritative asserted-pure gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | pending measurement | pending measurement |
 | Authoritative freshly compiled gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | pending measurement | pending measurement |
 
@@ -102,8 +102,8 @@ atomically exported to `evidence/release-baseline.json`. It is never hand-edited
 | --- | --- | --- |
 | Committed inventory skeleton proved before overlay preparation | `git show HEAD` succeeded and the exact inventory entry is at runner line 139 | passed |
 | Isolated pure writer completed | `baseline-write` exported the candidate manifest atomically | passed |
-| Exact manifest diff reviewed for expected tests, coverage, toolchain, and source origins | empty diff; tracked manifest already reports 1,379 passed, 97.89% total coverage, 97.28% core coverage, CPython 3.12.10, and pure `src/fast_fsm/core.py` origin | passed |
-| Read-only freshness check passed after regeneration | `task release-baseline-check` completed after the write | passed |
+| Exact manifest diff reviewed for expected tests, coverage, toolchain, and source origins | generated diff contains 1,476 passed, 98.00% total coverage, 97.33% core coverage, the environment-labelled pure benchmark, and Phase 19 slots inventory additions; CPython 3.12.10, uv 0.12.6, and pure `src/fast_fsm/core.py` origin remain current | passed |
+| Read-only freshness check passed after regeneration | direct uv freshness check completed after the write with the tracked floors satisfied | passed |
 | Final post-gate freshness check passed | pending measurement | pending measurement |
 
 ## Phase 20 Non-Claims

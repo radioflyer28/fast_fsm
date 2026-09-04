@@ -41,7 +41,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.078348,
+      "elapsed_seconds": 0.08785,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -51,24 +51,24 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 510544.6,
+      "ops_per_second": 455324.16,
       "warmup_operations": 2000
     }
   },
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 97.28,
-      "total_percent": 97.89
+      "core_percent": 97.33,
+      "total_percent": 98.0
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1379,
+      "collected": 1476,
       "errors": 0,
       "failed": 0,
-      "passed": 1379,
+      "passed": 1476,
       "skipped": 0
     }
   },
@@ -79,6 +79,43 @@
   "schema_version": 1,
   "slots_policy": {
     "inventory": [
+      {
+        "classification": "registered-exception",
+        "exception_reason": "Public bounded-diagnostic failures carry a scalar DiagnosticStatus.",
+        "line": 57,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 19,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticLimits",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 45,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticStatus",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 91,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 68,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticEdge",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 78,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
       {
         "classification": "slot-protected",
         "line": 18,
@@ -202,110 +239,128 @@
       },
       {
         "classification": "slot-protected",
-        "line": 4017,
+        "line": 4274,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 2960,
+        "line": 3189,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 491,
+        "line": 656,
         "qualified_name": "fast_fsm.core.CallbackState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 3883,
+        "line": 4140,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4095,
+        "line": 4352,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 420,
+        "line": 4838,
+        "qualified_name": "fast_fsm.core.FSMLoggingHandle",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 123,
+        "qualified_name": "fast_fsm.core.FSMTraceEvent",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 585,
         "qualified_name": "fast_fsm.core.State",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 521,
+        "line": 686,
         "qualified_name": "fast_fsm.core.StateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 355,
+        "line": 514,
         "qualified_name": "fast_fsm.core.TransitionEntry",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "registered-exception",
         "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
-        "line": 276,
+        "line": 435,
         "qualified_name": "fast_fsm.core.TransitionError",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 331,
+        "line": 490,
         "qualified_name": "fast_fsm.core.TransitionRecord",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 295,
+        "line": 454,
         "qualified_name": "fast_fsm.core.TransitionResult",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 382,
+        "line": 4831,
+        "qualified_name": "fast_fsm.core._FSMStreamHandler",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 544,
         "qualified_name": "fast_fsm.core._GraphSnapshot",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 372,
+        "line": 531,
         "qualified_name": "fast_fsm.core._GraphTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 408,
+        "line": 573,
         "qualified_name": "fast_fsm.core._PreparedDispatch",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 398,
+        "line": 563,
         "qualified_name": "fast_fsm.core._PreparedTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 414,
+        "line": 540,
         "qualified_name": "fast_fsm.validation.EnhancedFSMValidator",
         "source_path": "src/fast_fsm/validation.py"
       },
       {
         "classification": "slot-protected",
-        "line": 21,
+        "line": 98,
         "qualified_name": "fast_fsm.validation.FSMValidator",
         "source_path": "src/fast_fsm/validation.py"
       },
       {
         "classification": "slot-protected",
-        "line": 376,
+        "line": 502,
         "qualified_name": "fast_fsm.validation.ValidationIssue",
         "source_path": "src/fast_fsm/validation.py"
       }
@@ -324,6 +379,12 @@
     ],
     "registered_exceptions": [
       {
+        "exception_reason": "Public bounded-diagnostic failures carry a scalar DiagnosticStatus.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 96,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded"
+      },
+      {
         "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
         "has_instance_dict": true,
         "instance_size_bytes": 72,
@@ -337,6 +398,36 @@
       }
     ],
     "runtime_layouts": [
+      {
+        "dictoffset": 16,
+        "has_instance_dict": true,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticLimits"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticStatus"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticEdge"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph"
+      },
       {
         "dictoffset": 0,
         "has_instance_dict": false,
@@ -465,6 +556,16 @@
       {
         "dictoffset": 0,
         "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.FSMLoggingHandle"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.FSMTraceEvent"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
         "qualified_name": "fast_fsm.core.State"
       },
       {
@@ -491,6 +592,11 @@
         "dictoffset": 0,
         "has_instance_dict": false,
         "qualified_name": "fast_fsm.core.TransitionResult"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._FSMStreamHandler"
       },
       {
         "dictoffset": 0,
