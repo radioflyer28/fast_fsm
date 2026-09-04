@@ -494,9 +494,7 @@ def test_exact_trace_suppresses_trigger_and_declarative_legacy_diagnostics(
         hostile_payload = HostileRepr()
         source = GuardedState(SOURCE_SENTINEL, logger_name=logger_name)
         destination = State(DESTINATION_SENTINEL)
-        machine = StateMachine(
-            source, name=MACHINE_SENTINEL, logger_name=logger_name
-        )
+        machine = StateMachine(source, name=MACHINE_SENTINEL, logger_name=logger_name)
         machine.add_state(destination)
         machine.add_transition(TRIGGER_SENTINEL, source, destination)
         kwargs = {
@@ -515,9 +513,7 @@ def test_exact_trace_suppresses_trigger_and_declarative_legacy_diagnostics(
             async_source, name=MACHINE_SENTINEL, logger_name=logger_name
         )
         sync_machine.add_state(async_destination)
-        sync_machine.add_transition(
-            TRIGGER_SENTINEL, async_source, async_destination
-        )
+        sync_machine.add_transition(TRIGGER_SENTINEL, async_source, async_destination)
         assert not sync_machine.trigger(TRIGGER_SENTINEL).success
 
         _assert_no_raw_payload(

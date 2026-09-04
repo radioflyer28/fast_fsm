@@ -281,7 +281,9 @@ def _emit_fsm_trace(
 
 def _legacy_debug_enabled(logger: logging.Logger) -> bool:
     """Return whether legacy DEBUG formatting is both enabled and safe to emit."""
-    return logger.isEnabledFor(logging.DEBUG) and not _trace_configuration_active(logger)
+    return logger.isEnabledFor(logging.DEBUG) and not _trace_configuration_active(
+        logger
+    )
 
 
 def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> None:
@@ -2145,13 +2147,16 @@ class StateMachine:
             if not isinstance(key, str) or len(key) > 100:
                 _emit_legacy_warning(
                     self._logger,
-                    "%s: Skipping invalid kwarg key for condition", self._name
+                    "%s: Skipping invalid kwarg key for condition",
+                    self._name,
                 )
                 continue
             if key.startswith("_"):
                 _emit_legacy_debug(
                     self._logger,
-                    "%s: Skipping private kwarg '%s' for condition", self._name, key
+                    "%s: Skipping private kwarg '%s' for condition",
+                    self._name,
+                    key,
                 )
                 continue
             if len(safe_kwargs) == 50:
@@ -4151,8 +4156,7 @@ def _invoke_declarative_handler(
         return TransitionResult(False, error=error_msg)
     if result.success:
         _emit_legacy_debug(
-            logger,
-            "State '%s': Handler '%s' succeeded", source_state.name, method_name
+            logger, "State '%s': Handler '%s' succeeded", source_state.name, method_name
         )
     else:
         _emit_legacy_debug(
@@ -4197,7 +4201,9 @@ async def _invoke_declarative_handler_async(
     if result.success:
         _emit_legacy_debug(
             logger,
-            "State '%s': Async handler '%s' succeeded", source_state.name, method_name
+            "State '%s': Async handler '%s' succeeded",
+            source_state.name,
+            method_name,
         )
     else:
         _emit_legacy_debug(
@@ -4508,7 +4514,8 @@ class FSMBuilder:
             self._machine_type = AsyncStateMachine if async_mode else StateMachine
             _emit_legacy_debug(
                 self._logger,
-                "Builder: Explicitly set to %s mode", "async" if async_mode else "sync"
+                "Builder: Explicitly set to %s mode",
+                "async" if async_mode else "sync",
             )
 
         # Per-state callback queues — applied in build()
@@ -4598,7 +4605,8 @@ class FSMBuilder:
             self._machine_type = required_type
             _emit_legacy_debug(
                 self._logger,
-                "Builder: Upgraded to async mode due to state '%s'", state.name
+                "Builder: Upgraded to async mode due to state '%s'",
+                state.name,
             )
         return self
 
