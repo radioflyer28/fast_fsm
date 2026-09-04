@@ -12,11 +12,13 @@ import pytest
 
 from fast_fsm.core import (
     AsyncStateMachine,
+    DeclarativeState,
     FSMTraceEvent,
     State,
     StateMachine,
     configure_fsm_logging,
     set_fsm_logging_level,
+    transition,
 )
 from fast_fsm.conditions import FuncCondition
 
@@ -30,6 +32,8 @@ KEYWORD_SENTINEL = "keyword-secret-19"
 EXCEPTION_SENTINEL = "exception-secret-19"
 REPR_SENTINEL = "repr-secret-19"
 MACHINE_SENTINEL = "machine-secret-19"
+PRIVATE_KEY_SENTINEL = "_private-key-secret-19"
+INVALID_KEY_SENTINEL = "invalid-key-secret-19-" + "x" * 101
 RAW_SENTINELS = (
     TRIGGER_SENTINEL,
     SOURCE_SENTINEL,
@@ -39,6 +43,8 @@ RAW_SENTINELS = (
     EXCEPTION_SENTINEL,
     REPR_SENTINEL,
     MACHINE_SENTINEL,
+    PRIVATE_KEY_SENTINEL,
+    INVALID_KEY_SENTINEL,
 )
 
 
@@ -87,6 +93,22 @@ def _logger_name(label: str) -> str:
     return f"fast_fsm.phase19.{label}.{uuid.uuid4().hex}"
 
 
+def _contains_raw_secret(value: object, secret: str) -> bool:
+    """Inspect record data without coercing arbitrary caller objects to text."""
+
+    if isinstance(value, str):
+        return secret in value
+    if isinstance(value, dict):
+        return any(
+            _contains_raw_secret(item, secret)
+            for pair in value.items()
+            for item in pair
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_raw_secret(item, secret) for item in value)
+    return False
+
+
 def _assert_no_raw_payload(
     handler: CaptureHandler, hostile_payload: HostileRepr, stderr: str
 ) -> None:
@@ -101,11 +123,9 @@ def _assert_no_raw_payload(
         assert hostile_payload not in record_dict.values()
         for secret in RAW_SENTINELS:
             assert secret not in formatted
-            assert not (isinstance(message, str) and secret in message)
-            assert all(
-                not (isinstance(value, str) and secret in value)
-                for value in record_dict.values()
-            )
+            assert not _contains_raw_secret(message, secret)
+            assert not _contains_raw_secret(args, secret)
+            assert not _contains_raw_secret(record_dict, secret)
 
 
 def _sync_trace_machine(
@@ -319,6 +339,73 @@ async def test_async_trace_suppresses_legacy_failure_warnings(
         )
 
         assert not result.success
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_exact_trace_suppresses_trigger_and_declarative_legacy_diagnostics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Every trigger-adjacent legacy diagnostic remains outside TRACE records."""
+
+    logger_name = _logger_name("trigger-diagnostics")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    class GuardedState(DeclarativeState):
+        @transition(
+            TRIGGER_SENTINEL,
+            from_state=SOURCE_SENTINEL,
+            to_state=DESTINATION_SENTINEL,
+            condition=lambda *_args, **_kwargs: True,
+        )
+        def guarded(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    class AsyncHandlerState(DeclarativeState):
+        @transition(TRIGGER_SENTINEL)
+        async def guarded(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False, redactor=None
+        )
+        hostile_payload = HostileRepr()
+        source = GuardedState(SOURCE_SENTINEL, logger_name=logger_name)
+        destination = State(DESTINATION_SENTINEL)
+        machine = StateMachine(
+            source, name=MACHINE_SENTINEL, logger_name=logger_name
+        )
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+        kwargs = {
+            **{f"field_{index}": KEYWORD_SENTINEL for index in range(51)},
+            INVALID_KEY_SENTINEL: KEYWORD_SENTINEL,
+            PRIVATE_KEY_SENTINEL: KEYWORD_SENTINEL,
+        }
+
+        assert machine.trigger(
+            TRIGGER_SENTINEL, POSITIONAL_SENTINEL, hostile_payload, **kwargs
+        ).success
+
+        async_source = AsyncHandlerState(SOURCE_SENTINEL, logger_name=logger_name)
+        async_destination = State(DESTINATION_SENTINEL)
+        sync_machine = StateMachine(
+            async_source, name=MACHINE_SENTINEL, logger_name=logger_name
+        )
+        sync_machine.add_state(async_destination)
+        sync_machine.add_transition(
+            TRIGGER_SENTINEL, async_source, async_destination
+        )
+        assert not sync_machine.trigger(TRIGGER_SENTINEL).success
+
         _assert_no_raw_payload(
             application_handler, hostile_payload, capsys.readouterr().err
         )

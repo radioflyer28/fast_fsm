@@ -274,6 +274,18 @@ def _emit_legacy_warning(logger: logging.Logger, message: str, *args: object) ->
         logger.warning(message, *args)
 
 
+def _emit_legacy_error(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy ERROR diagnostics out of redacted TRACE configuration."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        logger.error(message, *args)
+
+
+def _emit_legacy_info(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy INFO diagnostics out of redacted TRACE configuration."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        logger.info(message, *args)
+
+
 def _set_prepared_declarative_guard(
     machine: "StateMachine", source_state: "State", trigger: str, to_state: "State"
 ) -> contextvars.Token[Optional[_PreparedDeclarativeGuard]]:
@@ -1994,7 +2006,8 @@ class StateMachine:
                     _reject_sync_awaitable(condition_result)
             else:
                 condition_result = bool(condition)
-            source_state._logger.debug(
+            _emit_legacy_debug(
+                source_state._logger,
                 "State '%s': Condition check for trigger '%s': %s",
                 source_state.name,
                 prepared.trigger,
@@ -2004,7 +2017,8 @@ class StateMachine:
         except Exception as exc:  # broad catch preserves can_trigger compatibility
             if raise_on_error:
                 raise
-            source_state._logger.warning(
+            _emit_legacy_warning(
+                source_state._logger,
                 "State '%s': Condition evaluation failed for trigger '%s' type=%s",
                 source_state.name,
                 prepared.trigger,
@@ -2039,7 +2053,8 @@ class StateMachine:
                     condition_result = await condition_result
             else:
                 condition_result = bool(condition)
-            source_state._logger.debug(
+            _emit_legacy_debug(
+                source_state._logger,
                 "State '%s': Async condition check for trigger '%s': %s",
                 source_state.name,
                 prepared.trigger,
@@ -2049,7 +2064,8 @@ class StateMachine:
         except Exception as exc:  # broad catch preserves can_trigger compatibility
             if raise_on_error:
                 raise
-            source_state._logger.warning(
+            _emit_legacy_warning(
+                source_state._logger,
                 "State '%s': Async condition evaluation failed for trigger '%s' type=%s",
                 source_state.name,
                 prepared.trigger,
@@ -2093,7 +2109,8 @@ class StateMachine:
 
         # Retain the established diagnostic only; values are never logged.
         if len(kwargs) > 50:
-            self._logger.warning(
+            _emit_legacy_warning(
+                self._logger,
                 "%s: Too many kwargs (%d) passed to condition, truncating",
                 self._name,
                 len(kwargs),
@@ -2104,12 +2121,14 @@ class StateMachine:
         # keys deterministic without retaining the caller's mapping.
         for key, value in kwargs.items():
             if not isinstance(key, str) or len(key) > 100:
-                self._logger.warning(
+                _emit_legacy_warning(
+                    self._logger,
                     "%s: Skipping invalid kwarg key for condition", self._name
                 )
                 continue
             if key.startswith("_"):
-                self._logger.debug(
+                _emit_legacy_debug(
+                    self._logger,
                     "%s: Skipping private kwarg '%s' for condition", self._name, key
                 )
                 continue
@@ -2766,7 +2785,8 @@ class StateMachine:
                 try:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_BEFORE_TRANSITION,
@@ -2776,7 +2796,8 @@ class StateMachine:
         try:
             old_state.on_exit(to_state, trigger)
         except Exception as cause:
-            self._logger.warning(
+            _emit_legacy_warning(
+                self._logger,
                 "%s: control callback failed stage=%s type=%s",
                 self._name,
                 _LIFECYCLE_STAGE_SOURCE_EXIT,
@@ -2789,7 +2810,8 @@ class StateMachine:
                 try:
                     fn(to_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
@@ -2801,7 +2823,8 @@ class StateMachine:
                 try:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
@@ -2813,7 +2836,8 @@ class StateMachine:
         try:
             to_state.on_enter(old_state, trigger)
         except Exception as cause:
-            self._logger.warning(
+            _emit_legacy_warning(
+                self._logger,
                 "%s: control callback failed stage=%s type=%s",
                 self._name,
                 _LIFECYCLE_STAGE_DESTINATION_ENTER,
@@ -2826,7 +2850,8 @@ class StateMachine:
                 try:
                     fn(old_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
@@ -2838,7 +2863,8 @@ class StateMachine:
                 try:
                     fn(to_state, old_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
@@ -2850,7 +2876,8 @@ class StateMachine:
                 try:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_AFTER_TRANSITION,
@@ -2863,7 +2890,8 @@ class StateMachine:
                 try:
                     fn(old_state, to_state, trigger)
                 except Exception as cause:
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "%s: control callback failed stage=%s type=%s",
                         self._name,
                         _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
@@ -3116,7 +3144,8 @@ class StateMachine:
                 except (
                     Exception
                 ) as cause:  # intentional post-admission compatibility barrier
-                    self._logger.error(
+                    _emit_legacy_error(
+                        self._logger,
                         "%s: safe trigger failed type=%s",
                         self._name,
                         type(cause).__name__,
@@ -4002,7 +4031,8 @@ def _invoke_declarative_handler_for_transition(
     method = handler_info["method"]
     logger = cast(DeclarativeState, source_state)._logger
     if handler_info["is_async"]:
-        logger.warning(
+        _emit_legacy_warning(
+            logger,
             "State '%s': declarative handler failed stage=%s type=async",
             source_state.name,
             _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
@@ -4073,14 +4103,16 @@ def _invoke_declarative_handler(
     method = handler_info["method"]
     method_name = method.__name__
     logger = cast(DeclarativeState, source_state)._logger
-    logger.debug(
+    _emit_legacy_debug(
+        logger,
         "State '%s': Executing handler '%s' for event '%s'",
         source_state.name,
         method_name,
         event,
     )
     if handler_info["is_async"]:
-        logger.warning(
+        _emit_legacy_warning(
+            logger,
             "State '%s': Async handler '%s' cannot be executed in sync context. "
             "Use AsyncDeclarativeState for async methods.",
             source_state.name,
@@ -4093,14 +4125,16 @@ def _invoke_declarative_handler(
         result = _normalize_declarative_handler_result(method(*args, **kwargs))
     except Exception as exc:  # broad catch isolates user handler failures
         error_msg = f"Handler '{method_name}' raised exception: {exc}"
-        logger.warning("State '%s': %s", source_state.name, error_msg)
+        _emit_legacy_warning(logger, "State '%s': %s", source_state.name, error_msg)
         return TransitionResult(False, error=error_msg)
     if result.success:
-        logger.debug(
+        _emit_legacy_debug(
+            logger,
             "State '%s': Handler '%s' succeeded", source_state.name, method_name
         )
     else:
-        logger.debug(
+        _emit_legacy_debug(
+            logger,
             "State '%s': Handler '%s' failed: %s",
             source_state.name,
             method_name,
@@ -4120,7 +4154,8 @@ async def _invoke_declarative_handler_async(
     method = handler_info["method"]
     method_name = method.__name__
     logger = cast(DeclarativeState, source_state)._logger
-    logger.debug(
+    _emit_legacy_debug(
+        logger,
         "State '%s': Executing async handler '%s' for event '%s'",
         source_state.name,
         method_name,
@@ -4135,14 +4170,16 @@ async def _invoke_declarative_handler_async(
         result = _normalize_declarative_handler_result(raw_result)
     except Exception as exc:  # broad catch isolates user handler failures
         error_msg = f"Async handler '{method_name}' raised exception: {exc}"
-        logger.warning("State '%s': %s", source_state.name, error_msg)
+        _emit_legacy_warning(logger, "State '%s': %s", source_state.name, error_msg)
         return TransitionResult(False, error=error_msg)
     if result.success:
-        logger.debug(
+        _emit_legacy_debug(
+            logger,
             "State '%s': Async handler '%s' succeeded", source_state.name, method_name
         )
     else:
-        logger.debug(
+        _emit_legacy_debug(
+            logger,
             "State '%s': Async handler '%s' failed: %s",
             source_state.name,
             method_name,
@@ -4199,7 +4236,8 @@ class DeclarativeState(State):
                     self._handlers[trigger] = handler_info
 
                     # Log handler registration
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Registered handler '%s' for trigger '%s'%s",
                         self.name,
                         attr_name,
@@ -4228,7 +4266,8 @@ class DeclarativeState(State):
                     # Handle different condition types
                     if isinstance(condition, AsyncCondition):
                         # For sync context, we can't handle async conditions properly
-                        self._logger.warning(
+                        _emit_legacy_warning(
+                            self._logger,
                             "State '%s': Async condition '%s' in sync context. "
                             "Consider using AsyncDeclarativeState.",
                             self.name,
@@ -4251,7 +4290,8 @@ class DeclarativeState(State):
                     else:
                         condition_result = bool(condition)
 
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Condition check for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -4262,7 +4302,8 @@ class DeclarativeState(State):
                         return False
 
                 except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from DeclarativeState control flow
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "State '%s': Condition evaluation failed for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -4326,7 +4367,8 @@ class AsyncDeclarativeState(DeclarativeState):
                     else:
                         condition_result = bool(condition)
 
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Async condition check for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -4337,7 +4379,8 @@ class AsyncDeclarativeState(DeclarativeState):
                         return False
 
                 except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from AsyncDeclarativeState control flow
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "State '%s': Async condition evaluation failed for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -4433,14 +4476,16 @@ class FSMBuilder:
         if async_mode is None:
             self._auto_detect = True
             self._machine_type = detected_type
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Auto-detected %s mode based on initial state",
                 "async" if self._machine_type == AsyncStateMachine else "sync",
             )
         else:
             self._auto_detect = False
             self._machine_type = AsyncStateMachine if async_mode else StateMachine
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Explicitly set to %s mode", "async" if async_mode else "sync"
             )
 
@@ -4529,7 +4574,8 @@ class FSMBuilder:
         self._states[state.name] = state
         if required_type != self._machine_type:
             self._machine_type = required_type
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to state '%s'", state.name
             )
         return self
@@ -4583,7 +4629,8 @@ class FSMBuilder:
         self._transitions.append((trigger, from_state, to_state, condition))
         if required_type != self._machine_type:
             self._machine_type = required_type
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to async condition '%s'",
                 getattr(condition, "name", str(condition)),
             )
@@ -4643,7 +4690,8 @@ class FSMBuilder:
         self._enter_async_callbacks.append((state_name, callback))
         if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to on_enter_async callback for '%s'",
                 state_name,
             )
@@ -4667,7 +4715,8 @@ class FSMBuilder:
         self._exit_async_callbacks.append((state_name, callback))
         if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to on_exit_async callback for '%s'",
                 state_name,
             )
@@ -4678,7 +4727,7 @@ class FSMBuilder:
         self._ensure_mutable()
         self._auto_detect = False
         self._machine_type = AsyncStateMachine
-        self._logger.debug("Builder: Forced to async mode")
+        _emit_legacy_debug(self._logger, "Builder: Forced to async mode")
         return self
 
     def force_sync(self) -> "FSMBuilder":
@@ -4686,7 +4735,7 @@ class FSMBuilder:
         self._ensure_mutable()
         self._auto_detect = False
         self._machine_type = StateMachine
-        self._logger.debug("Builder: Forced to sync mode")
+        _emit_legacy_debug(self._logger, "Builder: Forced to sync mode")
         return self
 
     def _preflight_async_requirements(self) -> Optional[str]:
@@ -4811,7 +4860,8 @@ class FSMBuilder:
             if isinstance(candidate, AsyncStateMachine)
             else "StateMachine"
         )
-        self._logger.info(
+        _emit_legacy_info(
+            self._logger,
             "Builder: Created %s '%s' with %d states and %d transitions",
             machine_type_name,
             candidate.name,
