@@ -199,7 +199,7 @@
   4. Validation, comparison, JSON analysis, and diagram generation all describe the same immutable graph snapshot rather than independently reading mutable private dictionaries.
   5. Mermaid and PlantUML output uses collision-free identifiers and grammar-specific escaping, while trace logs redact payload values by default, accept an application redactor, and preserve application-owned handlers through reversible configuration.
 
-**Plans**: 6/8 plans executed
+**Plans**: 7/8 plans executed
 
 **Wave 0** *(tracer and strict-RED harnesses; no file overlap)*
 
@@ -221,7 +221,7 @@
 
 **Wave 4** *(blocked on all behavior plans)*
 
-- [ ] 19-07-PLAN.md — Publish README/API, architecture, testing, ADR, and SPR contracts
+- [x] 19-07-PLAN.md — Publish README/API, architecture, testing, ADR, and SPR contracts
 
 **Wave 5** *(blocked on documentation and complete implementation)*
 
@@ -252,5 +252,5 @@
 | 16. Canonical Graph & Dispatch Invariants | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
-| 19. Bounded Diagnostics & Safe Output | v0.3.0 | 6/8 | In Progress|  |
+| 19. Bounded Diagnostics & Safe Output | v0.3.0 | 7/8 | In Progress|  |
 | 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/TBD | Not started | - |
