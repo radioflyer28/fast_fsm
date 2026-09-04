@@ -523,11 +523,31 @@ def test_phase19_logging_marker_and_handle_stay_slotted_and_owned() -> None:
         for keyword in marker_decorator.keywords
         if isinstance(keyword.value, ast.Constant)
     } == {"frozen": True, "slots": True}
-    assert [
-        item.target.id
+    marker_fields = {
+        item.target.id: item.annotation
         for item in marker.body
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
-    ] == ["generation", "redactor"]
+    }
+    assert list(marker_fields) == ["generation", "redactor", "configured_level"]
+    configured_level_annotation = marker_fields["configured_level"]
+    assert isinstance(configured_level_annotation, ast.Name)
+    assert configured_level_annotation.id == "int"
+
+    configure = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "configure_fsm_logging"
+    )
+    marker_call = next(
+        node
+        for node in ast.walk(configure)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_FSMStreamHandler"
+    )
+    assert [
+        argument.id for argument in marker_call.args if isinstance(argument, ast.Name)
+    ] == ["generation", "redactor", "level"]
 
     handle = classes.get("FSMLoggingHandle")
     assert handle is not None
