@@ -1046,6 +1046,47 @@ def test_rejected_configuration_preserves_prior_handle_and_logger_state() -> Non
         handle.restore()
 
 
+def test_failed_commit_closes_candidate_and_restores_logger_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing handler installation must roll back its complete transaction."""
+
+    logger_name = _logger_name("commit-failure")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    candidates: list[logging.StreamHandler] = []
+    original_stream_handler = logging.StreamHandler
+
+    def track_candidate(*args: Any, **kwargs: Any) -> logging.StreamHandler:
+        candidate = original_stream_handler(*args, **kwargs)
+        candidates.append(candidate)
+        return candidate
+
+    def reject_candidate(_handler: logging.Handler) -> None:
+        raise RuntimeError("handler installation failed")
+
+    monkeypatch.setattr(logging, "StreamHandler", track_candidate)
+    monkeypatch.setattr(logger, "addHandler", reject_candidate)
+
+    with pytest.raises(RuntimeError, match="handler installation failed"):
+        configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+
+    assert len(candidates) == 1
+    assert candidates[0]._closed is True
+    assert not logger.handlers
+    assert logger.level == original_level
+    assert logger.propagate is original_propagate
+    for name in (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    ):
+        assert not hasattr(logger, name)
+
+
 def test_concurrent_configurations_publish_one_coherent_owned_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

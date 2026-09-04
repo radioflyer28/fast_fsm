@@ -5067,8 +5067,21 @@ def configure_fsm_logging(
     configured_level = _validate_fsm_logging_level(level)
     handler = _prepare_fsm_logging_handler(configured_level, format_string)
     logger = logging.getLogger(logger_name)
-    try:
-        with _fsm_logging_configuration_lock:
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    with _fsm_logging_configuration_lock:
+        original_level = logger.level
+        original_propagate = logger.propagate
+        original_metadata = {
+            name: (hasattr(logger, name), getattr(logger, name, None))
+            for name in metadata_names
+        }
+        try:
             previous_generation = getattr(logger, "_fast_fsm_generation", None)
             previous_level = getattr(logger, "_fast_fsm_configured_level", None)
             previous_propagate = getattr(logger, "_fast_fsm_configured_propagate", None)
@@ -5119,12 +5132,19 @@ def configure_fsm_logging(
                 propagate,
                 generation,
             )
-    except BaseException:
-        if handler is not None:
-            if handler in logger.handlers:
-                logger.removeHandler(handler)
-            handler.close()
-        raise
+        except BaseException:
+            if handler is not None:
+                if handler in logger.handlers:
+                    logger.removeHandler(handler)
+                handler.close()
+            logger.setLevel(original_level)
+            logger.propagate = original_propagate
+            for name, (was_present, value) in original_metadata.items():
+                if was_present:
+                    setattr(logger, name, value)
+                else:
+                    delattr(logger, name)
+            raise
 
 
 def set_fsm_logging_level(
