@@ -12,6 +12,7 @@ without adding overhead to the core FSM classes. Includes:
 - Smart validation recommendations
 """
 
+from dataclasses import asdict
 from typing import Dict, Set, List, Tuple, Optional, Any, Callable
 from collections import defaultdict, deque
 import json
@@ -89,6 +90,11 @@ def _aggregate_diagnostic_status(
     )
 
 
+def _diagnostic_status_record(status: DiagnosticStatus) -> Dict[str, Any]:
+    """Return JSON-ready scalar status without exposing graph internals."""
+    return asdict(status)
+
+
 class FSMValidator:
     """
     Lightweight validator for fast_fsm StateMachine instances.
@@ -124,7 +130,23 @@ class FSMValidator:
                 ``fsm.name``.  Useful when validating anonymous FSMs or
                 producing reports with a custom title.
         """
-        self._snapshot = fsm._graph_snapshot()
+        self._initialize_from_snapshot(
+            fsm,
+            fsm._graph_snapshot(),
+            name=name,
+            budget=_DiagnosticBudget(limits),
+        )
+
+    def _initialize_from_snapshot(
+        self,
+        fsm: StateMachine,
+        snapshot: Any,
+        *,
+        name: Optional[str],
+        budget: _DiagnosticBudget,
+    ) -> None:
+        """Initialize legacy adapters from one captured graph and one ledger."""
+        self._snapshot = snapshot
         self.fsm = fsm
         self._report_name: str = name if name is not None else self._snapshot.name
         self.states: Set[str] = set()
@@ -135,7 +157,7 @@ class FSMValidator:
         self.initial_state = self._snapshot.initial_state_name
         self.current_state = self._snapshot.current_state_name
         self._diagnostic_graph = _graph_from_snapshot(self._snapshot)
-        self._budget = _DiagnosticBudget(limits)
+        self._budget = budget
 
         # Extract FSM structure
         self._extract_fsm_structure()
@@ -154,7 +176,12 @@ class FSMValidator:
         """Return scalar completion metadata for the shared diagnostic budget."""
         return self._budget.status
 
-    def get_reachable_states(self, start_state: Optional[str] = None) -> Set[str]:
+    def get_reachable_states(
+        self,
+        start_state: Optional[str] = None,
+        *,
+        limits: DiagnosticLimits | None = None,
+    ) -> Set[str]:
         """
         Find all states reachable from the given start state.
 
@@ -176,30 +203,37 @@ class FSMValidator:
         return {
             self._diagnostic_graph.state_names[index]
             for index in _reachable_indices(
-                self._diagnostic_graph, self._budget, start_index=start_index
+                self._diagnostic_graph,
+                self._operation_budget(limits),
+                start_index=start_index,
             )
         }
 
-    def find_unreachable_states(self) -> Set[str]:
+    def find_unreachable_states(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> Set[str]:
         """Find states that cannot be reached from the initial state"""
-        reachable = self.get_reachable_states()
+        reachable = self.get_reachable_states(limits=limits)
         return self.states - reachable
 
-    def find_dead_states(self) -> Set[str]:
-        """Find states with no outgoing transitions (potential dead ends)"""
-        dead_states = set()
-        for state in self.states:
-            has_outgoing = any(
-                self.transitions[state][event]
-                for event in self.events
-                if event in self.transitions[state]
-            )
-            if not has_outgoing:
-                dead_states.add(state)
-        return dead_states
+    def _dead_state_names(self, budget: _DiagnosticBudget) -> tuple[str, ...]:
+        """Return snapshot-ordered dead states with bounded work accounting."""
+        dead_states: List[str] = []
+        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
+            budget.reserve_work(stage="dead-state.visit")
+            if not self._diagnostic_graph.forward[state_index]:
+                budget.reserve_result(stage="dead-state.result")
+                dead_states.append(state_name)
+        return tuple(dead_states)
 
-    def find_missing_transitions(self) -> List[Tuple[str, str]]:
-        """Find state-event combinations with no defined transitions"""
+    def find_dead_states(self, *, limits: DiagnosticLimits | None = None) -> Set[str]:
+        """Find states with no outgoing transitions (potential dead ends)"""
+        return set(self._dead_state_names(self._operation_budget(limits)))
+
+    def _missing_transition_pairs(
+        self, budget: _DiagnosticBudget
+    ) -> List[Tuple[str, str]]:
+        """Return bounded snapshot-order missing state/event combinations."""
         missing: List[Tuple[str, str]] = []
         event_names = tuple(sorted(self.events))
         for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
@@ -208,11 +242,17 @@ class FSMValidator:
                 for edge_index in self._diagnostic_graph.forward[state_index]
             }
             for event_name in event_names:
-                self._budget.reserve_work(stage="missing.transition.cell")
+                budget.reserve_work(stage="missing.transition.cell")
                 if event_name not in outgoing_events:
-                    self._budget.reserve_result(stage="missing.transition.result")
+                    budget.reserve_result(stage="missing.transition.result")
                     missing.append((state_name, event_name))
         return missing
+
+    def find_missing_transitions(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> List[Tuple[str, str]]:
+        """Find state-event combinations with no defined transitions"""
+        return self._missing_transition_pairs(self._operation_budget(limits))
 
     def _operation_budget(self, limits: DiagnosticLimits | None) -> _DiagnosticBudget:
         """Use the shared ledger unless a caller requests a fresh top-level cap."""
@@ -288,19 +328,12 @@ class FSMValidator:
             for index in _reachable_indices(self._diagnostic_graph, budget)
         }
         unreachable = self.states - reachable
-        dead_states = self.find_dead_states()
-        missing: List[Tuple[str, str]] = []
-        event_names = tuple(sorted(self.events))
-        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
-            outgoing_events = {
-                self._diagnostic_graph.edges[edge_index].trigger
-                for edge_index in self._diagnostic_graph.forward[state_index]
-            }
-            for event_name in event_names:
-                budget.reserve_work(stage="missing.transition.cell")
-                if event_name not in outgoing_events:
-                    budget.reserve_result(stage="missing.transition.result")
-                    missing.append((state_name, event_name))
+        dead_states = set(self._dead_state_names(budget))
+        missing = self._missing_transition_pairs(budget)
+        cyclic_components = _strongly_connected_components(
+            self._diagnostic_graph, budget
+        )
+        depth = _structural_depth(self._diagnostic_graph, budget)
 
         report: Dict[str, Any] = {
             "fsm_name": self._report_name,
@@ -315,6 +348,14 @@ class FSMValidator:
             "is_complete": len(missing) == 0,
             "is_reachable": len(unreachable) == 0,
             "has_dead_states": len(dead_states) > 0,
+            "cyclic_components": cyclic_components,
+            "states_in_cycles": tuple(
+                state_name
+                for component in cyclic_components
+                for state_name in component
+            ),
+            "structural_depth": depth["depth"],
+            "depth_interpretation": depth["interpretation"],
             "sparse_adjacency": _sparse_adjacency(self._diagnostic_graph, budget),
             "diagnostic_status": budget.status,
         }
@@ -351,35 +392,45 @@ class FSMValidator:
         )
         return [list(path) for path in paths]
 
-    def check_determinism(self) -> Dict[str, Any]:
+    def check_determinism(
+        self, *, limits: DiagnosticLimits | None = None
+    ) -> Dict[str, Any]:
         """
         Check if FSM is deterministic (at most one transition per state-event pair).
 
         Returns:
             Dictionary with determinism analysis results
         """
-        non_deterministic = []
-        for state in self.states:
-            for event in self.events:
-                next_states = self.transitions[state][event]
-                if len(next_states) > 1:
-                    non_deterministic.append((state, event))  # pragma: no cover
+        budget = self._operation_budget(limits)
+        non_deterministic: List[Tuple[str, str]] = []
+        event_names = tuple(sorted(self.events))
+        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
+            outgoing = self._diagnostic_graph.forward[state_index]
+            for event_name in event_names:
+                budget.reserve_work(stage="determinism.cell")
+                targets = {
+                    self._diagnostic_graph.edges[edge_index].to_index
+                    for edge_index in outgoing
+                    if self._diagnostic_graph.edges[edge_index].trigger == event_name
+                }
+                if len(targets) > 1:  # pragma: no cover
+                    budget.reserve_result(stage="determinism.result")
+                    non_deterministic.append((state_name, event_name))
 
         return {
             "is_deterministic": len(non_deterministic) == 0,
             "non_deterministic_transitions": non_deterministic,
         }
 
-    def find_cycles(self) -> List[List[str]]:
+    def find_cycles(self, *, limits: DiagnosticLimits | None = None) -> List[List[str]]:
         """
         Find all cycles in the FSM.
 
         Returns:
             List of cycles, where each cycle is a list of states
         """
-        components = _strongly_connected_components(
-            self._diagnostic_graph, self._budget
-        )
+        budget = self._operation_budget(limits)
+        components = _strongly_connected_components(self._diagnostic_graph, budget)
         state_indices = {
             name: state_index
             for state_index, name in enumerate(self._diagnostic_graph.state_names)
@@ -388,7 +439,7 @@ class FSMValidator:
             _closed_cycle_path(
                 tuple(state_indices[name] for name in component),
                 self._diagnostic_graph,
-                self._budget,
+                budget,
             )
             for component in components
         ]
@@ -550,7 +601,12 @@ class EnhancedFSMValidator(FSMValidator):
         self._design_style_threshold: float = design_style_threshold
         self._min_transitions_for_style: int = min_transitions_for_style
         self._completeness_weight: float = completeness_weight
-        super().__init__(fsm, name=name, limits=limits)
+        self._initialize_from_snapshot(
+            fsm,
+            fsm._graph_snapshot(),
+            name=name,
+            budget=_DiagnosticBudget(limits),
+        )
         self.issues: List[ValidationIssue] = []
         self.recommendations: List[str] = []
         self.metrics: Dict[str, Any] = {}
@@ -886,6 +942,7 @@ class EnhancedFSMValidator(FSMValidator):
             else "C"
             if blended >= 50
             else "D",
+            "diagnostic_status": self.diagnostic_status,
         }
 
     def export_report(self, format: str = "text") -> str:
@@ -901,11 +958,16 @@ class EnhancedFSMValidator(FSMValidator):
         """Export as JSON with full adjacency matrix and stable transition indices."""
         adj = self.get_adjacency_matrix()
         score = self.get_validation_score()
+        json_score = {
+            **score,
+            "diagnostic_status": _diagnostic_status_record(score["diagnostic_status"]),
+        }
         return json.dumps(
             {
                 "fsm_name": self._report_name,
                 "design_style": score["design_style"],
-                "validation_score": score,
+                "validation_score": json_score,
+                "diagnostic_status": _diagnostic_status_record(self.diagnostic_status),
                 "metrics": self.metrics,
                 "issues": [
                     {
@@ -1116,7 +1178,9 @@ class EnhancedFSMValidator(FSMValidator):
 # Enhanced convenience functions with new features
 
 
-def enhanced_validate_fsm(fsm: StateMachine) -> EnhancedFSMValidator:
+def enhanced_validate_fsm(
+    fsm: StateMachine, *, limits: DiagnosticLimits | None = None
+) -> EnhancedFSMValidator:
     """
     Create an enhanced validator with smart recommendations.
 
@@ -1126,10 +1190,12 @@ def enhanced_validate_fsm(fsm: StateMachine) -> EnhancedFSMValidator:
     Returns:
         EnhancedFSMValidator instance with comprehensive analysis
     """
-    return EnhancedFSMValidator(fsm)
+    return EnhancedFSMValidator(fsm, limits=limits)
 
 
-def quick_health_check(fsm: StateMachine) -> str:
+def quick_health_check(
+    fsm: StateMachine, *, limits: DiagnosticLimits | None = None
+) -> str:
     """
     Quick health check returning a simple status.
 
@@ -1139,7 +1205,7 @@ def quick_health_check(fsm: StateMachine) -> str:
     Returns:
         Health status: 'healthy', 'issues', 'critical'
     """
-    validator = EnhancedFSMValidator(fsm)
+    validator = EnhancedFSMValidator(fsm, limits=limits)
 
     if validator.has_critical_issues():
         return "critical"
@@ -1149,7 +1215,9 @@ def quick_health_check(fsm: StateMachine) -> str:
         return "healthy"
 
 
-def validate_and_score(fsm: StateMachine) -> Dict[str, Any]:
+def validate_and_score(
+    fsm: StateMachine, *, limits: DiagnosticLimits | None = None
+) -> Dict[str, Any]:
     """
     Validate FSM and return score with summary.
 
@@ -1159,7 +1227,7 @@ def validate_and_score(fsm: StateMachine) -> Dict[str, Any]:
     Returns:
         Dictionary with score and summary information
     """
-    validator = EnhancedFSMValidator(fsm)
+    validator = EnhancedFSMValidator(fsm, limits=limits)
     score = validator.get_validation_score()
 
     return {
@@ -1257,7 +1325,9 @@ def compare_fsms(
 # Legacy support - keep original functions but enhance them
 
 
-def validate_fsm(fsm: StateMachine) -> "EnhancedFSMValidator":
+def validate_fsm(
+    fsm: StateMachine, *, limits: DiagnosticLimits | None = None
+) -> "EnhancedFSMValidator":
     """
     Original function - now returns enhanced validator for backward compatibility.
 
@@ -1267,17 +1337,19 @@ def validate_fsm(fsm: StateMachine) -> "EnhancedFSMValidator":
     Returns:
         EnhancedFSMValidator instance (backward compatible)
     """
-    return EnhancedFSMValidator(fsm)
+    return EnhancedFSMValidator(fsm, limits=limits)
 
 
-def quick_validation_report(fsm: StateMachine) -> None:
+def quick_validation_report(
+    fsm: StateMachine, *, limits: DiagnosticLimits | None = None
+) -> None:
     """
     Enhanced version of the original quick report.
 
     Args:
         fsm: StateMachine instance to validate
     """
-    validator = EnhancedFSMValidator(fsm)
+    validator = EnhancedFSMValidator(fsm, limits=limits)
     validator.print_enhanced_report()
 
 
@@ -1345,7 +1417,12 @@ def batch_validate(
     }
 
 
-def fsm_lint(fsm: StateMachine, fix_mode: bool = False) -> None:
+def fsm_lint(
+    fsm: StateMachine,
+    fix_mode: bool = False,
+    *,
+    limits: DiagnosticLimits | None = None,
+) -> None:
     """
     Lint-style validation with optional auto-fixing.
 
@@ -1353,7 +1430,7 @@ def fsm_lint(fsm: StateMachine, fix_mode: bool = False) -> None:
         fsm: StateMachine to lint
         fix_mode: Whether to attempt auto-fixes
     """
-    validator = EnhancedFSMValidator(fsm)
+    validator = EnhancedFSMValidator(fsm, limits=limits)
 
     print(f"🔍 Linting FSM: {fsm.name}")
 

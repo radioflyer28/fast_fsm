@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import fast_fsm._diagnostics as diagnostics
@@ -298,6 +299,16 @@ def test_package_root_exports_only_diagnostic_contract_types() -> None:
         "DiagnosticStatus",
         "DiagnosticBudgetExceeded",
     }
+
+
+def test_validation_analysis_uses_only_captured_topology() -> None:
+    """Validation may retain the machine for compatibility but never read its maps."""
+    source = Path("src/fast_fsm/validation.py").read_text(encoding="utf-8")
+
+    assert "fsm._states" not in source
+    assert "fsm._transitions" not in source
+    assert ".fsm._states" not in source
+    assert ".fsm._transitions" not in source
 
 
 def _hash_seed_payload(seed: str) -> dict[str, object]:
@@ -621,8 +632,8 @@ def test_structured_report_has_complete_snapshot_analysis_metadata(
 
     assert report["initial_state"] == "a"
     assert report["current_state"] == "a"
-    assert report["cyclic_components"] == (("a", "b"), ("c", "d"), ("tail",))
-    assert report["states_in_cycles"] == ("a", "b", "c", "d", "tail")
+    assert report["cyclic_components"] == (("a", "b"), ("c", "d"))
+    assert report["states_in_cycles"] == ("a", "b", "c", "d")
     assert report["structural_depth"] == 2
     assert report["depth_interpretation"] == "condensation_dag_depth"
     assert report["sparse_adjacency"]["states"] == ("a", "b", "c", "d", "tail")
