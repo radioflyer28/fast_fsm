@@ -5096,15 +5096,31 @@ def set_fsm_logging_level(
     propagate: Optional[bool] = None,
     redactor: Optional[FSMTraceRedactor] = None,
 ) -> FSMLoggingHandle:
-    """
-    Set FSM logging level using standard Python logging level names.
+    """Set a named Fast FSM logger by verbosity and return its reversible handle.
 
     Args:
         verbosity: Logging level name (case-insensitive).
-                  Standard levels: 'debug', 'info', 'warning', 'error', 'critical'.
-                  Convenience alias: 'off' (same as 'warning' — silences FSM logs).
-                  Custom level: 'trace' (DEBUG-5, ultra-verbose trigger attempts).
-        logger_name: Logger name to configure
+            Standard levels: 'debug', 'info', 'warning', 'error', and 'critical'.
+            Convenience alias: 'off' (same as 'warning' — silences FSM logs).
+            Custom level: 'trace' (``logging.DEBUG - 5``) emits metadata-only
+            TRACE records with fixed ``trace_operation``, ``trace_stage``, and
+            ``trace_result`` categories, ``trace_arg_count``, and capped
+            sanitized ``trace_keyword_names``. They never contain trigger/state
+            names, positional or keyword values, exception payloads, or object
+            representations.
+        logger_name: Name of the logger to configure.
+        propagate: ``None`` preserves the logger's current propagation setting;
+            a Boolean explicitly sets it.
+        redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
+            ordinary ``Exception`` from the redactor emits fixed
+            ``redaction_failure`` metadata. A ``BaseException`` is not caught:
+            it emits no trace record and is re-raised.
+
+    Returns:
+        FSMLoggingHandle: A reversible handle that removes only its exact
+            library-owned handler. ``restore()`` conditionally restores the
+            prior level and propagation only while this configuration remains
+            current.
 
     Examples:
         # Show transitions (DEBUG level)
@@ -5116,7 +5132,7 @@ def set_fsm_logging_level(
         # Silence FSM logs
         set_fsm_logging_level('warning')  # or 'off'
 
-        # Ultra-verbose trigger tracing
+        # Enable metadata-only TRACE logging
         set_fsm_logging_level('trace')
     """
     level_map = {
@@ -5126,7 +5142,7 @@ def set_fsm_logging_level(
         "error": logging.ERROR,
         "critical": logging.CRITICAL,
         "off": logging.WARNING,  # convenience alias
-        "trace": logging.DEBUG - 5,  # custom ultra-verbose level
+        "trace": logging.DEBUG - 5,  # custom metadata-only TRACE level
     }
 
     key = verbosity.lower()

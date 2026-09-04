@@ -99,8 +99,12 @@ def _logger_name(label: str) -> str:
 def _core_function_ast(function_name: str) -> ast.FunctionDef:
     """Return a public logging function definition from its source contract."""
 
-    source_path = Path(__file__).resolve().parent.parent / "src" / "fast_fsm" / "core.py"
-    module = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    source_path = (
+        Path(__file__).resolve().parent.parent / "src" / "fast_fsm" / "core.py"
+    )
+    module = ast.parse(
+        source_path.read_text(encoding="utf-8"), filename=str(source_path)
+    )
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
             return node
@@ -1007,10 +1011,7 @@ def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
         root / "docs" / "api" / "core.md",
         root / "README.md",
         root / ".specify" / "memory" / "spr-core-api.md",
-        root
-        / ".specify"
-        / "decisions"
-        / "ADR-006-bounded-diagnostics-safe-output.md",
+        root / ".specify" / "decisions" / "ADR-006-bounded-diagnostics-safe-output.md",
     )
     for path in documented_files:
         document = " ".join(path.read_text(encoding="utf-8").lower().split())
@@ -1033,38 +1034,39 @@ def test_core_spr_documents_trace_handler_marker_schema() -> None:
     assert "legacy payload-bearing records must be suppressed" in document
 
 
-def test_configure_logging_docstring_matches_its_public_contract() -> None:
-    """Autodoc source must expose the signature, safe TRACE, and restore contracts."""
+def test_logging_configuration_docstrings_match_public_contracts() -> None:
+    """Autodoc source must expose both entry points' safe TRACE contracts."""
 
-    function = _core_function_ast("configure_fsm_logging")
-    assert [argument.arg for argument in function.args.posonlyargs] == []
-    assert [argument.arg for argument in function.args.args] == [
-        "level",
-        "logger_name",
-        "format_string",
-    ]
-    assert [argument.arg for argument in function.args.kwonlyargs] == [
-        "propagate",
-        "redactor",
-    ]
+    contracts = (
+        ("configure_fsm_logging", ["level", "logger_name", "format_string"]),
+        ("set_fsm_logging_level", ["verbosity", "logger_name"]),
+    )
+    for function_name, positional_arguments in contracts:
+        function = _core_function_ast(function_name)
+        assert [argument.arg for argument in function.args.posonlyargs] == []
+        assert [argument.arg for argument in function.args.args] == positional_arguments
+        assert [argument.arg for argument in function.args.kwonlyargs] == [
+            "propagate",
+            "redactor",
+        ]
 
-    documentation = ast.get_docstring(function)
-    assert documentation is not None
-    for field in (
-        "propagate:",
-        "redactor:",
-        "Returns:",
-        "FSMLoggingHandle:",
-        "trace_operation",
-        "trace_stage",
-        "trace_result",
-        "trace_arg_count",
-        "trace_keyword_names",
-        "redaction_failure",
-        "BaseException",
-        "emits no trace record and is re-raised",
-    ):
-        assert field in documentation
+        documentation = ast.get_docstring(function)
+        assert documentation is not None
+        for field in (
+            "propagate:",
+            "redactor:",
+            "Returns:",
+            "FSMLoggingHandle:",
+            "trace_operation",
+            "trace_stage",
+            "trace_result",
+            "trace_arg_count",
+            "trace_keyword_names",
+            "redaction_failure",
+            "BaseException",
+            "emits no trace record and is re-raised",
+        ):
+            assert field in documentation
 
 
 # ---------------------------------------------------------------------------
