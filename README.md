@@ -481,6 +481,101 @@ print(doc)   # or save to a .md file
 print(to_plantuml(fsm))
 ```
 
+### Bounded Diagnostics and Safe Output
+
+Diagnostics are opt-in design-time work. `trigger()`, `can_trigger()`,
+`add_state()`, and `add_transition()` remain O(1); importing or using the
+diagnostic APIs adds no runtime dependency and never puts graph traversal on
+that path. Each top-level validator, comparison, JSON export, or renderer
+captures one immutable private graph view and shares one budget through its
+nested analysis. Structural reachability always begins at the machine's
+declared initial state. The captured current state is reported separately; it
+does not change the answer.
+
+Use a keyword-only `DiagnosticLimits` override when the default ceilings are
+too small for a known diagnostic job:
+
+| Limit | Default | Counted before the operation |
+|---|---:|---|
+| `max_work` | 50,000 | graph visits, edge examinations, and other analysis work |
+| `max_results` | 10,000 | published diagnostic rows, components, paths, and similar results |
+| `max_dense_cells` | 200,000 | a requested dense matrix's complete cell allocation |
+| `max_path_expansions` | 20,000 | followed edges during generated-path exploration |
+
+These are finite operation counters, not elapsed-time limits. `DiagnosticStatus`
+is the structured completion record: `complete`, `exhausted_dimension`,
+`exhausted_stage`, `work_count`, `result_count`, `dense_cell_count`, and
+`path_expansion_count`. Structured validation, comparison, batch, report, and
+JSON output expose it. A legacy set, list, scalar, printed report, diagram, or
+dense-matrix shape cannot safely carry partial metadata, so it raises
+`DiagnosticBudgetExceeded` with the fixed message `diagnostic budget exhausted`
+instead of returning hidden partial output.
+
+`compare_fsms(*fsms, limits=None)` and
+`batch_validate(*fsms, show_summary=True, limits=None)` preserve every input
+by zero-based `position`, even when labels are empty or duplicated. Comparison
+entries are `{position, name, score, metrics, issue_count, diagnostic_status}`;
+rankings are `{position, name, score}` records sorted by descending score then
+ascending position, and `best_fsm` is `{position, name}`. Batch entries are
+`{position, name, validator, diagnostic_status}`. Names are display labels,
+never dictionary keys. Comparing zero machines returns empty `entries` and
+`rankings`, `best_fsm=None`, `count=0`, `total_issues=0`, and
+`avg_score=score_range=None`—the zero-machine numeric aggregates are `None`,
+not invented zeroes.
+
+Cycle membership is complete strongly connected component (SCC) membership:
+self-loops and every member of longer cycles appear once in deterministic
+snapshot order. A DAG reports `dag_longest_path`; a cyclic graph reports the
+longest depth of its SCC condensation DAG as `condensation_dag_depth`. This is
+not an exact longest-simple-path claim inside a cycle. Sparse state/event/edge
+rows are the default `O(V + E)` representation. Dense `V × events` transition
+and `V²` adjacency matrices are explicit compatibility outputs that preflight
+their full counted allocation before construction. Generated paths use
+iterative traversal and are bounded independently by requested length/path
+caps and the shared expansion, work, and result budgets.
+
+Diagram identity and text are separate. Mermaid and PlantUML use opaque,
+snapshot-position node IDs (`s0`, `s1`, ...) rather than labels, so labels that
+sanitize alike cannot collide. Mermaid text, PlantUML text, and Markdown
+headings/table cells each use their own grammar-specific, one-line encoding
+boundary for titles, state labels, triggers, and condition names. JSON and
+documents preserve snapshot order; dense JSON/document output is opt-in. A
+caller-supplied adjacency matrix must exactly match the captured states,
+events, transitions, and every cell or fails with
+`ValueError("adjacency matrix does not match captured snapshot")`.
+
+### Safe Trace Logging
+
+Trace output is metadata-only by default. At `logging.DEBUG - 5` it records
+fixed operation/stage/result categories, `trace_arg_count`, and capped,
+sanitized `trace_keyword_names`; it never puts trigger/state names, argument
+or keyword values, exception payloads, object representations, or raw values
+in a `LogRecord`, its arguments, `extra`, or formatted output. The disabled
+trace guard runs before event allocation, value traversal, handler lookup, or
+redactor work.
+
+An explicit `FSMTraceRedactor` receives one ephemeral frozen `FSMTraceEvent`
+with exactly `operation`, `stage`, `result`, `trigger`, `source_state`,
+`destination_state`, `positional_args`, `keyword_args`, and `error`. It may
+return only the scalar keys `operation`, `stage`, `result`, and `detail`; text
+is capped at 200 characters. A raising redactor, `None`/non-mapping result,
+forbidden key, non-scalar value, or oversized string fails closed by emitting
+only the fixed `redaction_failure` metadata—never a raw fallback. This is a
+fail-closed boundary, not best-effort formatting.
+
+`configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
+format_string="%(message)s", *, propagate=None, redactor=None)` returns an
+`FSMLoggingHandle`. It preserves application-owned handlers, filters,
+formatters, ordering, and open state; repeated library configuration replaces
+only its marked library handler. `propagate=None` preserves the application's
+existing setting, while a Boolean is a deliberate library choice.
+`FSMLoggingHandle.restore()` is idempotent and generation-scoped: it removes
+only its own library handler and restores a previous level/propagation value
+only when a newer configuration or application change has not superseded it.
+`set_fsm_logging_level(verbosity, logger_name="fast_fsm", *, propagate=None,
+redactor=None)` validates its verbosity name and delegates to the same
+ownership-preserving configuration seam. No logging backend is introduced.
+
 ### Serialization & Introspection
 
 Round-trip topology snapshots and machine-readable JSON export for agents:
