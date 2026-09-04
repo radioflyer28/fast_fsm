@@ -466,3 +466,52 @@ def test_dense_output_is_opt_in_preflighted_and_stale_matrices_are_rejected() ->
         ValueError, match="adjacency matrix does not match captured snapshot"
     ):
         to_mermaid_document(machine, adjacency_matrix=adjacency)
+
+
+def _transition_heavy_machine() -> StateMachine:
+    """Build two states with enough edges to exercise renderer result ceilings."""
+    machine = StateMachine.from_states("source", "destination", name="budget")
+    machine.add_transition("forward", "source", "destination")
+    machine.add_transition("backward", "destination", "source")
+    machine.add_transition("repeat", "source", "source")
+    return machine
+
+
+@pytest.mark.parametrize(
+    ("renderer", "required_results"),
+    ((to_mermaid, 7), (to_plantuml, 8)),
+)
+def test_diagram_result_budget_counts_every_emitted_row(
+    renderer: object, required_results: int
+) -> None:
+    """State, marker, transition, and grammar rows reserve results before output."""
+    machine = _transition_heavy_machine()
+
+    assert callable(renderer)
+    output = renderer(machine, limits=DiagnosticLimits(max_results=required_results))
+    assert isinstance(output, str)
+
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        renderer(machine, limits=DiagnosticLimits(max_results=required_results - 1))
+    assert raised.value.status.exhausted_dimension == "max_results"
+    assert raised.value.status.result_count == required_results - 1
+
+
+@pytest.mark.parametrize(
+    ("renderer", "required_results"),
+    ((to_mermaid_fenced, 9), (to_mermaid_document, 13)),
+)
+def test_composed_mermaid_output_shares_the_result_ledger(
+    renderer: object, required_results: int
+) -> None:
+    """Fences and document rows cannot bypass the diagram's result budget."""
+    machine = _transition_heavy_machine()
+
+    assert callable(renderer)
+    output = renderer(machine, limits=DiagnosticLimits(max_results=required_results))
+    assert isinstance(output, str)
+
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        renderer(machine, limits=DiagnosticLimits(max_results=required_results - 1))
+    assert raised.value.status.exhausted_dimension == "max_results"
+    assert raised.value.status.result_count == required_results - 1

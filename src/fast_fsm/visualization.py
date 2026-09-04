@@ -103,6 +103,14 @@ def _transition_label(
     return label
 
 
+def _append_rendered_line(
+    lines: list[str], budget: _DiagnosticBudget, *, stage: str, line: str
+) -> None:
+    """Reserve one rendered physical line before exposing it in diagram output."""
+    budget.reserve_result(stage=stage)
+    lines.append(line)
+
+
 def _to_mermaid_from_snapshot(
     _snapshot: Any,
     graph: _DiagnosticGraph,
@@ -113,20 +121,32 @@ def _to_mermaid_from_snapshot(
 ) -> str:
     """Render one already-captured graph as a collision-free Mermaid diagram."""
     state_ids = _opaque_state_ids(graph)
-    budget.reserve_result(stage="mermaid.state_ids", amount=len(state_ids))
     lines: list[str] = []
     if title is not None:
-        lines.append(f"%% {_escape_mermaid_text(title)}")
-    lines.append("stateDiagram-v2")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="mermaid.title",
+            line=f"%% {_escape_mermaid_text(title)}",
+        )
+    _append_rendered_line(lines, budget, stage="mermaid.header", line="stateDiagram-v2")
 
     for state_index, state_name in enumerate(graph.state_names):
         budget.reserve_work(stage="mermaid.state")
-        lines.append(
-            f'    state "{_escape_mermaid_text(state_name)}" as {state_ids[state_index]}'
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="mermaid.state",
+            line=f'    state "{_escape_mermaid_text(state_name)}" as {state_ids[state_index]}',
         )
 
     if graph.initial_index is not None:
-        lines.append(f"    [*] --> {state_ids[graph.initial_index]}")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="mermaid.initial",
+            line=f"    [*] --> {state_ids[graph.initial_index]}",
+        )
 
     for edge in graph.edges:
         budget.reserve_work(stage="mermaid.edge")
@@ -136,8 +156,11 @@ def _to_mermaid_from_snapshot(
             show_conditions=show_conditions,
             escape=_escape_mermaid_text,
         )
-        lines.append(
-            f"    {state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}"
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="mermaid.edge",
+            line=f"    {state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}",
         )
 
     return "\n".join(lines)
@@ -153,19 +176,32 @@ def _to_plantuml_from_snapshot(
 ) -> str:
     """Render one already-captured graph as a collision-free PlantUML diagram."""
     state_ids = _opaque_state_ids(graph)
-    budget.reserve_result(stage="plantuml.state_ids", amount=len(state_ids))
-    lines: list[str] = ["@startuml"]
+    lines: list[str] = []
+    _append_rendered_line(lines, budget, stage="plantuml.open", line="@startuml")
     if title is not None:
-        lines.append(f"title {_escape_plantuml_text(title)}")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="plantuml.title",
+            line=f"title {_escape_plantuml_text(title)}",
+        )
 
     for state_index, state_name in enumerate(graph.state_names):
         budget.reserve_work(stage="plantuml.state")
-        lines.append(
-            f'state "{_escape_plantuml_text(state_name)}" as {state_ids[state_index]}'
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="plantuml.state",
+            line=f'state "{_escape_plantuml_text(state_name)}" as {state_ids[state_index]}',
         )
 
     if graph.initial_index is not None:
-        lines.append(f"[*] --> {state_ids[graph.initial_index]}")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="plantuml.initial",
+            line=f"[*] --> {state_ids[graph.initial_index]}",
+        )
 
     has_outgoing = [False] * len(graph.state_names)
     for edge in graph.edges:
@@ -177,16 +213,24 @@ def _to_plantuml_from_snapshot(
             show_conditions=show_conditions,
             escape=_escape_plantuml_text,
         )
-        lines.append(
-            f"{state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}"
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="plantuml.edge",
+            line=f"{state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}",
         )
 
     for state_index, has_edge in enumerate(has_outgoing):
         if not has_edge:
             budget.reserve_work(stage="plantuml.terminal")
-            lines.append(f"{state_ids[state_index]} --> [*]")
+            _append_rendered_line(
+                lines,
+                budget,
+                stage="plantuml.terminal",
+                line=f"{state_ids[state_index]} --> [*]",
+            )
 
-    lines.append("@enduml")
+    _append_rendered_line(lines, budget, stage="plantuml.close", line="@enduml")
     return "\n".join(lines)
 
 
@@ -508,6 +552,7 @@ def _to_mermaid_fenced_from_snapshot(
     show_conditions: bool,
 ) -> str:
     """Fence one already-rendered snapshot diagram without another capture."""
+    budget.reserve_result(stage="mermaid.fence.open")
     diagram = _to_mermaid_from_snapshot(
         snapshot,
         graph,
@@ -515,6 +560,7 @@ def _to_mermaid_fenced_from_snapshot(
         title=title,
         show_conditions=show_conditions,
     )
+    budget.reserve_result(stage="mermaid.fence.close")
     return f"```mermaid\n{diagram}\n```"
 
 
@@ -651,8 +697,18 @@ def _to_mermaid_document_from_snapshot(
 ) -> str:
     """Compose the full Markdown document from one graph and one ledger."""
     heading = snapshot.name if title is None else title
-    lines: list[str] = [f"# {_escape_markdown_heading(heading)}", ""]
-    lines.extend(["## State Diagram", ""])
+    lines: list[str] = []
+    _append_rendered_line(
+        lines,
+        budget,
+        stage="document.heading",
+        line=f"# {_escape_markdown_heading(heading)}",
+    )
+    _append_rendered_line(lines, budget, stage="document.separator", line="")
+    _append_rendered_line(
+        lines, budget, stage="document.diagram.heading", line="## State Diagram"
+    )
+    _append_rendered_line(lines, budget, stage="document.separator", line="")
     lines.append(
         _to_mermaid_fenced_from_snapshot(
             snapshot,
@@ -683,10 +739,27 @@ def _to_mermaid_document_from_snapshot(
         raise _adjacency_mismatch()
 
     if states:
-        lines.extend(["", "## State Adjacency Matrix", ""])
+        _append_rendered_line(lines, budget, stage="document.separator", line="")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="document.adjacency.heading",
+            line="## State Adjacency Matrix",
+        )
+        _append_rendered_line(lines, budget, stage="document.separator", line="")
         header_cells = [_escape_markdown_cell(str(state)) for state in states]
-        lines.append("| → | " + " | ".join(header_cells) + " |")
-        lines.append("|---|" + "|".join(["---"] * len(states)) + "|")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="document.adjacency.header",
+            line="| → | " + " | ".join(header_cells) + " |",
+        )
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="document.adjacency.separator",
+            line="|---|" + "|".join(["---"] * len(states)) + "|",
+        )
         for source_index, state_name in enumerate(states):
             row_cells: list[str] = []
             row = matrix[source_index]
@@ -712,16 +785,33 @@ def _to_mermaid_document_from_snapshot(
                     row_cells.append(", ".join(events))
                 else:
                     row_cells.append("—")
-            lines.append(
-                f"| **{_escape_markdown_cell(str(state_name))}** | "
+            _append_rendered_line(
+                lines,
+                budget,
+                stage="document.adjacency.row",
+                line=f"| **{_escape_markdown_cell(str(state_name))}** | "
                 + " | ".join(row_cells)
-                + " |"
+                + " |",
             )
 
     if transitions:
-        lines.extend(["", "## Transitions", ""])
-        lines.append("| # | From | Event | To |")
-        lines.append("|---|------|-------|----|")
+        _append_rendered_line(lines, budget, stage="document.separator", line="")
+        _append_rendered_line(
+            lines, budget, stage="document.transitions.heading", line="## Transitions"
+        )
+        _append_rendered_line(lines, budget, stage="document.separator", line="")
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="document.transitions.header",
+            line="| # | From | Event | To |",
+        )
+        _append_rendered_line(
+            lines,
+            budget,
+            stage="document.transitions.separator",
+            line="|---|------|-------|----|",
+        )
         for transition in transitions:
             if not isinstance(transition, dict):
                 raise _adjacency_mismatch()
@@ -736,10 +826,13 @@ def _to_mermaid_document_from_snapshot(
                 or not isinstance(to_state, str)
             ):
                 raise _adjacency_mismatch()
-            lines.append(
-                f"| {index} | {_escape_markdown_cell(from_state)} | "
+            _append_rendered_line(
+                lines,
+                budget,
+                stage="document.transitions.row",
+                line=f"| {index} | {_escape_markdown_cell(from_state)} | "
                 f"`{_escape_markdown_cell(event)}` | "
-                f"{_escape_markdown_cell(to_state)} |"
+                f"{_escape_markdown_cell(to_state)} |",
             )
 
     return "\n".join(lines)
