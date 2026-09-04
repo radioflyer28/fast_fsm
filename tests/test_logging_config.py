@@ -7,6 +7,7 @@ All tests use real logging infrastructure — no mocking.
 import ast
 import asyncio
 import logging
+import threading
 from pathlib import Path
 import uuid
 from typing import Any
@@ -1021,9 +1022,7 @@ def test_rejected_configuration_preserves_prior_handle_and_logger_state() -> Non
         "_fast_fsm_configured_propagate",
     )
     expected_handlers = tuple(logger.handlers)
-    expected_metadata = {
-        name: getattr(logger, name) for name in metadata_names
-    }
+    expected_metadata = {name: getattr(logger, name) for name in metadata_names}
 
     try:
         with pytest.raises((TypeError, ValueError)):
@@ -1045,6 +1044,78 @@ def test_rejected_configuration_preserves_prior_handle_and_logger_state() -> Non
         assert logger.propagate is original_propagate
     finally:
         handle.restore()
+
+
+def test_concurrent_configurations_publish_one_coherent_owned_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent calls must serialize handler replacement and generation state."""
+
+    logger_name = _logger_name("concurrent-configuration")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    original_get_logger = logging.getLogger
+    arrivals = threading.Barrier(2)
+    result_lock = threading.Lock()
+    handles: list[Any] = []
+    errors: list[BaseException] = []
+
+    def synchronized_get_logger(name: str | None = None) -> logging.Logger:
+        if name == logger_name:
+            arrivals.wait(timeout=5)
+        return original_get_logger(name)
+
+    def configure(level: int, propagate: bool) -> None:
+        try:
+            handle = configure_fsm_logging(level, logger_name, propagate=propagate)
+        except BaseException as error:
+            with result_lock:
+                errors.append(error)
+        else:
+            with result_lock:
+                handles.append(handle)
+
+    monkeypatch.setattr(logging, "getLogger", synchronized_get_logger)
+    threads = (
+        threading.Thread(target=configure, args=(logging.INFO, False)),
+        threading.Thread(target=configure, args=(logging.DEBUG, True)),
+    )
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert not any(thread.is_alive() for thread in threads)
+        assert not errors
+        assert len(handles) == 2
+        owned_handlers = [
+            handler
+            for handler in logger.handlers
+            if hasattr(handler, "_fast_fsm_marker")
+        ]
+        assert len(owned_handlers) == 1
+        marker = owned_handlers[0]._fast_fsm_marker
+        current = max(handles, key=lambda handle: handle._generation)
+        assert marker.generation == current._generation
+        assert logger._fast_fsm_generation == current._generation
+        assert logger._fast_fsm_configured_level == marker.configured_level
+        assert logger.level == marker.configured_level
+
+        current.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        for handle in handles:
+            handle.restore()
+        for handler in tuple(logger.handlers):
+            if hasattr(handler, "_fast_fsm_marker"):
+                logger.removeHandler(handler)
+                handler.close()
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
 
 def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
