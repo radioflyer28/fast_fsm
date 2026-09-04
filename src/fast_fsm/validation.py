@@ -71,6 +71,24 @@ def _closed_cycle_path(
     raise RuntimeError("diagnostic cycle path unavailable")
 
 
+def _aggregate_diagnostic_status(
+    statuses: List[DiagnosticStatus],
+) -> DiagnosticStatus:
+    """Combine per-input ledgers without hiding the first exhausted boundary."""
+    exhausted = next((status for status in statuses if not status.complete), None)
+    return DiagnosticStatus(
+        complete=exhausted is None,
+        exhausted_dimension=(
+            None if exhausted is None else exhausted.exhausted_dimension
+        ),
+        exhausted_stage=None if exhausted is None else exhausted.exhausted_stage,
+        work_count=sum(status.work_count for status in statuses),
+        result_count=sum(status.result_count for status in statuses),
+        dense_cell_count=sum(status.dense_cell_count for status in statuses),
+        path_expansion_count=sum(status.path_expansion_count for status in statuses),
+    )
+
+
 class FSMValidator:
     """
     Lightweight validator for fast_fsm StateMachine instances.
@@ -1155,48 +1173,84 @@ def validate_and_score(fsm: StateMachine) -> Dict[str, Any]:
     }
 
 
-def compare_fsms(*fsms: StateMachine) -> Dict[str, Any]:
+def compare_fsms(
+    *fsms: StateMachine, limits: DiagnosticLimits | None = None
+) -> Dict[str, Any]:
     """
-    Compare multiple FSMs and provide analysis.
+    Compare multiple FSMs with position-safe, bounded analysis results.
 
     Args:
         *fsms: Multiple StateMachine instances to compare
+        limits: Optional finite budget applied independently to each captured
+            input graph.  An exhausted input raises ``DiagnosticBudgetExceeded``
+            instead of emitting a partial comparison.
 
     Returns:
-        Comparison results with rankings and insights
+        ``entries`` preserves every input in order with ``position`` as its
+        identity.  ``rankings`` sort descending by score then ascending by
+        position, and ``best_fsm`` is the winning ``{position, name}`` record.
+        Empty comparisons have ``count=0``, ``total_issues=0``, and ``None``
+        values for undefined score aggregates.
     """
-    results: Dict[str, Any] = {}
-    validators: Dict[str, Any] = {}
+    entries: List[Dict[str, Any]] = []
+    statuses: List[DiagnosticStatus] = []
 
-    for fsm in fsms:
-        validator = EnhancedFSMValidator(fsm)
-        validators[fsm.name] = validator
-        results[fsm.name] = {
-            "score": validator.get_validation_score(),
-            "metrics": validator.metrics,
-            "issue_count": len(validator.issues),
+    for position, fsm in enumerate(fsms):
+        validator = EnhancedFSMValidator(fsm, limits=limits)
+        score = validator.get_validation_score()
+        status = validator.diagnostic_status
+        statuses.append(status)
+        entries.append(
+            {
+                "position": position,
+                "name": validator._report_name,
+                "score": score,
+                "metrics": dict(validator.metrics),
+                "issue_count": len(validator.issues),
+                "diagnostic_status": status,
+            }
+        )
+
+    rankings = [
+        {
+            "position": entry["position"],
+            "name": entry["name"],
+            "score": entry["score"]["overall_score"],
         }
-
-    # Rank by score
-    ranked = sorted(
-        results.items(), key=lambda x: x[1]["score"]["overall_score"], reverse=True
+        for entry in sorted(
+            entries,
+            key=lambda entry: (-entry["score"]["overall_score"], entry["position"]),
+        )
+    ]
+    best_fsm = (
+        {"position": rankings[0]["position"], "name": rankings[0]["name"]}
+        if rankings
+        else None
     )
+    comparison_status = _aggregate_diagnostic_status(statuses)
 
     return {
-        "rankings": [(name, data["score"]["overall_score"]) for name, data in ranked],
-        "best_fsm": ranked[0][0] if ranked else None,
+        "entries": entries,
+        "rankings": rankings,
+        "best_fsm": best_fsm,
         "comparison_metrics": {
-            "avg_score": sum(
-                data["score"]["overall_score"] for data in results.values()
-            )
-            / len(results),
-            "score_range": (
-                min(data["score"]["overall_score"] for data in results.values()),
-                max(data["score"]["overall_score"] for data in results.values()),
+            "count": len(entries),
+            "avg_score": (
+                sum(entry["score"]["overall_score"] for entry in entries) / len(entries)
+                if entries
+                else None
             ),
-            "total_issues": sum(data["issue_count"] for data in results.values()),
+            "score_range": (
+                (
+                    min(entry["score"]["overall_score"] for entry in entries),
+                    max(entry["score"]["overall_score"] for entry in entries),
+                )
+                if entries
+                else None
+            ),
+            "total_issues": sum(entry["issue_count"] for entry in entries),
+            "diagnostic_status": comparison_status,
         },
-        "detailed_results": results,
     }
 
 
@@ -1231,28 +1285,47 @@ def quick_validation_report(fsm: StateMachine) -> None:
 
 
 def batch_validate(
-    *fsms: StateMachine, show_summary: bool = True
-) -> Dict[str, EnhancedFSMValidator]:
+    *fsms: StateMachine,
+    show_summary: bool = True,
+    limits: DiagnosticLimits | None = None,
+) -> Dict[str, Any]:
     """
-    Validate multiple FSMs in batch.
+    Validate multiple FSMs in a position-safe ordered batch.
 
     Args:
         *fsms: Multiple StateMachine instances
         show_summary: Whether to print summary report
+        limits: Optional finite budget applied independently to each captured
+            input graph.
 
     Returns:
-        Dictionary mapping FSM names to their validators
+        A dictionary containing ``count`` and ordered ``entries``.  Each entry
+        contains its zero-based ``position``, display ``name``, validator, and
+        diagnostic completion status; duplicate names are never dictionary keys.
     """
-    validators = {}
+    entries: List[Dict[str, Any]] = []
+    statuses: List[DiagnosticStatus] = []
 
-    for fsm in fsms:
-        validators[fsm.name] = EnhancedFSMValidator(fsm)
+    for position, fsm in enumerate(fsms):
+        validator = EnhancedFSMValidator(fsm, limits=limits)
+        status = validator.diagnostic_status
+        statuses.append(status)
+        entries.append(
+            {
+                "position": position,
+                "name": validator._report_name,
+                "validator": validator,
+                "diagnostic_status": status,
+            }
+        )
 
     if show_summary:
         print("📊 Batch Validation Summary")
         print("=" * 40)
 
-        for name, validator in validators.items():
+        for entry in entries:
+            name = entry["name"]
+            validator = entry["validator"]
             score = validator.get_validation_score()
             status_icon = (
                 "✅"
@@ -1265,7 +1338,11 @@ def batch_validate(
                 f"{status_icon} {name}: {score['overall_score']}/100 ({score['total_issues']} issues)"
             )
 
-    return validators
+    return {
+        "count": len(entries),
+        "entries": entries,
+        "diagnostic_status": _aggregate_diagnostic_status(statuses),
+    }
 
 
 def fsm_lint(fsm: StateMachine, fix_mode: bool = False) -> None:

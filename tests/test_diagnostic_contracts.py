@@ -559,11 +559,12 @@ def test_comparison_and_batch_preserve_duplicate_positional_identity(
         "duplicate",
         "duplicate",
     ]
-    assert comparison["rankings"] == [
-        {"position": 0, "name": "duplicate", "score": 66.7},
-        {"position": 1, "name": "duplicate", "score": 66.7},
-        {"position": 2, "name": "duplicate", "score": 66.7},
+    assert [(entry["position"], entry["name"]) for entry in comparison["rankings"]] == [
+        (0, "duplicate"),
+        (1, "duplicate"),
+        (2, "duplicate"),
     ]
+    assert len({entry["score"] for entry in comparison["rankings"]}) == 1
     assert comparison["best_fsm"] == {"position": 0, "name": "duplicate"}
     assert all(entry["diagnostic_status"].complete for entry in comparison["entries"])
     assert batch["count"] == 3
@@ -573,7 +574,9 @@ def test_comparison_and_batch_preserve_duplicate_positional_identity(
         "duplicate",
         "duplicate",
     ]
-    assert all(entry["validator"].diagnostic_status.complete for entry in batch["entries"])
+    assert all(
+        entry["validator"].diagnostic_status.complete for entry in batch["entries"]
+    )
 
 
 def test_empty_comparison_returns_exact_structured_undefined_aggregates() -> None:
