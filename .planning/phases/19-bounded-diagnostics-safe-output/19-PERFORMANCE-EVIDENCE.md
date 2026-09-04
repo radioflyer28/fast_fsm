@@ -1,6 +1,6 @@
 # Phase 19 Performance and Complexity Evidence
 
-> Status: measurement collection in progress. Timing and throughput observations are
+> Status: authoritative local gate complete. Timing and throughput observations are
 > environment-labelled; deterministic operation counters establish diagnostic
 > complexity boundaries. This document intentionally contains no caller payloads,
 > trace values, exception values, or object representations.
@@ -9,14 +9,14 @@
 
 | Property | Observation |
 | --- | --- |
-| Collection timestamp (UTC) | `2026-09-04T02:45:40Z` |
+| Collection timestamp (UTC) | `2026-09-04T03:02:00Z` |
 | Host operating system / architecture | `Darwin 25.5.0 arm64` (`macOS-26.5-arm64-arm-64bit`) |
 | Python executable and version | `.venv/bin/python3`; CPython `3.12.10` (Clang `20.1.0`) |
 | `uv` version | `0.12.6` |
 | pytest / Ruff / mypy / ty / Sphinx versions | `8.4.1` / `0.12.11` / `1.17.1` / `0.0.1-alpha.19` / `9.1.0` |
 | Build intent for baseline collection | isolated `pure`; exported module origin reported as `src/fast_fsm/core.py` |
-| Build intent for asserted-pure phase gate | pending authoritative Task 3 measurement |
-| Build intent for fresh-compiled phase gate | pending authoritative Task 3 measurement |
+| Build intent for asserted-pure phase gate | isolated `pure`; temporary export asserted `src/fast_fsm/core.py` |
+| Build intent for fresh-compiled phase gate | isolated `compiled`; temporary export asserted a freshly built `src/fast_fsm/core.*.so` |
 | `PYTHONHASHSEED` values for deterministic counter fixtures | `0` and `1`; identical observed counter payloads |
 
 ## Commands
@@ -38,13 +38,13 @@
 | 13 | `uv run python tools/release_evidence.py slots-policy --json` | Audit registered slot protection and measured exceptions. | passed; three registered exceptions only; `State=40 B`, `TransitionResult=96 B` |
 | 14 | `uv run pytest tests/test_performance_benchmarks.py -x -q -k 'trigger_min_throughput or trace'` | Prove disabled trace behavior and the compiled trigger floor selection. | passed; 3 selected tests from checkout pure-source origin |
 | 15 | `uv run python benchmarks/benchmark_fast_fsm.py` | Collect repository benchmark observations. | passed; exited 0 without separate stdout |
-| 16 | `uv run python tools/phase16_isolated_verify.py --suite phase19` | Run the authoritative asserted-pure and freshly compiled Phase 19 gate. | pending measurement |
-| 17 | `uv run ruff format --check src/fast_fsm/core.py src/fast_fsm/_diagnostics.py src/fast_fsm/validation.py src/fast_fsm/visualization.py src/fast_fsm/__init__.py tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py` | Check formatting for all Phase 19 implementation and focused test surfaces. | pending measurement |
-| 18 | `uv run ruff check src/fast_fsm/core.py src/fast_fsm/_diagnostics.py src/fast_fsm/validation.py src/fast_fsm/visualization.py src/fast_fsm/__init__.py tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py` | Check Phase 19 linting. | pending measurement |
-| 19 | `task typecheck-mypy` | Run the blocking mypy/mypyc compatibility gate. | pending measurement |
-| 20 | `task typecheck-ty` | Run independently visible advisory type feedback. | pending measurement |
-| 21 | `uv run sphinx-build -b html docs docs/_build/html -W --keep-going` | Build Sphinx HTML with warnings treated as errors. | pending measurement |
-| 22 | `uv run sphinx-build -b doctest docs docs/_build/doctest` | Execute documentation doctests. | pending measurement |
+| 16 | `uv run python tools/phase16_isolated_verify.py --suite phase19` | Run the authoritative asserted-pure and freshly compiled Phase 19 gate. | passed; pure and freshly compiled semantic selections, compiled trace/throughput, slots, quality, docs, full suites, and freshness all completed |
+| 17 | `uv run ruff format --check src/fast_fsm/core.py src/fast_fsm/_diagnostics.py src/fast_fsm/validation.py src/fast_fsm/visualization.py src/fast_fsm/__init__.py tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py` | Check formatting for all Phase 19 implementation and focused test surfaces. | passed in the asserted-pure gate |
+| 18 | `uv run ruff check src/fast_fsm/core.py src/fast_fsm/_diagnostics.py src/fast_fsm/validation.py src/fast_fsm/visualization.py src/fast_fsm/__init__.py tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py` | Check Phase 19 linting. | passed in the asserted-pure gate |
+| 19 | `task typecheck-mypy` | Run the blocking mypy/mypyc compatibility gate. | passed; no issues in seven source files |
+| 20 | `task typecheck-ty` | Run independently visible advisory type feedback. | passed in the asserted-pure gate |
+| 21 | `uv run sphinx-build -b html docs docs/_build/html -W --keep-going` | Build Sphinx HTML with warnings treated as errors. | passed |
+| 22 | `uv run sphinx-build -b doctest docs docs/_build/doctest` | Execute documentation doctests. | passed; three doctests, zero failures |
 
 ## Module Origins
 
@@ -52,8 +52,8 @@
 | --- | --- | --- | --- |
 | Isolated pure baseline writer | `src/fast_fsm/core.py` in the temporary pure export | baseline-write | passed |
 | Read-only pure baseline freshness check | `src/fast_fsm/core.py` in the temporary pure export | baseline-check | passed |
-| Asserted pure Phase 19 temporary tree | pending measurement | diagnostics, output, logging, performance, legacy, documentation, and full suite | pending measurement |
-| Freshly compiled Phase 19 temporary tree | pending measurement | diagnostics, output, logging, performance, legacy, and compiled trigger floor | pending measurement |
+| Asserted pure Phase 19 temporary tree | `src/fast_fsm/core.py` in a fresh isolated export | diagnostics, output, logging, performance, legacy, documentation, and full suite | passed |
+| Freshly compiled Phase 19 temporary tree | freshly built `src/fast_fsm/core.cpython-312-darwin.so` in a fresh isolated export | diagnostics, output, logging, performance, legacy, and compiled trigger floor | passed |
 | Checkout native shadow | deliberately not used as Phase 19 proof | none | non-claim |
 
 ## Deterministic Budget Boundaries
@@ -80,18 +80,18 @@ recorded hash seeds; timing is not used as a correctness assertion.
 | --- | --- | --- | --- |
 | Recursive slots policy, including only registered mypyc exceptions | `uv run python tools/release_evidence.py slots-policy --json` | passed; `DiagnosticBudgetExceeded`, `CompiledFuncCondition`, and `TransitionError` are the three registered exceptions; all other audited production classes are slot-protected | passed |
 | Disabled trace keeps the trigger path O(1) | `uv run pytest tests/test_performance_benchmarks.py -x -q -k 'trigger_min_throughput or trace'` | passed; disabled trace did not call the redactor or hostile `repr` / `str` hooks | passed from checkout pure source |
-| Default trace is metadata-only and does not expose payloads | Phase 19 logging selection and isolated Phase 19 suite | focused logging selection passed; isolated proof pending Task 3 | pending authoritative Task 3 measurement |
-| Custom redactor fails closed and handler ownership remains reversible | Phase 19 logging selection and isolated Phase 19 suite | focused logging selection passed; isolated proof pending Task 3 | pending authoritative Task 3 measurement |
+| Default trace is metadata-only and does not expose payloads | Phase 19 logging selection and isolated Phase 19 suite | focused selection and asserted-pure/fresh-compiled suites passed without payload exposure | passed |
+| Custom redactor fails closed and handler ownership remains reversible | Phase 19 logging selection and isolated Phase 19 suite | focused selection and asserted-pure/fresh-compiled suites passed with fail-closed redaction and reversible handlers | passed |
 
 ## Performance Observations
 
 | Observation | Command / origin | Result | Status |
 | --- | --- | --- | --- |
-| Compiled `trigger()` floor | focused performance selection from checkout pure source | selection passed from `.py` source (its pure floor is `30000`); the required fresh-compiled `200000` floor is not claimed until Task 3 | pending authoritative Task 3 measurement |
-| Disabled-trace behavior | focused performance selection from checkout pure source | 3 selected tests passed; functional allocation/redaction oracle held | pending authoritative Task 3 measurement |
+| Compiled `trigger()` floor | focused performance selection from fresh compiled origin | `trigger_min_throughput` passed with its fixed minimum of `200000` operations/second | passed |
+| Disabled-trace behavior | focused performance selection from fresh compiled origin | trace/redaction/payload/handler selection passed; separate checkout selection also passed three tests | passed |
 | Repository benchmark | `uv run python benchmarks/benchmark_fast_fsm.py` | command exited 0 without stdout; current isolated pure baseline records `455324.16` ops/sec for 40,000 alternating `trigger()` operations | environment-labelled observation |
-| Authoritative asserted-pure gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | pending measurement | pending measurement |
-| Authoritative freshly compiled gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | pending measurement | pending measurement |
+| Authoritative asserted-pure gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | semantic selection, slots, quality gates, docs, full suite, and freshness passed from `core.py` | passed |
+| Authoritative freshly compiled gate | `uv run python tools/phase16_isolated_verify.py --suite phase19` | semantic and focused performance selections passed from a freshly built `core.*.so` | passed |
 
 ## Baseline Provenance
 
@@ -104,7 +104,7 @@ atomically exported to `evidence/release-baseline.json`. It is never hand-edited
 | Isolated pure writer completed | `baseline-write` exported the candidate manifest atomically | passed |
 | Exact manifest diff reviewed for expected tests, coverage, toolchain, and source origins | generated diff contains 1,476 passed, 98.00% total coverage, 97.33% core coverage, the environment-labelled pure benchmark, and Phase 19 slots inventory additions; CPython 3.12.10, uv 0.12.6, and pure `src/fast_fsm/core.py` origin remain current | passed |
 | Read-only freshness check passed after regeneration | direct uv freshness check completed after the write with the tracked floors satisfied | passed |
-| Final post-gate freshness check passed | pending measurement | pending measurement |
+| Final post-gate freshness check passed | authoritative gate repeated the isolated read-only check at 1,476 tests, 98.00% total, 97.33% core, and `src/fast_fsm/core.py` | passed |
 
 ## Phase 20 Non-Claims
 
