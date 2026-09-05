@@ -2780,3 +2780,31 @@ def test_phase19_stops_on_nonzero_semantic_subprocess(
 
     assert isolated_verify._suite_mode(_phase19_args()) == 73
     assert calls == ["pure"]
+
+
+def test_expected_matrix_derives_local_proof_from_the_release_contract() -> None:
+    """The local evidence profile is a non-authorizing release-matrix projection."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+
+    release = release_evidence.expected_matrix("release", runtime)
+    local = release_evidence.expected_matrix("local", runtime)
+
+    assert release.profile == "release"
+    assert local.profile == "local"
+    assert local.authorizes_release is False
+    assert set(local.cells).issubset(set(release.cells))
+    assert {
+        cell.asserted_mode for cell in local.cells
+    } == {"pure", "compiled", "sdist"}
+    assert any(cell.sdist_parent is not None for cell in local.cells)
+    assert any(cell.requires_parity for cell in local.cells)
+    assert any(cell.requires_origin for cell in local.cells)
+    assert any(cell.requires_performance for cell in local.cells)
+
+    with pytest.raises(EvidenceError, match="release profile"):
+        release_evidence.build_release_authorization({"profile": "local"})
