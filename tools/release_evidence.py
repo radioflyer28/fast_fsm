@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from typing import Any, Iterable, Mapping, Sequence, cast
@@ -73,7 +74,11 @@ class EvidenceError(RuntimeError):
 
 
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
+_SDIST_ARCHIVE_SCHEMA_VERSION = 1
 _MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
+_MAX_SDIST_MEMBERS = 512
+_MAX_SDIST_MEMBER_BYTES = 32 * 1024 * 1024
+_MAX_SDIST_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 _MAX_CHILD_OUTPUT_BYTES = 1024 * 1024
 _MAX_CHILD_STRING_LENGTH = 4096
 _MAX_CHILD_NESTING = 12
@@ -86,6 +91,19 @@ _FORBIDDEN_CONFORMANCE_TOKENS = (
     "caller-secret",
     "destination-secret",
     "observer-secret",
+)
+_SDIST_BUILD_REQUIREMENTS = (
+    "setuptools==80.9.0",
+    "wheel==0.45.1",
+    "mypy[mypyc]==1.17.1",
+)
+_SDIST_REQUIRED_ROOT_FILES = (
+    "pyproject.toml",
+    "setup.py",
+    "MANIFEST.in",
+    "tools/__init__.py",
+    "tools/build_modes.py",
+    "tools/artifact_conformance.py",
 )
 
 
@@ -467,6 +485,252 @@ def inspect_wheel(
         "native_core_members": list(native_core_members),
         "classified_mode": mode,
         "mode": mode,
+    }
+
+
+def _required_sdist_members() -> tuple[str, ...]:
+    """Return the source and probe files an isolated sdist child must retain."""
+    package_root = REPOSITORY_ROOT / "src" / PACKAGE_NAME
+    if not package_root.is_dir():
+        raise EvidenceError("Source archive contract cannot locate package sources.")
+    package_members = sorted(
+        source.relative_to(REPOSITORY_ROOT).as_posix()
+        for source in package_root.rglob("*")
+        if source.is_file() and (source.suffix == ".py" or source.name == "py.typed")
+    )
+    if not package_members:
+        raise EvidenceError("Source archive contract has no package sources.")
+    return (*_SDIST_REQUIRED_ROOT_FILES, *package_members)
+
+
+def _sdist_project_root(path: Path) -> str:
+    """Derive the single permitted top-level root from a canonical sdist name."""
+    suffix = ".tar.gz"
+    if not path.name.endswith(suffix):
+        raise EvidenceError(f"Expected a .tar.gz source archive, got {path.name!r}.")
+    root = path.name.removesuffix(suffix)
+    if not root or "/" in root or "\\" in root:
+        raise EvidenceError("Source archive filename has an invalid project root.")
+    return root
+
+
+def _normalized_sdist_member_name(member: tarfile.TarInfo, *, root: str) -> str:
+    """Normalize one tar member only after rejecting paths unsafe for extraction."""
+    name = member.name
+    if not isinstance(name, str) or not name or "\x00" in name or "\\" in name:
+        raise EvidenceError("Source archive contains an unsafe member destination.")
+    candidate = name.rstrip("/") if member.isdir() else name
+    if (
+        not candidate
+        or candidate.startswith("/")
+        or re.match(r"^[A-Za-z]:", candidate)
+        or candidate.split("/")[0] != root
+    ):
+        raise EvidenceError("Source archive contains an unsafe member destination.")
+    normalized = "/".join(part for part in candidate.split("/") if part not in {""})
+    if normalized != candidate or any(
+        part in {".", ".."} for part in normalized.split("/")
+    ):
+        raise EvidenceError("Source archive contains an unsafe member destination.")
+    return normalized
+
+
+def _inspect_sdist_archive(
+    archive: tarfile.TarFile, *, path: Path, artifact_sha256: str
+) -> tuple[dict[str, Any], tuple[tarfile.TarInfo, ...]]:
+    """Inspect every sdist member before extraction or a downstream build starts."""
+    root = _sdist_project_root(path)
+    members: list[tarfile.TarInfo] = []
+    normalized_members: set[str] = set()
+    relative_members: set[str] = set()
+    total_uncompressed_bytes = 0
+
+    for member in archive:
+        members.append(member)
+        if len(members) > _MAX_SDIST_MEMBERS:
+            raise EvidenceError("Source archive exceeds the member-count limit.")
+        if not (member.isdir() or member.isfile()):
+            raise EvidenceError("Source archive contains an unsafe member type.")
+        normalized = _normalized_sdist_member_name(member, root=root)
+        if normalized in normalized_members:
+            raise EvidenceError(
+                "Source archive contains a duplicate normalized member."
+            )
+        normalized_members.add(normalized)
+        if member.isfile():
+            if member.size < 0 or member.size > _MAX_SDIST_MEMBER_BYTES:
+                raise EvidenceError("Source archive contains an oversized member.")
+            total_uncompressed_bytes += member.size
+            if total_uncompressed_bytes > _MAX_SDIST_TOTAL_UNCOMPRESSED_BYTES:
+                raise EvidenceError(
+                    "Source archive exceeds the uncompressed-size limit."
+                )
+        if normalized != root:
+            relative = normalized.removeprefix(f"{root}/")
+            relative_members.add(relative)
+
+    if not members:
+        raise EvidenceError("Source archive contains no members.")
+    required_members = _required_sdist_members()
+    missing = [member for member in required_members if member not in relative_members]
+    if missing:
+        raise EvidenceError(
+            "Source archive is missing required build or probe input(s): "
+            + ", ".join(missing)
+        )
+    native_members = sorted(
+        member for member in relative_members if _is_native_member(member)
+    )
+    if native_members:
+        raise EvidenceError(
+            "Source archive contains unexpected native member(s): "
+            + ", ".join(native_members)
+        )
+    return (
+        {
+            "schema_version": _SDIST_ARCHIVE_SCHEMA_VERSION,
+            "filename": path.name,
+            "sha256": artifact_sha256,
+            "project_root": root,
+            "member_count": len(members),
+            "total_uncompressed_bytes": total_uncompressed_bytes,
+            "members": sorted(relative_members),
+            "required_members": list(required_members),
+        },
+        tuple(members),
+    )
+
+
+def inspect_sdist(sdist_path: Path) -> dict[str, Any]:
+    """Inspect one bounded source archive without extracting it."""
+    sdist = sdist_path.resolve(strict=True)
+    artifact_sha256 = _artifact_sha256(sdist)
+    try:
+        with tarfile.open(sdist, mode="r:gz") as archive:
+            record, _members = _inspect_sdist_archive(
+                archive, path=sdist, artifact_sha256=artifact_sha256
+            )
+    except (OSError, tarfile.TarError) as error:
+        raise EvidenceError("Source archive could not be inspected safely.") from error
+    return record
+
+
+def _extract_validated_sdist(sdist: Path, destination: Path) -> dict[str, Any]:
+    """Extract an sdist only after its complete member inventory is accepted."""
+    artifact_sha256 = _artifact_sha256(sdist)
+    try:
+        with tarfile.open(sdist, mode="r:gz") as archive:
+            record, members = _inspect_sdist_archive(
+                archive, path=sdist, artifact_sha256=artifact_sha256
+            )
+            destination.mkdir()
+            if sys.version_info >= (3, 12):
+                archive.extractall(destination, members=members, filter="data")
+            else:
+                archive.extractall(destination, members=members)
+    except (OSError, tarfile.TarError) as error:
+        raise EvidenceError("Source archive could not be extracted safely.") from error
+    return record
+
+
+def _write_sdist_build_constraints(path: Path) -> None:
+    """Write the reviewed PEP 517 pins used by every derived child build."""
+    path.write_text("\n".join(_SDIST_BUILD_REQUIREMENTS) + "\n", encoding="utf-8")
+
+
+def _validate_sdist_child_lineage(
+    children: Sequence[Mapping[str, Any]], *, parent_sdist: Mapping[str, str]
+) -> None:
+    """Require exactly one pure and compiled installed record bound to one parent."""
+    expected_intents = {"pure", "compiled"}
+    seen_intents: set[str] = set()
+    if len(children) != len(expected_intents):
+        raise EvidenceError(
+            "Source archive derivation has missing or duplicate children."
+        )
+    for child in children:
+        intent = child.get("requested_build_intent")
+        if intent not in expected_intents or intent in seen_intents:
+            raise EvidenceError(
+                "Source archive derivation has missing or duplicate intents."
+            )
+        seen_intents.add(cast(str, intent))
+        if child.get("parent_sdist") != dict(parent_sdist):
+            raise EvidenceError("Source archive child lineage contradicts its parent.")
+        artifact = child.get("artifact")
+        if not isinstance(artifact, Mapping) or (
+            artifact.get("expected_mode") != intent
+            or artifact.get("build_intent") != intent
+        ):
+            raise EvidenceError(
+                "Source archive child lineage has an invalid build intent."
+            )
+    if seen_intents != expected_intents:
+        raise EvidenceError("Source archive derivation has missing required children.")
+
+
+def verify_sdist_derivations(sdist_path: Path) -> dict[str, Any]:
+    """Build and prove explicit pure and compiled wheels from one safe sdist."""
+    source_archive = sdist_path.resolve(strict=True)
+    _artifact_sha256(source_archive)
+    with tempfile.TemporaryDirectory(prefix="fast-fsm-sdist-proof-") as temporary:
+        temporary_root = Path(temporary).resolve()
+        staged_archive = temporary_root / source_archive.name
+        shutil.copyfile(source_archive, staged_archive)
+        extraction_root = temporary_root / "extracted"
+        archive_record = _extract_validated_sdist(staged_archive, extraction_root)
+        source_root = extraction_root / str(archive_record["project_root"])
+        if not source_root.is_dir():
+            raise EvidenceError("Source archive project root was not extracted.")
+        constraints = temporary_root / "build-constraints.txt"
+        _write_sdist_build_constraints(constraints)
+        children: list[dict[str, Any]] = []
+        for intent in ("compiled", "pure"):
+            wheel_directory = temporary_root / f"{intent}-wheel"
+            environment = _installed_environment()
+            environment["FAST_FSM_BUILD_MODE"] = intent
+            environment.pop("FAST_FSM_PURE_PYTHON", None)
+            _run_installed_command(
+                [
+                    "uv",
+                    "build",
+                    "--offline",
+                    "--python",
+                    sys.executable,
+                    "--build-constraints",
+                    str(constraints),
+                    "--wheel",
+                    "--out-dir",
+                    str(wheel_directory),
+                ],
+                cwd=source_root,
+                environment=environment,
+                stage=f"sdist {intent} child build",
+            )
+            wheel = _exactly_one_wheel(wheel_directory)
+            child = verify_installed_wheel(
+                wheel, expected_mode=intent, build_intent=intent
+            )
+            children.append(
+                {
+                    **child,
+                    "parent_sdist": {
+                        "filename": archive_record["filename"],
+                        "sha256": archive_record["sha256"],
+                    },
+                    "requested_build_intent": intent,
+                }
+            )
+
+    parent_sdist = {
+        "filename": cast(str, archive_record["filename"]),
+        "sha256": cast(str, archive_record["sha256"]),
+    }
+    _validate_sdist_child_lineage(children, parent_sdist=parent_sdist)
+    return {
+        "schema_version": _SDIST_ARCHIVE_SCHEMA_VERSION,
+        "archive": archive_record,
+        "children": children,
     }
 
 
@@ -3429,6 +3693,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     installed_wheel_parser.add_argument("--json", action="store_true")
 
+    sdist_parser = commands.add_parser(
+        "verify-sdist",
+        help="inspect one bounded sdist and prove explicit installed child wheels",
+    )
+    sdist_parser.add_argument(
+        "--sdist", type=Path, required=True, help="exact source archive to inspect"
+    )
+    sdist_parser.add_argument("--json", action="store_true")
+
     slots_policy_parser = commands.add_parser(
         "slots-policy", help="recursively audit source classes against the slots policy"
     )
@@ -3509,6 +3782,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 ),
                 parsed.json,
             )
+        elif parsed.command == "verify-sdist":
+            _emit(verify_sdist_derivations(parsed.sdist), parsed.json)
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
         elif parsed.command == "verify-history":

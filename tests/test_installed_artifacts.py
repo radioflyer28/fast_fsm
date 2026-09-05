@@ -52,8 +52,10 @@ def _write_sdist(
             member = tarfile.TarInfo(name)
             member.type = member_type or tarfile.REGTYPE
             member.size = len(contents)
-            if member_type == tarfile.SYMTYPE:
+            if member_type in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
                 member.linkname = "target"
+                archive.addfile(member)
+            elif member_type is not None and member_type != tarfile.REGTYPE:
                 archive.addfile(member)
             else:
                 archive.addfile(member, io.BytesIO(contents))
@@ -85,6 +87,8 @@ def test_sdist_archive_rejects_unsafe_members_before_extraction(tmp_path: Path) 
         ("/absolute.py", b"", None),
         ("C:/drive.py", b"", None),
         ("fast_fsm-0.2.2/link", b"", tarfile.SYMTYPE),
+        ("fast_fsm-0.2.2/hard-link", b"", tarfile.LNKTYPE),
+        ("fast_fsm-0.2.2/device", b"", tarfile.CHRTYPE),
         ("fast_fsm-0.2.2/src/fast_fsm/core.abi3.so", b"native", None),
     )
     for entry in unsafe_entries:
@@ -103,13 +107,65 @@ def test_sdist_archive_rejects_unsafe_members_before_extraction(tmp_path: Path) 
         release_evidence.inspect_sdist(_write_sdist(tmp_path, missing))
 
 
+def test_sdist_archive_enforces_member_and_uncompressed_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fixed limits stop oversized archives before any extraction or build work."""
+    entries = _valid_sdist_entries()
+
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_SDIST_MEMBERS", len(entries) - 1)
+        with pytest.raises(release_evidence.EvidenceError, match="member-count"):
+            release_evidence.inspect_sdist(_write_sdist(tmp_path, entries))
+
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_SDIST_MEMBER_BYTES", 1)
+        with pytest.raises(release_evidence.EvidenceError, match="oversized member"):
+            release_evidence.inspect_sdist(_write_sdist(tmp_path, entries))
+
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_SDIST_MEMBER_BYTES", 10)
+        patched.setattr(release_evidence, "_MAX_SDIST_TOTAL_UNCOMPRESSED_BYTES", 1)
+        with pytest.raises(release_evidence.EvidenceError, match="uncompressed-size"):
+            release_evidence.inspect_sdist(_write_sdist(tmp_path, entries))
+
+
+def test_sdist_child_lineage_rejects_auto_missing_and_duplicate_records() -> None:
+    """The accepted lineage has one exact pure and compiled child, never AUTO."""
+    parent = {"filename": "fast_fsm-0.2.2.tar.gz", "sha256": "0" * 64}
+
+    def child(intent: str, *, build_intent: str | None = None) -> dict[str, object]:
+        return {
+            "requested_build_intent": intent,
+            "parent_sdist": parent,
+            "artifact": {
+                "expected_mode": intent,
+                "build_intent": build_intent or intent,
+            },
+        }
+
+    with pytest.raises(release_evidence.EvidenceError, match="missing or duplicate"):
+        release_evidence._validate_sdist_child_lineage(
+            [child("pure")], parent_sdist=parent
+        )
+    with pytest.raises(release_evidence.EvidenceError, match="missing or duplicate"):
+        release_evidence._validate_sdist_child_lineage(
+            [child("pure"), child("pure")], parent_sdist=parent
+        )
+    with pytest.raises(release_evidence.EvidenceError, match="invalid build intent"):
+        release_evidence._validate_sdist_child_lineage(
+            [child("pure", build_intent="auto"), child("compiled")],
+            parent_sdist=parent,
+        )
+
+
 def _build_wheel(output: Path, mode: str) -> Path:
     """Build one intentional local wheel under the requested release intent."""
     environment = dict(os.environ)
     environment["FAST_FSM_BUILD_MODE"] = mode
     environment.pop("FAST_FSM_PURE_PYTHON", None)
     completed = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(output)],
+        ["uv", "build", "--offline", "--wheel", "--out-dir", str(output)],
         cwd=ROOT,
         env=environment,
         text=True,

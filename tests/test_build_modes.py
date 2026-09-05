@@ -235,6 +235,7 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
         [
             "uv",
             "build",
+            "--offline",
             "--build-constraints",
             str(build_constraints),
             "--sdist",
@@ -262,6 +263,7 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
         [
             "uv",
             "build",
+            "--offline",
             "--build-constraints",
             str(build_constraints),
             "--wheel",
@@ -288,6 +290,7 @@ def test_sdist_derivation_reuses_installed_wheel_verification(tmp_path: Path) ->
         [
             "uv",
             "build",
+            "--offline",
             "--build-constraints",
             str(build_constraints),
             "--sdist",
@@ -308,10 +311,9 @@ def test_sdist_derivation_reuses_installed_wheel_verification(tmp_path: Path) ->
         "compiled",
         "pure",
     ]
-    assert {
-        child["parent_sdist"]["filename"] for child in children
-    } == {sdist.name}
+    assert {child["parent_sdist"]["filename"] for child in children} == {sdist.name}
     assert len({child["parent_sdist"]["sha256"] for child in children}) == 1
-    assert {
-        child["artifact"]["expected_mode"] for child in children
-    } == {"pure", "compiled"}
+    assert {child["artifact"]["expected_mode"] for child in children} == {
+        "pure",
+        "compiled",
+    }
