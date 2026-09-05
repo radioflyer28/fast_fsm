@@ -90,6 +90,25 @@ _RELEASE_HISTORY_FACTS = (
     "existing v0.2.3 tag and published artifacts are immutable and unchanged",
     "v0.3.0",
 )
+_BASELINE_TOP_LEVEL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "release_identity",
+        "matrix_profile",
+        "expected_matrix",
+        "artifact_records",
+        "historical_phase_performance",
+        "pure_source_performance",
+        "installed_compiled_performance",
+        "diagnostic_complexity",
+        "quality_baseline",
+        "toolchain",
+        "artifact_evidence",
+        "slots_policy",
+        "performance_contract",
+        "measurement_environment",
+    }
+)
 
 REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
     "fast_fsm.conditions.CompiledFuncCondition": (
@@ -1331,6 +1350,74 @@ def _checked_out_commit(*, repository_root: Path) -> str:
     return commit
 
 
+def validate_release_baseline_static_contract(baseline: Mapping[str, object]) -> None:
+    """Reject stale release-baseline identity and Phase 20 envelope shapes.
+
+    This intentionally static check runs before expensive evidence collection.
+    It does not regenerate any evidence: the explicit baseline-write workflow is
+    the only authority allowed to replace tracked baseline bytes.
+    """
+    if set(baseline) != _BASELINE_TOP_LEVEL_FIELDS:
+        raise EvidenceError("release baseline top-level schema is stale.")
+    if baseline["schema_version"] != MANIFEST_SCHEMA_VERSION:
+        raise EvidenceError("release baseline schema_version is stale.")
+
+    identity = baseline["release_identity"]
+    if not isinstance(identity, Mapping) or set(identity) != {
+        "package",
+        "distribution_version",
+    }:
+        raise EvidenceError("release baseline release_identity schema is stale.")
+    if (
+        identity["package"] != PACKAGE_NAME
+        or identity["distribution_version"] != _RELEASE_VERSION
+    ):
+        raise EvidenceError("release baseline distribution identity is stale.")
+
+    matrix_profile = baseline["matrix_profile"]
+    if not isinstance(matrix_profile, Mapping) or set(matrix_profile) != {
+        "profile",
+        "scope",
+        "status",
+    }:
+        raise EvidenceError("release baseline matrix_profile schema is stale.")
+    if (
+        matrix_profile["profile"] != "local"
+        or matrix_profile["scope"] != "local-non-authorizing"
+    ):
+        raise EvidenceError("release baseline matrix_profile is stale.")
+    if (
+        not isinstance(baseline["expected_matrix"], list)
+        or not baseline["expected_matrix"]
+    ):
+        raise EvidenceError("release baseline expected_matrix is stale.")
+
+    historical = baseline["historical_phase_performance"]
+    if not isinstance(historical, Mapping) or set(historical) != {"scope", "entries"}:
+        raise EvidenceError("release baseline historical performance schema is stale.")
+    if historical["scope"] != "historical-non-gating" or not isinstance(
+        historical["entries"], list
+    ):
+        raise EvidenceError("release baseline historical performance is stale.")
+    if not isinstance(baseline["installed_compiled_performance"], list):
+        raise EvidenceError("release baseline installed performance schema is stale.")
+
+    diagnostics = baseline["diagnostic_complexity"]
+    if not isinstance(diagnostics, Mapping) or set(diagnostics) != {
+        "scope",
+        "dimensions",
+        "evidence",
+    }:
+        raise EvidenceError("release baseline diagnostic schema is stale.")
+    if diagnostics["dimensions"] != [
+        "work",
+        "results",
+        "dense_cells",
+        "path_expansions",
+    ]:
+        raise EvidenceError("release baseline diagnostic dimensions are stale.")
+
+
 def validate_release_identity(
     *,
     repository_root: Path,
@@ -1355,6 +1442,7 @@ def validate_release_identity(
     )
     docs_identity = _static_docs_identity(root / "docs" / "conf.py")
     baseline = _strict_identity_json(root / "evidence" / "release-baseline.json")
+    validate_release_baseline_static_contract(baseline)
     evidence_identity = baseline.get("release_identity")
     if baseline.get("schema_version") != 2 or not isinstance(
         evidence_identity, Mapping

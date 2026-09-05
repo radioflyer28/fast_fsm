@@ -4264,6 +4264,41 @@ def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
         release_evidence.read_matrix_record(path)
 
 
+def _phase20_baseline_static_fixture() -> dict[str, object]:
+    """Return the generator's static v0.3.0 baseline envelope without measurements."""
+    return {
+        "schema_version": 2,
+        "release_identity": {
+            "package": "fast_fsm",
+            "distribution_version": "0.3.0",
+        },
+        "matrix_profile": {
+            "profile": "local",
+            "scope": "local-non-authorizing",
+            "status": "not-collected",
+        },
+        "expected_matrix": [{"cell": "fixture"}],
+        "artifact_records": [],
+        "historical_phase_performance": {
+            "scope": "historical-non-gating",
+            "entries": [],
+        },
+        "pure_source_performance": {"scope": "environment-labeled-observation"},
+        "installed_compiled_performance": [],
+        "diagnostic_complexity": {
+            "scope": "deterministic-non-timing",
+            "dimensions": ["work", "results", "dense_cells", "path_expansions"],
+            "evidence": "tests/test_diagnostic_contracts.py",
+        },
+        "quality_baseline": {},
+        "toolchain": {},
+        "artifact_evidence": {},
+        "slots_policy": {},
+        "performance_contract": {},
+        "measurement_environment": {},
+    }
+
+
 def _write_release_identity_fixture(
     root: Path, *, changelog_date: str = "UNRELEASED"
 ) -> None:
@@ -4288,17 +4323,46 @@ def _write_release_identity_fixture(
         encoding="utf-8",
     )
     (root / "evidence" / "release-baseline.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "release_identity": {
-                    "package": "fast_fsm",
-                    "distribution_version": "0.3.0",
-                },
-            }
-        ),
+        json.dumps(_phase20_baseline_static_fixture()),
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    (
+        (
+            lambda baseline: baseline["release_identity"].update(
+                {"distribution_version": "0.2.2"}
+            ),
+            "distribution identity",
+        ),
+        (
+            lambda baseline: baseline.__setitem__("expected_matrix", []),
+            "expected_matrix",
+        ),
+        (
+            lambda baseline: baseline.__setitem__(
+                "historical_phase_performance_observations", []
+            ),
+            "top-level schema",
+        ),
+        (
+            lambda baseline: baseline.__setitem__("installed_compiled_performance", {}),
+            "installed performance schema",
+        ),
+    ),
+)
+def test_phase20_baseline_static_contract_rejects_stale_identity_and_schema(
+    mutation: object, match: str
+) -> None:
+    """Legacy baseline bytes fail statically; this test never writes a baseline."""
+    baseline = deepcopy(_phase20_baseline_static_fixture())
+    assert callable(mutation)
+    mutation(baseline)
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.validate_release_baseline_static_contract(baseline)
 
 
 def _identity_inputs() -> tuple[dict[str, str], dict[str, str]]:
