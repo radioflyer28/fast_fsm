@@ -5152,6 +5152,9 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     performance_contract = stable.get("performance_contract")
     if isinstance(performance_contract, dict):
         performance_contract.pop("observation", None)
+    pure_source_performance = stable.get("pure_source_performance")
+    if isinstance(pure_source_performance, dict):
+        pure_source_performance.pop("observations", None)
     slots = stable.get("slots_policy")
     if isinstance(slots, dict):
         _normalize_runtime_layouts_for_comparison(slots)

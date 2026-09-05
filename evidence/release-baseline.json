@@ -9,20 +9,21 @@
           "py3-none-any"
         ],
         "classified_mode": "pure",
-        "dist_info_directory": "fast_fsm-0.2.2.dist-info",
+        "dist_info_directory": "fast_fsm-0.3.0.dist-info",
         "dist_info_package": "fast-fsm",
-        "dist_info_version": "0.2.2",
-        "filename": "fast_fsm-0.2.2-py3-none-any.whl",
+        "dist_info_version": "0.3.0",
+        "filename": "fast_fsm-0.3.0-py3-none-any.whl",
         "filename_package": "fast-fsm",
         "filename_tags": [
           "py3-none-any"
         ],
-        "filename_version": "0.2.2",
+        "filename_version": "0.3.0",
         "metadata_name": "fast-fsm",
-        "metadata_version": "0.2.2",
+        "metadata_version": "0.3.0",
         "mode": "pure",
+        "native_core_members": [],
         "native_members": [],
-        "normalized_basename": "fast_fsm-0.2.2-py3-none-any.whl",
+        "normalized_basename": "fast_fsm-0.3.0-py3-none-any.whl",
         "wheel_tags": [
           "py3-none-any"
         ]
@@ -30,47 +31,6 @@
     ]
   },
   "artifact_records": [],
-  "expected_matrix": [],
-  "historical_phase_performance_observations": [
-    {
-      "command": "uv run python tools/phase16_isolated_verify.py \\",
-      "commit": "31f90e5",
-      "environment": "CPython 3.12.10 (arm64 macOS)",
-      "path": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
-      "phase": "16",
-      "sha256": "21f4d4c3e5540b4f82d50c2f267967c6b7fa073a2b54902053ec207d063a4d1a"
-    },
-    {
-      "command": "uv run python tools/phase16_isolated_verify.py --mode task --build-mode pure --include src/fast_fsm/core.py --include tests/test_performance_benchmarks.py --include tools/phase16_isolated_verify.py -- uv run pytest tests/test_performance_benchmarks.py -x -q -k test_trigger_min_throughput",
-      "commit": "unavailable",
-      "environment": "unavailable",
-      "path": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
-      "phase": "17",
-      "sha256": "8755ebc7c88b532a69f18071919fb3aca53c2f663312a55d96802fc1504a5190"
-    },
-    {
-      "command": "unavailable",
-      "commit": "unavailable",
-      "environment": "CPython 3.12.10 / macOS arm64",
-      "path": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
-      "phase": "18",
-      "sha256": "0da2cc91f0b76596acf8cd11132c8ad427afc567bfdd9e9c12e879004ed65e70"
-    },
-    {
-      "command": "uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py -x -q",
-      "commit": "unavailable",
-      "environment": "CPython",
-      "path": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
-      "phase": "19",
-      "sha256": "906524d28edb2f9f0542eb01cd21cbbe1bd9f3c3b25417317dd132485d132288"
-    }
-  ],
-  "installed_compiled_performance": {
-    "floor_ops_per_second": 200000,
-    "records": [],
-    "scope": "installed-native-blocking",
-    "status": "not-collected"
-  },
   "diagnostic_complexity": {
     "dimensions": [
       "work",
@@ -78,13 +38,301 @@
       "dense_cells",
       "path_expansions"
     ],
-    "scope": "deterministic-non-timing",
-    "status": "verified-by-targeted-tests"
+    "evidence": "tests/test_diagnostic_contracts.py",
+    "scope": "deterministic-non-timing"
   },
-  "pure_source_performance": {
-    "observation_path": "performance_contract.observation",
-    "scope": "environment-labeled-nonblocking"
+  "expected_matrix": [
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "compiled-wheel-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "compiled-wheel-cp312-macos-universal2-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "pure",
+      "cpython_minor": "3.12",
+      "identifier": "pure-wheel-cp312",
+      "machine": "universal",
+      "os": "universal",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": false,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "sdist",
+      "cpython_minor": "archive",
+      "identifier": "sdist-archive",
+      "machine": "archive",
+      "os": "archive",
+      "requires_origin": false,
+      "requires_parity": false,
+      "requires_performance": false,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "sdist-compiled-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": "sdist-archive"
+    },
+    {
+      "asserted_mode": "pure",
+      "cpython_minor": "3.12",
+      "identifier": "sdist-pure-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": false,
+      "sdist_parent": "sdist-archive"
+    }
+  ],
+  "historical_phase_performance": {
+    "entries": [
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains distinct pure and compiled runs rather than one phase-wide build mode.",
+            "searched_sources": [
+              "original Phase 16 evidence narrative",
+              "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate, Blocking Commands",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --suite phase16"
+          },
+          "environment": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate environment",
+            "status": "recorded",
+            "value": "CPython 3.12.10; arm64; macOS 26.5 arm64; `uv` 0.12.6."
+          },
+          "measurement_outcome": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+            "status": "recorded",
+            "value": "958,497.84 ops/s"
+          },
+          "original_evidence_commit": {
+            "reason": "The record identifies source-tree commits, not the commit that originally captured this evidence file.",
+            "searched_sources": [
+              "original Phase 16 evidence narrative",
+              "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "16"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+            "status": "recorded",
+            "value": "semantic/performance suite passed; \u2265200,000 floor"
+          }
+        },
+        "phase": "16",
+        "source_path": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "6d69ac9a130d745e3fea8ecd09dc854f8a2c89dd1fadee623a5325d8c39c1c16"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record aggregates separate pure and freshly compiled checks.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Before Wave 0 tracer Commands",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --mode task --build-mode compiled --include src/fast_fsm/core.py --include tests/test_performance_benchmarks.py --include tools/phase16_isolated_verify.py -- uv run pytest tests/test_performance_benchmarks.py -x -q -k test_trigger_min_throughput"
+          },
+          "environment": {
+            "reason": "The original record asserts fresh temporary exports but does not identify an exact interpreter, operating system, and architecture tuple.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "measurement_outcome": {
+            "citation": "Final Plan 05 isolated proof results table",
+            "status": "recorded",
+            "value": "2 passed; the fixed 200,000 ops/sec floor held."
+          },
+          "original_evidence_commit": {
+            "reason": "The original record does not name the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "17"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final Plan 05 isolated proof results table",
+            "status": "recorded",
+            "value": "the fixed 200,000 ops/sec floor held."
+          }
+        },
+        "phase": "17",
+        "source_path": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "8db9a3ee557a7618db83f987b7b7595c6acf9a82450514f24bd702b3e23eec47"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains separate asserted-pure and freshly compiled observations.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "reason": "The original evidence records a <mode> command template, not an exact executed command line and arguments.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "environment": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "CPython 3.12.10 / macOS arm64"
+          },
+          "measurement_outcome": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "686,116.94 sync ops/sec; 346,573.40 async ops/sec"
+          },
+          "original_evidence_commit": {
+            "reason": "The original record does not name the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "18"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "compiled sync result is above the 200,000 ops/sec floor"
+          }
+        },
+        "phase": "18",
+        "source_path": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "4174b1ffb592d9914dce3bf15d7f740ddfcd3c1d048d732d8300452ec1f97656"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains distinct isolated pure and freshly compiled gates rather than one phase-wide mode.",
+            "searched_sources": [
+              "original Phase 19 evidence narrative",
+              "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Commands table, order 16",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --suite phase19"
+          },
+          "environment": {
+            "citation": "Environment table, Python executable and version",
+            "status": "recorded",
+            "value": ".venv/bin/python3`; CPython `3.12.10` (Clang `20.1.0`)"
+          },
+          "measurement_outcome": {
+            "citation": "Performance Observations, Repository benchmark",
+            "status": "recorded",
+            "value": "455324.16"
+          },
+          "original_evidence_commit": {
+            "reason": "The original record proves an inventory skeleton at HEAD but does not identify the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 19 evidence narrative",
+              "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "19"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Performance Observations, Compiled trigger floor",
+            "status": "recorded",
+            "value": "`trigger_min_throughput` passed with its fixed minimum of `200000` operations/second"
+          }
+        },
+        "phase": "19",
+        "source_path": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "7d4912a71182084deadbacd851acffae9918b25d34d719245fe7f271e883bd1c"
+      }
+    ],
+    "scope": "historical-non-gating"
   },
+  "installed_compiled_performance": [],
   "matrix_profile": {
     "profile": "local",
     "scope": "local-non-authorizing",
@@ -94,7 +342,7 @@
     "comparison": "stable fields exclude this environment observation",
     "implementation": "cpython",
     "machine": "arm64",
-    "platform": "macOS-26.5-arm64-arm-64bit",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
     "python_version": "3.12.10"
   },
   "performance_contract": {
@@ -102,19 +350,39 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.086577,
+      "elapsed_seconds": 0.086768,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
-        "platform": "macOS-26.5-arm64-arm-64bit",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "python_version": "3.12.10"
       },
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 462017.58,
+      "ops_per_second": 460997.45,
       "warmup_operations": 2000
     }
+  },
+  "pure_source_performance": {
+    "observations": [
+      {
+        "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
+        "elapsed_seconds": 0.086768,
+        "environment": {
+          "implementation": "cpython",
+          "machine": "arm64",
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "python_version": "3.12.10"
+        },
+        "metric": "StateMachine.trigger operations per second",
+        "mode": "pure",
+        "operations": 40000,
+        "ops_per_second": 460997.45,
+        "warmup_operations": 2000
+      }
+    ],
+    "scope": "environment-labeled-observation"
   },
   "quality_baseline": {
     "build_mode": "pure",
@@ -126,10 +394,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1503,
+      "collected": 1626,
       "errors": 0,
       "failed": 0,
-      "passed": 1503,
+      "passed": 1626,
       "skipped": 0
     }
   },
@@ -142,7 +410,7 @@
     "inventory": [
       {
         "classification": "registered-exception",
-        "exception_reason": "Public bounded-diagnostic failures carry a scalar DiagnosticStatus.",
+        "exception_reason": "ADR-006 accepts this interpreted bounded-diagnostic exception boundary because public failures carry a scalar DiagnosticStatus.",
         "line": 70,
         "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
         "source_path": "src/fast_fsm/_diagnostics.py"
@@ -440,7 +708,7 @@
     ],
     "registered_exceptions": [
       {
-        "exception_reason": "Public bounded-diagnostic failures carry a scalar DiagnosticStatus.",
+        "exception_reason": "ADR-006 accepts this interpreted bounded-diagnostic exception boundary because public failures carry a scalar DiagnosticStatus.",
         "has_instance_dict": true,
         "instance_size_bytes": 96,
         "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded"

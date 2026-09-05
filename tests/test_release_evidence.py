@@ -2160,11 +2160,22 @@ def test_manifest_reader_rejects_non_standard_json_numbers(
 def test_manifest_freshness_excludes_only_volatile_benchmark_measurements() -> None:
     """A valid benchmark measurement may change without weakening its presence contract."""
     expected = _manifest_fixture()
+    expected["pure_source_performance"] = {
+        "scope": "environment-labeled-observation",
+        "observations": [
+            expected["performance_contract"]["observation"],
+        ],
+    }
     observed = json.loads(serialize_manifest(expected))
     observation = observed["performance_contract"]["observation"]
     observation["elapsed_seconds"] = 0.04
     observation["ops_per_second"] = 50000.0
     observation["environment"]["machine"] = "another-machine"
+
+    pure_observation = observed["pure_source_performance"]["observations"][0]
+    pure_observation["elapsed_seconds"] = 0.05
+    pure_observation["ops_per_second"] = 40000.0
+    pure_observation["environment"]["machine"] = "another-machine"
 
     validate_performance_observation(observed)
     assert compare_manifests(expected, observed) == []
