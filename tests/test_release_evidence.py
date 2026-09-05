@@ -2242,6 +2242,162 @@ def test_taskfile_baseline_tasks_delegate_temp_wheel_lifecycle_to_python() -> No
         assert "--build-wheel" in rendered
 
 
+PHASE20_LOCAL_TASKS = (
+    "release-identity-check",
+    "release-installed-artifacts-check",
+    "release-sdist-check",
+    "release-evidence-local-check",
+    "release-installed-performance-check",
+    "release-slots-check",
+)
+
+
+def _task_commands(task: Mapping[str, object]) -> list[object]:
+    """Return one Taskfile command sequence without accepting a scalar shortcut."""
+    commands = task.get("cmds")
+    assert isinstance(commands, list) and commands
+    return commands
+
+
+def _task_command_text(task: Mapping[str, object]) -> str:
+    """Render a task's executable command forms for semantic contract checks."""
+    return "\n".join(
+        command.get("task", "") if isinstance(command, dict) else str(command)
+        for command in _task_commands(task)
+    )
+
+
+def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
+    """Keep local proof non-authorizing and hosted inspection explicitly separate."""
+    tasks = _task_definitions(taskfile)
+    assert set(PHASE20_LOCAL_TASKS).issubset(tasks)
+    for name in PHASE20_LOCAL_TASKS:
+        rendered = _task_command_text(tasks[name])
+        assert "uv run" in rendered, name
+        assert "profile=release" not in rendered, name
+        assert "release-evidence-complete" not in rendered, name
+        assert "gh run" not in rendered, name
+        assert "gh release" not in rendered, name
+
+    readiness = _task_commands(tasks["release-readiness-check"])
+    ordered_blocking_tasks = [
+        command["task"]
+        for command in readiness
+        if isinstance(command, dict) and isinstance(command.get("task"), str)
+    ]
+    assert ordered_blocking_tasks == [
+        "format-check",
+        "lint",
+        "typecheck-mypy",
+        "test",
+        "docs-check",
+        "docs-test",
+        "pure-source-check",
+        "release-baseline-check",
+        *PHASE20_LOCAL_TASKS,
+    ]
+    readiness_text = _task_command_text(tasks["release-readiness-check"])
+    assert "task typecheck-ty" in readiness_text
+    assert "ty_status=$?" in readiness_text
+    assert "ADVISORY task typecheck-ty exit status" in readiness_text
+    assert "profile=release" not in readiness_text
+    assert "gh run" not in readiness_text
+    assert "gh release" not in readiness_text
+
+    hosted = _task_command_text(tasks["release-hosted-prerelease-check"])
+    for required in (
+        "FAST_FSM_HOSTED_RUN_ID",
+        "FAST_FSM_EXPECTED_SHA",
+        "gh run view",
+        "gh run download",
+        "aggregate-matrix --profile release",
+        "aggregate_release_evidence",
+        "Release Evidence",
+    ):
+        assert required in hosted
+    assert "gh workflow run" not in hosted
+    assert "gh release" not in hosted
+    assert "git push" not in hosted
+
+
+def test_phase20_taskfile_keeps_local_readiness_non_authorizing() -> None:
+    """The exact local chain cannot silently become hosted release authorization."""
+    taskfile = _taskfile_data()
+    _validate_phase20_release_taskfile(taskfile)
+
+    missing = deepcopy(taskfile)
+    _task_definitions(missing).pop("release-slots-check")
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(missing)
+
+    reordered = deepcopy(taskfile)
+    commands = _task_commands(_task_definitions(reordered)["release-readiness-check"])
+    commands[0], commands[1] = commands[1], commands[0]
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(reordered)
+
+    release_profile = deepcopy(taskfile)
+    local_commands = _task_commands(
+        _task_definitions(release_profile)["release-evidence-local-check"]
+    )
+    local_commands.append("uv run python tools/release_evidence.py aggregate-matrix --profile release")
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(release_profile)
+
+
+def _validate_hosted_evidence_run_metadata(
+    payload: Mapping[str, object], *, expected_sha: str
+) -> None:
+    """Fail closed on a nonterminal, non-evidence, or wrong-SHA hosted run."""
+    assert re.fullmatch(r"[0-9a-f]{40}", expected_sha)
+    assert payload.get("workflowName") == "Release Evidence"
+    assert payload.get("event") == "workflow_dispatch"
+    assert payload.get("status") == "completed"
+    assert payload.get("conclusion") == "success"
+    assert payload.get("headSha") == expected_sha
+    jobs = payload.get("jobs")
+    assert isinstance(jobs, list)
+    terminal = [
+        job
+        for job in jobs
+        if isinstance(job, Mapping)
+        and job.get("name") == "Aggregate exact hosted release evidence"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0].get("status") == "completed"
+    assert terminal[0].get("conclusion") == "success"
+
+
+def test_hosted_evidence_metadata_fixture_rejects_wrong_run_before_download() -> None:
+    """Read-only hosted inspection accepts only a completed exact-SHA evidence run."""
+    sha = "a" * 40
+    fixture: dict[str, object] = {
+        "workflowName": "Release Evidence",
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+        "headSha": sha,
+        "jobs": [
+            {
+                "name": "Aggregate exact hosted release evidence",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
+    }
+    _validate_hosted_evidence_run_metadata(fixture, expected_sha=sha)
+
+    wrong_sha = deepcopy(fixture)
+    wrong_sha["headSha"] = "b" * 40
+    with pytest.raises(AssertionError):
+        _validate_hosted_evidence_run_metadata(wrong_sha, expected_sha=sha)
+
+    missing_terminal = deepcopy(fixture)
+    missing_terminal["jobs"] = []
+    with pytest.raises(AssertionError):
+        _validate_hosted_evidence_run_metadata(missing_terminal, expected_sha=sha)
+
+
 def _workflow_data(path: Path = CI_WORKFLOW) -> dict[str, object]:
     """Load a workflow as YAML so step discovery cannot be fooled by prose."""
     data = yaml.safe_load(_workflow_text(path))
