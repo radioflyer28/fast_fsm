@@ -2461,6 +2461,12 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
     assert "gh run" not in readiness_text
     assert "gh release" not in readiness_text
 
+    local_evidence_text = _task_command_text(tasks["release-evidence-local-check"])
+    assert '"core_origin", "core_loader"' in local_evidence_text
+    assert 'proof["performance"] if cell.requires_performance else None' in (
+        local_evidence_text
+    )
+
     hosted = _task_command_text(tasks["release-hosted-prerelease-check"])
     for required in (
         "FAST_FSM_HOSTED_RUN_ID",
