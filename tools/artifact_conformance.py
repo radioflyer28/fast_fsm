@@ -20,7 +20,7 @@ import platform
 import sys
 from typing import Any, Callable, Mapping, Sequence
 
-from fast_fsm.conditions import AsyncCondition
+from fast_fsm.conditions import AsyncCondition, NegatedCondition
 from fast_fsm.core import DeclarativeState, transition
 
 
@@ -90,6 +90,9 @@ _SCENARIO_DEFINITIONS = (
             "canonical_endpoints",
             "duplicate_state_rejected",
             "snapshot_immutable",
+            "snapshot_facts_exact",
+            "guard_context_observed",
+            "rejected_topology_unchanged",
             "redacted",
         ),
     },
@@ -103,6 +106,7 @@ _SCENARIO_DEFINITIONS = (
             "recorded",
             "custom_redactor_called",
             "custom_redactor_safe",
+            "custom_failure_safe",
             "redacted",
             "handler_restored",
         ),
@@ -302,11 +306,20 @@ def _graph_guard_rejection() -> dict[str, Any]:
     destination = core.State("guard-destination")
     machine = core.StateMachine(source, name="artifact-conformance-guard")
     machine.add_state(destination)
+    guard_context_observed = False
+
+    def denied_guard(*args: object, **kwargs: object) -> bool:
+        nonlocal guard_context_observed
+        guard_context_observed = args == ("guard-position",) and kwargs == {
+            "token": "caller-secret"
+        }
+        return False
+
     machine.add_transition(
         "advance",
         source,
         destination,
-        conditions.FuncCondition(lambda *_args, **_kwargs: False, "false-guard"),
+        conditions.FuncCondition(denied_guard, "false-guard"),
     )
     machine.enable_history()
     snapshot = machine._graph_snapshot()
@@ -324,7 +337,15 @@ def _graph_guard_rejection() -> dict[str, Any]:
         snapshot.states += (core.State("forbidden"),)
     except (AttributeError, TypeError):
         snapshot_immutable = True
-    result = machine.trigger("advance", payload="caller-secret")
+    before_rejection_version = snapshot.graph_version
+    rejected_topology_unchanged = False
+    try:
+        machine.add_transition("invalid", "missing", destination)
+    except (KeyError, ValueError):
+        rejected_topology_unchanged = (
+            machine._graph_snapshot().graph_version == before_rejection_version
+        )
+    result = machine.trigger("advance", "guard-position", token="caller-secret")
     return {
         "id": "graph.guard-rejection",
         "family": "graph-guard",
@@ -336,6 +357,15 @@ def _graph_guard_rejection() -> dict[str, Any]:
         "canonical_endpoints": canonical_endpoints,
         "duplicate_state_rejected": duplicate_state_rejected,
         "snapshot_immutable": snapshot_immutable,
+        "snapshot_facts_exact": (
+            snapshot.initial_state is source
+            and snapshot.initial_state_name == "guard-source"
+            and snapshot.current_state_name == "guard-source"
+            and snapshot.state_names == ("guard-destination", "guard-source")
+            and snapshot.graph_version == 2
+        ),
+        "guard_context_observed": guard_context_observed,
+        "rejected_topology_unchanged": rejected_topology_unchanged,
         "redacted": "caller-secret" not in repr(result),
     }
 
@@ -470,7 +500,10 @@ def _builder_declarative_dispatch() -> dict[str, Any]:
     async_builder = core.FSMBuilder(core.State("async-source"))
     async_builder.add_state(core.State("async-target"))
     async_builder.add_transition(
-        "advance", "async-source", "async-target", NestedAsync()
+        "advance",
+        "async-source",
+        "async-target",
+        unless=NegatedCondition(NestedAsync()),
     )
     async_detected = isinstance(async_builder.build(), core.AsyncStateMachine)
 
@@ -637,24 +670,29 @@ def _output_grammar_containment() -> dict[str, Any]:
     machine = core.StateMachine(source, name="artifact-conformance-output")
     machine.add_state(destination)
     machine.add_transition("advance", source, destination)
-    hostile_title = "!include caller-secret"
+    # The title is adversarial grammar, but not a caller payload.  Payload
+    # sentinels stay separate so the record proves both grammar containment and
+    # trace redaction instead of requiring a user-visible title to be secret.
+    hostile_title = "!include hostile-grammar"
     mermaid = public.to_mermaid(machine, title=hostile_title)
     plantuml = public.to_plantuml(machine, title=hostile_title)
     structured = public.to_json(machine)
-    rendered = mermaid + plantuml + canonical_json(structured)
+    structured_json = canonical_json(structured)
+    rendered = mermaid + plantuml + structured_json
+    rendered_safe = (
+        all(sentinel not in rendered for sentinel in _PAYLOAD_SENTINELS)
+        and "\x00" not in rendered
+    )
     return {
         "id": "output.grammar-containment",
         "family": "output-containment",
-        "mermaid_safe": mermaid.count("stateDiagram-v2") == 1 and "\x00" not in mermaid,
+        "mermaid_safe": mermaid.count("stateDiagram-v2") == 1 and rendered_safe,
         "plantuml_safe": plantuml.startswith("@startuml")
-        and plantuml.endswith("@enduml"),
-        "json_safe": isinstance(structured, dict)
-        and "\x00" not in canonical_json(structured),
+        and plantuml.endswith("@enduml")
+        and rendered_safe,
+        "json_safe": isinstance(structured, dict) and rendered_safe,
         "output_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-        "redacted": "caller-secret"
-        not in canonical_json(
-            {"output_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()}
-        ),
+        "redacted": rendered_safe,
     }
 
 
@@ -681,7 +719,15 @@ def _logging_metadata_redaction() -> dict[str, Any]:
     logger.propagate = False
     custom_redactor_called = False
     custom_redactor_safe = False
+    custom_failure_safe = False
     custom_handle: Any | None = None
+    failure_handle: Any | None = None
+    custom_logger: logging.Logger | None = None
+    failure_logger: logging.Logger | None = None
+    custom_capture: CaptureHandler | None = None
+    failure_capture: CaptureHandler | None = None
+    custom_prior: tuple[list[logging.Handler], int, bool] | None = None
+    failure_prior: tuple[list[logging.Handler], int, bool] | None = None
     try:
         source = core.State("source")
         destination = core.State("destination")
@@ -695,6 +741,15 @@ def _logging_metadata_redaction() -> dict[str, Any]:
         redacted = all("caller-secret" not in message for message in records)
 
         custom_logger_name = f"{logger_name}.custom"
+        custom_logger = logging.getLogger(custom_logger_name)
+        custom_prior = (
+            list(custom_logger.handlers),
+            custom_logger.level,
+            custom_logger.propagate,
+        )
+        custom_capture = CaptureHandler()
+        custom_logger.addHandler(custom_capture)
+        custom_logger.setLevel(logging.DEBUG - 5)
 
         def redactor(_event: object) -> dict[str, str]:
             nonlocal custom_redactor_called, custom_redactor_safe
@@ -716,9 +771,78 @@ def _logging_metadata_redaction() -> dict[str, Any]:
         custom_machine.add_state(core.State("destination"))
         custom_machine.add_transition("advance", "source", "destination")
         custom_machine.trigger("advance", payload="caller-secret")
+        custom_records = custom_capture.records
+        custom_redactor_safe = (
+            custom_redactor_called
+            and bool(custom_records)
+            and all(
+                sentinel not in record.getMessage()
+                for record in custom_records
+                for sentinel in _PAYLOAD_SENTINELS
+            )
+            and any(
+                getattr(record, "trace_operation", None) == "trusted-redaction"
+                for record in custom_records
+            )
+        )
+
+        failure_logger_name = f"{logger_name}.custom-failure"
+        failure_logger = logging.getLogger(failure_logger_name)
+        failure_prior = (
+            list(failure_logger.handlers),
+            failure_logger.level,
+            failure_logger.propagate,
+        )
+        failure_capture = CaptureHandler()
+        failure_logger.addHandler(failure_capture)
+        failure_logger.setLevel(logging.DEBUG - 5)
+
+        def failing_redactor(_event: object) -> dict[str, str]:
+            raise ValueError("caller-secret")
+
+        failure_handle = core.configure_fsm_logging(
+            logging.DEBUG - 5,
+            failure_logger_name,
+            propagate=False,
+            redactor=failing_redactor,
+        )
+        failure_machine = core.StateMachine(
+            core.State("source"),
+            name="artifact-conformance-custom-redactor-failure",
+            logger_name=failure_logger_name,
+        )
+        failure_machine.add_state(core.State("destination"))
+        failure_machine.add_transition("advance", "source", "destination")
+        failure_machine.trigger("advance", payload="caller-secret")
+        custom_failure_safe = (
+            bool(failure_capture.records)
+            and all(
+                sentinel not in record.getMessage()
+                for record in failure_capture.records
+                for sentinel in _PAYLOAD_SENTINELS
+            )
+            and any(
+                getattr(record, "trace_operation", None) == "redaction_failure"
+                for record in failure_capture.records
+            )
+        )
     finally:
+        if failure_handle is not None:
+            failure_handle.restore()
         if custom_handle is not None:
             custom_handle.restore()
+        if failure_logger is not None and failure_capture is not None:
+            failure_logger.removeHandler(failure_capture)
+        if failure_logger is not None and failure_prior is not None:
+            failure_logger.handlers = failure_prior[0]
+            failure_logger.setLevel(failure_prior[1])
+            failure_logger.propagate = failure_prior[2]
+        if custom_logger is not None and custom_capture is not None:
+            custom_logger.removeHandler(custom_capture)
+        if custom_logger is not None and custom_prior is not None:
+            custom_logger.handlers = custom_prior[0]
+            custom_logger.setLevel(custom_prior[1])
+            custom_logger.propagate = custom_prior[2]
         logger.handlers = prior_handlers
         logger.setLevel(prior_level)
         logger.propagate = prior_propagate
@@ -729,6 +853,7 @@ def _logging_metadata_redaction() -> dict[str, Any]:
         "recorded": bool(records),
         "custom_redactor_called": custom_redactor_called,
         "custom_redactor_safe": custom_redactor_safe,
+        "custom_failure_safe": custom_failure_safe,
         "redacted": redacted,
         "handler_restored": logger.handlers == prior_handlers,
     }

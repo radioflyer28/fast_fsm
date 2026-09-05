@@ -180,6 +180,9 @@ def test_hardened_oracle_observes_each_phase_contract() -> None:
     assert graph["canonical_endpoints"] is True
     assert graph["duplicate_state_rejected"] is True
     assert graph["snapshot_immutable"] is True
+    assert graph["snapshot_facts_exact"] is True
+    assert graph["guard_context_observed"] is True
+    assert graph["rejected_topology_unchanged"] is True
 
     precommit = records["lifecycle.precommit-failure-observation"]
     assert precommit["success"] is False
@@ -216,6 +219,13 @@ def test_hardened_oracle_observes_each_phase_contract() -> None:
     logging_record = records["logging.metadata-redaction"]
     assert logging_record["custom_redactor_called"] is True
     assert logging_record["custom_redactor_safe"] is True
+    assert logging_record["custom_failure_safe"] is True
+
+    output = records["output.grammar-containment"]
+    assert output["mermaid_safe"] is True
+    assert output["plantuml_safe"] is True
+    assert output["json_safe"] is True
+    assert output["redacted"] is True
 
 
 @pytest.mark.parametrize(
