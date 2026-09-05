@@ -41,6 +41,16 @@ CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
 REQUIRED_UV_VERSION = "0.12.6"
 MANIFEST_SCHEMA_VERSION = 1
 
+_RELEASE_VERSION = "0.3.0"
+_SUPPORTED_CPYTHON_MINORS = ("3.10", "3.11", "3.12", "3.13", "3.14")
+_DIRECT_NATIVE_TARGETS = (
+    ("linux", "x86_64"),
+    ("linux", "aarch64"),
+    ("windows", "amd64"),
+    ("macos", "x86_64"),
+    ("macos", "arm64"),
+)
+
 _RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
 _RELEASE_HISTORY_FACTS = (
     "defective 0.2.2 package metadata",
@@ -71,6 +81,179 @@ class EvidenceError(RuntimeError):
     ) -> None:
         super().__init__(message)
         self.diagnostics = diagnostics
+
+
+@dataclass(frozen=True, order=True)
+class MatrixCell:
+    """One immutable required artifact/runtime evidence cell."""
+
+    identifier: str
+    cpython_minor: str
+    os: str
+    machine: str
+    asserted_mode: str
+    sdist_parent: str | None = None
+    requires_parity: bool = True
+    requires_origin: bool = True
+    requires_performance: bool = False
+
+
+@dataclass(frozen=True)
+class MatrixProfile:
+    """A complete expected-evidence view derived from the release contract."""
+
+    profile: str
+    cells: tuple[MatrixCell, ...]
+    authorizes_release: bool
+
+
+def _canonical_release_cells() -> tuple[MatrixCell, ...]:
+    """Return the one authoritative hosted release contract in stable order."""
+    cells: list[MatrixCell] = []
+    for minor in _SUPPORTED_CPYTHON_MINORS:
+        cells.append(
+            MatrixCell(
+                identifier=f"pure-wheel-cp{minor.replace('.', '')}",
+                cpython_minor=minor,
+                os="universal",
+                machine="universal",
+                asserted_mode="pure",
+            )
+        )
+        for os_name, machine in _DIRECT_NATIVE_TARGETS:
+            cells.append(
+                MatrixCell(
+                    identifier=(
+                        f"compiled-wheel-cp{minor.replace('.', '')}-{os_name}-{machine}"
+                    ),
+                    cpython_minor=minor,
+                    os=os_name,
+                    machine=machine,
+                    asserted_mode="compiled",
+                    requires_performance=True,
+                )
+            )
+        for machine in ("x86_64", "arm64"):
+            cells.append(
+                MatrixCell(
+                    identifier=(
+                        f"compiled-wheel-cp{minor.replace('.', '')}-macos-universal2-{machine}"
+                    ),
+                    cpython_minor=minor,
+                    os="macos",
+                    machine=machine,
+                    asserted_mode="compiled",
+                    requires_performance=True,
+                )
+            )
+
+    cells.append(
+        MatrixCell(
+            identifier="sdist-archive",
+            cpython_minor="archive",
+            os="archive",
+            machine="archive",
+            asserted_mode="sdist",
+            requires_parity=False,
+            requires_origin=False,
+        )
+    )
+    for minor in _SUPPORTED_CPYTHON_MINORS:
+        for os_name, machine in _DIRECT_NATIVE_TARGETS:
+            for mode in ("pure", "compiled"):
+                cells.append(
+                    MatrixCell(
+                        identifier=(
+                            f"sdist-{mode}-cp{minor.replace('.', '')}-{os_name}-{machine}"
+                        ),
+                        cpython_minor=minor,
+                        os=os_name,
+                        machine=machine,
+                        asserted_mode=mode,
+                        sdist_parent="sdist-archive",
+                        requires_performance=mode == "compiled",
+                    )
+                )
+    return tuple(sorted(cells))
+
+
+def _normalize_matrix_runtime(runtime: Mapping[str, object]) -> tuple[str, str, str]:
+    """Normalize the current interpreter/platform target without guessing values."""
+    implementation = runtime.get("implementation")
+    minor = runtime.get("python_minor")
+    os_name = runtime.get("platform")
+    machine = runtime.get("machine")
+    aliases = {
+        "darwin": "macos",
+        "macos": "macos",
+        "linux": "linux",
+        "win32": "windows",
+        "windows": "windows",
+        "amd64": "amd64",
+        "x86_64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "aarch64",
+    }
+    if implementation != "cpython" or not isinstance(minor, str):
+        raise EvidenceError("Matrix runtime requires a CPython minor version.")
+    if minor not in _SUPPORTED_CPYTHON_MINORS:
+        raise EvidenceError(f"Matrix runtime CPython {minor!r} is unsupported.")
+    if not isinstance(os_name, str) or not isinstance(machine, str):
+        raise EvidenceError("Matrix runtime platform and machine must be strings.")
+    normalized_os = aliases.get(os_name.casefold())
+    normalized_machine = aliases.get(machine.casefold())
+    if normalized_os not in {"linux", "windows", "macos"} or normalized_machine not in {
+        "x86_64",
+        "amd64",
+        "arm64",
+        "aarch64",
+    }:
+        raise EvidenceError("Matrix runtime platform or machine is unsupported.")
+    return minor, normalized_os, normalized_machine
+
+
+def expected_matrix(profile: str, runtime: Mapping[str, object]) -> MatrixProfile:
+    """Return the release contract or its deterministic local proof projection."""
+    release_cells = _canonical_release_cells()
+    if profile == "release":
+        return MatrixProfile("release", release_cells, True)
+    if profile != "local":
+        raise EvidenceError("Matrix profile must be 'release' or 'local'.")
+
+    minor, os_name, machine = _normalize_matrix_runtime(runtime)
+    compatible_machines = {machine}
+    if machine == "arm64":
+        compatible_machines.add("aarch64")
+    elif machine == "aarch64":
+        compatible_machines.add("arm64")
+    elif machine == "amd64":
+        compatible_machines.add("x86_64")
+    elif machine == "x86_64":
+        compatible_machines.add("amd64")
+    local_cells = tuple(
+        cell
+        for cell in release_cells
+        if cell.identifier == "sdist-archive"
+        or (
+            cell.cpython_minor == minor
+            and (
+                (cell.os == "universal" and cell.machine == "universal")
+                or (cell.os == os_name and cell.machine in compatible_machines)
+            )
+        )
+    )
+    if not local_cells:
+        raise EvidenceError("Matrix runtime has no local release proof projection.")
+    return MatrixProfile("local", local_cells, False)
+
+
+def build_release_authorization(aggregate: Mapping[str, object]) -> dict[str, str]:
+    """Construct an authorization marker only for a complete hosted profile."""
+    if aggregate.get("profile") != "release":
+        raise EvidenceError("Only the complete release profile can authorize release.")
+    if aggregate.get("authorizes_release") is not True:
+        raise EvidenceError("Release profile aggregate is not authorizing.")
+    return {"profile": "release", "authorization": "release-evidence-complete"}
 
 
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
