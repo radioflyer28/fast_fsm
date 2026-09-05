@@ -7,17 +7,30 @@ on:
         description: Exact branch, tag, or commit to resolve once for evidence
         required: true
         type: string
+      tag:
+        description: Provenance tag used only by the tag-only release caller
+        required: false
+        default: unreleased
+        type: string
   workflow_call:
     inputs:
       ref:
         description: Exact branch, tag, or commit to resolve once for evidence
         required: true
         type: string
+      tag:
+        description: Provenance tag used only by the tag-only release caller
+        required: false
+        default: unreleased
+        type: string
 
 # This workflow is intentionally evidence-only.  The tag-only release caller owns
 # the one write-capable job after it separately proves tag-to-aggregate equality.
 permissions:
   contents: read
+
+env:
+  EVIDENCE_TAG: ${{ inputs.tag }}
 
 jobs:
   resolve_ref:
@@ -78,7 +91,7 @@ jobs:
               "package": "fast_fsm",
               "distribution_version": "0.3.0",
               "commit": head_sha,
-              "tag": "unreleased",
+              "tag": os.environ["EVIDENCE_TAG"],
               "suite_sha256": _suite_sha256(),
           }
           with open("evidence-input/installed-identity.json", "w", encoding="utf-8") as output:
@@ -301,7 +314,7 @@ jobs:
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
               "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
               "conformance": raw["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": None,
               "parent_sdist": None,
@@ -413,7 +426,7 @@ jobs:
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
               "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
               "conformance": raw["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": {"status": "passed"},
               "parent_sdist": None,
@@ -543,7 +556,7 @@ jobs:
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
               "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
               "conformance": child["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": {"status": "passed"} if mode == "compiled" else None,
               "parent_sdist": {"filename": archive["filename"], "sha256": archive["sha256"]},
@@ -568,7 +581,7 @@ jobs:
                   "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "classified_mode": "sdist", "build_intent": "sdist"},
                   "runtime": None,
                   "conformance": None,
-                  "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+                  "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
                   "origin_verified": False,
                   "performance": None,
                   "parent_sdist": None,

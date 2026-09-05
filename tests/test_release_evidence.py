@@ -2615,7 +2615,7 @@ def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> N
             "docs_doctest",
         ),
         DOCS_WORKFLOW: ("build_docs",),
-        RELEASE_WORKFLOW: ("build_sdist",),
+        RELEASE_EVIDENCE_WORKFLOW: ("build_sdist",),
     }
     preflight = "uv run python tools/release_evidence.py verify-source --json"
     for workflow_path, jobs in required.items():
@@ -2638,21 +2638,16 @@ def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> N
             assert "pytest" not in between
 
 
-def test_release_workflow_gates_artifacts_without_publishing_a_pure_wheel() -> None:
-    """The reusable complete gate precedes existing artifacts; Phase 20 owns pure publication."""
+def test_release_workflow_is_tag_only_evidence_caller() -> None:
+    """The write-capable caller builds nothing and delegates all proof read-only."""
     workflow = _workflow_text(RELEASE_WORKFLOW)
-    assert "uses: ./.github/workflows/ci.yml" in workflow
-    for job in ("build_wheels", "build_sdist"):
-        job_match = re.search(
-            rf"^  {job}:$(.*?)(?=^  [A-Za-z_][A-Za-z0-9_]*:$|\Z)",
-            workflow,
-            flags=re.MULTILINE | re.DOTALL,
-        )
-        assert job_match
-        assert "needs: quality_gate" in job_match.group(1)
-    assert "FAST_FSM_BUILD_MODE: pure" in workflow
-    assert "uv sync --locked" in workflow
-    assert "py3-none-any" not in workflow
+    assert 'tags:\n      - "v0.3.0"' in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "workflow_call:" not in workflow
+    assert "uses: ./.github/workflows/release-evidence.yml" in workflow
+    assert "build_wheels:" not in workflow
+    assert "build_sdist:" not in workflow
+    assert "quality_gate:" not in workflow
 
 
 def _workflow_needs(job: dict[str, object]) -> set[str]:
@@ -2726,6 +2721,8 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert "workflow_call:" in text
     assert re.search(r"workflow_dispatch:.*?ref:.*?required: true", text, re.DOTALL)
     assert re.search(r"workflow_call:.*?ref:.*?required: true", text, re.DOTALL)
+    assert "EVIDENCE_TAG: ${{ inputs.tag }}" in text
+    assert '"tag": os.environ["EVIDENCE_TAG"]' in text
     assert workflow.get("permissions") == {"contents": "read"}
     assert "github_release" not in jobs
     assert "contents: write" not in text
@@ -2868,7 +2865,7 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
     text = _workflow_text(RELEASE_WORKFLOW)
     assert "workflow_dispatch:" not in text
     assert "workflow_call:" not in text
-    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\\.3\\.0\"", text)
+    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\.3\.0\"", text)
     assert workflow.get("permissions") == {"contents": "read"}
     assert set(jobs) == {"release_evidence", "tag_identity", "github_release"}
 

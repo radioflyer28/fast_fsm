@@ -1,169 +1,105 @@
-name: Build and Release
+name: Release v0.3.0
 
+# This is deliberately the only workflow that can publish. Evidence collection
+# lives in release-evidence.yml, which is callable/manual but read-only.
 on:
   push:
     tags:
-      - "v*"
+      - "v0.3.0"
 
 permissions:
   contents: read
 
 jobs:
-  quality_gate:
-    name: Complete reusable quality gate
-    uses: ./.github/workflows/ci.yml
+  release_evidence:
+    name: Complete hosted release evidence
+    uses: ./.github/workflows/release-evidence.yml
+    with:
+      ref: ${{ github.ref }}
+      tag: v0.3.0
 
-  # ── Build compiled wheels (cibuildwheel) ─────────────────────────────────────
-  build_wheels:
-    name: Wheels · ${{ matrix.artifact_name }}
-    needs: quality_gate
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux  — x86_64 (glibc + musl) and aarch64 (glibc only)
-          - os: ubuntu-latest
-            cibw_archs: "x86_64 aarch64"
-            artifact_name: linux
-
-          # Windows — 64-bit only
-          - os: windows-latest
-            cibw_archs: "AMD64"
-            artifact_name: windows
-
-          # macOS — arm64 runner can cross-compile x86_64 and produce universal2
-          - os: macos-14
-            cibw_archs: "x86_64 arm64 universal2"
-            artifact_name: macos
-
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-
-      # QEMU lets the x86_64 Linux runner build aarch64 wheels via emulation.
-      - name: Set up QEMU (Linux aarch64)
-        if: matrix.os == 'ubuntu-latest'
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-        with:
-          platforms: linux/arm64
-
-      - name: Build wheels
-        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
-        env:
-          # CPython 3.10–3.14 on all selected arches; skip PyPy
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-
-          # Per-platform arch selection driven by the matrix
-          CIBW_ARCHS_LINUX: ${{ matrix.cibw_archs }}
-          CIBW_ARCHS_WINDOWS: ${{ matrix.cibw_archs }}
-          CIBW_ARCHS_MACOS: ${{ matrix.cibw_archs }}
-
-          # Skip all musllinux (Alpine/musl libc) — manylinux covers all mainstream distros
-          CIBW_SKIP: "*musllinux*"
-
-          # Install test dependencies inside each wheel build environment
-          CIBW_TEST_REQUIRES: "pytest pytest-asyncio hypothesis"
-          # Skip QEMU (Linux aarch64) builds to avoid very slow emulation;
-          # skip macOS x86_64 cross-compiled on arm64 runner (no Rosetta in CI)
-          CIBW_TEST_SKIP: "cp*-*linux_aarch64 cp*-macosx_x86_64"
-          CIBW_TEST_COMMAND: >-
-            python -m pytest {project}/tests/test_basic_functionality.py
-            {project}/tests/test_async.py -x -q
-
-          # Ensure minimum macOS deployment target for universal support
-          CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=10.15"
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: wheels-${{ matrix.artifact_name }}
-          path: ./wheelhouse/*.whl
-
-  # ── Build source distribution (pure-Python fallback) ───────────────────────
-  build_sdist:
-    name: Source distribution
-    needs: quality_gate
+  tag_identity:
+    name: Bind v0.3.0 tag to accepted aggregate
+    needs: [release_evidence]
     runs-on: ubuntu-latest
     env:
       FAST_FSM_BUILD_MODE: pure
+      HEAD_SHA: ${{ needs.release_evidence.outputs.head_sha }}
+      AGGREGATE_CONCLUSION: ${{ needs.release_evidence.outputs.aggregate_conclusion }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ needs.release_evidence.outputs.head_sha }}
           fetch-depth: 0
-
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "0.12.6"
           python-version: "3.12"
-
-      - name: Install locked source-build dependencies
-        run: uv sync --locked --group release
-
-      - name: Verify pure source origin
-        run: uv run python tools/release_evidence.py verify-source --json
-
-      - name: Build sdist
-        run: uv build --sdist
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sdist
-          path: dist/*.tar.gz
+          name: ${{ needs.release_evidence.outputs.manifest_artifact }}
+          path: evidence
+      - name: Require the accepted aggregate and exact peeled tag
+        run: |
+          # aggregate_conclusion is the reusable terminal aggregate output.
+          test "$AGGREGATE_CONCLUSION" = success
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git rev-parse v0.3.0^{})" = "$HEAD_SHA"
+          uv sync --locked --all-groups
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-  # ── Create GitHub Release and attach all artifacts ──────────────────────────
+          aggregate = json.loads(Path("evidence/release-manifest.json").read_text())
+          if aggregate.get("profile") != "release":
+              raise SystemExit("aggregate profile is not release")
+          if aggregate.get("authorizes_release") is not True:
+              raise SystemExit("aggregate does not authorize release")
+          if aggregate.get("release_identity", {}).get("commit") != os.environ["HEAD_SHA"]:
+              raise SystemExit("aggregate commit differs from resolved checkout")
+          Path("installed-identity.json").write_text(
+              '{"distribution_version":"0.3.0","package_version":"0.3.0"}',
+              encoding="utf-8",
+          )
+          PY
+          uv run python tools/release_evidence.py verify-release-identity \
+            --installed-identity installed-identity.json \
+            --aggregate evidence/release-manifest.json --tag-ref v0.3.0 --json
+
   github_release:
     name: Create GitHub Release
-    needs: [quality_gate, build_wheels, build_sdist]
+    needs: [release_evidence, tag_identity]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ needs.release_evidence.outputs.head_sha }}
           fetch-depth: 0
-
-      # Collect all wheel artifacts into dist/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist/
+          name: ${{ needs.release_evidence.outputs.manifest_artifact }}
+          path: evidence
+      - name: Require an aggregate-approved release manifest
+        run: |
+          uv run python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
-      # Add the sdist as well
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sdist
-          path: dist/
-
-      - name: Create release
+          release_manifest = Path("evidence/release-manifest.json")
+          payload = json.loads(release_manifest.read_text())
+          digest = hashlib.sha256(release_manifest.read_bytes()).hexdigest()
+          if payload.get("profile") != "release" or payload.get("authorizes_release") is not True:
+              raise SystemExit("release manifest is not aggregate-authorized")
+          if payload.get("release_identity", {}).get("commit") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("release manifest commit does not equal tag checkout")
+          print(f"accepted release-manifest sha256={digest}")
+          PY
+      - name: Create aggregate-approved release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: dist/*
           generate_release_notes: true
-          fail_on_unmatched_files: true
-
-  # ── Optional: Publish to PyPI ───────────────────────────────────────────────
-  # Uncomment and add a PYPI_TOKEN repository secret to enable.
-  #
-  # publish_pypi:
-  #   name: Publish to PyPI
-  #   needs: [build_wheels, build_sdist]
-  #   runs-on: ubuntu-latest
-  #   environment:
-  #     name: pypi
-  #     url: https://pypi.org/project/fast-fsm/
-  #   permissions:
-  #     id-token: write   # OIDC trusted publishing (no token needed if configured)
-  #   steps:
-  #     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-  #       with:
-  #         pattern: wheels-*
-  #         merge-multiple: true
-  #         path: dist/
-  #     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-  #       with:
-  #         name: sdist
-  #         path: dist/
-  #     - uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0

@@ -12,6 +12,56 @@ permissions:
   contents: read
 
 jobs:
+  static_release_identity:
+    name: Static v0.3.0 identity
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked identity dependencies
+        run: uv sync --locked --all-groups
+      - name: Validate static release identity without requiring a tag
+        run: |
+          uv run python - <<'PY'
+          import json
+          import subprocess
+          from fast_fsm import __version__
+          from tools.artifact_conformance import _suite_sha256
+
+          head_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          with open("installed-identity.json", "w", encoding="utf-8") as output:
+              json.dump(
+                  {"distribution_version": "0.3.0", "package_version": __version__},
+                  output,
+                  sort_keys=True,
+              )
+          with open("static-aggregate.json", "w", encoding="utf-8") as output:
+              json.dump(
+                  {
+                      "package": "fast_fsm",
+                      "distribution_version": "0.3.0",
+                      "commit": head_sha,
+                      "tag": "unreleased",
+                      "suite_sha256": _suite_sha256(),
+                  },
+                  output,
+                  sort_keys=True,
+              )
+          PY
+          uv run python tools/release_evidence.py verify-release-identity \
+            --installed-identity installed-identity.json \
+            --aggregate static-aggregate.json --json
+
   format:
     name: Ruff format
     runs-on: ubuntu-latest
