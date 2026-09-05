@@ -11,6 +11,9 @@ import io
 import logging
 import os
 import time
+from collections import Counter
+from collections.abc import Callable
+from typing import Any
 
 import coverage
 import pytest
@@ -23,6 +26,187 @@ from fast_fsm.core import (
 )
 from fast_fsm.conditions import Condition
 from fast_fsm.condition_templates import TimeoutCondition
+
+
+_COMPLEXITY_TOPOLOGY_SIZES = (4, 64, 512)
+_COARSE_SCALING_OPERATIONS = 200
+
+
+class _CountingDict(dict[str, Any]):
+    """Test-only mapping wrapper recording the runtime's direct registry work."""
+
+    def __init__(self, values: dict[str, Any], counts: Counter[str]) -> None:
+        super().__init__(values)
+        self._counts = counts
+
+    def get(self, key: str, default: Any = None) -> Any:
+        self._counts["get"] += 1
+        return super().get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        self._counts["getitem"] += 1
+        return super().__getitem__(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._counts["setitem"] += 1
+        super().__setitem__(key, value)
+
+
+def _constant_topology_machine(size: int) -> StateMachine:
+    """Build a fixed local operation plus unrelated topology of a chosen size."""
+    idle = State("idle")
+    active = State("active")
+    machine = StateMachine(idle, name=f"complexity-{size}")
+    machine.add_state(active)
+    machine.add_transition("activate", idle, active)
+    machine.add_transition("deactivate", active, idle)
+
+    previous = idle
+    for index in range(size):
+        state = State(f"unrelated-{index}")
+        machine.add_state(state)
+        machine.add_transition(f"unrelated-{index}", previous, state)
+        previous = state
+    return machine
+
+
+def _count_topology_operations(machine: StateMachine) -> Counter[str]:
+    """Replace only test-local dicts so operation counts need no runtime hooks."""
+    counts: Counter[str] = Counter()
+    machine._states = _CountingDict(dict(machine._states), counts)  # type: ignore[assignment]
+    machine._transitions = _CountingDict(  # type: ignore[assignment]
+        {
+            name: _CountingDict(dict(entries), counts)
+            for name, entries in machine._transitions.items()
+        },
+        counts,
+    )
+    return counts
+
+
+def _assert_constant_count(
+    observed: dict[int, int], *, upper_bound: int, operation: str
+) -> None:
+    """Assert one operation's relevant dictionary work ignores unrelated topology."""
+    assert set(observed) == set(_COMPLEXITY_TOPOLOGY_SIZES)
+    assert len(set(observed.values())) == 1, (
+        f"{operation} lookup/write drift: {observed}"
+    )
+    assert next(iter(observed.values())) <= upper_bound, (
+        f"{operation} exceeded its direct-registry work bound: {observed}"
+    )
+
+
+def _coarse_operation_seconds(operation: Callable[[], None]) -> float:
+    """Time one repeated operation only as a deliberately broad regression signal."""
+    gc.collect()
+    started = time.perf_counter()
+    for _ in range(_COARSE_SCALING_OPERATIONS):
+        operation()
+    elapsed = time.perf_counter() - started
+    assert elapsed > 0
+    return elapsed
+
+
+def test_trigger_constant_lookup_invariant_across_topology_sizes() -> None:
+    """trigger() uses one outer and one inner direct transition lookup."""
+    observed: dict[int, int] = {}
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        machine = _constant_topology_machine(size)
+        counts = _count_topology_operations(machine)
+        assert machine.trigger("activate").success
+        observed[size] = sum(counts.values())
+    _assert_constant_count(observed, upper_bound=2, operation="trigger")
+
+
+def test_can_trigger_constant_lookup_and_guard_invariant_across_topology_sizes() -> (
+    None
+):
+    """can_trigger() resolves an unconditional direct transition without scanning."""
+    observed: dict[int, int] = {}
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        machine = _constant_topology_machine(size)
+        counts = _count_topology_operations(machine)
+        assert machine.can_trigger("activate") is True
+        observed[size] = sum(counts.values())
+    _assert_constant_count(observed, upper_bound=2, operation="can_trigger")
+
+
+def test_add_state_constant_registry_lookup_and_writes_across_topology_sizes() -> None:
+    """add_state() does one registry lookup and writes exactly two direct entries."""
+    observed: dict[int, int] = {}
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        machine = _constant_topology_machine(size)
+        counts = _count_topology_operations(machine)
+        machine.add_state(State("candidate"))
+        observed[size] = sum(counts.values())
+    _assert_constant_count(observed, upper_bound=3, operation="add_state")
+
+
+def test_add_transition_constant_registry_lookup_and_write_across_topology_sizes() -> (
+    None
+):
+    """add_transition() resolves endpoints then writes one direct transition entry."""
+    observed: dict[int, int] = {}
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        machine = _constant_topology_machine(size)
+        counts = _count_topology_operations(machine)
+        machine.add_transition("candidate", "idle", "active")
+        observed[size] = sum(counts.values())
+    _assert_constant_count(observed, upper_bound=6, operation="add_transition")
+
+
+def test_core_operations_coarse_scaling_backstop_is_not_an_asymptotic_proof() -> None:
+    """Broad multi-size timing only catches gross topology-dependent regressions."""
+    observations: dict[str, list[float]] = {
+        "trigger": [],
+        "can_trigger": [],
+        "add_state": [],
+        "add_transition": [],
+    }
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        trigger_machine = _constant_topology_machine(size)
+        observations["trigger"].append(
+            _coarse_operation_seconds(
+                lambda: (
+                    trigger_machine.trigger("activate"),
+                    trigger_machine.trigger("deactivate"),
+                )
+            )
+        )
+        can_trigger_machine = _constant_topology_machine(size)
+        observations["can_trigger"].append(
+            _coarse_operation_seconds(
+                lambda: can_trigger_machine.can_trigger("activate")
+            )
+        )
+        add_state_machine = _constant_topology_machine(size)
+        state_index = 0
+
+        def add_state() -> None:
+            nonlocal state_index
+            add_state_machine.add_state(State(f"candidate-state-{state_index}"))
+            state_index += 1
+
+        observations["add_state"].append(_coarse_operation_seconds(add_state))
+        add_transition_machine = _constant_topology_machine(size)
+        transition_index = 0
+
+        def add_transition() -> None:
+            nonlocal transition_index
+            add_transition_machine.add_transition(
+                f"candidate-transition-{transition_index}", "idle", "active"
+            )
+            transition_index += 1
+
+        observations["add_transition"].append(_coarse_operation_seconds(add_transition))
+
+    for operation, timings in observations.items():
+        fastest = min(timings)
+        slowest = max(timings)
+        assert slowest / fastest < 20, (
+            f"{operation} coarse scaling backstop exceeded its loose ratio: {timings}"
+        )
 
 
 # Suppress print output during benchmarks

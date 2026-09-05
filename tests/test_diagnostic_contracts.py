@@ -551,6 +551,77 @@ def test_iterative_paths_distinguish_length_result_and_expansion_limits(
     assert result_raised.value.status.exhausted_stage == "path.result"
 
 
+def test_diagnostic_exact_limit_boundaries_are_separate_from_runtime_complexity(
+    monkeypatch: pytest.MonkeyPatch,
+    high_fanout_machine: StateMachine,
+) -> None:
+    """All diagnostic dimensions reserve deterministic limits before forbidden work."""
+    graph = _graph_from_snapshot(high_fanout_machine._graph_snapshot())
+    edge_count = len(graph.edges)
+    dense_cells = len(graph.state_names) * len(graph.state_names)
+
+    required_work = (edge_count * 2) + 1
+    exact_work = _DiagnosticBudget(DiagnosticLimits(max_work=required_work))
+    assert diagnostics._reachable_indices(graph, exact_work) == tuple(
+        range(len(graph.state_names))
+    )
+    assert exact_work.status.work_count == required_work
+    with pytest.raises(DiagnosticBudgetExceeded) as work_raised:
+        diagnostics._reachable_indices(
+            graph, _DiagnosticBudget(DiagnosticLimits(max_work=required_work - 1))
+        )
+    assert work_raised.value.status.work_count == required_work - 1
+
+    exact_results = _DiagnosticBudget(DiagnosticLimits(max_results=edge_count))
+    assert (
+        len(_generate_paths(graph, exact_results, max_length=1, max_paths=edge_count))
+        == edge_count
+    )
+    assert exact_results.status.result_count == edge_count
+    with pytest.raises(DiagnosticBudgetExceeded) as result_raised:
+        _generate_paths(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_results=edge_count - 1)),
+            max_length=1,
+            max_paths=edge_count,
+        )
+    assert result_raised.value.status.result_count == edge_count - 1
+
+    exact_dense = _DiagnosticBudget(DiagnosticLimits(max_dense_cells=dense_cells))
+    _dense_adjacency(graph, exact_dense)
+    assert exact_dense.status.dense_cell_count == dense_cells
+    monkeypatch.setattr(
+        diagnostics,
+        "_allocate_dense_matrix",
+        lambda *_args: pytest.fail(
+            "dense allocation must not run after one-less preflight"
+        ),
+    )
+    with pytest.raises(DiagnosticBudgetExceeded) as dense_raised:
+        _dense_adjacency(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_dense_cells=dense_cells - 1)),
+        )
+    assert dense_raised.value.status.dense_cell_count == 0
+
+    exact_paths = _DiagnosticBudget(
+        DiagnosticLimits(max_path_expansions=edge_count, max_results=edge_count)
+    )
+    assert (
+        len(_generate_paths(graph, exact_paths, max_length=1, max_paths=edge_count))
+        == edge_count
+    )
+    assert exact_paths.status.path_expansion_count == edge_count
+    with pytest.raises(DiagnosticBudgetExceeded) as path_raised:
+        _generate_paths(
+            graph,
+            _DiagnosticBudget(DiagnosticLimits(max_path_expansions=edge_count - 1)),
+            max_length=1,
+            max_paths=edge_count,
+        )
+    assert path_raised.value.status.path_expansion_count == edge_count - 1
+
+
 def test_diagnostic_defaults_are_finite_and_pinned() -> None:
     """Default ceilings are explicit calibrated constants, never wall-clock state."""
     assert DiagnosticLimits() == DiagnosticLimits(
