@@ -407,6 +407,62 @@ def _matrix_filename(value: object, *, field: str) -> str:
     return value.casefold()
 
 
+def _normalized_evidence_origin(value: object, *, field: str) -> str:
+    """Remove fresh-environment roots after installed containment was proven."""
+    if not isinstance(value, str) or not value:
+        raise EvidenceError(f"matrix evidence runtime.{field} is malformed.")
+    parts = PurePosixPath(value.replace("\\", "/")).parts
+    try:
+        site_packages = parts.index("site-packages")
+    except ValueError as error:
+        raise EvidenceError(
+            f"matrix evidence runtime.{field} is not an installed package origin."
+        ) from error
+    relative = parts[site_packages:]
+    if (
+        len(relative) < 3
+        or relative[1] != PACKAGE_NAME
+        or any(part in {"", ".", ".."} for part in relative)
+    ):
+        raise EvidenceError(f"matrix evidence runtime.{field} is malformed.")
+    return PurePosixPath(*relative).as_posix()
+
+
+def matrix_runtime_evidence(runtime: Mapping[str, object]) -> dict[str, object]:
+    """Project validated runtime facts into deterministic matrix evidence."""
+    fields = (
+        "python_implementation",
+        "python_version",
+        "platform",
+        "machine",
+        "distribution_version",
+        "package_version",
+        "package_origin",
+        "core_origin",
+        "core_loader",
+    )
+    try:
+        projected = {field: runtime[field] for field in fields}
+    except KeyError as error:
+        raise EvidenceError("Installed runtime proof is incomplete.") from error
+    projected["package_origin"] = _normalized_evidence_origin(
+        projected["package_origin"], field="package_origin"
+    )
+    projected["core_origin"] = _normalized_evidence_origin(
+        projected["core_origin"], field="core_origin"
+    )
+    return projected
+
+
+def matrix_artifact_evidence(artifact: Mapping[str, object]) -> dict[str, object]:
+    """Project inspected archive identity into the strict matrix envelope."""
+    fields = ("filename", "sha256", "wheel_tags", "classified_mode", "build_intent")
+    try:
+        return {field: artifact[field] for field in fields}
+    except KeyError as error:
+        raise EvidenceError("Installed artifact proof is incomplete.") from error
+
+
 def _matrix_artifact_group(cell: MatrixCell) -> str:
     """Return the only cell families allowed to share one artifact digest."""
     if cell.identifier.startswith("pure-wheel-"):
@@ -416,7 +472,9 @@ def _matrix_artifact_group(cell: MatrixCell) -> str:
     return cell.identifier
 
 
-def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> None:
+def _matrix_runtime_matches(
+    cell: MatrixCell, runtime: Mapping[str, object]
+) -> dict[str, object]:
     """Bind installed runtime facts to the expected cell before parity is accepted."""
     fields = frozenset(
         {
@@ -426,6 +484,7 @@ def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> 
             "machine",
             "distribution_version",
             "package_version",
+            "package_origin",
             "core_origin",
             "core_loader",
         }
@@ -482,9 +541,14 @@ def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> 
             raise EvidenceError(
                 f"matrix evidence runtime.{field} is not {_RELEASE_VERSION}."
             )
-    core_origin = checked["core_origin"]
-    if not isinstance(core_origin, str) or not core_origin:
-        raise EvidenceError("matrix evidence runtime.core_origin is malformed.")
+    package_origin = _normalized_evidence_origin(
+        checked["package_origin"], field="package_origin"
+    )
+    core_origin = _normalized_evidence_origin(
+        checked["core_origin"], field="core_origin"
+    )
+    if package_origin != "site-packages/fast_fsm/__init__.py":
+        raise EvidenceError("matrix evidence runtime.package_origin is malformed.")
     if cell.asserted_mode == "compiled":
         core_basename = PurePosixPath(core_origin.replace("\\", "/")).name
         if checked[
@@ -497,6 +561,10 @@ def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> 
         ".py"
     ):
         raise EvidenceError("matrix evidence runtime pure core is invalid.")
+    normalized = dict(checked)
+    normalized["package_origin"] = package_origin
+    normalized["core_origin"] = core_origin
+    return normalized
 
 
 def _matrix_conformance_matches(
@@ -602,7 +670,7 @@ def _validate_matrix_record(
         raise EvidenceError("matrix evidence matrix.artifact_sha256 is malformed.")
 
     artifact_fields = frozenset(
-        {"filename", "sha256", "classified_mode", "build_intent"}
+        {"filename", "sha256", "wheel_tags", "classified_mode", "build_intent"}
     )
     artifact = _exact_mapping(
         checked["artifact"], fields=artifact_fields, field="artifact"
@@ -618,6 +686,27 @@ def _validate_matrix_record(
         or artifact["build_intent"] != cell.asserted_mode
     ):
         raise EvidenceError("matrix evidence artifact mode contradicts matrix.")
+    wheel_tags = artifact["wheel_tags"]
+    if cell.identifier == "sdist-archive":
+        if wheel_tags != []:
+            raise EvidenceError("matrix evidence sdist archive has wheel tags.")
+    else:
+        if not isinstance(wheel_tags, list) or not all(
+            isinstance(tag, str) and tag for tag in wheel_tags
+        ):
+            raise EvidenceError("matrix evidence artifact wheel tags are malformed.")
+        try:
+            _name, _version, _build, filename_tags = parse_wheel_filename(
+                artifact_filename
+            )
+        except InvalidWheelFilename as error:
+            raise EvidenceError(
+                "matrix evidence artifact wheel filename is invalid."
+            ) from error
+        if wheel_tags != sorted(str(tag) for tag in filename_tags):
+            raise EvidenceError(
+                "matrix evidence artifact wheel tags contradict filename."
+            )
     artifact_key = (artifact_filename, cast(str, artifact_sha))
     artifact_group = _matrix_artifact_group(cell)
     existing_group = artifact_groups.setdefault(artifact_key, artifact_group)
@@ -655,7 +744,9 @@ def _validate_matrix_record(
 
     if not isinstance(checked["runtime"], Mapping):
         raise EvidenceError("matrix evidence runtime is required.")
-    _matrix_runtime_matches(cell, cast(Mapping[str, object], checked["runtime"]))
+    runtime = _matrix_runtime_matches(
+        cell, cast(Mapping[str, object], checked["runtime"])
+    )
     if checked["origin_verified"] is not cell.requires_origin:
         raise EvidenceError("matrix evidence origin proof contradicts matrix.")
     if cell.requires_performance:
@@ -677,8 +768,15 @@ def _validate_matrix_record(
             "platform",
             "machine",
         )
-        runtime = cast(Mapping[str, object], checked["runtime"])
-        if any(performance[field] != runtime[field] for field in runtime_fields):
+        if any(
+            (
+                _normalized_evidence_origin(performance[field], field=field)
+                if field == "core_origin"
+                else performance[field]
+            )
+            != runtime[field]
+            for field in runtime_fields
+        ):
             raise EvidenceError("matrix evidence performance runtime is detached.")
     elif checked["performance"] is not None:
         raise EvidenceError("matrix evidence has unexpected installed performance.")
@@ -758,7 +856,19 @@ def aggregate_matrix_records(
                         "matrix evidence semantic parity differs: "
                         + "; ".join(differences)
                     )
-        accepted_records.append(json.loads(serialize_manifest(checked)))
+        accepted = json.loads(serialize_manifest(checked))
+        accepted_runtime = accepted.get("runtime")
+        if isinstance(accepted_runtime, Mapping):
+            accepted["runtime"] = matrix_runtime_evidence(accepted_runtime)
+        accepted_performance = accepted.get("performance")
+        if isinstance(accepted_performance, Mapping):
+            accepted["performance"] = {
+                **accepted_performance,
+                "core_origin": _normalized_evidence_origin(
+                    accepted_performance.get("core_origin"), field="core_origin"
+                ),
+            }
+        accepted_records.append(accepted)
 
     missing = sorted(set(expected_cells) - set(actual_cells))
     unexpected = sorted(set(actual_cells) - set(expected_cells))

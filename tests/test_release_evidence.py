@@ -2462,7 +2462,8 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
     assert "gh release" not in readiness_text
 
     local_evidence_text = _task_command_text(tasks["release-evidence-local-check"])
-    assert '"core_origin", "core_loader"' in local_evidence_text
+    assert "matrix_artifact_evidence(artifact)" in local_evidence_text
+    assert "matrix_runtime_evidence(runtime_record)" in local_evidence_text
     assert 'proof["performance"] if cell.requires_performance else None' in (
         local_evidence_text
     )
@@ -3191,7 +3192,8 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert 'Path("artifact").rglob' in native_runs
     assert "expected exactly one" in native_runs
     assert '"performance": raw["performance"]' in native_runs
-    assert '"core_loader"' in native_runs
+    assert "matrix_artifact_evidence(artifact)" in native_runs
+    assert "matrix_runtime_evidence(runtime)" in native_runs
 
     pure_steps = jobs["verify_pure"].get("steps")
     assert isinstance(pure_steps, list)
@@ -3202,7 +3204,8 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     )
     # The producer itself, rather than a synthetic matrix fixture, must emit
     # the exact strict runtime shape accepted by aggregate-matrix.
-    assert '"core_origin", "core_loader"' in pure_runs
+    assert "matrix_artifact_evidence(artifact)" in pure_runs
+    assert "matrix_runtime_evidence(runtime)" in pure_runs
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
@@ -3894,12 +3897,24 @@ def _matrix_artifact_name(cell: object) -> str:
     assert isinstance(cell, release_evidence.MatrixCell)
     if cell.identifier == "sdist-archive":
         return "fast_fsm-0.3.0.tar.gz"
+    if cell.identifier.startswith("sdist-pure-"):
+        build = f"1sdist{cell.cpython_minor.replace('.', '')}{cell.os}{cell.machine}"
+        return f"fast_fsm-0.3.0-{build}-py3-none-any.whl"
     if cell.identifier.startswith("pure-wheel-"):
         return "fast_fsm-0.3.0-py3-none-any.whl"
     if "universal2" in cell.identifier:
         minor = cell.cpython_minor.replace(".", "")
         return f"fast_fsm-0.3.0-cp{minor}-cp{minor}-macosx_10_15_universal2.whl"
-    return f"fast_fsm-0.3.0-{cell.identifier}.whl"
+    minor = cell.cpython_minor.replace(".", "")
+    platform_tag = {
+        ("linux", "x86_64"): "manylinux_2_17_x86_64",
+        ("linux", "aarch64"): "manylinux_2_17_aarch64",
+        ("macos", "x86_64"): "macosx_10_15_x86_64",
+        ("macos", "arm64"): "macosx_11_0_arm64",
+        ("windows", "amd64"): "win_amd64",
+    }[(cell.os, cell.machine)]
+    build_tag = "-1sdist" if cell.identifier.startswith("sdist-") else ""
+    return f"fast_fsm-0.3.0{build_tag}-cp{minor}-cp{minor}-{platform_tag}.whl"
 
 
 def _matrix_core_origin(cell: object) -> str:
@@ -3911,6 +3926,20 @@ def _matrix_core_origin(cell: object) -> str:
         minor = cell.cpython_minor.replace(".", "")
         return rf"C:\isolated\site-packages\fast_fsm\core.cp{minor}-win_amd64.pyd"
     return "/isolated/environment/site-packages/fast_fsm/core.abi3.so"
+
+
+def _matrix_package_origin(cell: object) -> str:
+    """Return a platform-shaped package origin fixture for matrix proofs."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.os == "windows":
+        return r"C:\\isolated\\site-packages\\fast_fsm\\__init__.py"
+    return "/isolated/environment/site-packages/fast_fsm/__init__.py"
+
+
+def _matrix_wheel_tags(filename: str) -> list[str]:
+    """Derive oracle fixture tags exactly as inspected wheel evidence does."""
+    _name, _version, _build, tags = release_evidence.parse_wheel_filename(filename)
+    return sorted(str(tag) for tag in tags)
 
 
 def _matrix_record(
@@ -3941,6 +3970,9 @@ def _matrix_record(
         "artifact": {
             "filename": filename,
             "sha256": digest,
+            "wheel_tags": []
+            if cell.identifier == "sdist-archive"
+            else _matrix_wheel_tags(filename),
             "classified_mode": cell.asserted_mode,
             "build_intent": cell.asserted_mode,
         },
@@ -3953,6 +3985,7 @@ def _matrix_record(
             "machine": runtime_machine,
             "distribution_version": "0.3.0",
             "package_version": "0.3.0",
+            "package_origin": _matrix_package_origin(cell),
             "core_origin": _matrix_core_origin(cell),
             "core_loader": (
                 "ExtensionFileLoader"
@@ -4046,6 +4079,57 @@ def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministi
     assert release_evidence.render_aggregate_summary(first).endswith("\n")
     with pytest.raises(EvidenceError, match="release profile"):
         release_evidence.build_release_authorization(first)
+
+
+def test_matrix_evidence_normalizes_fresh_environment_provenance() -> None:
+    """Fresh install roots do not leak into deterministic matrix evidence."""
+    first_runtime = {
+        "python_implementation": "cpython",
+        "python_version": "3.12.1",
+        "platform": "macos",
+        "machine": "arm64",
+        "distribution_version": "0.3.0",
+        "package_version": "0.3.0",
+        "package_origin": "/private/tmp/one/site-packages/fast_fsm/__init__.py",
+        "core_origin": "/private/tmp/one/site-packages/fast_fsm/core.abi3.so",
+        "core_loader": "ExtensionFileLoader",
+    }
+    second_runtime = {
+        **first_runtime,
+        "package_origin": r"C:\\temporary\\two\\site-packages\\fast_fsm\\__init__.py",
+        "core_origin": r"C:\\temporary\\two\\site-packages\\fast_fsm\\core.abi3.so",
+    }
+
+    assert (
+        release_evidence.matrix_runtime_evidence(first_runtime)
+        == release_evidence.matrix_runtime_evidence(second_runtime)
+        == {
+            **first_runtime,
+            "package_origin": "site-packages/fast_fsm/__init__.py",
+            "core_origin": "site-packages/fast_fsm/core.abi3.so",
+        }
+    )
+
+    aggregate = release_evidence.aggregate_matrix_records(
+        _complete_matrix_records(),
+        profile="local",
+        runtime={
+            "implementation": "cpython",
+            "python_minor": "3.12",
+            "platform": "macos",
+            "machine": "arm64",
+        },
+    )
+    serialized = release_evidence.serialize_manifest(aggregate)
+    assert "/isolated/environment/" not in serialized
+    assert r"C:\\isolated" not in serialized
+    assert '"wheel_tags"' in serialized
+    for record in aggregate["artifact_records"]:
+        runtime = record["runtime"]
+        if runtime is None:
+            continue
+        assert runtime["package_origin"] == "site-packages/fast_fsm/__init__.py"
+        assert runtime["core_origin"].startswith("site-packages/fast_fsm/")
 
 
 def test_aggregate_matrix_records_accepts_complete_release_performance_proof() -> None:

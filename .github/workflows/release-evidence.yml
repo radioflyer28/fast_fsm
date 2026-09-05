@@ -101,6 +101,7 @@ jobs:
           uv run python - <<'PY'
           import json
           import os
+          from tools import release_evidence
           from fast_fsm import __version__
           from tools.artifact_conformance import _suite_sha256
 
@@ -316,6 +317,7 @@ jobs:
           uv run python - <<'PY'
           import json
           import os
+          from tools import release_evidence
 
           raw = json.load(open("raw.json", encoding="utf-8"))
           artifact = raw["artifact"]
@@ -333,8 +335,8 @@ jobs:
                   "artifact_filename": artifact["filename"],
                   "artifact_sha256": artifact["sha256"],
               },
-              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
+              "artifact": release_evidence.matrix_artifact_evidence(artifact),
+              "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": raw["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
@@ -438,6 +440,7 @@ jobs:
           uv run python - <<'PY'
           import json
           import os
+          from tools import release_evidence
 
           raw = json.load(open("raw.json", encoding="utf-8"))
           artifact = raw["artifact"]
@@ -459,8 +462,8 @@ jobs:
                   "artifact_filename": artifact["filename"],
                   "artifact_sha256": artifact["sha256"],
               },
-              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
+              "artifact": release_evidence.matrix_artifact_evidence(artifact),
+              "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": raw["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
@@ -566,6 +569,7 @@ jobs:
           import json
           import os
           from pathlib import Path
+          from tools import release_evidence
 
           raw = json.load(open("raw.json", encoding="utf-8"))
           archive = raw["archive"]
@@ -589,8 +593,8 @@ jobs:
                   "artifact_filename": artifact["filename"],
                   "artifact_sha256": artifact["sha256"],
               },
-              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
+              "artifact": release_evidence.matrix_artifact_evidence(artifact),
+              "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": child["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
@@ -614,7 +618,7 @@ jobs:
                       "artifact_filename": archive["filename"],
                       "artifact_sha256": archive["sha256"],
                   },
-                  "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "classified_mode": "sdist", "build_intent": "sdist"},
+                  "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "wheel_tags": [], "classified_mode": "sdist", "build_intent": "sdist"},
                   "runtime": None,
                   "conformance": None,
                   "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
