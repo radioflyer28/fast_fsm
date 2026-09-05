@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from typing import Iterable, Mapping
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -269,6 +270,30 @@ def test_installed_command_enforces_timeout_and_incremental_output_caps(
                 environment=environment,
                 stage="flood fixture",
             )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
+def test_installed_command_timeout_kills_pipe_holding_descendants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child cannot evade the deadline by exiting behind an inherited pipe."""
+    environment = dict(os.environ)
+    descendant = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
+        "print('parent-exits', flush=True)"
+    )
+    started = time.monotonic()
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_INSTALLED_COMMAND_TIMEOUT_SECONDS", 0.1)
+        with pytest.raises(EvidenceError, match="timed out"):
+            release_evidence._run_installed_command(
+                [sys.executable, "-c", descendant],
+                cwd=tmp_path,
+                environment=environment,
+                stage="descendant pipe fixture",
+            )
+    assert time.monotonic() - started < 0.75
 
 
 CANONICAL_V023_CORRECTION = (

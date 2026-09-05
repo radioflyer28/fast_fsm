@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import signal
 import stat
 import statistics
 import subprocess
@@ -2376,46 +2377,109 @@ def _run_installed_command(
     arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str], stage: str
 ) -> str:
     """Run an isolated child with per-stream caps and a hard stage timeout."""
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     process = subprocess.Popen(
         list(arguments),
         cwd=cwd,
         env=dict(environment),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=os.name != "nt",
+        creationflags=creationflags,
     )
     assert process.stdout is not None and process.stderr is not None
     output: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     exceeded = threading.Event()
+    stopped = threading.Event()
+
+    def stop_process_tree() -> None:
+        """Stop the session created for this untrusted command exactly once."""
+        if stopped.is_set():
+            return
+        stopped.set()
+        try:
+            if os.name == "nt":
+                # ``kill`` stops only the direct child on Windows.  taskkill's
+                # tree mode is needed when that child has left pipe-owning
+                # descendants behind.
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=1,
+                )
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+    def close_streams() -> None:
+        """Wake reader threads even if a descendant held a copied pipe open."""
+        for stream in (process.stdout, process.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
 
     def read_capped(stream: Any, target: bytearray) -> None:
-        while True:
-            chunk = stream.read(64 * 1024)
-            if not chunk:
-                return
-            if len(target) + len(chunk) > _MAX_CHILD_OUTPUT_BYTES:
-                exceeded.set()
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                return
-            target.extend(chunk)
+        try:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    return
+                if len(target) + len(chunk) > _MAX_CHILD_OUTPUT_BYTES:
+                    exceeded.set()
+                    stop_process_tree()
+                    return
+                target.extend(chunk)
+        except (OSError, ValueError):
+            # A forced tree termination intentionally closes the pipe under a
+            # reader.  Its status is represented by ``exceeded``/timeout, not
+            # an incidental reader exception.
+            return
 
     readers = (
-        threading.Thread(target=read_capped, args=(process.stdout, output["stdout"])),
-        threading.Thread(target=read_capped, args=(process.stderr, output["stderr"])),
+        threading.Thread(
+            target=read_capped, args=(process.stdout, output["stdout"]), daemon=True
+        ),
+        threading.Thread(
+            target=read_capped, args=(process.stderr, output["stderr"]), daemon=True
+        ),
     )
     for reader in readers:
         reader.start()
+    deadline = time.monotonic() + _INSTALLED_COMMAND_TIMEOUT_SECONDS
+    timed_out = False
     try:
-        process.wait(timeout=_INSTALLED_COMMAND_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        process.kill()
-        process.wait()
-        raise EvidenceError(f"Installed artifact {stage} timed out.") from error
+        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        stop_process_tree()
     finally:
+        # A direct child may exit while a descendant keeps its inherited pipe
+        # open.  Reader joins share the command deadline; when it expires we
+        # kill the whole group and close the parent's handles so no verifier
+        # waits indefinitely for that descendant.
         for reader in readers:
-            reader.join()
+            reader.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in readers):
+            timed_out = True
+            stop_process_tree()
+            close_streams()
+            for reader in readers:
+                reader.join(timeout=0.1)
+        if process.poll() is None:
+            stop_process_tree()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+    if timed_out:
+        raise EvidenceError(f"Installed artifact {stage} timed out.")
     if exceeded.is_set():
         raise EvidenceError(f"Installed artifact {stage} exceeded the output limit.")
     stdout = bytes(output["stdout"]).decode("utf-8", errors="replace")
