@@ -1448,15 +1448,18 @@ def _is_importable_native_core_basename(name: str) -> bool:
     # extension suffixes and would let an archive prove a native core with a
     # lookalike member.  The portable alternatives below are the CPython
     # platform suffix forms used by the release matrix.
-    return re.fullmatch(
-        r"core\.(?:"
-        r"abi3|"
-        r"(?:cp\d{2,3}|cpython-\d{2,3})"
-        r"(?:-(?:darwin|(?:x86_64|aarch64|arm64|i686|ppc64le|s390x)-linux-gnu|"
-        r"win(?:32|_amd64|_arm64)))?"
-        r")\.(?:so|pyd)",
-        normalized,
-    ) is not None
+    return (
+        re.fullmatch(
+            r"core\.(?:"
+            r"abi3|"
+            r"(?:cp\d{2,3}|cpython-\d{2,3})"
+            r"(?:-(?:darwin|(?:x86_64|aarch64|arm64|i686|ppc64le|s390x)-linux-gnu|"
+            r"win(?:32|_amd64|_arm64)))?"
+            r")\.(?:so|pyd)",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _native_core_members(member_names: Iterable[str]) -> tuple[str, ...]:
