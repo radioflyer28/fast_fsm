@@ -300,3 +300,95 @@ def test_compiled_archive_tags_must_match_the_installed_runtime_architecture() -
             {"platform": "Darwin", "machine": "arm64"},
             expected_mode="compiled",
         )
+
+
+def _installed_compiled_performance_record() -> dict[str, object]:
+    """Return one complete installed-native sample set with a slow outlier."""
+    return {
+        "evidence_kind": "installed_compiled_performance",
+        "artifact_sha256": "a" * 64,
+        "asserted_mode": "compiled",
+        "build_intent": "compiled",
+        "core_origin": "/isolated/environment/site-packages/fast_fsm/core.so",
+        "core_loader": "ExtensionFileLoader",
+        "exact_command": "release_evidence.py installed-benchmark-child",
+        "execution_commit": "b" * 40,
+        "executed_at": "2026-09-05T02:36:33Z",
+        "warmup_operations": 2_000,
+        "iterations": 20_000,
+        "samples_ops_per_second": [275_000.0, 250_000.0, 1.0],
+        "statistic": "median",
+        "median_ops_per_second": 250_000.0,
+        "python_implementation": "cpython",
+        "python_version": "3.12.10",
+        "platform": "Darwin",
+        "machine": "arm64",
+        "environment_label": "installed-compiled-native",
+    }
+
+
+def test_installed_compiled_performance_requires_native_median_samples() -> None:
+    """Only three finite installed-native samples can pass the 200k median gate."""
+    record = _installed_compiled_performance_record()
+
+    validated = release_evidence.validate_installed_compiled_performance(record)
+
+    assert validated["median_ops_per_second"] == 250_000.0
+    assert validated["samples_ops_per_second"] == [275_000.0, 250_000.0, 1.0]
+    assert validated["statistic"] == "median"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("samples_ops_per_second", [275_000.0, 250_000.0], "three"),
+        ("samples_ops_per_second", [275_000.0, float("nan"), 250_000.0], "finite"),
+        ("samples_ops_per_second", [275_000.0, float("inf"), 250_000.0], "finite"),
+        ("median_ops_per_second", 199_999.99, "median"),
+        ("statistic", "mean", "median"),
+        ("asserted_mode", "pure", "compiled"),
+        ("core_loader", "SourceFileLoader", "native"),
+        ("artifact_sha256", "short", "sha256"),
+        ("execution_commit", "short", "commit"),
+        ("executed_at", "not-a-utc-time", "time"),
+    ],
+)
+def test_installed_compiled_performance_rejects_nonblocking_or_malformed_records(
+    field: str, value: object, match: str
+) -> None:
+    """Pure, detached, malformed, and below-floor records cannot satisfy TEST-06."""
+    record = _installed_compiled_performance_record()
+    record[field] = value
+
+    with pytest.raises(release_evidence.EvidenceError, match=match):
+        release_evidence.validate_installed_compiled_performance(record)
+
+
+def test_installed_performance_evidence_validates_history_before_new_native_run() -> (
+    None
+):
+    """Historical records remain categorical prerequisites, never performance substitutes."""
+    installed = _installed_compiled_performance_record()
+    historical = release_evidence.historical_evidence()["entries"]
+
+    validated = release_evidence.validate_installed_performance_evidence(
+        historical=historical,
+        installed=[installed],
+    )
+
+    assert validated["historical_phases"] == ["16", "17", "18", "19"]
+    assert validated["compiled"][0]["artifact_sha256"] == "a" * 64
+
+    with pytest.raises(release_evidence.EvidenceError, match="historical"):
+        release_evidence.validate_installed_performance_evidence(
+            historical=historical[:-1],
+            installed=[installed],
+        )
+
+    substituted = dict(installed)
+    substituted["evidence_kind"] = "historical_phase_performance"
+    with pytest.raises(release_evidence.EvidenceError, match="installed"):
+        release_evidence.validate_installed_performance_evidence(
+            historical=historical,
+            installed=[substituted],
+        )
