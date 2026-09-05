@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 import platform
 import sys
+import threading
 from typing import Any, Callable, Mapping, Sequence
 
 from fast_fsm.conditions import AsyncCondition, NegatedCondition
@@ -64,18 +65,32 @@ _SCENARIO_DEFINITIONS = (
             "redacted",
         ),
     },
-    {
-        "id": "diagnostic.exact-limit",
-        "family": "diagnostic-budget",
-        "fields": (
-            "id",
-            "family",
-            "exact_complete",
-            "one_less_exhausted",
-            "exhausted_dimension",
-            "redacted",
-        ),
-    },
+    *(
+        {
+            "id": f"diagnostic.{dimension}-boundary",
+            "family": "diagnostic-budget",
+            "fields": (
+                "id",
+                "family",
+                "exact_complete",
+                "exact_limit",
+                "exact_count",
+                "one_less_limit",
+                "one_less_exhausted",
+                "exhausted_dimension",
+                "error_redacted",
+                "redacted",
+            ),
+            "required_values": {
+                "exact_complete": True,
+                "one_less_exhausted": True,
+                "exhausted_dimension": f"max_{dimension}",
+                "error_redacted": True,
+                "redacted": True,
+            },
+        }
+        for dimension in ("work", "results", "dense_cells", "path_expansions")
+    ),
     {
         "id": "graph.guard-rejection",
         "family": "graph-guard",
@@ -140,6 +155,82 @@ _SCENARIO_DEFINITIONS = (
         "id": "ownership.cancellation-reuse",
         "family": "ownership-cancellation",
         "fields": ("id", "family", "cancelled", "reused", "state", "redacted"),
+    },
+    {
+        "id": "ownership.sync-thread-serialization",
+        "family": "ownership-cancellation",
+        "fields": (
+            "id",
+            "family",
+            "first_success",
+            "second_success",
+            "second_blocked_while_owned",
+            "redacted",
+        ),
+        "required_values": {
+            "first_success": True,
+            "second_success": True,
+            "second_blocked_while_owned": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "ownership.async-task-serialization",
+        "family": "ownership-cancellation",
+        "fields": (
+            "id",
+            "family",
+            "owner_success",
+            "waiter_success",
+            "waiter_blocked_while_owned",
+            "heartbeat_ran",
+            "redacted",
+        ),
+        "required_values": {
+            "owner_success": True,
+            "waiter_success": True,
+            "waiter_blocked_while_owned": True,
+            "heartbeat_ran": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "ownership.cross-loop-rejection",
+        "family": "ownership-cancellation",
+        "fields": (
+            "id",
+            "family",
+            "foreign_loop_rejected",
+            "bound_loop_preserved",
+            "foreign_guard_not_evaluated",
+            "redacted",
+        ),
+        "required_values": {
+            "foreign_loop_rejected": True,
+            "bound_loop_preserved": True,
+            "foreign_guard_not_evaluated": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "ownership.mutator-baseexception-release",
+        "family": "ownership-cancellation",
+        "fields": (
+            "id",
+            "family",
+            "mutator_rejected_while_owned",
+            "topology_unchanged",
+            "baseexception_propagated",
+            "mutator_admitted_after_release",
+            "redacted",
+        ),
+        "required_values": {
+            "mutator_rejected_while_owned": True,
+            "topology_unchanged": True,
+            "baseexception_propagated": True,
+            "mutator_admitted_after_release": True,
+            "redacted": True,
+        },
     },
     {
         "id": "sync-async.equivalence",
@@ -628,35 +719,348 @@ def _ownership_reentry_independent_machine() -> dict[str, Any]:
     }
 
 
-def _diagnostic_exact_limit() -> dict[str, Any]:
-    """Check the exact diagnostics limit and the deterministic one-less failure."""
-    public = importlib.import_module(_PACKAGE_NAME)
+def _ownership_sync_thread_serialization() -> dict[str, Any]:
+    """Prove one machine serializes independent writers without a global lock."""
     core = importlib.import_module(_CORE_MODULE_NAME)
+    first_entered = threading.Event()
+    contender_attempted = threading.Event()
+    second_finished = threading.Event()
+    release_first = threading.Event()
+    outcomes: dict[str, bool] = {}
+    thread_errors: list[BaseException] = []
+    second_blocked_while_owned = False
+
+    class BlockingListener:
+        def before_transition(
+            self,
+            _from_state: object,
+            _to_state: object,
+            trigger: str,
+            **_kwargs: object,
+        ) -> None:
+            nonlocal second_blocked_while_owned
+            if trigger != "first":
+                return
+            first_entered.set()
+            if not contender_attempted.wait(timeout=5):
+                raise RuntimeError("artifact conformance contender did not start")
+            second_blocked_while_owned = not second_finished.wait(timeout=0.05)
+            if not release_first.wait(timeout=5):
+                raise RuntimeError("artifact conformance owner was not released")
+
     source = core.State("source")
     destination = core.State("destination")
-    machine = core.StateMachine(source, name="artifact-conformance-diagnostic")
+    machine = core.StateMachine(source, name="artifact-conformance-thread-owner")
+    machine.add_state(destination)
+    machine.add_transition("first", source, destination)
+    machine.add_transition("second", destination, source)
+    machine.add_listener(BlockingListener())
+
+    def run_first() -> None:
+        try:
+            outcomes["first"] = machine.trigger("first").success
+        except BaseException as error:  # pragma: no cover - returned as a record fact
+            thread_errors.append(error)
+
+    def run_second() -> None:
+        try:
+            if not first_entered.wait(timeout=5):
+                raise RuntimeError("artifact conformance owner did not enter")
+            contender_attempted.set()
+            outcomes["second"] = machine.trigger("second").success
+            second_finished.set()
+        except BaseException as error:  # pragma: no cover - returned as a record fact
+            thread_errors.append(error)
+
+    first = threading.Thread(target=run_first)
+    second = threading.Thread(target=run_second)
+    first.start()
+    first_entered.wait(timeout=5)
+    second.start()
+    try:
+        contender_attempted.wait(timeout=5)
+    finally:
+        release_first.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+    return {
+        "id": "ownership.sync-thread-serialization",
+        "family": "ownership-cancellation",
+        "first_success": (
+            outcomes.get("first") is True and not first.is_alive() and not thread_errors
+        ),
+        "second_success": (
+            outcomes.get("second") is True
+            and not second.is_alive()
+            and not thread_errors
+        ),
+        "second_blocked_while_owned": second_blocked_while_owned,
+        "redacted": True,
+    }
+
+
+def _ownership_async_task_serialization() -> dict[str, Any]:
+    """Prove same-loop task contention yields instead of bypassing ownership."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    async def collect_async() -> tuple[bool, bool, bool, bool]:
+        owner_entered = asyncio.Event()
+        release_owner = asyncio.Event()
+        waiter_attempted = asyncio.Event()
+        heartbeat_ran = asyncio.Event()
+        source = core.State("source")
+        destination = core.State("destination")
+        machine = core.AsyncStateMachine(
+            source, name="artifact-conformance-async-owner"
+        )
+        machine.add_state(destination)
+        machine.add_transition("advance", source, destination)
+        machine.add_transition("return", destination, source)
+
+        async def hold_owner(*_args: object, **_kwargs: object) -> None:
+            owner_entered.set()
+            await asyncio.wait_for(release_owner.wait(), timeout=5)
+
+        machine.on_exit_async("source", hold_owner)
+        owner = asyncio.create_task(machine.trigger_async("advance"))
+        waiter: asyncio.Task[Any] | None = None
+        heartbeat: asyncio.Task[Any] | None = None
+        try:
+            await asyncio.wait_for(owner_entered.wait(), timeout=5)
+
+            async def contend() -> object:
+                waiter_attempted.set()
+                return await machine.trigger_async("return")
+
+            waiter = asyncio.create_task(contend())
+            await asyncio.wait_for(waiter_attempted.wait(), timeout=5)
+
+            async def beat() -> None:
+                heartbeat_ran.set()
+
+            heartbeat = asyncio.create_task(beat())
+            await asyncio.wait_for(heartbeat_ran.wait(), timeout=5)
+            await asyncio.wait_for(heartbeat, timeout=5)
+            waiter_blocked = not waiter.done()
+            release_owner.set()
+            owner_result = await asyncio.wait_for(owner, timeout=5)
+            waiter_result = await asyncio.wait_for(waiter, timeout=5)
+            return (
+                bool(owner_result.success),
+                bool(waiter_result.success),
+                waiter_blocked,
+                heartbeat_ran.is_set(),
+            )
+        finally:
+            release_owner.set()
+            active = tuple(
+                task for task in (owner, waiter, heartbeat) if task is not None
+            )
+            for task in active:
+                if not task.done():
+                    task.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
+
+    owner_success, waiter_success, waiter_blocked, heartbeat_ran = asyncio.run(
+        collect_async()
+    )
+    return {
+        "id": "ownership.async-task-serialization",
+        "family": "ownership-cancellation",
+        "owner_success": owner_success,
+        "waiter_success": waiter_success,
+        "waiter_blocked_while_owned": waiter_blocked,
+        "heartbeat_ran": heartbeat_ran,
+        "redacted": True,
+    }
+
+
+def _ownership_cross_loop_rejection() -> dict[str, Any]:
+    """Bind once and reject a foreign event loop before it evaluates a guard."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    async def collect_async() -> tuple[bool, bool, bool]:
+        guard_calls: list[str] = []
+        source = core.State("source")
+        destination = core.State("destination")
+        machine = core.AsyncStateMachine(source, name="artifact-conformance-loop")
+        machine.add_state(destination)
+        machine.add_transition(
+            "advance",
+            source,
+            destination,
+            lambda *_args, **_kwargs: guard_calls.append("guard") or True,
+        )
+        initial_ready = await machine.can_trigger_async("advance")
+        original_loop = asyncio.get_running_loop()
+        foreign_errors: list[BaseException] = []
+
+        def use_foreign_loop() -> None:
+            async def attempt() -> None:
+                try:
+                    await machine.can_trigger_async("advance")
+                except RuntimeError as error:
+                    foreign_errors.append(error)
+
+            asyncio.run(attempt())
+
+        foreign = threading.Thread(target=use_foreign_loop)
+        foreign.start()
+        foreign.join(timeout=5)
+        rejected = (
+            not foreign.is_alive()
+            and len(foreign_errors) == 1
+            and "foreign async loop" in str(foreign_errors[0])
+        )
+        return (
+            bool(initial_ready) and rejected,
+            machine._bound_loop is original_loop,
+            guard_calls == ["guard"],
+        )
+
+    foreign_rejected, loop_preserved, guard_untouched = asyncio.run(collect_async())
+    return {
+        "id": "ownership.cross-loop-rejection",
+        "family": "ownership-cancellation",
+        "foreign_loop_rejected": foreign_rejected,
+        "bound_loop_preserved": loop_preserved,
+        "foreign_guard_not_evaluated": guard_untouched,
+        "redacted": True,
+    }
+
+
+def _ownership_mutator_baseexception_release() -> dict[str, Any]:
+    """Reject a mutator while owned, then admit it after BaseException cleanup."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    mutator_rejected = False
+    machine: Any
+    alternate = core.State("alternate")
+
+    def reject_mutator(*_args: object, **_kwargs: object) -> None:
+        nonlocal mutator_rejected
+        try:
+            machine.add_state(alternate)
+        except RuntimeError:
+            mutator_rejected = True
+
+    source = core.CallbackState("source", on_exit=reject_mutator)
+    destination = core.State("destination")
+    machine = core.StateMachine(source, name="artifact-conformance-mutator-owner")
     machine.add_state(destination)
     machine.add_transition("advance", source, destination)
-    exact = public.to_json(
-        machine,
-        include_adjacency=True,
-        limits=public.DiagnosticLimits(max_dense_cells=4),
+    version_before = machine._graph_version
+    machine.trigger("advance")
+    topology_unchanged = (
+        "alternate" not in machine._states and machine._graph_version == version_before
     )
-    exhausted_dimension = ""
+
+    raise_once = True
+
+    def raise_baseexception(*_args: object, **_kwargs: object) -> None:
+        nonlocal raise_once
+        if raise_once:
+            raise_once = False
+            raise KeyboardInterrupt("caller-secret")
+
+    recovery_source = core.CallbackState("source", on_exit=raise_baseexception)
+    recovery_destination = core.State("destination")
+    recovery = core.StateMachine(
+        recovery_source, name="artifact-conformance-baseexception"
+    )
+    recovery.add_state(recovery_destination)
+    recovery.add_transition("advance", recovery_source, recovery_destination)
+    baseexception_propagated = False
     try:
-        public.to_json(
-            machine,
-            include_adjacency=True,
-            limits=public.DiagnosticLimits(max_dense_cells=3),
-        )
+        recovery.trigger("advance", payload="caller-secret")
+    except KeyboardInterrupt:
+        baseexception_propagated = True
+    post_release = core.State("post-release")
+    try:
+        recovery.add_state(post_release)
+        mutator_admitted = "post-release" in recovery._states
+    except BaseException:  # pragma: no cover - returned as a record fact
+        mutator_admitted = False
+
+    return {
+        "id": "ownership.mutator-baseexception-release",
+        "family": "ownership-cancellation",
+        "mutator_rejected_while_owned": mutator_rejected,
+        "topology_unchanged": topology_unchanged,
+        "baseexception_propagated": baseexception_propagated,
+        "mutator_admitted_after_release": mutator_admitted,
+        "redacted": True,
+    }
+
+
+def _diagnostic_boundary(dimension: str) -> dict[str, Any]:
+    """Prove exact and one-less limits for one public diagnostic dimension."""
+    public = importlib.import_module(_PACKAGE_NAME)
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    def make_machine() -> Any:
+        source = core.State("source")
+        destination = core.State("destination")
+        machine = core.StateMachine(source, name="artifact-conformance-diagnostic")
+        machine.add_state(destination)
+        machine.add_transition("advance", source, destination)
+        return machine
+
+    count_field = {
+        "work": "work_count",
+        "results": "result_count",
+        "dense_cells": "dense_cell_count",
+        "path_expansions": "path_expansion_count",
+    }[dimension]
+
+    def limits(limit: int) -> Any:
+        kwargs = {
+            "max_work": 100_000,
+            "max_results": 100_000,
+            "max_dense_cells": 100_000,
+            "max_path_expansions": 100_000,
+        }
+        kwargs[f"max_{dimension}"] = limit
+        return public.DiagnosticLimits(**kwargs)
+
+    def action(limit: int) -> tuple[bool, int]:
+        machine = make_machine()
+        if dimension == "dense_cells":
+            payload = public.to_json(
+                machine, include_adjacency=True, limits=limits(limit)
+            )
+            status = payload["analysis"]["diagnostic_status"]
+            return bool(status["complete"]), int(status[count_field])
+        validator = public.FSMValidator(machine, limits=limits(limit))
+        if dimension == "work":
+            validator.get_reachable_states()
+        else:
+            validator.generate_test_paths(max_length=1, max_paths=1)
+        status = validator.diagnostic_status
+        return bool(status.complete), int(getattr(status, count_field))
+
+    _complete, exact_limit = action(100_000)
+    exact_complete, exact_count = action(exact_limit)
+    exhausted_dimension = ""
+    error_redacted = False
+    try:
+        action(exact_limit - 1)
     except public.DiagnosticBudgetExceeded as error:
         exhausted_dimension = error.status.exhausted_dimension or ""
+        error_redacted = all(
+            sentinel not in str(error) for sentinel in _PAYLOAD_SENTINELS
+        )
     return {
-        "id": "diagnostic.exact-limit",
+        "id": f"diagnostic.{dimension}-boundary",
         "family": "diagnostic-budget",
-        "exact_complete": bool(exact["analysis"]["diagnostic_status"]["complete"]),
+        "exact_complete": exact_complete,
+        "exact_limit": exact_limit,
+        "exact_count": exact_count,
+        "one_less_limit": exact_limit - 1,
         "one_less_exhausted": bool(exhausted_dimension),
         "exhausted_dimension": exhausted_dimension,
+        "error_redacted": error_redacted,
         "redacted": True,
     }
 
@@ -865,12 +1269,19 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
         _lifecycle_destination_enter_failure,
         _lifecycle_precommit_failure_observation,
         _builder_declarative_dispatch,
-        _diagnostic_exact_limit,
+        lambda: _diagnostic_boundary("work"),
+        lambda: _diagnostic_boundary("results"),
+        lambda: _diagnostic_boundary("dense_cells"),
+        lambda: _diagnostic_boundary("path_expansions"),
         _graph_guard_rejection,
         _logging_metadata_redaction,
         _output_grammar_containment,
         _ownership_cancellation_reuse,
         _ownership_reentry_independent_machine,
+        _ownership_sync_thread_serialization,
+        _ownership_async_task_serialization,
+        _ownership_cross_loop_rejection,
+        _ownership_mutator_baseexception_release,
         _sync_async_equivalence,
     )
 
@@ -936,6 +1347,30 @@ def _validate_scenarios(scenarios: Sequence[Mapping[str, Any]]) -> None:
             raise ConformanceError(
                 f"Conformance scenario {identifier} has invalid scalar outcome."
             )
+        required_values = expected.get("required_values", {})
+        if not isinstance(required_values, Mapping):
+            raise ConformanceError(
+                f"Conformance scenario {identifier} has invalid required values."
+            )
+        for field, required_value in required_values.items():
+            if record.get(field) != required_value:
+                raise ConformanceError(
+                    f"Conformance scenario {identifier} contradicted {field}."
+                )
+        if identifier.startswith("diagnostic."):
+            exact_limit = record.get("exact_limit")
+            exact_count = record.get("exact_count")
+            one_less_limit = record.get("one_less_limit")
+            if (
+                isinstance(exact_limit, bool)
+                or not isinstance(exact_limit, int)
+                or exact_limit <= 0
+                or exact_count != exact_limit
+                or one_less_limit != exact_limit - 1
+            ):
+                raise ConformanceError(
+                    f"Conformance scenario {identifier} has invalid budget boundary."
+                )
         if not isinstance(record["redacted"], bool):
             raise ConformanceError(
                 f"Conformance scenario {identifier} has invalid redaction verdict."

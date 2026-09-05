@@ -29,6 +29,40 @@ REQUIRED_FAMILIES = {
     "logging-redaction",
 }
 
+_OWNERSHIP_OBSERVATIONS = (
+    ("ownership.sync-thread-serialization", "first_success"),
+    ("ownership.sync-thread-serialization", "second_success"),
+    ("ownership.sync-thread-serialization", "second_blocked_while_owned"),
+    ("ownership.async-task-serialization", "owner_success"),
+    ("ownership.async-task-serialization", "waiter_success"),
+    ("ownership.async-task-serialization", "waiter_blocked_while_owned"),
+    ("ownership.async-task-serialization", "heartbeat_ran"),
+    ("ownership.cross-loop-rejection", "foreign_loop_rejected"),
+    ("ownership.cross-loop-rejection", "bound_loop_preserved"),
+    ("ownership.cross-loop-rejection", "foreign_guard_not_evaluated"),
+    ("ownership.mutator-baseexception-release", "mutator_rejected_while_owned"),
+    ("ownership.mutator-baseexception-release", "topology_unchanged"),
+    ("ownership.mutator-baseexception-release", "baseexception_propagated"),
+    ("ownership.mutator-baseexception-release", "mutator_admitted_after_release"),
+)
+_DIAGNOSTIC_DIMENSIONS = (
+    ("diagnostic.work-boundary", "max_work"),
+    ("diagnostic.results-boundary", "max_results"),
+    ("diagnostic.dense_cells-boundary", "max_dense_cells"),
+    ("diagnostic.path_expansions-boundary", "max_path_expansions"),
+)
+
+
+def _rehash(payload: dict[str, object]) -> None:
+    """Keep mutation tests focused on contract validation, not stale digest bytes."""
+    payload["semantic_sha256"] = artifact_conformance._sha256(
+        {
+            "schema_version": artifact_conformance.SCHEMA_VERSION,
+            "suite_sha256": payload["suite_sha256"],
+            "scenarios": payload["scenarios"],
+        }
+    )
+
 
 def test_tracer_lifecycle_record_is_stable_and_payload_safe() -> None:
     """The initial oracle scenario is real lifecycle behavior, not a smoke import."""
@@ -205,6 +239,18 @@ def test_hardened_oracle_observes_each_phase_contract() -> None:
     assert ownership["nested_rejected"] is True
     assert ownership["independent_success"] is True
 
+    for identifier, field in _OWNERSHIP_OBSERVATIONS:
+        assert records[identifier][field] is True
+
+    for identifier, dimension in _DIAGNOSTIC_DIMENSIONS:
+        diagnostic = records[identifier]
+        assert diagnostic["exact_complete"] is True
+        assert diagnostic["exact_limit"] == diagnostic["exact_count"]
+        assert diagnostic["one_less_limit"] == diagnostic["exact_limit"] - 1
+        assert diagnostic["one_less_exhausted"] is True
+        assert diagnostic["exhausted_dimension"] == dimension
+        assert diagnostic["error_redacted"] is True
+
     equivalence = records["sync-async.equivalence"]
     for field in (
         "success",
@@ -248,3 +294,50 @@ def test_each_hardened_contract_record_is_required(identifier: str) -> None:
 
     with pytest.raises(artifact_conformance.ConformanceError):
         artifact_conformance.validate_conformance(payload)
+
+
+@pytest.mark.parametrize(("identifier", "field"), _OWNERSHIP_OBSERVATIONS)
+def test_each_ownership_observation_is_immutable_and_fail_closed(
+    identifier: str, field: str
+) -> None:
+    """Removing or falsifying any ownership proof invalidates installed evidence."""
+    payload = copy.deepcopy(artifact_conformance.collect_conformance())
+    records = {record["id"]: record for record in payload["scenarios"]}
+    records[identifier][field] = False
+    _rehash(payload)
+
+    with pytest.raises(
+        artifact_conformance.ConformanceError,
+        match=rf"{identifier} contradicted {field}",
+    ):
+        artifact_conformance.validate_conformance(payload)
+
+
+@pytest.mark.parametrize(("identifier", "dimension"), _DIAGNOSTIC_DIMENSIONS)
+def test_each_diagnostic_boundary_is_immutable_and_fail_closed(
+    identifier: str, dimension: str
+) -> None:
+    """Every limit's exact and one-less outcome is a semantic, not count-only, proof."""
+    for field, replacement in (
+        ("exact_complete", False),
+        ("one_less_exhausted", False),
+        ("exhausted_dimension", "max_wrong_dimension"),
+        ("error_redacted", False),
+    ):
+        payload = copy.deepcopy(artifact_conformance.collect_conformance())
+        records = {record["id"]: record for record in payload["scenarios"]}
+        records[identifier][field] = replacement
+        _rehash(payload)
+        with pytest.raises(artifact_conformance.ConformanceError):
+            artifact_conformance.validate_conformance(payload)
+
+    payload = copy.deepcopy(artifact_conformance.collect_conformance())
+    records = {record["id"]: record for record in payload["scenarios"]}
+    records[identifier]["exact_limit"] += 1
+    _rehash(payload)
+    with pytest.raises(
+        artifact_conformance.ConformanceError, match="invalid budget boundary"
+    ):
+        artifact_conformance.validate_conformance(payload)
+
+    assert dimension == records[identifier]["exhausted_dimension"]
