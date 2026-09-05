@@ -2997,3 +2997,112 @@ def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
 
     with pytest.raises(EvidenceError, match="matrix evidence"):
         release_evidence.read_matrix_record(path)
+
+
+def _write_release_identity_fixture(root: Path, *, changelog_date: str = "UNRELEASED") -> None:
+    """Create complete v0.3.0 static surfaces without creating a Git tag."""
+    (root / "docs").mkdir()
+    (root / "evidence").mkdir()
+    (root / "pyproject.toml").write_text(
+        "[project]\nname = \"fast_fsm\"\nversion = \"0.3.0\"\n",
+        encoding="utf-8",
+    )
+    (root / "docs" / "conf.py").write_text(
+        'project = "Fast FSM"\nversion = "0.3"\nrelease = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    (root / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## [0.3.0] — {changelog_date}\n\nRelease proof.\n",
+        encoding="utf-8",
+    )
+    (root / "README.md").write_text(
+        "Fast FSM v0.3.0 provides installed-artifact release proof. "
+        "SHA-256 binds exact bytes, not publisher authenticity.\n",
+        encoding="utf-8",
+    )
+    (root / "evidence" / "release-baseline.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "release_identity": {
+                    "package": "fast_fsm",
+                    "distribution_version": "0.3.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _identity_inputs() -> tuple[dict[str, str], dict[str, str]]:
+    """Return installed and aggregate values that bind one static identity."""
+    return (
+        {"distribution_version": "0.3.0", "package_version": "0.3.0"},
+        {
+            "package": "fast_fsm",
+            "distribution_version": "0.3.0",
+            "commit": "a" * 40,
+            "tag": "unreleased",
+            "suite_sha256": "b" * 64,
+        },
+    )
+
+
+def test_static_release_identity_requires_every_v030_surface(tmp_path: Path) -> None:
+    """PR-time validation accepts v0.3.0 without assuming its public tag exists."""
+    _write_release_identity_fixture(tmp_path)
+    installed, aggregate = _identity_inputs()
+
+    identity = release_evidence.validate_release_identity(
+        repository_root=tmp_path,
+        installed_identity=installed,
+        aggregate_identity=aggregate,
+        checked_out_commit="a" * 40,
+    )
+
+    assert identity["version"] == "0.3.0"
+    assert identity["tag_status"] == "not-required"
+    assert identity["changelog_status"] == "unreleased"
+
+    installed["package_version"] = "unknown"
+    with pytest.raises(EvidenceError, match="installed.package_version"):
+        release_evidence.validate_release_identity(
+            repository_root=tmp_path,
+            installed_identity=installed,
+            aggregate_identity=aggregate,
+            checked_out_commit="a" * 40,
+        )
+
+
+def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tag mode compares an already-created tag; it never creates or moves one."""
+    _write_release_identity_fixture(tmp_path, changelog_date="2026-09-05")
+    installed, aggregate = _identity_inputs()
+    aggregate["tag"] = "v0.3.0"
+    monkeypatch.setattr(
+        release_evidence, "_peeled_release_tag_commit", lambda *_args, **_kwargs: "a" * 40
+    )
+
+    identity = release_evidence.validate_release_identity(
+        repository_root=tmp_path,
+        installed_identity=installed,
+        aggregate_identity=aggregate,
+        checked_out_commit="a" * 40,
+        tag_ref="v0.3.0",
+    )
+
+    assert identity["tag_status"] == "verified"
+
+    monkeypatch.setattr(
+        release_evidence, "_peeled_release_tag_commit", lambda *_args, **_kwargs: "b" * 40
+    )
+    with pytest.raises(EvidenceError, match="peeled tag commit"):
+        release_evidence.validate_release_identity(
+            repository_root=tmp_path,
+            installed_identity=installed,
+            aggregate_identity=aggregate,
+            checked_out_commit="a" * 40,
+            tag_ref="v0.3.0",
+        )
