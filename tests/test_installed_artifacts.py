@@ -93,7 +93,9 @@ def _runtime_probe(
     }
 
 
-def test_runtime_provenance_rejects_checkout_and_symlink_escapes(tmp_path: Path) -> None:
+def test_runtime_provenance_rejects_checkout_and_symlink_escapes(
+    tmp_path: Path,
+) -> None:
     """Fresh-env evidence never accepts editable or checkout-backed origins."""
     environment = tmp_path / "environment"
     checkout_direct_url = {"url": ROOT.as_uri(), "dir_info": {"editable": False}}
@@ -116,7 +118,9 @@ def test_runtime_provenance_rejects_checkout_and_symlink_escapes(tmp_path: Path)
         )
 
 
-def test_child_probe_rejects_payloads_resource_abuse_and_parent_identity_drift() -> None:
+def test_child_probe_rejects_payloads_resource_abuse_and_parent_identity_drift() -> (
+    None
+):
     """Child output is untrusted even when its top-level JSON is well formed."""
     conformance = artifact_conformance.collect_conformance()
     conformance["scenarios"][0]["state"] = "caller-secret"

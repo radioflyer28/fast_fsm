@@ -694,9 +694,17 @@ def _runtime_facts() -> dict[str, Any]:
     }
 
 
-def collect_installed_probe() -> dict[str, Any]:
+def collect_installed_probe(*, artifact_sha256: str) -> dict[str, Any]:
     """Return one JSON child probe with semantic records plus runtime evidence."""
-    return {"conformance": collect_conformance(), "runtime": _runtime_facts()}
+    if len(artifact_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in artifact_sha256
+    ):
+        raise ConformanceError("Installed artifact identity is invalid.")
+    return {
+        "artifact_sha256": artifact_sha256,
+        "conformance": collect_conformance(),
+        "runtime": _runtime_facts(),
+    }
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -706,11 +714,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--installed-probe", action="store_true", help="include installed runtime facts"
     )
+    parser.add_argument(
+        "--artifact-sha256",
+        help="parent-computed exact artifact identity for the installed probe",
+    )
     parsed = parser.parse_args(arguments)
     try:
         payload: Mapping[str, Any]
         if parsed.installed_probe:
-            payload = collect_installed_probe()
+            if not parsed.artifact_sha256:
+                raise ConformanceError("Installed artifact identity is required.")
+            payload = collect_installed_probe(artifact_sha256=parsed.artifact_sha256)
         else:
             payload = collect_conformance()
         print(canonical_json(payload))

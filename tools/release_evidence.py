@@ -10,7 +10,7 @@ from email.parser import Parser
 import gc
 import hashlib
 import importlib
-from importlib import machinery, metadata
+from importlib import machinery, metadata, util
 import json
 import math
 import os
@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 from typing import Any, Iterable, Mapping, Sequence, cast
+from urllib.parse import unquote, urlparse
 from zipfile import ZipFile
 from xml.etree import ElementTree
 
@@ -74,6 +75,18 @@ class EvidenceError(RuntimeError):
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
 _MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 _MAX_CHILD_OUTPUT_BYTES = 1024 * 1024
+_MAX_CHILD_STRING_LENGTH = 4096
+_MAX_CHILD_NESTING = 12
+_MAX_CHILD_COLLECTION_LENGTH = 128
+_MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+_FORBIDDEN_CONFORMANCE_FIELDS = frozenset(
+    {"args", "kwargs", "exception", "error", "repr", "path", "timing", "duration"}
+)
+_FORBIDDEN_CONFORMANCE_TOKENS = (
+    "caller-secret",
+    "destination-secret",
+    "observer-secret",
+)
 
 
 @dataclass(frozen=True)
@@ -490,6 +503,8 @@ def _artifact_sha256(path: Path) -> str:
 
 def _strict_json_object(value: str, *, field: str) -> dict[str, Any]:
     """Parse one child object without accepting duplicate keys or NaN values."""
+    if len(value.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES:
+        raise EvidenceError(f"Installed artifact {field} exceeds the size limit.")
 
     def reject_constant(_value: str) -> None:
         raise ValueError("non-standard JSON number")
@@ -515,6 +530,74 @@ def _strict_json_object(value: str, *, field: str) -> dict[str, Any]:
     return parsed
 
 
+def _validate_json_bounds(value: Any, *, depth: int = 0) -> None:
+    """Reject child values that exceed finite evidence resource budgets."""
+    if depth > _MAX_CHILD_NESTING:
+        raise EvidenceError("Installed artifact child evidence exceeds nesting limits.")
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if abs(value) > _MAX_SAFE_JSON_INTEGER:
+            raise EvidenceError(
+                "Installed artifact child evidence has an unsafe number."
+            )
+        return
+    if isinstance(value, str):
+        if len(value) > _MAX_CHILD_STRING_LENGTH:
+            raise EvidenceError(
+                "Installed artifact child evidence has an oversized string."
+            )
+        return
+    if isinstance(value, list):
+        if len(value) > _MAX_CHILD_COLLECTION_LENGTH:
+            raise EvidenceError(
+                "Installed artifact child evidence has too many values."
+            )
+        for item in value:
+            _validate_json_bounds(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if len(value) > _MAX_CHILD_COLLECTION_LENGTH:
+            raise EvidenceError(
+                "Installed artifact child evidence has too many fields."
+            )
+        for key, item in value.items():
+            if not isinstance(key, str) or len(key) > _MAX_CHILD_STRING_LENGTH:
+                raise EvidenceError(
+                    "Installed artifact child evidence has an invalid field."
+                )
+            _validate_json_bounds(item, depth=depth + 1)
+        return
+    raise EvidenceError("Installed artifact child evidence has an invalid value.")
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _expected_conformance_suite_sha256() -> str:
+    """Load only the copied-probe definition seam and bind child suite identity."""
+    probe_path = Path(__file__).with_name("artifact_conformance.py")
+    spec = util.spec_from_file_location("_artifact_conformance_contract", probe_path)
+    if spec is None or spec.loader is None:
+        raise EvidenceError(
+            "Installed artifact conformance contract could not be loaded."
+        )
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    suite = getattr(module, "_suite_sha256", None)
+    if not callable(suite):
+        raise EvidenceError("Installed artifact conformance contract is incomplete.")
+    value = suite()
+    if not _is_sha256(value):
+        raise EvidenceError("Installed artifact conformance contract is malformed.")
+    return value
+
+
 def _path_is_contained(path: Path, root: Path) -> bool:
     """Return whether a resolved artifact-runtime path is inside its fresh env."""
     try:
@@ -531,6 +614,17 @@ def _lexically_contained(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _direct_url_references_checkout(direct_url: Mapping[str, Any]) -> bool:
+    """Return whether untrusted PEP 610 metadata points back into this checkout."""
+    value = direct_url.get("url")
+    if not isinstance(value, str) or not value:
+        raise EvidenceError("Installed artifact direct-url provenance is malformed.")
+    parsed = urlparse(value)
+    if parsed.scheme != "file":
+        return False
+    return _path_is_contained(Path(unquote(parsed.path)), REPOSITORY_ROOT)
 
 
 def _installed_environment() -> dict[str, str]:
@@ -645,6 +739,10 @@ def _validate_runtime_probe(
         cast(Mapping[str, Any], direct_url).get("dir_info", {}).get("editable", False)
     ):
         raise EvidenceError("Installed artifact provenance is editable.")
+    if isinstance(direct_url, dict) and _direct_url_references_checkout(
+        cast(Mapping[str, Any], direct_url)
+    ):
+        raise EvidenceError("Installed artifact provenance references the checkout.")
     suffixes = runtime["extension_suffixes"]
     if (
         not isinstance(suffixes, list)
@@ -659,6 +757,8 @@ def _validate_runtime_probe(
             raise EvidenceError(
                 "Installed artifact pure mode has a native core origin."
             )
+        if find_native_core_shadows(Path(runtime["package_origin"]).parent):
+            raise EvidenceError("Installed artifact pure mode has a native shadow.")
     elif expected_mode == "compiled":
         if not is_extension or runtime["core_loader"] != "ExtensionFileLoader":
             raise EvidenceError(
@@ -683,7 +783,9 @@ def _validate_runtime_probe(
     }
 
 
-def _validate_child_conformance(value: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_child_conformance(
+    value: Mapping[str, Any], *, expected_suite_sha256: str
+) -> dict[str, Any]:
     """Accept only the strict semantic contract emitted by the copied probe."""
     expected = {
         "schema_version",
@@ -697,13 +799,68 @@ def _validate_child_conformance(value: Mapping[str, Any]) -> dict[str, Any]:
     if value["schema_version"] != 1 or value["payload_leak_free"] is not True:
         raise EvidenceError("Installed artifact conformance verdict is invalid.")
     if not all(
-        isinstance(value[field], str) and len(value[field]) == 64
-        for field in ("suite_sha256", "semantic_sha256")
+        _is_sha256(value[field]) for field in ("suite_sha256", "semantic_sha256")
     ):
         raise EvidenceError("Installed artifact conformance digest is malformed.")
+    if value["suite_sha256"] != expected_suite_sha256:
+        raise EvidenceError("Installed artifact conformance suite digest is invalid.")
     if not isinstance(value["scenarios"], list) or not value["scenarios"]:
         raise EvidenceError("Installed artifact conformance scenario set is invalid.")
+    _validate_json_bounds(value)
+    for scenario in value["scenarios"]:
+        if not isinstance(scenario, dict):
+            raise EvidenceError("Installed artifact conformance scenario is malformed.")
+        if not isinstance(scenario.get("id"), str) or not isinstance(
+            scenario.get("family"), str
+        ):
+            raise EvidenceError("Installed artifact conformance scenario is malformed.")
+        if _FORBIDDEN_CONFORMANCE_FIELDS.intersection(scenario):
+            raise EvidenceError(
+                "Installed artifact conformance scenario has forbidden fields."
+            )
+    rendered = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if any(token in rendered for token in _FORBIDDEN_CONFORMANCE_TOKENS):
+        raise EvidenceError(
+            "Installed artifact conformance scenario contains payload data."
+        )
+    semantic_input = {
+        "schema_version": value["schema_version"],
+        "suite_sha256": value["suite_sha256"],
+        "scenarios": value["scenarios"],
+    }
+    expected_semantic = hashlib.sha256(
+        json.dumps(
+            semantic_input, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
+    if value["semantic_sha256"] != expected_semantic:
+        raise EvidenceError(
+            "Installed artifact conformance semantic digest is invalid."
+        )
     return dict(value)
+
+
+def _validate_child_probe(
+    value: Mapping[str, Any],
+    *,
+    expected_artifact_sha256: str,
+    expected_suite_sha256: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate untrusted child evidence before parent-owned provenance checks."""
+    _validate_json_bounds(value)
+    if set(value) != {"artifact_sha256", "conformance", "runtime"}:
+        raise EvidenceError("Installed artifact child probe has an invalid schema.")
+    if value["artifact_sha256"] != expected_artifact_sha256:
+        raise EvidenceError("Installed artifact child artifact identity is invalid.")
+    conformance = value["conformance"]
+    runtime = value["runtime"]
+    if not isinstance(conformance, dict) or not isinstance(runtime, dict):
+        raise EvidenceError("Installed artifact child probe is malformed.")
+    suite_sha256 = expected_suite_sha256 or _expected_conformance_suite_sha256()
+    return (
+        _validate_child_conformance(conformance, expected_suite_sha256=suite_sha256),
+        dict(runtime),
+    )
 
 
 def verify_installed_wheel(
@@ -726,6 +883,7 @@ def verify_installed_wheel(
         raise EvidenceError(
             "Installed artifact archive mode contradicts expected mode."
         )
+    expected_suite_sha256 = _expected_conformance_suite_sha256()
 
     with tempfile.TemporaryDirectory(
         prefix="fast-fsm-installed-artifact-"
@@ -769,26 +927,31 @@ def verify_installed_wheel(
         shutil.copyfile(Path(__file__).with_name("artifact_conformance.py"), probe)
         child = _strict_json_object(
             _run_installed_command(
-                [str(interpreter), str(probe), "--installed-probe"],
+                [
+                    str(interpreter),
+                    str(probe),
+                    "--installed-probe",
+                    "--artifact-sha256",
+                    artifact_sha256,
+                ],
                 cwd=neutral_directory,
                 environment=environment,
                 stage="conformance probe",
             ),
             field="child probe",
         )
-        if set(child) != {"conformance", "runtime"}:
-            raise EvidenceError("Installed artifact child probe has an invalid schema.")
-        runtime = child["runtime"]
-        conformance = child["conformance"]
-        if not isinstance(runtime, dict) or not isinstance(conformance, dict):
-            raise EvidenceError("Installed artifact child probe is malformed.")
+        conformance, runtime = _validate_child_probe(
+            child,
+            expected_artifact_sha256=artifact_sha256,
+            expected_suite_sha256=expected_suite_sha256,
+        )
         runtime_record = _validate_runtime_probe(
             runtime,
             environment_root=environment_root,
             expected_mode=expected_mode,
             version=str(archive["metadata_version"]),
         )
-        conformance_record = _validate_child_conformance(conformance)
+        conformance_record = conformance
 
     return {
         "schema_version": _INSTALLED_ARTIFACT_SCHEMA_VERSION,
