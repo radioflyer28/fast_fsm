@@ -378,8 +378,10 @@ jobs:
       - name: Select the one matching native wheel and run the complete oracle
         shell: bash
         run: |
-          wheel="$(find artifact -type f -name '*.whl' -print -quit)"
-          test -n "$wheel"
+          wheel_tag="cp${MATRIX_PYTHON/./}"
+          mapfile -t wheels < <(find artifact -type f -name "*${wheel_tag}-*.whl" -print | sort)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
           uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode compiled --build-intent compiled --json > raw.json
       - name: Bind native oracle and installed performance to immutable matrix cell
         shell: bash

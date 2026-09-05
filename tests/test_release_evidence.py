@@ -2790,6 +2790,14 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert '"FAST_FSM_BUILD_MODE": "auto"' not in compiled_text
     assert "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074" in text
     assert "# v4.2.0" in text
+    native_steps = jobs["verify_native"].get("steps")
+    assert isinstance(native_steps, list)
+    native_runs = "\n".join(
+        step["run"]
+        for step in native_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "cp${MATRIX_PYTHON/./}" in native_runs
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
