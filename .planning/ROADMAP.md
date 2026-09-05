@@ -240,7 +240,7 @@
   4. Benchmarks cover every performance-sensitive core phase, compiled `trigger()` remains at least 200,000 operations/sec, core runtime operations remain O(1), and diagnostics enforce their separate budgets.
   5. Package metadata, `fast_fsm.__version__`, changelog, documentation, release tag, quality gates, and published artifacts all identify and substantiate v0.3.0.
 
-**Plans**: 5/6 plans executed
+**Plans**: 6/6 plans executed
 
 **Wave 1**
 
@@ -264,7 +264,7 @@
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 20-06-PLAN.md — Add exact-SHA evidence-only native CI, tag-only release authorization, and local/hosted proof commands
+- [x] 20-06-PLAN.md — Add exact-SHA evidence-only native CI, tag-only release authorization, and local/hosted proof commands
 
 ## Progress
 
@@ -277,4 +277,4 @@
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | Complete    | 2026-09-04 |
-| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 5/6 | In Progress|  |
+| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 6/6 | In Progress|  |

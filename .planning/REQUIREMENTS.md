@@ -8,7 +8,7 @@
 
 ### Release Integrity
 
-- [ ] **REL-01**: A maintainer can verify that package metadata, `fast_fsm.__version__`, changelog, documentation, and the release tag all identify v0.3.0 before publishing.
+- [x] **REL-01**: A maintainer can verify that package metadata, `fast_fsm.__version__`, changelog, documentation, and the release tag all identify v0.3.0 before publishing.
 - [x] **REL-02**: A maintainer can audit the historical v0.2.3 version mismatch through an explicit correction record without moving or silently replacing the existing tag.
 - [x] **REL-03**: A requested compiled release fails when mypyc compilation fails or the produced wheel does not contain the expected native extension.
 - [x] **REL-04**: A maintainer can intentionally build and identify a pure-Python wheel without triggering the strict compiled-release failure policy.
@@ -109,7 +109,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REL-01 | Phase 20 | Pending |
+| REL-01 | Phase 20 | Complete |
 | REL-02 | Phase 15 | Complete |
 | REL-03 | Phase 20 | Complete |
 | REL-04 | Phase 15 | Complete |

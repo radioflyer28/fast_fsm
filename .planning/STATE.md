@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 20
 current_phase_name: Installed Artifact Parity & Release Proof
 status: executing
-stopped_at: Completed 20-05-PLAN.md
-last_updated: "2026-09-05T02:59:51.342Z"
+stopped_at: Completed 20-06-PLAN.md
+last_updated: "2026-09-05T19:50:36.501Z"
 last_activity: 2026-09-04
 last_activity_desc: Phase 19 complete, transitioned to Phase 20
-state_head: 133bd42202c1bb3468f1aaa814b72f2e174ccc6e
+state_head: bfe9ca0c4854c1f34d869e34458735b47de1006c
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 41
-  completed_plans: 40
+  completed_plans: 41
   percent: 83
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 20 (Installed Artifact Parity & Release Proof) — READY TO EXECUTE
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-09-04 — Phase 19 complete, transitioned to Phase 20
 
@@ -80,6 +80,7 @@ Progress: [████████░░] 83%
 | Phase 20 P01 | 32m | 3 tasks | 4 files |
 | Phase 20 P02 | 20m | 2 tasks | 5 files |
 | Phase 20 P05 | 21m | 2 tasks | 5 files |
+| Phase 20 P06 | 1004m | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 20]: Use counted mapping operations as primary O(1) evidence; timing remains a coarse regression backstop.
 - [Phase 20]: Gate TEST-06 only on fresh installed compiled native records with a recomputed three-sample median.
 - [Phase 20]: Keep historical categorical provenance, pure observations, installed compiled evidence, and diagnostic complexity in separate evidence namespaces.
+- [Phase 20]: Preserve the reviewed uv 0.12.6 pin fail-closed; do not substitute host uv 0.12.9 for release readiness.
+- [Phase 20]: Scope contents: write exclusively to the final v0.3.0 tag-only release job after exact aggregate and peeled-tag identity.
+- [Phase 20]: Local profile evidence is non-authorizing; an explicitly authorized read-only hosted evidence inspection remains required before tagging.
 
 ### Pending Todos
 
@@ -154,8 +158,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T02:59:51.234Z
-Stopped at: Completed 20-05-PLAN.md
+Last session: 2026-09-05T19:50:36.364Z
+Stopped at: Completed 20-06-PLAN.md
 Resume file: None
 
 ## Rebuild Log
