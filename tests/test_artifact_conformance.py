@@ -143,23 +143,30 @@ def test_hash_seed_does_not_change_canonical_semantics() -> None:
     assert outputs[0] == outputs[1]
 
 
-def test_suite_digest_binds_collector_implementation_bytes(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "needle",
+    (
+        "def collect_conformance(",
+        "def validate_conformance(",
+        "def canonical_json(",
+    ),
+)
+def test_suite_digest_binds_all_collector_implementation_bytes(
+    tmp_path: Path, needle: str
 ) -> None:
-    """Schema-preserving scenario rewrites cannot retain the reviewed suite identity."""
-    original = artifact_conformance._lifecycle_destination_enter_failure
-    baseline = artifact_conformance._suite_sha256()
+    """Collector, validation, and serialization mutations change suite identity."""
+    source = Path(artifact_conformance.__file__)
+    mutated = tmp_path / "artifact_conformance.py"
+    original = source.read_text(encoding="utf-8")
+    mutated.write_text(original, encoding="utf-8")
+    baseline = artifact_conformance._suite_sha256(mutated)
 
-    def altered_lifecycle() -> dict[str, object]:
-        return original()
-
-    monkeypatch.setattr(
-        artifact_conformance,
-        "_lifecycle_destination_enter_failure",
-        altered_lifecycle,
+    mutated.write_text(
+        original.replace(needle, f"{needle}  # reviewed mutation", 1),
+        encoding="utf-8",
     )
 
-    assert artifact_conformance._suite_sha256() != baseline
+    assert artifact_conformance._suite_sha256(mutated) != baseline
 
 
 def test_hardened_oracle_observes_each_phase_contract() -> None:

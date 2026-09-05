@@ -13,7 +13,6 @@ import asyncio
 import hashlib
 import importlib
 from importlib import machinery, metadata
-import inspect
 import json
 import logging
 from pathlib import Path
@@ -179,25 +178,18 @@ def _sha256(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def _suite_sha256() -> str:
-    """Bind the schema to the reviewed collector and scenario implementation bytes."""
-    collectors = _scenario_collectors()
-    source_digests = {
-        collector.__name__: hashlib.sha256(
-            inspect.getsource(collector).encode("utf-8")
-        ).hexdigest()
-        for collector in collectors
-    }
-    return _sha256(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "scenario_definitions": list(_SCENARIO_DEFINITIONS),
-            "collector_source_sha256": hashlib.sha256(
-                inspect.getsource(_scenario_collectors).encode("utf-8")
-            ).hexdigest(),
-            "scenario_source_sha256": source_digests,
-        }
-    )
+def _suite_sha256(source_path: Path | None = None) -> str:
+    """Bind the accepted oracle to every byte of its collector implementation.
+
+    Individual-function introspection leaves schema validation, serialization,
+    runtime probes, and the CLI emission seam unbound.  The collector is a
+    deliberately single-file, standard-library-only oracle, so hashing its
+    complete normalized source is both simpler and complete.  ``source_path``
+    is an internal test seam for mutation coverage; production always hashes
+    the installed module itself.
+    """
+    path = source_path or Path(__file__)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _lifecycle_destination_enter_failure() -> dict[str, Any]:
