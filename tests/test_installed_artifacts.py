@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -16,6 +18,89 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import artifact_conformance, release_evidence  # noqa: E402
+
+
+_SDIST_PACKAGE_SOURCES = (
+    "src/fast_fsm/__init__.py",
+    "src/fast_fsm/_diagnostics.py",
+    "src/fast_fsm/condition_templates.py",
+    "src/fast_fsm/conditions.py",
+    "src/fast_fsm/core.py",
+    "src/fast_fsm/py.typed",
+    "src/fast_fsm/validation.py",
+    "src/fast_fsm/visualization.py",
+)
+_SDIST_REQUIRED_FILES = (
+    "pyproject.toml",
+    "setup.py",
+    "MANIFEST.in",
+    "tools/__init__.py",
+    "tools/build_modes.py",
+    "tools/artifact_conformance.py",
+    *_SDIST_PACKAGE_SOURCES,
+)
+
+
+def _write_sdist(
+    tmp_path: Path,
+    entries: list[tuple[str, bytes, bytes | None]],
+) -> Path:
+    """Write a compact synthetic source archive for archive-boundary tests."""
+    sdist = tmp_path / "fast_fsm-0.2.2.tar.gz"
+    with tarfile.open(sdist, "w:gz") as archive:
+        for name, contents, member_type in entries:
+            member = tarfile.TarInfo(name)
+            member.type = member_type or tarfile.REGTYPE
+            member.size = len(contents)
+            if member_type == tarfile.SYMTYPE:
+                member.linkname = "target"
+                archive.addfile(member)
+            else:
+                archive.addfile(member, io.BytesIO(contents))
+    return sdist
+
+
+def _valid_sdist_entries() -> list[tuple[str, bytes, bytes | None]]:
+    """Return all fixed build/probe inputs under one expected source root."""
+    root = "fast_fsm-0.2.2"
+    return [(f"{root}/{path}", b"fixture", None) for path in _SDIST_REQUIRED_FILES]
+
+
+def test_sdist_archive_requires_all_build_and_probe_inputs(tmp_path: Path) -> None:
+    """Archive validation exposes its bounded deterministic contract before build."""
+    sdist = _write_sdist(tmp_path, _valid_sdist_entries())
+
+    record = release_evidence.inspect_sdist(sdist)
+
+    assert record["filename"] == sdist.name
+    assert record["project_root"] == "fast_fsm-0.2.2"
+    assert record["member_count"] == len(_SDIST_REQUIRED_FILES)
+    assert record["required_members"] == list(_SDIST_REQUIRED_FILES)
+
+
+def test_sdist_archive_rejects_unsafe_members_before_extraction(tmp_path: Path) -> None:
+    """Traversal, links, duplicate paths, and native residue fail archive inspection."""
+    unsafe_entries = (
+        ("fast_fsm-0.2.2/../escaped.py", b"", None),
+        ("/absolute.py", b"", None),
+        ("C:/drive.py", b"", None),
+        ("fast_fsm-0.2.2/link", b"", tarfile.SYMTYPE),
+        ("fast_fsm-0.2.2/src/fast_fsm/core.abi3.so", b"native", None),
+    )
+    for entry in unsafe_entries:
+        sdist = _write_sdist(tmp_path, [*_valid_sdist_entries(), entry])
+        with pytest.raises(release_evidence.EvidenceError):
+            release_evidence.inspect_sdist(sdist)
+
+    duplicate = _valid_sdist_entries()
+    duplicate.append(duplicate[-1])
+    with pytest.raises(release_evidence.EvidenceError, match="duplicate"):
+        release_evidence.inspect_sdist(_write_sdist(tmp_path, duplicate))
+
+    missing = _valid_sdist_entries()
+    missing = [entry for entry in missing if not entry[0].endswith("setup.py")]
+    with pytest.raises(release_evidence.EvidenceError, match="missing"):
+        release_evidence.inspect_sdist(_write_sdist(tmp_path, missing))
 
 
 def _build_wheel(output: Path, mode: str) -> Path:

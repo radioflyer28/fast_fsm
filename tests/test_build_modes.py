@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.build_modes import BuildMode, resolve_build_mode  # noqa: E402
+from tools import release_evidence  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -272,3 +273,45 @@ def test_pure_sdist_contains_selector_and_can_build_wheel_in_isolation(
         check=True,
     )
     assert list(wheel_dir.glob("*.whl"))
+
+
+@pytest.mark.integration
+def test_sdist_derivation_reuses_installed_wheel_verification(tmp_path: Path) -> None:
+    """Pure and compiled sdist children inherit one exact parent lineage record."""
+    dist_dir = tmp_path / "dist"
+    build_constraints = tmp_path / "build-constraints.txt"
+    build_constraints.write_text(
+        "setuptools==80.9.0\nwheel==0.45.1\nmypy[mypyc]==1.17.1\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--build-constraints",
+            str(build_constraints),
+            "--sdist",
+            "--out-dir",
+            str(dist_dir),
+        ],
+        cwd=ROOT,
+        env={**os.environ, "FAST_FSM_BUILD_MODE": "pure"},
+        check=True,
+    )
+    sdist = next(dist_dir.glob("*.tar.gz"))
+
+    record = release_evidence.verify_sdist_derivations(sdist)
+
+    assert record["archive"]["filename"] == sdist.name
+    children = record["children"]
+    assert [child["requested_build_intent"] for child in children] == [
+        "compiled",
+        "pure",
+    ]
+    assert {
+        child["parent_sdist"]["filename"] for child in children
+    } == {sdist.name}
+    assert len({child["parent_sdist"]["sha256"] for child in children}) == 1
+    assert {
+        child["artifact"]["expected_mode"] for child in children
+    } == {"pure", "compiled"}
