@@ -20,6 +20,9 @@ import platform
 import sys
 from typing import Any, Callable, Mapping, Sequence
 
+from fast_fsm.conditions import AsyncCondition
+from fast_fsm.core import DeclarativeState, transition
+
 
 SCHEMA_VERSION = 1
 _PACKAGE_NAME = "fast_fsm"
@@ -241,9 +244,8 @@ def _graph_guard_rejection() -> dict[str, Any]:
 def _sync_async_equivalence() -> dict[str, Any]:
     """Drive equivalent sync and async transitions through real FSM classes."""
     core = importlib.import_module(_CORE_MODULE_NAME)
-    conditions = importlib.import_module(f"{_PACKAGE_NAME}.conditions")
 
-    class AlwaysAsync(conditions.AsyncCondition):
+    class AlwaysAsync(AsyncCondition):
         def __init__(self) -> None:
             super().__init__("always-async", "artifact collector guard")
 
@@ -288,14 +290,14 @@ def _builder_declarative_dispatch() -> dict[str, Any]:
     """Exercise builder and decorator dispatch without test-module helpers."""
     core = importlib.import_module(_CORE_MODULE_NAME)
 
-    class DeclarativeCollectorState(core.DeclarativeState):
+    class DeclarativeCollectorState(DeclarativeState):
         __slots__ = ("calls",)
 
         def __init__(self) -> None:
             self.calls = 0
             super().__init__("source")
 
-        @core.transition("advance", from_state="source", to_state="target")
+        @transition("advance", from_state="source", to_state="target")
         def handle_advance(self, *_args: object, **_kwargs: object) -> None:
             self.calls += 1
 
@@ -329,9 +331,8 @@ def _builder_declarative_dispatch() -> dict[str, Any]:
 def _ownership_cancellation_reuse() -> dict[str, Any]:
     """Cancel one owned async dispatch and prove the machine can be reused."""
     core = importlib.import_module(_CORE_MODULE_NAME)
-    conditions = importlib.import_module(f"{_PACKAGE_NAME}.conditions")
 
-    class CancellationGate(conditions.AsyncCondition):
+    class CancellationGate(AsyncCondition):
         def __init__(self) -> None:
             super().__init__("cancellation-gate", "artifact collector gate")
             self.started = asyncio.Event()
@@ -666,7 +667,7 @@ def _runtime_facts() -> dict[str, Any]:
     if not package_origin or not core_origin:
         raise ConformanceError("Installed runtime did not expose package/core origins.")
     distribution = metadata.distribution("fast-fsm")
-    direct_url_path = Path(distribution.locate_file("direct_url.json"))
+    direct_url_path = Path(str(distribution.locate_file("direct_url.json")))
     direct_url: object | None = None
     if direct_url_path.is_file():
         try:
