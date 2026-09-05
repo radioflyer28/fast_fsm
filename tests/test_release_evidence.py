@@ -2862,6 +2862,118 @@ def test_release_evidence_workflow_contract_rejects_bypass_mutations() -> None:
         _validate_evidence_only_workflow(bypass)
 
 
+def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
+    """Require the one write-capable job to follow evidence and exact tag identity."""
+    jobs = _workflow_jobs(workflow)
+    text = _workflow_text(RELEASE_WORKFLOW)
+    assert "workflow_dispatch:" not in text
+    assert "workflow_call:" not in text
+    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\\.3\\.0\"", text)
+    assert workflow.get("permissions") == {"contents": "read"}
+    assert set(jobs) == {"release_evidence", "tag_identity", "github_release"}
+
+    evidence = jobs["release_evidence"]
+    assert evidence.get("uses") == "./.github/workflows/release-evidence.yml"
+    inputs = evidence.get("with")
+    assert isinstance(inputs, dict)
+    assert inputs.get("ref") == "${{ github.ref }}"
+    assert inputs.get("tag") == "v0.3.0"
+    assert "permissions" not in evidence
+
+    tag_identity = jobs["tag_identity"]
+    assert _workflow_needs(tag_identity) == {"release_evidence"}
+    assert _checkout_refs(tag_identity) == [
+        "${{ needs.release_evidence.outputs.head_sha }}"
+    ]
+    tag_steps = tag_identity.get("steps")
+    assert isinstance(tag_steps, list)
+    tag_runs = "\n".join(
+        step["run"]
+        for step in tag_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "verify-release-identity" in tag_runs
+    assert "--tag-ref v0.3.0" in tag_runs
+    assert "aggregate_conclusion" in tag_runs
+    assert "git rev-parse v0.3.0^{}" in tag_runs
+
+    release = jobs["github_release"]
+    assert _workflow_needs(release) == {"release_evidence", "tag_identity"}
+    assert release.get("permissions") == {"contents": "write"}
+    assert "if" not in release
+    assert release.get("continue-on-error") is not True
+    assert _checkout_refs(release) == ["${{ needs.release_evidence.outputs.head_sha }}"]
+    release_steps = release.get("steps")
+    assert isinstance(release_steps, list)
+    release_runs = "\n".join(
+        step["run"]
+        for step in release_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "hashlib.sha256" in release_runs
+    assert "release-manifest" in release_runs
+    assert "profile" in release_runs and "release" in release_runs
+    assert "authorizes_release" in release_runs
+    assert "local" not in release_runs
+    assert "softprops/action-gh-release" in text
+
+    for job_id, job in jobs.items():
+        if job_id != "github_release":
+            assert "permissions" not in job, job_id
+        assert "always()" not in str(job.get("if", "")), job_id
+        assert job.get("continue-on-error") is not True, job_id
+
+
+def test_tag_release_workflow_has_one_complete_non_advisory_path() -> None:
+    """Only tag evidence plus peeled tag identity can reach release creation."""
+    _validate_tag_release_workflow(_workflow_data(RELEASE_WORKFLOW))
+    _validate_evidence_only_workflow(_workflow_data(RELEASE_EVIDENCE_WORKFLOW))
+
+
+def test_tag_release_workflow_rejects_needs_permission_and_condition_bypasses() -> None:
+    """Graph mutations cannot make a local or partial result publishable."""
+    workflow = _workflow_data(RELEASE_WORKFLOW)
+
+    missing_identity = deepcopy(workflow)
+    _workflow_jobs(missing_identity)["github_release"]["needs"] = ["release_evidence"]
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(missing_identity)
+
+    write_early = deepcopy(workflow)
+    _workflow_jobs(write_early)["tag_identity"]["permissions"] = {"contents": "write"}
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(write_early)
+
+    bypass = deepcopy(workflow)
+    _workflow_jobs(bypass)["github_release"]["if"] = "always()"
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(bypass)
+
+    local_input = deepcopy(workflow)
+    _workflow_jobs(local_input)["release_evidence"]["with"]["tag"] = "local"
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(local_input)
+
+
+def test_ci_keeps_static_v030_identity_as_an_ordinary_non_tag_gate() -> None:
+    """Pull-request CI validates release identity without needing a tag or release call."""
+    ci = _workflow_data(CI_WORKFLOW)
+    jobs = _workflow_jobs(ci)
+    assert "static_release_identity" in jobs
+    identity = jobs["static_release_identity"]
+    assert "needs" not in identity
+    assert _checkout_refs(identity) == ["${{ github.sha }}"]
+    steps = identity.get("steps")
+    assert isinstance(steps, list)
+    runs = "\n".join(
+        step["run"]
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "verify-release-identity" in runs
+    assert "--tag-ref" not in runs
+
+
 def _phase19_planned_paths() -> frozenset[str]:
     """Return the complete inventory union declared by Phase 19 plans."""
     phase_dir = ROOT / ".planning" / "phases" / "19-bounded-diagnostics-safe-output"
