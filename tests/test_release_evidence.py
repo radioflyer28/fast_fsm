@@ -47,6 +47,7 @@ TOOL = ROOT / "tools" / "release_evidence.py"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DOCS_WORKFLOW = ROOT / ".github" / "workflows" / "docs.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_EVIDENCE_WORKFLOW = ROOT / ".github" / "workflows" / "release-evidence.yml"
 TASKFILE = ROOT / "Taskfile.yml"
 
 TASK_SETUP_ACTION = "arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52"
@@ -65,7 +66,10 @@ THIRD_PARTY_ACTION_PINS = {
     "arduino/setup-task": ("c0bc642852239c2689f73f4ea6459c29405f3c52", "v3.0.0"),
     "astral-sh/setup-uv": ("d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86", "v5"),
     "docker/setup-qemu-action": ("c7c53464625b32c7a7e944ae62b3e17d2b600130", "v3"),
-    "pypa/cibuildwheel": ("ee63bf16da6cddfb925f542f2c7b59ad50e93969", "v2.22.0"),
+    "pypa/cibuildwheel": (
+        "1828c10ab37f080699c7b81cea34097c684a7074",
+        "v4.2.0",
+    ),
     "pypa/gh-action-pypi-publish": (
         "ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
         "v1.9.0",
@@ -2462,7 +2466,12 @@ def _setup_uv_blocks(workflow: str) -> list[str]:
 
 def test_setup_uv_actions_pin_the_exact_release_version() -> None:
     """Every repository-owned setup-uv use shares the manifest's exact version."""
-    for workflow_path in (CI_WORKFLOW, DOCS_WORKFLOW, RELEASE_WORKFLOW):
+    for workflow_path in (
+        CI_WORKFLOW,
+        DOCS_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_EVIDENCE_WORKFLOW,
+    ):
         blocks = _setup_uv_blocks(_workflow_text(workflow_path))
         assert blocks, workflow_path
         assert all('version: "0.12.6"' in block for block in blocks), workflow_path
@@ -2505,7 +2514,12 @@ def _validate_action_pins(workflow_path: Path) -> None:
 
 def test_workflow_actions_use_reviewed_immutable_pins() -> None:
     """Tags cannot regain execution authority through a future workflow edit."""
-    for workflow_path in (CI_WORKFLOW, DOCS_WORKFLOW, RELEASE_WORKFLOW):
+    for workflow_path in (
+        CI_WORKFLOW,
+        DOCS_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_EVIDENCE_WORKFLOW,
+    ):
         _validate_action_pins(workflow_path)
         for action in re.findall(
             r"(?m)^\s*(?:#\s*)?(?:-\s*)?uses:\s+([^\s#]+)",
@@ -2639,6 +2653,200 @@ def test_release_workflow_gates_artifacts_without_publishing_a_pure_wheel() -> N
     assert "FAST_FSM_BUILD_MODE: pure" in workflow
     assert "uv sync --locked" in workflow
     assert "py3-none-any" not in workflow
+
+
+def _workflow_needs(job: dict[str, object]) -> set[str]:
+    """Normalize a GitHub Actions needs edge without accepting malformed values."""
+    value = job.get("needs", [])
+    if isinstance(value, str):
+        return {value}
+    assert isinstance(value, list)
+    assert all(isinstance(item, str) for item in value)
+    return set(value)
+
+
+def _checkout_refs(job: dict[str, object]) -> list[str]:
+    """Return every explicit checkout ref in one workflow job."""
+    steps = job.get("steps", [])
+    assert isinstance(steps, list)
+    refs: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if step.get("uses") != THIRD_PARTY_ACTION_PINS["actions/checkout"][0].join(
+            ("actions/checkout@", "")
+        ):
+            continue
+        inputs = step.get("with")
+        assert isinstance(inputs, dict)
+        ref = inputs.get("ref")
+        assert isinstance(ref, str)
+        refs.append(ref)
+    return refs
+
+
+def _release_matrix_cell_identifiers() -> set[str]:
+    """Use the Python authority to enumerate all hosted evidence cells."""
+    return {
+        cell.identifier
+        for cell in release_evidence.expected_matrix(
+            "release",
+            {
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "linux",
+                "machine": "x86_64",
+            },
+        ).cells
+    }
+
+
+def _workflow_matrix_cells(job: dict[str, object]) -> set[str]:
+    """Read explicit per-cell workflow routing rather than counting artifacts."""
+    strategy = job.get("strategy")
+    assert isinstance(strategy, dict)
+    matrix = strategy.get("matrix")
+    assert isinstance(matrix, dict)
+    include = matrix.get("include")
+    assert isinstance(include, list)
+    cells = {
+        item["cell"]
+        for item in include
+        if isinstance(item, dict) and isinstance(item.get("cell"), str)
+    }
+    assert len(cells) == len(include)
+    return cells
+
+
+def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
+    """Enforce the exact-SHA, read-only hosted evidence graph."""
+    jobs = _workflow_jobs(workflow)
+    text = _workflow_text(RELEASE_EVIDENCE_WORKFLOW)
+    assert "workflow_dispatch:" in text
+    assert "workflow_call:" in text
+    assert re.search(r"workflow_dispatch:.*?ref:.*?required: true", text, re.DOTALL)
+    assert re.search(r"workflow_call:.*?ref:.*?required: true", text, re.DOTALL)
+    assert workflow.get("permissions") == {"contents": "read"}
+    assert "github_release" not in jobs
+    assert "contents: write" not in text
+    assert "softprops/action-gh-release" not in text
+    assert "gh release" not in text
+
+    resolver = jobs["resolve_ref"]
+    assert resolver.get("outputs", {}).get("head_sha") == "${{ steps.resolve.outputs.head_sha }}"
+    assert _checkout_refs(resolver) == ["${{ inputs.ref }}"]
+    resolver_steps = resolver.get("steps")
+    assert isinstance(resolver_steps, list)
+    assert any(
+        isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and "git rev-parse HEAD" in step["run"]
+        and "^[0-9a-f]{40}$" in step["run"]
+        for step in resolver_steps
+    )
+
+    expected_jobs = {
+        "static_identity",
+        "quality",
+        "build_pure",
+        "build_sdist",
+        "build_compiled",
+        "verify_pure",
+        "verify_native",
+        "verify_sdist",
+        "aggregate_release_evidence",
+    }
+    assert expected_jobs.issubset(jobs)
+    for job_id in expected_jobs:
+        job = jobs[job_id]
+        assert "resolve_ref" in _workflow_needs(job), job_id
+        assert _checkout_refs(job) == ["${{ needs.resolve_ref.outputs.head_sha }}"], job_id
+        assert "always()" not in str(job.get("if", "")), job_id
+        assert job.get("continue-on-error") is not True, job_id
+
+    native_cells = _workflow_matrix_cells(jobs["verify_native"])
+    sdist_cells = _workflow_matrix_cells(jobs["verify_sdist"])
+    pure_cells = _workflow_matrix_cells(jobs["verify_pure"])
+    expected_cells = _release_matrix_cell_identifiers()
+    assert native_cells | sdist_cells | pure_cells | {"sdist-archive"} == expected_cells
+    assert {
+        "compiled-wheel-cp310-linux-aarch64",
+        "compiled-wheel-cp310-macos-x86_64",
+        "compiled-wheel-cp310-macos-universal2-arm64",
+        "compiled-wheel-cp310-macos-universal2-x86_64",
+    }.issubset(native_cells)
+    assert all("musllinux" not in cell for cell in expected_cells)
+
+    compiled = jobs["build_compiled"]
+    compiled_text = json.dumps(compiled, sort_keys=True)
+    assert 'CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"' in text
+    assert 'CIBW_SKIP: "*musllinux*"' in text
+    assert "FAST_FSM_BUILD_MODE=compiled" in compiled_text
+    assert "FAST_FSM_BUILD_MODE=auto" not in compiled_text
+    assert "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074" in text
+    assert "# v4.2.0" in text
+
+    aggregate = jobs["aggregate_release_evidence"]
+    assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
+        _workflow_needs(aggregate)
+    )
+    aggregate_outputs = aggregate.get("outputs")
+    assert isinstance(aggregate_outputs, dict)
+    for output in (
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    ):
+        assert output in aggregate_outputs
+    aggregate_steps = aggregate.get("steps")
+    assert isinstance(aggregate_steps, list)
+    aggregate_runs = "\n".join(
+        step["run"]
+        for step in aggregate_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "aggregate-matrix --profile release" in aggregate_runs
+    assert "release-evidence-complete" not in aggregate_runs
+
+
+def test_release_evidence_workflow_is_exact_sha_native_and_evidence_only() -> None:
+    """Manual/reusable native evidence cannot become a release-capable graph."""
+    _validate_evidence_only_workflow(_workflow_data(RELEASE_EVIDENCE_WORKFLOW))
+
+
+def test_release_evidence_workflow_contract_rejects_bypass_mutations() -> None:
+    """A moving ref, missing native cell, write grant, or optional edge fails closed."""
+    workflow = _workflow_data(RELEASE_EVIDENCE_WORKFLOW)
+
+    moving_ref = deepcopy(workflow)
+    checkout = _workflow_jobs(moving_ref)["verify_native"]["steps"][0]
+    assert isinstance(checkout, dict)
+    checkout["with"]["ref"] = "${{ inputs.ref }}"
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(moving_ref)
+
+    missing_cell = deepcopy(workflow)
+    include = _workflow_jobs(missing_cell)["verify_native"]["strategy"]["matrix"][
+        "include"
+    ]
+    assert isinstance(include, list)
+    include.pop()
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(missing_cell)
+
+    write_permission = deepcopy(workflow)
+    write_permission["permissions"] = {"contents": "write"}
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(write_permission)
+
+    bypass = deepcopy(workflow)
+    _workflow_jobs(bypass)["aggregate_release_evidence"]["if"] = "always()"
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(bypass)
 
 
 def _phase19_planned_paths() -> frozenset[str]:
