@@ -1,0 +1,64 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-05T21:39:53Z",
+  "phase": "20",
+  "phase_name": "Installed Artifact Parity & Release Proof",
+  "phase_dir": ".planning/phases/20-installed-artifact-parity-release-proof",
+  "plan": 6,
+  "task": 2,
+  "total_tasks": 3,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Execute all six Phase 20 plans",
+      "status": "done",
+      "commit": "af08805"
+    },
+    {
+      "id": 2,
+      "name": "Code review and two fix iterations",
+      "status": "done",
+      "commit": "a4d2689"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 3,
+      "name": "Re-review iteration 3, resolve remaining findings, then run regression, Nyquist, security, verifier, UAT, and milestone completion gates",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "The tracked release baseline is stale, but its reviewed generator requires exact uv 0.12.6 and this host only has uv 0.12.9.",
+      "type": "external",
+      "workaround": "Find or explicitly authorize installation of exact uv 0.12.6; never fabricate the baseline or weaken the pin."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {
+      "decision": "Preserve exact uv 0.12.6 release-evidence pin",
+      "rationale": "The toolchain is part of the reviewed deterministic baseline contract; substitution would invalidate the evidence.",
+      "phase": "20"
+    },
+    {
+      "decision": "Keep local profile evidence non-authorizing and hosted evidence inspection separate",
+      "rationale": "Local success cannot prove the complete native release matrix or authorize publication.",
+      "phase": "20"
+    },
+    {
+      "decision": "No remote release action during implementation",
+      "rationale": "The user approved only the checked-in tag-only contents:write workflow definition, not dispatch, tag, release, publication, fetch, or push.",
+      "phase": "20"
+    }
+  ],
+  "uncommitted_files": [
+    ".planning/phases/20-installed-artifact-parity-release-proof/20-REVIEW.md",
+    ".planning/phases/20-installed-artifact-parity-release-proof/20-REVIEW-FIX.md"
+  ],
+  "next_action": "In /private/tmp/fast-fsm-phase20-resume, run the third independent standard-depth review over the original 24-file scope. If findings remain, apply the third and final bounded fix pass. Then commit the converged REVIEW.md and REVIEW-FIX.md together, run the regression gate, Nyquist and security hooks, and the phase verifier.",
+  "context_notes": "All six Phase 20 plans are summarized. Fix iteration 2 integrated eight atomic commits through a4d2689. Ruff, the 204-test targeted release/artifact suite, the real release-evidence-local-check, and the full sequential pytest suite passed. The current REVIEW.md is iteration 2 input and REVIEW-FIX.md is the uncommitted iteration 2 result. Hosted workflows were never dispatched and no remote state changed."
+}
