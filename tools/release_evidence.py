@@ -68,7 +68,8 @@ REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
         "@mypyc_attr(native_class=False) preserves normal Python exception behavior."
     ),
     "fast_fsm._diagnostics.DiagnosticBudgetExceeded": (
-        "Public bounded-diagnostic failures carry a scalar DiagnosticStatus."
+        "ADR-006 accepts this interpreted bounded-diagnostic exception boundary "
+        "because public failures carry a scalar DiagnosticStatus."
     ),
 }
 

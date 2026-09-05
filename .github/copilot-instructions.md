@@ -40,9 +40,14 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 **Performance:**
 - Hot-path production classes MUST use `__slots__`; the recursive
   `uv run python tools/release_evidence.py slots-policy --json` audit is the
-  authority. `CompiledFuncCondition` and `TransitionError` are the only
-  measured registered exceptions and may have an instance `__dict__` because
-  each uses `@mypyc_attr(native_class=False)`.
+  authority. Exactly three measured registered exceptions are
+  CompiledFuncCondition, TransitionError, and DiagnosticBudgetExceeded.
+  `CompiledFuncCondition` remains interpreted in `conditions.py` to preserve
+  the public Python subclass boundary; `TransitionError` uses
+  `@mypyc_attr(native_class=False)` for the compiled built-in-exception
+  boundary; and ADR-006 accepts interpreted `DiagnosticBudgetExceeded` for
+  its bounded diagnostic status. These are measured exceptions, not a reason
+  to weaken slots on hot-path classes.
 - Compiled `trigger()` throughput MUST stay ≥ 200,000 ops/sec
 - Core operations (`trigger()`, `can_trigger()`, `add_state()`, `add_transition()`) MUST be O(1)
 - Verify with: `uv run python benchmarks/benchmark_fast_fsm.py`
@@ -307,13 +312,16 @@ than plain fenced code blocks so they are verified on every CI run.
 1. **Slots optimization is mandatory on the hot path.** Recursively audit every
    relevant class under `src/fast_fsm` with
    `uv run python tools/release_evidence.py slots-policy --json`; the command
-   fails on an unregistered or omitted exception. `CompiledFuncCondition` uses
-   `@mypyc_attr(native_class=False)` to preserve the interpreted `Condition`
-   boundary, and `TransitionError` uses it to preserve normal Python exception
-   behavior. Those two ADR-003 registry entries may retain an instance
-   `__dict__`; `State`, `StateMachine`, and other hot-path objects may not. Use
-   `CallbackState` (with dedicated `_on_enter` / `_on_exit` slots) when you need
-   callback storage on a state.
+   fails on an unregistered or omitted exception. Exactly three measured
+   registered exceptions are CompiledFuncCondition, TransitionError, and
+   DiagnosticBudgetExceeded. `CompiledFuncCondition` remains interpreted to
+   preserve the `Condition` subclass boundary; `TransitionError` uses
+   `@mypyc_attr(native_class=False)` to preserve normal Python exception
+   behavior in compiled `core.py`; and ADR-006 accepts interpreted
+   `DiagnosticBudgetExceeded` for bounded diagnostic failures. Those measured
+   exceptions may retain an instance `__dict__`; `State`, `StateMachine`, and
+   other hot-path objects may not. Use `CallbackState` (with dedicated
+   `_on_enter` / `_on_exit` slots) when you need callback storage on a state.
 
 2. **Argument passing convention.** Every condition `.check()` and state callback (`on_enter`, `on_exit`, `can_transition`) receives `*args, **kwargs`. This MUST be preserved for forward compatibility.
 
