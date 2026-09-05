@@ -29,6 +29,48 @@
       }
     ]
   },
+  "artifact_records": [],
+  "expected_matrix": [],
+  "historical_evidence": [
+    {
+      "command": "uv run python tools/phase16_isolated_verify.py \\",
+      "commit": "31f90e5",
+      "environment": "CPython 3.12.10 (arm64 macOS)",
+      "path": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+      "phase": "16",
+      "sha256": "21f4d4c3e5540b4f82d50c2f267967c6b7fa073a2b54902053ec207d063a4d1a"
+    },
+    {
+      "command": "uv run python tools/phase16_isolated_verify.py --mode task --build-mode pure --include src/fast_fsm/core.py --include tests/test_performance_benchmarks.py --include tools/phase16_isolated_verify.py -- uv run pytest tests/test_performance_benchmarks.py -x -q -k test_trigger_min_throughput",
+      "commit": "unavailable",
+      "environment": "unavailable",
+      "path": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+      "phase": "17",
+      "sha256": "8755ebc7c88b532a69f18071919fb3aca53c2f663312a55d96802fc1504a5190"
+    },
+    {
+      "command": "unavailable",
+      "commit": "unavailable",
+      "environment": "CPython 3.12.10 / macOS arm64",
+      "path": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+      "phase": "18",
+      "sha256": "0da2cc91f0b76596acf8cd11132c8ad427afc567bfdd9e9c12e879004ed65e70"
+    },
+    {
+      "command": "uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py -x -q",
+      "commit": "unavailable",
+      "environment": "CPython",
+      "path": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+      "phase": "19",
+      "sha256": "906524d28edb2f9f0542eb01cd21cbbe1bd9f3c3b25417317dd132485d132288"
+    }
+  ],
+  "installed_performance": [],
+  "matrix_profile": {
+    "profile": "local",
+    "scope": "local-non-authorizing",
+    "status": "not-collected"
+  },
   "measurement_environment": {
     "comparison": "stable fields exclude this environment observation",
     "implementation": "cpython",
@@ -73,10 +115,10 @@
     }
   },
   "release_identity": {
-    "distribution_version": "0.2.2",
+    "distribution_version": "0.3.0",
     "package": "fast_fsm"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "slots_policy": {
     "inventory": [
       {

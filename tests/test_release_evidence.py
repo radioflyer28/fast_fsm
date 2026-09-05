@@ -131,7 +131,7 @@ def _write_wheel(
     filename_tag: str,
     wheel_tags: Iterable[str],
     native_members: Iterable[str] = (),
-    version: str = "0.2.2",
+    version: str = "0.3.0",
     filename_name: str = "fast_fsm",
     dist_info_name: str = "fast_fsm",
     dist_info_version: str | None = None,
@@ -344,7 +344,7 @@ def test_verify_wheel_classifies_universal_wheel_without_native_members(
     assert artifact["filename_tags"] == ["py3-none-any"]
     assert artifact["wheel_tags"] == ["py3-none-any"]
     assert artifact["native_members"] == []
-    assert artifact["metadata_version"] == "0.2.2"
+    assert artifact["metadata_version"] == "0.3.0"
 
 
 @pytest.mark.parametrize(
@@ -2999,12 +2999,14 @@ def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
         release_evidence.read_matrix_record(path)
 
 
-def _write_release_identity_fixture(root: Path, *, changelog_date: str = "UNRELEASED") -> None:
+def _write_release_identity_fixture(
+    root: Path, *, changelog_date: str = "UNRELEASED"
+) -> None:
     """Create complete v0.3.0 static surfaces without creating a Git tag."""
     (root / "docs").mkdir()
     (root / "evidence").mkdir()
     (root / "pyproject.toml").write_text(
-        "[project]\nname = \"fast_fsm\"\nversion = \"0.3.0\"\n",
+        '[project]\nname = "fast_fsm"\nversion = "0.3.0"\n',
         encoding="utf-8",
     )
     (root / "docs" / "conf.py").write_text(
@@ -3082,7 +3084,9 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
     installed, aggregate = _identity_inputs()
     aggregate["tag"] = "v0.3.0"
     monkeypatch.setattr(
-        release_evidence, "_peeled_release_tag_commit", lambda *_args, **_kwargs: "a" * 40
+        release_evidence,
+        "_peeled_release_tag_commit",
+        lambda *_args, **_kwargs: "a" * 40,
     )
 
     identity = release_evidence.validate_release_identity(
@@ -3096,7 +3100,9 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
     assert identity["tag_status"] == "verified"
 
     monkeypatch.setattr(
-        release_evidence, "_peeled_release_tag_commit", lambda *_args, **_kwargs: "b" * 40
+        release_evidence,
+        "_peeled_release_tag_commit",
+        lambda *_args, **_kwargs: "b" * 40,
     )
     with pytest.raises(EvidenceError, match="peeled tag commit"):
         release_evidence.validate_release_identity(

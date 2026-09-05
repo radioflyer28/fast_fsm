@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 No unreleased changes.
 
+## [0.3.0] — UNRELEASED
+
+### Added
+
+- Installed-artifact parity and exact release-matrix evidence for pure, compiled,
+  and source-derived builds. Release publication remains blocked until the
+  separately authorized tag-time identity gate supplies the actual release date.
+
 ## [0.2.3] — 2026-04-05
 
 ### Added

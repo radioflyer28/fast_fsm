@@ -39,7 +39,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
 REQUIRED_UV_VERSION = "0.12.6"
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 _RELEASE_VERSION = "0.3.0"
 _SUPPORTED_CPYTHON_MINORS = ("3.10", "3.11", "3.12", "3.13", "3.14")
@@ -744,6 +744,285 @@ def _current_matrix_runtime() -> dict[str, object]:
     }
 
 
+def _historical_evidence() -> list[dict[str, str]]:
+    """Hash the exact Phase 16–19 evidence allowlist without inventing facts."""
+    records: list[dict[str, str]] = []
+    for relative_path in _HISTORICAL_EVIDENCE_PATHS:
+        path = REPOSITORY_ROOT / relative_path
+        try:
+            content = path.read_bytes()
+        except OSError as error:
+            raise EvidenceError(
+                "Historical release evidence is unavailable."
+            ) from error
+        if not content or len(content) > _MAX_CHILD_OUTPUT_BYTES:
+            raise EvidenceError("Historical release evidence violates size limits.")
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise EvidenceError("Historical release evidence is not UTF-8.") from error
+        phase_match = re.search(r"(?:^|\b)[Pp]hase\s+(1[6-9])\b", text)
+        if phase_match is None:
+            raise EvidenceError("Historical release evidence has no phase fact.")
+        command_match = re.search(r"uv run [^\n`]+", text)
+        environment_match = re.search(r"CPython[^\n`|]*", text)
+        commit_match = re.search(r"\b[0-9a-f]{7,40}\b", text)
+        records.append(
+            {
+                "path": relative_path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "phase": phase_match.group(1),
+                "command": command_match.group(0).strip()
+                if command_match is not None
+                else "unavailable",
+                "environment": environment_match.group(0).strip()
+                if environment_match is not None
+                else "unavailable",
+                "commit": commit_match.group(0)
+                if commit_match is not None
+                else "unavailable",
+            }
+        )
+    return records
+
+
+def _single_text_match(text: str, pattern: re.Pattern[str], *, field: str) -> str:
+    """Extract exactly one non-empty static identity value from trusted source text."""
+    matches = pattern.findall(text)
+    if len(matches) != 1:
+        raise EvidenceError(f"release identity {field} is missing or ambiguous.")
+    value = matches[0].strip()
+    if not value or value.casefold() == "unknown":
+        raise EvidenceError(f"release identity {field} is blank or unknown.")
+    return value
+
+
+def _static_docs_identity(path: Path) -> dict[str, str]:
+    """Read literal Sphinx version assignments without importing configuration code."""
+    try:
+        source = path.read_text(encoding="utf-8")
+        module = ast.parse(source, filename=str(path))
+    except (OSError, SyntaxError) as error:
+        raise EvidenceError("release identity docs.conf is unreadable.") from error
+    values: dict[str, list[str]] = {"version": [], "release": []}
+    for statement in module.body:
+        if not isinstance(statement, ast.Assign) or not isinstance(
+            statement.value, ast.Constant
+        ):
+            continue
+        if not isinstance(statement.value.value, str):
+            continue
+        for target in statement.targets:
+            if isinstance(target, ast.Name) and target.id in values:
+                values[target.id].append(statement.value.value)
+    result: dict[str, str] = {}
+    for field, candidates in values.items():
+        if len(candidates) != 1 or not candidates[0] or candidates[0] == "unknown":
+            raise EvidenceError(
+                f"release identity docs.{field} is missing or ambiguous."
+            )
+        result[field] = candidates[0]
+    return result
+
+
+def _strict_identity_json(path: Path) -> Mapping[str, object]:
+    """Read one static JSON identity source with duplicate-key rejection."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+        payload = _strict_json_object(raw, field="release identity")
+    except (OSError, EvidenceError) as error:
+        raise EvidenceError(
+            "release identity evidence is unreadable or malformed."
+        ) from error
+    return payload
+
+
+def _validate_identity_mapping(
+    value: Mapping[str, object], *, field: str, expected_fields: frozenset[str]
+) -> Mapping[str, object]:
+    """Require exact identity fields so blank additions cannot hide stale values."""
+    if set(value) != expected_fields:
+        raise EvidenceError(f"release identity {field} is missing or ambiguous.")
+    for key, item in value.items():
+        if not isinstance(item, str) or not item or item.casefold() == "unknown":
+            raise EvidenceError(f"release identity {field}.{key} is blank or unknown.")
+    return value
+
+
+def _peeled_release_tag_commit(tag_ref: str, *, repository_root: Path) -> str:
+    """Read an existing lightweight or annotated tag commit without mutating Git."""
+    if tag_ref != f"v{_RELEASE_VERSION}":
+        raise EvidenceError("release identity tag ref is invalid.")
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "rev-parse",
+            "--verify",
+            f"{tag_ref}^{{commit}}",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    commit = completed.stdout.strip()
+    if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise EvidenceError("release identity tag could not be peeled to a commit.")
+    return commit
+
+
+def _checked_out_commit(*, repository_root: Path) -> str:
+    """Read the current commit for identity comparison without changing Git state."""
+    completed = subprocess.run(
+        ["git", "-C", str(repository_root), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    commit = completed.stdout.strip()
+    if completed.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise EvidenceError("release identity checkout commit is unavailable.")
+    return commit
+
+
+def validate_release_identity(
+    *,
+    repository_root: Path,
+    installed_identity: Mapping[str, object],
+    aggregate_identity: Mapping[str, object],
+    checked_out_commit: str,
+    tag_ref: str | None = None,
+) -> dict[str, str]:
+    """Validate static v0.3.0 identity, with optional non-mutating tag equality."""
+    root = repository_root.resolve()
+    try:
+        pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8")
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        readme = (root / "README.md").read_text(encoding="utf-8")
+    except OSError as error:
+        raise EvidenceError("release identity static source is unreadable.") from error
+
+    project_version = _single_text_match(
+        pyproject_text,
+        re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE),
+        field="pyproject.version",
+    )
+    docs_identity = _static_docs_identity(root / "docs" / "conf.py")
+    baseline = _strict_identity_json(root / "evidence" / "release-baseline.json")
+    evidence_identity = baseline.get("release_identity")
+    if baseline.get("schema_version") != 2 or not isinstance(
+        evidence_identity, Mapping
+    ):
+        raise EvidenceError("release identity evidence.schema_version is invalid.")
+    evidence_checked = _validate_identity_mapping(
+        cast(Mapping[str, object], evidence_identity),
+        field="evidence.release_identity",
+        expected_fields=frozenset({"package", "distribution_version"}),
+    )
+    installed_checked = _validate_identity_mapping(
+        installed_identity,
+        field="installed",
+        expected_fields=frozenset({"distribution_version", "package_version"}),
+    )
+    aggregate_checked = _validate_identity_mapping(
+        aggregate_identity,
+        field="aggregate",
+        expected_fields=frozenset(
+            {"package", "distribution_version", "commit", "tag", "suite_sha256"}
+        ),
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", checked_out_commit):
+        raise EvidenceError("release identity checked_out_commit is malformed.")
+    expected_values = (
+        ("pyproject.version", project_version),
+        ("docs.version", docs_identity["version"]),
+        ("docs.release", docs_identity["release"]),
+        ("evidence.release_identity.package", evidence_checked["package"]),
+        (
+            "evidence.release_identity.distribution_version",
+            evidence_checked["distribution_version"],
+        ),
+        ("installed.distribution_version", installed_checked["distribution_version"]),
+        ("installed.package_version", installed_checked["package_version"]),
+        ("aggregate.package", aggregate_checked["package"]),
+        ("aggregate.distribution_version", aggregate_checked["distribution_version"]),
+    )
+    for field, value in expected_values:
+        if value not in {_RELEASE_VERSION, "0.3", PACKAGE_NAME}:
+            raise EvidenceError(f"release identity {field} is not {_RELEASE_VERSION}.")
+    if docs_identity["version"] != "0.3" or any(
+        value != _RELEASE_VERSION
+        for field, value in expected_values
+        if field
+        not in {
+            "docs.version",
+            "evidence.release_identity.package",
+            "aggregate.package",
+        }
+    ):
+        raise EvidenceError("release identity static values are contradictory.")
+    if aggregate_checked["commit"] != checked_out_commit:
+        raise EvidenceError("release identity aggregate.commit differs from checkout.")
+    suite_sha256 = aggregate_checked["suite_sha256"]
+    if not _is_sha256(suite_sha256):
+        raise EvidenceError("release identity aggregate.suite_sha256 is malformed.")
+    changelog_matches = re.findall(
+        rf"^## \[{re.escape(_RELEASE_VERSION)}\] — (UNRELEASED|\d{{4}}-\d{{2}}-\d{{2}})$",
+        changelog,
+        flags=re.MULTILINE,
+    )
+    if len(changelog_matches) != 1:
+        raise EvidenceError(
+            "release identity changelog section is missing or ambiguous."
+        )
+    required_claims = (
+        "v0.3.0",
+        "installed-artifact",
+        "SHA-256 binds exact bytes",
+        "not publisher authenticity",
+    )
+    normalized_readme = re.sub(r"\s+", " ", readme)
+    if any(claim not in normalized_readme for claim in required_claims):
+        raise EvidenceError("release identity README durable claims are incomplete.")
+
+    if tag_ref is None:
+        if (
+            aggregate_checked["tag"] != "unreleased"
+            or changelog_matches[0] != "UNRELEASED"
+        ):
+            raise EvidenceError(
+                "release identity static mode requires unreleased tag state."
+            )
+        tag_status = "not-required"
+        changelog_status = "unreleased"
+    else:
+        if aggregate_checked["tag"] != tag_ref:
+            raise EvidenceError(
+                "release identity aggregate.tag differs from requested tag."
+            )
+        if changelog_matches[0] == "UNRELEASED":
+            raise EvidenceError(
+                "release identity tag mode requires a dated changelog section."
+            )
+        peeled_commit = _peeled_release_tag_commit(tag_ref, repository_root=root)
+        if (
+            peeled_commit != checked_out_commit
+            or peeled_commit != aggregate_checked["commit"]
+        ):
+            raise EvidenceError(
+                "release identity peeled tag commit differs from checkout."
+            )
+        tag_status = "verified"
+        changelog_status = "dated"
+    return {
+        "version": _RELEASE_VERSION,
+        "commit": checked_out_commit,
+        "tag_status": tag_status,
+        "changelog_status": changelog_status,
+    }
+
+
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
 _SDIST_ARCHIVE_SCHEMA_VERSION = 1
 _MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
@@ -775,6 +1054,12 @@ _SDIST_REQUIRED_ROOT_FILES = (
     "tools/__init__.py",
     "tools/build_modes.py",
     "tools/artifact_conformance.py",
+)
+_HISTORICAL_EVIDENCE_PATHS = (
+    ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+    ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+    ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+    ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
 )
 
 
@@ -4163,6 +4448,18 @@ def _collect_manifest_after_preflight(
             "package": PACKAGE_NAME,
             "distribution_version": source["distribution_version"],
         },
+        "matrix_profile": {
+            "profile": "local",
+            "scope": "local-non-authorizing",
+            "status": "not-collected",
+        },
+        "expected_matrix": [
+            _matrix_cell_payload(cell)
+            for cell in expected_matrix("local", _current_matrix_runtime()).cells
+        ],
+        "artifact_records": [],
+        "historical_evidence": _historical_evidence(),
+        "installed_performance": [],
         "quality_baseline": {
             "build_mode": "pure",
             "tests": tests,
@@ -4394,6 +4691,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     aggregate_parser.add_argument("--json", action="store_true")
 
+    identity_parser = commands.add_parser(
+        "verify-release-identity",
+        help="validate static v0.3.0 identity and optional tag-to-commit equality",
+    )
+    identity_parser.add_argument(
+        "--installed-identity",
+        type=Path,
+        required=True,
+        help="strict JSON installed distribution and fast_fsm.__version__ values",
+    )
+    identity_parser.add_argument(
+        "--aggregate",
+        type=Path,
+        required=True,
+        help="strict JSON aggregate or adjacent release_identity object",
+    )
+    identity_parser.add_argument(
+        "--tag-ref",
+        help="existing v0.3.0 tag to peel and compare (omitted for static mode)",
+    )
+    identity_parser.add_argument("--json", action="store_true")
+
     slots_policy_parser = commands.add_parser(
         "slots-policy", help="recursively audit source classes against the slots policy"
     )
@@ -4486,6 +4805,26 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if parsed.summary:
                 parsed.summary.write_text(summary, encoding="utf-8")
             _emit(aggregate if parsed.json else {"summary": summary}, parsed.json)
+        elif parsed.command == "verify-release-identity":
+            installed = _strict_identity_json(parsed.installed_identity)
+            aggregate_payload = _strict_identity_json(parsed.aggregate)
+            aggregate_identity = aggregate_payload.get(
+                "release_identity", aggregate_payload
+            )
+            if not isinstance(aggregate_identity, Mapping):
+                raise EvidenceError("release identity aggregate is malformed.")
+            _emit(
+                validate_release_identity(
+                    repository_root=REPOSITORY_ROOT,
+                    installed_identity=installed,
+                    aggregate_identity=cast(Mapping[str, object], aggregate_identity),
+                    checked_out_commit=_checked_out_commit(
+                        repository_root=REPOSITORY_ROOT
+                    ),
+                    tag_ref=parsed.tag_ref,
+                ),
+                parsed.json,
+            )
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
         elif parsed.command == "verify-history":

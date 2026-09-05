@@ -22,6 +22,16 @@ environment-labeled benchmark observations are recorded in the tracked
 Regenerate or verify that evidence with the commands in the developer testing
 guide; do not treat a historical local benchmark as a universal result.
 
+## v0.3.0 Installed-Artifact Release Proof
+
+v0.3.0 requires a complete installed-artifact proof matrix: pure, compiled, and
+source-derived artifacts must be verified from fresh environments before a
+release can be authorized. The local matrix is an explicitly non-authorizing
+projection for development; only the complete hosted release matrix can
+authorize publication. SHA-256 binds exact bytes to the recorded evidence, not
+publisher authenticity. Exact artifact records, environment labels, and any
+performance observations remain in the manifest rather than this narrative.
+
 ## Requirements
 
 **Python ≥ 3.10** — requires `@dataclass(slots=True)` (PEP 681).
