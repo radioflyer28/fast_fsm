@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 0
 waived_count: 0
-fixed_count: 1
-total_count: 1
-last_updated: 2026-08-30T05:20:30.064Z
+fixed_count: 2
+total_count: 2
+last_updated: 2026-09-05T01:11:59.484Z
 ---
 
 # Broken Windows Ledger
@@ -16,6 +16,7 @@ last_updated: 2026-08-30T05:20:30.064Z
 | id | phase | kind | file | line | description | status | reason | recorded_at | resolved_at |
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
 | 1 | 16 | deviation | tests/test_builder.py |  | Compiled mypyc constructor boundary requires a mode-neutral TypeError assertion. | fixed |  | 2026-08-30T05:20:02.323Z | 2026-08-30T05:20:30.064Z |
+| 2 | 20 | deviation | tools/release_evidence.py |  | Removed unsupported uv pip install --no-project flag from isolated artifact install. | fixed |  | 2026-09-05T01:11:18.422Z | 2026-09-05T01:11:59.484Z |
 
 ````json
 [
@@ -30,6 +31,18 @@ last_updated: 2026-08-30T05:20:30.064Z
     "reason": "",
     "recorded_at": "2026-08-30T05:20:02.323Z",
     "resolved_at": "2026-08-30T05:20:30.064Z"
+  },
+  {
+    "id": 2,
+    "kind": "deviation",
+    "phase": "20",
+    "file": "tools/release_evidence.py",
+    "line": null,
+    "description": "Removed unsupported uv pip install --no-project flag from isolated artifact install.",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-05T01:11:18.422Z",
+    "resolved_at": "2026-09-05T01:11:59.484Z"
   }
 ]
 ````

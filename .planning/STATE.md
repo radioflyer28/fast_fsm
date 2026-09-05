@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 20
 current_phase_name: Installed Artifact Parity & Release Proof
 status: executing
-stopped_at: Phase 20 context gathered
-last_updated: "2026-09-05T00:33:57.268Z"
+stopped_at: Completed 20-01-PLAN.md
+last_updated: "2026-09-05T01:10:59.280Z"
 last_activity: 2026-09-04
 last_activity_desc: Phase 19 complete, transitioned to Phase 20
-state_head: a6cff1e15abd05cc34c0430fd24492a850a825a2
+state_head: 28c3ba0756885c137e5de1f00ed3dd3a0e9d3487
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 41
-  completed_plans: 35
+  completed_plans: 36
   percent: 83
 ---
 
@@ -77,6 +77,7 @@ Progress: [████████░░] 83%
 | Phase 18 P06 | 33m | 2 tasks | 5 files |
 | Phase 18 P07 | 1h 25m | 3 tasks | 10 files |
 | Phase 18 P08 | 44m | 3 tasks | 7 files |
+| Phase 20 P01 | 32m | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 19]: Mermaid and PlantUML output use grammar-specific escaping and collision-free opaque identifiers.
 - [Phase 19]: Trace logging is metadata-only by default, custom redactors fail closed, and library logging configuration preserves application-owned handlers.
 - [Phase 19]: Fresh pure and compiled exports are authoritative for semantics and performance; installed-artifact parity remains Phase 20-owned.
+- [Phase 20]: Use one deterministic checkout-independent oracle for source, pure-wheel, and compiled-wheel semantics.
+- [Phase 20]: Bind archive and runtime identity before accepting semantic artifact evidence; semantic digests exclude origins and performance.
 
 ### Pending Todos
 
@@ -144,6 +147,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-04T22:36:53.605Z
-Stopped at: Phase 20 context gathered
-Resume file: .planning/phases/20-installed-artifact-parity-release-proof/20-CONTEXT.md
+Last session: 2026-09-05T01:10:59.169Z
+Stopped at: Completed 20-01-PLAN.md
+Resume file: None
