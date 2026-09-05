@@ -55,9 +55,8 @@ coverage:
         status: pass
       - kind: integration
         ref: "task release-readiness-check"
-        status: unknown
-    human_judgment: true
-    rationale: "The reviewed uv 0.12.6 pin correctly rejects the host's uv 0.12.9, so the complete readiness command remains unverified on a pin-matching host."
+        status: pass
+    human_judgment: false
   - id: D4
     description: "Authorized exact-SHA hosted native evidence inspection before tag creation"
     requirement: TEST-03
@@ -169,7 +168,7 @@ Each task was committed atomically:
 
 ## External Verification Gaps
 
-- `task release-readiness-check` intentionally remains incomplete on this host: the exact gate rejects `uv 0.12.9` because the reviewed release evidence requires `uv 0.12.6`. The pin was not weakened or substituted. Run it on a host with exactly `uv 0.12.6` before treating the local readiness result as passed.
+- `task release-readiness-check` passed with the reviewed `uv 0.12.6` binary at `/private/tmp/fast-fsm-uv-0.12.6/uv-aarch64-apple-darwin/uv`; the pin remained fail-closed and the host-global `uv 0.12.9` was not substituted.
 - `task release-hosted-prerelease-check` was not run. It requires an explicitly authorized, completed `release-evidence.yml` run and exact SHA, then performs only read-only inspection. Hosted runner availability and the full native matrix remain a pre-tag external UAT requirement.
 - No hosted workflow was dispatched; no branch was pushed or fetched; no tag, release, or artifact publication was created.
 
@@ -183,8 +182,8 @@ None - no service setup is required. The pre-tag hosted evidence inspection requ
 
 ## Next Phase Readiness
 
-- The code and contracts are ready for a pin-matching local readiness run and the documented authorized hosted-native checkpoint.
-- The two external gaps above must remain blocking before any v0.3.0 tag or release operation.
+- The code and contracts are ready for the documented authorized hosted-native checkpoint.
+- The hosted evidence gap must remain blocking before any v0.3.0 tag or release operation.
 
 ## Self-Check: PASSED
 
