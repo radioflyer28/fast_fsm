@@ -73,9 +73,9 @@
 - [x] **TEST-02**: Pure-Python verification proves that no stale `.so` or `.pyd` shadows `core.py` and records meaningful source coverage.
 - [x] **TEST-03**: Compiled-wheel verification runs substantive behavior tests on supported native targets rather than a smoke import alone.
 - [x] **TEST-04**: Release verification asserts installed module origin, metadata version, architecture, semantic parity, and intended artifact type.
-- [ ] **TEST-05**: Every performance-sensitive `core.py` phase measures compiled and pure-Python overhead before its design is frozen.
-- [ ] **TEST-06**: Compiled `trigger()` throughput remains at least 200,000 operations/sec after lifecycle and ownership hardening.
-- [ ] **TEST-07**: Core runtime operations remain O(1), while diagnostic APIs document and enforce their separate complexity and budget contracts.
+- [x] **TEST-05**: Every performance-sensitive `core.py` phase measures compiled and pure-Python overhead before its design is frozen.
+- [x] **TEST-06**: Compiled `trigger()` throughput remains at least 200,000 operations/sec after lifecycle and ownership hardening.
+- [x] **TEST-07**: Core runtime operations remain O(1), while diagnostic APIs document and enforce their separate complexity and budget contracts.
 
 ## Future Requirements
 
@@ -156,9 +156,9 @@
 | TEST-02 | Phase 15 | Complete |
 | TEST-03 | Phase 20 | Complete |
 | TEST-04 | Phase 20 | Complete |
-| TEST-05 | Phase 20 | Pending |
-| TEST-06 | Phase 20 | Pending |
-| TEST-07 | Phase 20 | Pending |
+| TEST-05 | Phase 20 | Complete |
+| TEST-06 | Phase 20 | Complete |
+| TEST-07 | Phase 20 | Complete |
 
 **Coverage:**
 
