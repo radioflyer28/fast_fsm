@@ -744,46 +744,223 @@ def _current_matrix_runtime() -> dict[str, object]:
     }
 
 
-def _historical_evidence() -> list[dict[str, str]]:
-    """Hash the exact Phase 16–19 evidence allowlist without inventing facts."""
-    records: list[dict[str, str]] = []
-    for relative_path in _HISTORICAL_EVIDENCE_PATHS:
-        path = REPOSITORY_ROOT / relative_path
+_HISTORICAL_EVIDENCE_SCHEMA_VERSION = 1
+_HISTORICAL_BLOCK_START = "<!-- fast-fsm-historical-evidence:start -->"
+_HISTORICAL_BLOCK_END = "<!-- fast-fsm-historical-evidence:end -->"
+_HISTORICAL_CATEGORICAL_FIELDS = (
+    "phase",
+    "source_path",
+    "command",
+    "build_mode",
+    "threshold_outcome",
+    "measurement_outcome",
+    "environment",
+    "original_evidence_commit",
+)
+_HISTORICAL_RECORDED_FIELDS = frozenset({"status", "value", "citation"})
+_HISTORICAL_UNAVAILABLE_FIELDS = frozenset({"status", "reason", "searched_sources"})
+_RETROSPECTIVE_RERUN_FIELDS = frozenset(
+    {"execution_commit", "command", "environment", "executed_at", "observations"}
+)
+_RETROSPECTIVE_ENVIRONMENT_FIELDS = frozenset(
+    {"interpreter", "os", "architecture", "build_mode"}
+)
+
+
+def _historical_block(text: str, *, relative_path: str) -> tuple[dict[str, Any], str]:
+    """Return one strict categorical block and its pre-block source narrative."""
+    start = text.find(_HISTORICAL_BLOCK_START)
+    end = text.find(_HISTORICAL_BLOCK_END, start + len(_HISTORICAL_BLOCK_START))
+    if start < 0 or end < 0 or text.find(_HISTORICAL_BLOCK_START, start + 1) >= 0:
+        raise EvidenceError(
+            f"Historical evidence {relative_path} requires exactly one categorical block."
+        )
+    encoded = text[start + len(_HISTORICAL_BLOCK_START) : end].strip()
+    matched = re.fullmatch(r"```json\s*(.*?)\s*```", encoded, flags=re.DOTALL)
+    if matched is None:
+        raise EvidenceError(
+            f"Historical evidence {relative_path} categorical block is malformed."
+        )
+    try:
+        record = _strict_json_object(
+            matched.group(1), field=f"historical evidence {relative_path}"
+        )
+        _validate_json_bounds(record)
+    except EvidenceError as error:
+        raise EvidenceError(
+            f"Historical evidence {relative_path} categorical block is malformed."
+        ) from error
+    return record, text[:start]
+
+
+def _historical_recorded_value(
+    value: object, *, phase: str, field: str, original_text: str
+) -> None:
+    """Require the original material, never the new block, to support precision."""
+    if field == "phase":
+        if value == phase:
+            return
+    elif field == "source_path":
+        if value == HISTORICAL_EVIDENCE_PATHS[int(phase) - 16]:
+            return
+    elif isinstance(value, str) and value and value in original_text:
+        return
+    raise EvidenceError(
+        f"Phase {phase} field {field} contains an unsupported recorded value."
+    )
+
+
+def _validate_historical_field(
+    value: object, *, phase: str, field: str, original_text: str
+) -> dict[str, Any]:
+    """Validate one closed recorded/unavailable historical fact shape."""
+    prefix = f"Phase {phase} field {field}"
+    if not isinstance(value, Mapping):
+        raise EvidenceError(f"{prefix} must declare a recorded or unavailable status.")
+    status = value.get("status")
+    if status == "recorded":
+        if set(value) != _HISTORICAL_RECORDED_FIELDS:
+            raise EvidenceError(f"{prefix} recorded provenance is malformed.")
+        citation = value.get("citation")
+        if not isinstance(citation, str) or not citation.strip():
+            raise EvidenceError(f"{prefix} recorded provenance has no citation.")
+        _historical_recorded_value(
+            value.get("value"), phase=phase, field=field, original_text=original_text
+        )
+    elif status == "unavailable":
+        if set(value) != _HISTORICAL_UNAVAILABLE_FIELDS:
+            raise EvidenceError(f"{prefix} unavailable provenance is malformed.")
+        reason = value.get("reason")
+        searched_sources = value.get("searched_sources")
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or not isinstance(searched_sources, list)
+            or not searched_sources
+            or not all(
+                isinstance(item, str) and item.strip() for item in searched_sources
+            )
+        ):
+            raise EvidenceError(f"{prefix} unavailable provenance is incomplete.")
+    else:
+        raise EvidenceError(f"{prefix} must declare a recorded or unavailable status.")
+    return dict(value)
+
+
+def _validate_retrospective_rerun(value: object, *, phase: str) -> dict[str, Any]:
+    """Validate an optional later observation without letting it rewrite history."""
+    if not isinstance(value, Mapping) or set(value) != _RETROSPECTIVE_RERUN_FIELDS:
+        raise EvidenceError(f"Phase {phase} retrospective_rerun is incomplete.")
+    execution_commit = value.get("execution_commit")
+    command = value.get("command")
+    environment = value.get("environment")
+    executed_at = value.get("executed_at")
+    observations = value.get("observations")
+    if (
+        not isinstance(execution_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", execution_commit) is None
+        or not isinstance(command, str)
+        or not command.strip()
+        or not isinstance(environment, Mapping)
+        or set(environment) != _RETROSPECTIVE_ENVIRONMENT_FIELDS
+        or not all(
+            isinstance(item, str) and item.strip() for item in environment.values()
+        )
+        or not isinstance(executed_at, str)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", executed_at) is None
+        or not isinstance(observations, Mapping)
+        or not observations
+    ):
+        raise EvidenceError(f"Phase {phase} retrospective_rerun is incomplete.")
+    return dict(value)
+
+
+def historical_evidence(*, repository_root: Path | None = None) -> dict[str, Any]:
+    """Generate the exact non-gating Phase 16–19 provenance inventory."""
+    root = (repository_root or REPOSITORY_ROOT).resolve()
+    entries: list[dict[str, Any]] = []
+    observed_phases: set[str] = set()
+    for expected_phase, relative_path in zip(
+        ("16", "17", "18", "19"), HISTORICAL_EVIDENCE_PATHS
+    ):
+        path = root / relative_path
         try:
             content = path.read_bytes()
         except OSError as error:
             raise EvidenceError(
-                "Historical release evidence is unavailable."
+                f"Historical release evidence is unavailable: {relative_path}."
             ) from error
         if not content or len(content) > _MAX_CHILD_OUTPUT_BYTES:
-            raise EvidenceError("Historical release evidence violates size limits.")
+            raise EvidenceError(
+                f"Historical release evidence violates size limits: {relative_path}."
+            )
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as error:
-            raise EvidenceError("Historical release evidence is not UTF-8.") from error
-        phase_match = re.search(r"(?:^|\b)[Pp]hase\s+(1[6-9])\b", text)
-        if phase_match is None:
-            raise EvidenceError("Historical release evidence has no phase fact.")
-        command_match = re.search(r"uv run [^\n`]+", text)
-        environment_match = re.search(r"CPython[^\n`|]*", text)
-        commit_match = re.search(r"\b[0-9a-f]{7,40}\b", text)
-        records.append(
-            {
-                "path": relative_path,
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "phase": phase_match.group(1),
-                "command": command_match.group(0).strip()
-                if command_match is not None
-                else "unavailable",
-                "environment": environment_match.group(0).strip()
-                if environment_match is not None
-                else "unavailable",
-                "commit": commit_match.group(0)
-                if commit_match is not None
-                else "unavailable",
-            }
-        )
-    return records
+            raise EvidenceError(
+                f"Historical release evidence is not UTF-8: {relative_path}."
+            ) from error
+        record, original_text = _historical_block(text, relative_path=relative_path)
+        allowed_fields = {"schema_version", "kind", "fields", "retrospective_rerun"}
+        if set(record) - allowed_fields:
+            raise EvidenceError(
+                f"Historical evidence {relative_path} has extra fields."
+            )
+        if (
+            record.get("schema_version") != _HISTORICAL_EVIDENCE_SCHEMA_VERSION
+            or record.get("kind") != "historical_phase_performance"
+            or not isinstance(record.get("fields"), Mapping)
+            or set(cast(Mapping[str, object], record["fields"]))
+            != set(_HISTORICAL_CATEGORICAL_FIELDS)
+        ):
+            raise EvidenceError(
+                f"Historical evidence {relative_path} has an invalid schema."
+            )
+        fields = {
+            field: _validate_historical_field(
+                cast(Mapping[str, object], record["fields"])[field],
+                phase=expected_phase,
+                field=field,
+                original_text=original_text,
+            )
+            for field in _HISTORICAL_CATEGORICAL_FIELDS
+        }
+        if fields["phase"].get("value") != expected_phase:
+            raise EvidenceError(
+                f"Historical evidence {relative_path} phase contradicts the allowlist."
+            )
+        if fields["source_path"].get("value") != relative_path:
+            raise EvidenceError(
+                f"Historical evidence {relative_path} path contradicts the allowlist."
+            )
+        if expected_phase in observed_phases:
+            raise EvidenceError(
+                f"Historical evidence duplicates Phase {expected_phase}."
+            )
+        observed_phases.add(expected_phase)
+        entry: dict[str, Any] = {
+            "phase": expected_phase,
+            "source_path": relative_path,
+            "source_sha256": hashlib.sha256(content).hexdigest(),
+            "fields": fields,
+        }
+        if "retrospective_rerun" in record:
+            entry["retrospective_rerun"] = _validate_retrospective_rerun(
+                record["retrospective_rerun"], phase=expected_phase
+            )
+        entries.append(entry)
+    if observed_phases != {"16", "17", "18", "19"}:
+        raise EvidenceError("Historical evidence allowlist is incomplete.")
+    return {
+        "schema_version": _HISTORICAL_EVIDENCE_SCHEMA_VERSION,
+        "scope": "historical-non-gating",
+        "entries": entries,
+    }
+
+
+def _historical_evidence() -> list[dict[str, Any]]:
+    """Embed generated historical facts without allowing them to satisfy release gates."""
+    return cast(list[dict[str, Any]], historical_evidence()["entries"])
 
 
 def _single_text_match(text: str, pattern: re.Pattern[str], *, field: str) -> str:
@@ -1055,7 +1232,7 @@ _SDIST_REQUIRED_ROOT_FILES = (
     "tools/build_modes.py",
     "tools/artifact_conformance.py",
 )
-_HISTORICAL_EVIDENCE_PATHS = (
+HISTORICAL_EVIDENCE_PATHS = (
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
     ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
     ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
@@ -4691,6 +4868,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     aggregate_parser.add_argument("--json", action="store_true")
 
+    historical_parser = commands.add_parser(
+        "historical-evidence",
+        help="validate the exact non-gating Phase 16-19 provenance inventory",
+    )
+    historical_parser.add_argument(
+        "--check", action="store_true", help="validate without changing evidence files"
+    )
+    historical_parser.add_argument("--json", action="store_true")
+
     identity_parser = commands.add_parser(
         "verify-release-identity",
         help="validate static v0.3.0 identity and optional tag-to-commit equality",
@@ -4805,6 +4991,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             if parsed.summary:
                 parsed.summary.write_text(summary, encoding="utf-8")
             _emit(aggregate if parsed.json else {"summary": summary}, parsed.json)
+        elif parsed.command == "historical-evidence":
+            if not parsed.check:
+                raise EvidenceError("historical-evidence requires --check.")
+            _emit(historical_evidence(), parsed.json)
         elif parsed.command == "verify-release-identity":
             installed = _strict_identity_json(parsed.installed_identity)
             aggregate_payload = _strict_identity_json(parsed.aggregate)
