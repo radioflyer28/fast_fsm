@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import tools.release_evidence as release_evidence  # noqa: E402
+import tools.artifact_conformance as artifact_conformance  # noqa: E402
 import tools.phase16_isolated_verify as isolated_verify  # noqa: E402
 from tools.release_evidence import (  # noqa: E402
     REGISTERED_SLOTS_EXCEPTIONS,
@@ -2798,9 +2800,7 @@ def test_expected_matrix_derives_local_proof_from_the_release_contract() -> None
     assert local.profile == "local"
     assert local.authorizes_release is False
     assert set(local.cells).issubset(set(release.cells))
-    assert {
-        cell.asserted_mode for cell in local.cells
-    } == {"pure", "compiled", "sdist"}
+    assert {cell.asserted_mode for cell in local.cells} == {"pure", "compiled", "sdist"}
     assert any(cell.sdist_parent is not None for cell in local.cells)
     assert any(cell.requires_parity for cell in local.cells)
     assert any(cell.requires_origin for cell in local.cells)
@@ -2808,3 +2808,192 @@ def test_expected_matrix_derives_local_proof_from_the_release_contract() -> None
 
     with pytest.raises(EvidenceError, match="release profile"):
         release_evidence.build_release_authorization({"profile": "local"})
+
+
+def _matrix_artifact_name(cell: object) -> str:
+    """Return a stable filename fixture while sharing universal artifact identities."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.identifier == "sdist-archive":
+        return "fast_fsm-0.3.0.tar.gz"
+    if cell.identifier.startswith("pure-wheel-"):
+        return "fast_fsm-0.3.0-py3-none-any.whl"
+    if "universal2" in cell.identifier:
+        minor = cell.cpython_minor.replace(".", "")
+        return f"fast_fsm-0.3.0-cp{minor}-cp{minor}-macosx_10_15_universal2.whl"
+    return f"fast_fsm-0.3.0-{cell.identifier}.whl"
+
+
+def _matrix_record(
+    cell: object,
+    *,
+    conformance: dict[str, object],
+    record_suffix: str = "",
+) -> dict[str, object]:
+    """Build one complete opaque input record for matrix aggregation tests."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    filename = _matrix_artifact_name(cell)
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    runtime_platform = "macos" if cell.os == "universal" else cell.os
+    runtime_machine = "arm64" if cell.machine == "universal" else cell.machine
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "record_id": f"{cell.identifier}{record_suffix}",
+        "matrix": {
+            "cell": cell.identifier,
+            "cpython_minor": cell.cpython_minor,
+            "os": cell.os,
+            "machine": cell.machine,
+            "asserted_mode": cell.asserted_mode,
+            "sdist_parent": cell.sdist_parent,
+            "artifact_filename": filename,
+            "artifact_sha256": digest,
+        },
+        "artifact": {
+            "filename": filename,
+            "sha256": digest,
+            "classified_mode": cell.asserted_mode,
+            "build_intent": cell.asserted_mode,
+        },
+        "runtime": None
+        if cell.identifier == "sdist-archive"
+        else {
+            "python_implementation": "cpython",
+            "python_version": f"{cell.cpython_minor}.1",
+            "platform": runtime_platform,
+            "machine": runtime_machine,
+            "distribution_version": "0.3.0",
+            "package_version": "0.3.0",
+        },
+        "conformance": None
+        if cell.identifier == "sdist-archive"
+        else deepcopy(conformance),
+        "provenance": {
+            "release_version": "0.3.0",
+            "commit": "a" * 40,
+            "tag": "unreleased",
+        },
+        "origin_verified": cell.requires_origin,
+        "performance": {"status": "passed"} if cell.requires_performance else None,
+        "parent_sdist": None
+        if cell.sdist_parent is None
+        else {
+            "filename": "fast_fsm-0.3.0.tar.gz",
+            "sha256": hashlib.sha256(b"fast_fsm-0.3.0.tar.gz").hexdigest(),
+        },
+    }
+    return record
+
+
+def _complete_matrix_records(profile: str = "local") -> list[dict[str, object]]:
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+    conformance = artifact_conformance.collect_conformance()
+    return [
+        _matrix_record(cell, conformance=conformance)
+        for cell in release_evidence.expected_matrix(profile, runtime).cells
+    ]
+
+
+def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministically() -> (
+    None
+):
+    """A complete local projection is stable evidence but cannot publish a release."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+    records = _complete_matrix_records()
+
+    first = release_evidence.aggregate_matrix_records(
+        records, profile="local", runtime=runtime
+    )
+    second = release_evidence.aggregate_matrix_records(
+        list(reversed(records)), profile="local", runtime=runtime
+    )
+
+    assert first == second
+    assert first["scope"] == "local-non-authorizing"
+    assert first["authorizes_release"] is False
+    assert release_evidence.serialize_manifest(
+        first
+    ) == release_evidence.serialize_manifest(second)
+    assert release_evidence.render_aggregate_summary(first).endswith("\n")
+    with pytest.raises(EvidenceError, match="release profile"):
+        release_evidence.build_release_authorization(first)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (lambda records: records.pop(), "missing"),
+        (lambda records: records.append(deepcopy(records[0])), "duplicate"),
+        (
+            lambda records: records[0]["matrix"].update(cell="unexpected-cell"),
+            "unexpected",
+        ),
+        (
+            lambda records: records[0]["artifact"].update(sha256="b" * 64),
+            "detached",
+        ),
+        (
+            lambda records: records[1]["provenance"].update(commit="b" * 40),
+            "provenance.commit",
+        ),
+        (
+            lambda records: records[1]["runtime"].update(package_version="0.2.2"),
+            "runtime.package_version",
+        ),
+        (
+            lambda records: records[1]["conformance"].update(suite_sha256="b" * 64),
+            "suite_sha256",
+        ),
+        (
+            lambda records: records[1]["artifact"].update(classified_mode="pure"),
+            "mode",
+        ),
+    ],
+)
+def test_aggregate_matrix_records_rejects_substituted_or_mixed_evidence(
+    mutation: object, match: str
+) -> None:
+    """Exact matrix reconciliation rejects each incomplete or contradictory input."""
+    records = _complete_matrix_records()
+    assert callable(mutation)
+    mutation(records)
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.aggregate_matrix_records(
+            records,
+            profile="local",
+            runtime={
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "macos",
+                "machine": "arm64",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        '{"record_id": "one", "record_id": "two"}',
+        '{"record_id": NaN}',
+        "[]",
+    ],
+)
+def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
+    tmp_path: Path, contents: str
+) -> None:
+    """Untrusted uploaded evidence is strict JSON before aggregation starts."""
+    path = tmp_path / "record.json"
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="matrix evidence"):
+        release_evidence.read_matrix_record(path)

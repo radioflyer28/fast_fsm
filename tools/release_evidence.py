@@ -256,6 +256,494 @@ def build_release_authorization(aggregate: Mapping[str, object]) -> dict[str, st
     return {"profile": "release", "authorization": "release-evidence-complete"}
 
 
+_MATRIX_RECORD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "record_id",
+        "matrix",
+        "artifact",
+        "runtime",
+        "conformance",
+        "provenance",
+        "origin_verified",
+        "performance",
+        "parent_sdist",
+    }
+)
+
+
+def _matrix_cell_payload(cell: MatrixCell) -> dict[str, object]:
+    """Serialize an expected cell without exposing mutable implementation state."""
+    return {
+        "identifier": cell.identifier,
+        "cpython_minor": cell.cpython_minor,
+        "os": cell.os,
+        "machine": cell.machine,
+        "asserted_mode": cell.asserted_mode,
+        "sdist_parent": cell.sdist_parent,
+        "requires_parity": cell.requires_parity,
+        "requires_origin": cell.requires_origin,
+        "requires_performance": cell.requires_performance,
+    }
+
+
+def _exact_mapping(
+    value: object, *, fields: frozenset[str], field: str
+) -> Mapping[str, object]:
+    """Require an untrusted evidence object to have no omitted or extra fields."""
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise EvidenceError(f"matrix evidence {field} has an invalid field set.")
+    return cast(Mapping[str, object], value)
+
+
+def _matrix_filename(value: object, *, field: str) -> str:
+    """Normalize one archive filename while rejecting path-bearing evidence."""
+    if not isinstance(value, str) or not value or len(value) > 255:
+        raise EvidenceError(f"matrix evidence {field} filename is malformed.")
+    if "/" in value or "\\" in value or Path(value).name != value:
+        raise EvidenceError(f"matrix evidence {field} filename is malformed.")
+    return value.casefold()
+
+
+def _matrix_artifact_group(cell: MatrixCell) -> str:
+    """Return the only cell families allowed to share one artifact digest."""
+    if cell.identifier.startswith("pure-wheel-"):
+        return "pure-wheel"
+    if "universal2" in cell.identifier:
+        return f"universal2-cp{cell.cpython_minor}"
+    return cell.identifier
+
+
+def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> None:
+    """Bind installed runtime facts to the expected cell before parity is accepted."""
+    fields = frozenset(
+        {
+            "python_implementation",
+            "python_version",
+            "platform",
+            "machine",
+            "distribution_version",
+            "package_version",
+        }
+    )
+    checked = _exact_mapping(runtime, fields=fields, field="runtime")
+    implementation = checked["python_implementation"]
+    python_version = checked["python_version"]
+    platform_name = checked["platform"]
+    machine = checked["machine"]
+    if (
+        implementation != "cpython"
+        or not isinstance(python_version, str)
+        or not isinstance(platform_name, str)
+        or not isinstance(machine, str)
+    ):
+        raise EvidenceError("matrix evidence runtime is malformed.")
+    pieces = python_version.split(".")
+    if len(pieces) != 3 or not all(piece.isdigit() for piece in pieces):
+        raise EvidenceError("matrix evidence runtime.python_version is malformed.")
+    if f"{int(pieces[0])}.{int(pieces[1])}" != cell.cpython_minor:
+        raise EvidenceError(
+            "matrix evidence runtime.python_version contradicts matrix."
+        )
+    platform_aliases = {
+        "darwin": "macos",
+        "macos": "macos",
+        "linux": "linux",
+        "windows": "windows",
+        "win32": "windows",
+    }
+    machine_aliases = {
+        "x86_64": "x86_64",
+        "amd64": "amd64",
+        "arm64": "arm64",
+        "aarch64": "aarch64",
+    }
+    normalized_platform = platform_aliases.get(platform_name.casefold())
+    normalized_machine = machine_aliases.get(machine.casefold())
+    compatible_machines = {cell.machine}
+    if cell.machine == "arm64":
+        compatible_machines.add("aarch64")
+    elif cell.machine == "aarch64":
+        compatible_machines.add("arm64")
+    elif cell.machine == "amd64":
+        compatible_machines.add("x86_64")
+    elif cell.machine == "x86_64":
+        compatible_machines.add("amd64")
+    if cell.os != "universal" and (
+        normalized_platform != cell.os or normalized_machine not in compatible_machines
+    ):
+        raise EvidenceError("matrix evidence runtime architecture contradicts matrix.")
+    for field in ("distribution_version", "package_version"):
+        if checked[field] != _RELEASE_VERSION:
+            raise EvidenceError(
+                f"matrix evidence runtime.{field} is not {_RELEASE_VERSION}."
+            )
+
+
+def _matrix_conformance_matches(
+    conformance: object, *, suite_sha256: str | None
+) -> tuple[dict[str, Any], str]:
+    """Validate semantic records and retain only a declared suite identity."""
+    if not isinstance(conformance, Mapping):
+        raise EvidenceError("matrix evidence conformance is malformed.")
+    expected_suite = suite_sha256 or _expected_conformance_suite_sha256()
+    if conformance.get("suite_sha256") != expected_suite:
+        raise EvidenceError("matrix evidence conformance.suite_sha256 is invalid.")
+    try:
+        record = _validate_child_conformance(
+            conformance, expected_suite_sha256=expected_suite
+        )
+    except EvidenceError as error:
+        raise EvidenceError("matrix evidence conformance is invalid.") from error
+    actual_suite = record["suite_sha256"]
+    if not isinstance(actual_suite, str):  # defensive; child validation guarantees it.
+        raise EvidenceError("matrix evidence conformance is invalid.")
+    return record, actual_suite
+
+
+def _matrix_scenario_differences(
+    baseline: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> list[str]:
+    """Return bounded scenario/field deltas without rendering evidence payloads."""
+    baseline_scenarios = {
+        str(item["id"]): item
+        for item in cast(list[Mapping[str, Any]], baseline["scenarios"])
+    }
+    candidate_scenarios = {
+        str(item["id"]): item
+        for item in cast(list[Mapping[str, Any]], candidate["scenarios"])
+    }
+    differences: list[str] = []
+    for identifier in sorted(set(baseline_scenarios) | set(candidate_scenarios)):
+        expected = baseline_scenarios.get(identifier)
+        observed = candidate_scenarios.get(identifier)
+        if expected is None or observed is None:
+            differences.append(f"{identifier}: scenario")
+        else:
+            changed = [
+                field
+                for field in sorted(set(expected) | set(observed))
+                if field != "id" and expected.get(field) != observed.get(field)
+            ]
+            if changed:
+                differences.append(f"{identifier}: {', '.join(changed[:4])}")
+        if len(differences) == 8:
+            break
+    return differences
+
+
+def _validate_matrix_record(
+    record: object,
+    *,
+    expected_cells: Mapping[str, MatrixCell],
+    record_ids: set[str],
+    artifact_groups: dict[tuple[str, str], str],
+    suite_sha256: str | None,
+) -> tuple[MatrixCell, dict[str, Any], str]:
+    """Validate one untrusted record and return its expected cell and semantics."""
+    checked = _exact_mapping(record, fields=_MATRIX_RECORD_FIELDS, field="record")
+    if checked["schema_version"] != 1:
+        raise EvidenceError("matrix evidence record schema_version is unsupported.")
+    record_id = checked["record_id"]
+    if not isinstance(record_id, str) or not record_id or len(record_id) > 255:
+        raise EvidenceError("matrix evidence record_id is malformed.")
+    if record_id in record_ids:
+        raise EvidenceError("matrix evidence has duplicate record_id values.")
+    record_ids.add(record_id)
+
+    matrix_fields = frozenset(
+        {
+            "cell",
+            "cpython_minor",
+            "os",
+            "machine",
+            "asserted_mode",
+            "sdist_parent",
+            "artifact_filename",
+            "artifact_sha256",
+        }
+    )
+    matrix = _exact_mapping(checked["matrix"], fields=matrix_fields, field="matrix")
+    identifier = matrix["cell"]
+    if not isinstance(identifier, str) or identifier not in expected_cells:
+        raise EvidenceError("matrix evidence has an unexpected matrix cell.")
+    cell = expected_cells[identifier]
+    for field, expected in (
+        ("cpython_minor", cell.cpython_minor),
+        ("os", cell.os),
+        ("machine", cell.machine),
+        ("asserted_mode", cell.asserted_mode),
+        ("sdist_parent", cell.sdist_parent),
+    ):
+        if matrix[field] != expected:
+            raise EvidenceError(f"matrix evidence matrix.{field} contradicts cell.")
+    matrix_filename = _matrix_filename(matrix["artifact_filename"], field="matrix")
+    matrix_sha = matrix["artifact_sha256"]
+    if not _is_sha256(matrix_sha):
+        raise EvidenceError("matrix evidence matrix.artifact_sha256 is malformed.")
+
+    artifact_fields = frozenset(
+        {"filename", "sha256", "classified_mode", "build_intent"}
+    )
+    artifact = _exact_mapping(
+        checked["artifact"], fields=artifact_fields, field="artifact"
+    )
+    artifact_filename = _matrix_filename(artifact["filename"], field="artifact")
+    artifact_sha = artifact["sha256"]
+    if not _is_sha256(artifact_sha):
+        raise EvidenceError("matrix evidence artifact.sha256 is malformed.")
+    if matrix_filename != artifact_filename or matrix_sha != artifact_sha:
+        raise EvidenceError("matrix evidence artifact digest is detached from matrix.")
+    if (
+        artifact["classified_mode"] != cell.asserted_mode
+        or artifact["build_intent"] != cell.asserted_mode
+    ):
+        raise EvidenceError("matrix evidence artifact mode contradicts matrix.")
+    artifact_key = (artifact_filename, cast(str, artifact_sha))
+    artifact_group = _matrix_artifact_group(cell)
+    existing_group = artifact_groups.setdefault(artifact_key, artifact_group)
+    if existing_group != artifact_group:
+        raise EvidenceError(
+            "matrix evidence reuses an artifact across incompatible cells."
+        )
+
+    provenance_fields = frozenset({"release_version", "commit", "tag"})
+    provenance = _exact_mapping(
+        checked["provenance"], fields=provenance_fields, field="provenance"
+    )
+    version = provenance["release_version"]
+    commit = provenance["commit"]
+    tag = provenance["tag"]
+    if version != _RELEASE_VERSION:
+        raise EvidenceError("matrix evidence provenance.release_version is invalid.")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise EvidenceError("matrix evidence provenance.commit is malformed.")
+    if tag not in {"unreleased", f"v{_RELEASE_VERSION}"}:
+        raise EvidenceError("matrix evidence provenance.tag is invalid.")
+
+    if cell.identifier == "sdist-archive":
+        if (
+            checked["runtime"] is not None
+            or checked["conformance"] is not None
+            or checked["origin_verified"] is not False
+            or checked["performance"] is not None
+            or checked["parent_sdist"] is not None
+        ):
+            raise EvidenceError(
+                "matrix evidence sdist archive has runtime-only fields."
+            )
+        return cell, {}, cast(str, commit)
+
+    if not isinstance(checked["runtime"], Mapping):
+        raise EvidenceError("matrix evidence runtime is required.")
+    _matrix_runtime_matches(cell, cast(Mapping[str, object], checked["runtime"]))
+    if checked["origin_verified"] is not cell.requires_origin:
+        raise EvidenceError("matrix evidence origin proof contradicts matrix.")
+    if cell.requires_performance:
+        performance = _exact_mapping(
+            checked["performance"], fields=frozenset({"status"}), field="performance"
+        )
+        if performance["status"] != "passed":
+            raise EvidenceError("matrix evidence installed performance is invalid.")
+    elif checked["performance"] is not None:
+        raise EvidenceError("matrix evidence has unexpected installed performance.")
+
+    if cell.sdist_parent is None:
+        if checked["parent_sdist"] is not None:
+            raise EvidenceError("matrix evidence has unexpected sdist lineage.")
+    else:
+        parent = _exact_mapping(
+            checked["parent_sdist"],
+            fields=frozenset({"filename", "sha256"}),
+            field="parent_sdist",
+        )
+        if _matrix_filename(
+            parent["filename"], field="parent_sdist"
+        ) != "fast_fsm-0.3.0.tar.gz" or not _is_sha256(parent["sha256"]):
+            raise EvidenceError("matrix evidence sdist lineage is malformed.")
+
+    conformance, _suite = _matrix_conformance_matches(
+        checked["conformance"], suite_sha256=suite_sha256
+    )
+    return cell, conformance, cast(str, commit)
+
+
+def aggregate_matrix_records(
+    records: Sequence[object], *, profile: str, runtime: Mapping[str, object]
+) -> dict[str, Any]:
+    """Reconcile a complete exact evidence profile into deterministic aggregate JSON."""
+    if len(records) > 256:
+        raise EvidenceError("matrix evidence has too many records.")
+    expected = expected_matrix(profile, runtime)
+    expected_cells = {cell.identifier: cell for cell in expected.cells}
+    actual_cells: dict[str, MatrixCell] = {}
+    accepted_records: list[dict[str, Any]] = []
+    record_ids: set[str] = set()
+    artifact_groups: dict[tuple[str, str], str] = {}
+    baseline_conformance: dict[str, Any] | None = None
+    suite_sha256: str | None = None
+    commits: set[str] = set()
+    tags: set[object] = set()
+
+    for record in records:
+        cell, conformance, commit = _validate_matrix_record(
+            record,
+            expected_cells=expected_cells,
+            record_ids=record_ids,
+            artifact_groups=artifact_groups,
+            suite_sha256=suite_sha256,
+        )
+        if cell.identifier in actual_cells:
+            raise EvidenceError("matrix evidence has duplicate matrix cells.")
+        actual_cells[cell.identifier] = cell
+        checked = cast(Mapping[str, Any], record)
+        provenance = cast(Mapping[str, Any], checked["provenance"])
+        commits.add(commit)
+        tags.add(provenance["tag"])
+        if conformance:
+            record_suite = conformance["suite_sha256"]
+            if not isinstance(record_suite, str):
+                raise EvidenceError("matrix evidence conformance is invalid.")
+            if suite_sha256 is None:
+                suite_sha256 = record_suite
+            elif suite_sha256 != record_suite:
+                raise EvidenceError("matrix evidence has mixed suite_sha256 values.")
+            if baseline_conformance is None:
+                baseline_conformance = conformance
+            else:
+                differences = _matrix_scenario_differences(
+                    baseline_conformance, conformance
+                )
+                if differences:
+                    raise EvidenceError(
+                        "matrix evidence semantic parity differs: "
+                        + "; ".join(differences)
+                    )
+        accepted_records.append(json.loads(serialize_manifest(checked)))
+
+    missing = sorted(set(expected_cells) - set(actual_cells))
+    unexpected = sorted(set(actual_cells) - set(expected_cells))
+    if missing or unexpected:
+        parts: list[str] = []
+        if missing:
+            parts.append("missing " + ", ".join(missing[:8]))
+        if unexpected:
+            parts.append("unexpected " + ", ".join(unexpected[:8]))
+        raise EvidenceError("matrix evidence exact set mismatch: " + "; ".join(parts))
+    if len(commits) != 1:
+        raise EvidenceError("matrix evidence has mixed provenance.commit values.")
+    if len(tags) != 1:
+        raise EvidenceError("matrix evidence has mixed provenance.tag values.")
+    if suite_sha256 is None or baseline_conformance is None:
+        raise EvidenceError("matrix evidence is missing installed conformance.")
+
+    archive = next(
+        record
+        for record in accepted_records
+        if cast(Mapping[str, Any], record["matrix"])["cell"] == "sdist-archive"
+    )
+    archive_artifact = cast(Mapping[str, Any], archive["artifact"])
+    for record in accepted_records:
+        matrix = cast(Mapping[str, Any], record["matrix"])
+        if matrix["sdist_parent"] is None:
+            continue
+        parent = cast(Mapping[str, Any], record["parent_sdist"])
+        if (
+            parent["filename"] != archive_artifact["filename"]
+            or parent["sha256"] != archive_artifact["sha256"]
+        ):
+            raise EvidenceError(
+                "matrix evidence sdist lineage is detached from archive."
+            )
+
+    accepted_records.sort(
+        key=lambda item: str(cast(Mapping[str, Any], item["matrix"])["cell"])
+    )
+    commit = next(iter(commits))
+    tag = next(iter(tags))
+    return {
+        "schema_version": 2,
+        "profile": expected.profile,
+        "scope": "hosted-release-authorizing"
+        if expected.authorizes_release
+        else "local-non-authorizing",
+        "authorizes_release": expected.authorizes_release,
+        "expected_matrix": [_matrix_cell_payload(cell) for cell in expected.cells],
+        "artifact_records": accepted_records,
+        "release_identity": {
+            "package": PACKAGE_NAME,
+            "distribution_version": _RELEASE_VERSION,
+            "commit": commit,
+            "tag": tag,
+            "suite_sha256": suite_sha256,
+        },
+        "historical_evidence": [],
+        "installed_performance": [
+            {
+                "cell": cast(Mapping[str, Any], record["matrix"])["cell"],
+                "status": "passed",
+            }
+            for record in accepted_records
+            if record["performance"] is not None
+        ],
+    }
+
+
+def read_matrix_record(path: Path) -> dict[str, Any]:
+    """Read one uploaded evidence record with strict JSON and bounded resources."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise EvidenceError("matrix evidence could not be read.") from error
+    if len(raw.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES:
+        raise EvidenceError("matrix evidence exceeds the size limit.")
+    try:
+        record = _strict_json_object(raw, field="matrix evidence")
+        _validate_json_bounds(record)
+    except EvidenceError as error:
+        raise EvidenceError("matrix evidence is malformed.") from error
+    return record
+
+
+def render_aggregate_summary(aggregate: Mapping[str, object]) -> str:
+    """Render concise stable text solely from an already validated aggregate."""
+    profile = aggregate.get("profile")
+    scope = aggregate.get("scope")
+    records = aggregate.get("artifact_records")
+    identity = aggregate.get("release_identity")
+    if (
+        not isinstance(profile, str)
+        or not isinstance(scope, str)
+        or not isinstance(records, list)
+        or not isinstance(identity, Mapping)
+    ):
+        raise EvidenceError("matrix aggregate summary input is malformed.")
+    version = identity.get("distribution_version")
+    commit = identity.get("commit")
+    if not isinstance(version, str) or not isinstance(commit, str):
+        raise EvidenceError("matrix aggregate summary identity is malformed.")
+    return "\n".join(
+        (
+            f"Release evidence profile: {profile}",
+            f"Scope: {scope}",
+            f"Artifacts verified: {len(records)}",
+            f"Version: {version}",
+            f"Commit: {commit}",
+            "",
+        )
+    )
+
+
+def _current_matrix_runtime() -> dict[str, object]:
+    """Collect the runtime selector used only for the local matrix projection."""
+    return {
+        "implementation": sys.implementation.name,
+        "python_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "platform": platform.system(),
+        "machine": platform.machine(),
+    }
+
+
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
 _SDIST_ARCHIVE_SCHEMA_VERSION = 1
 _MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
@@ -3885,6 +4373,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sdist_parser.add_argument("--json", action="store_true")
 
+    aggregate_parser = commands.add_parser(
+        "aggregate-matrix",
+        help="reconcile exact artifact evidence into a release or local matrix profile",
+    )
+    aggregate_parser.add_argument(
+        "--profile", choices=("release", "local"), required=True
+    )
+    aggregate_parser.add_argument(
+        "--record",
+        type=Path,
+        action="append",
+        required=True,
+        help="strict JSON artifact record to aggregate (repeatable)",
+    )
+    aggregate_parser.add_argument(
+        "--summary",
+        type=Path,
+        help="optional generated human summary output path",
+    )
+    aggregate_parser.add_argument("--json", action="store_true")
+
     slots_policy_parser = commands.add_parser(
         "slots-policy", help="recursively audit source classes against the slots policy"
     )
@@ -3967,6 +4476,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
         elif parsed.command == "verify-sdist":
             _emit(verify_sdist_derivations(parsed.sdist), parsed.json)
+        elif parsed.command == "aggregate-matrix":
+            aggregate = aggregate_matrix_records(
+                [read_matrix_record(path) for path in parsed.record],
+                profile=parsed.profile,
+                runtime=_current_matrix_runtime(),
+            )
+            summary = render_aggregate_summary(aggregate)
+            if parsed.summary:
+                parsed.summary.write_text(summary, encoding="utf-8")
+            _emit(aggregate if parsed.json else {"summary": summary}, parsed.json)
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
         elif parsed.command == "verify-history":
