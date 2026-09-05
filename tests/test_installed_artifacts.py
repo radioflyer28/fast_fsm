@@ -40,10 +40,7 @@ def _build_wheel(output: Path, mode: str) -> Path:
 def tracer_wheels(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     """Build concrete pure and compiled archives once for the tracer proof."""
     root = tmp_path_factory.mktemp("artifact-tracer")
-    return {
-        mode: _build_wheel(root / mode, mode)
-        for mode in ("pure", "compiled")
-    }
+    return {mode: _build_wheel(root / mode, mode) for mode in ("pure", "compiled")}
 
 
 @pytest.mark.integration
@@ -59,9 +56,14 @@ def test_tracer_installs_exact_artifact_and_matches_source_lifecycle(
         build_intent=mode,
     )
 
-    assert record["artifact"]["sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+    assert (
+        record["artifact"]["sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+    )
     assert record["runtime"]["expected_mode"] == mode
     assert record["conformance"]["payload_leak_free"] is True
-    assert artifact_conformance.compare_conformance(
-        artifact_conformance.collect_conformance(), record["conformance"]
-    ) == []
+    assert (
+        artifact_conformance.compare_conformance(
+            artifact_conformance.collect_conformance(), record["conformance"]
+        )
+        == []
+    )

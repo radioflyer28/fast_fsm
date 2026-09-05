@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from email.message import Message
 from email.parser import Parser
 import gc
+import hashlib
 import importlib
 from importlib import machinery, metadata
 import json
@@ -62,6 +63,17 @@ REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
 
 class EvidenceError(RuntimeError):
     """Raised when local release evidence is incomplete or contradictory."""
+
+    def __init__(
+        self, message: str, *, diagnostics: tuple[str, str] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
+
+
+_INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
+_MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
+_MAX_CHILD_OUTPUT_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -456,6 +468,342 @@ def verify_wheels(
             "Duplicate normalized wheel artifact identities: " + ", ".join(duplicates)
         )
     return {"artifacts": artifacts}
+
+
+def _artifact_sha256(path: Path) -> str:
+    """Hash one bounded archive before any isolated-environment work begins."""
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise EvidenceError("Artifact identity could not be read.") from error
+    if size <= 0 or size > _MAX_ARTIFACT_BYTES:
+        raise EvidenceError("Artifact identity violates the archive size limit.")
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as artifact:
+            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise EvidenceError("Artifact identity could not be hashed.") from error
+    return digest.hexdigest()
+
+
+def _strict_json_object(value: str, *, field: str) -> dict[str, Any]:
+    """Parse one child object without accepting duplicate keys or NaN values."""
+
+    def reject_constant(_value: str) -> None:
+        raise ValueError("non-standard JSON number")
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = item
+        return result
+
+    try:
+        parsed = json.loads(
+            value,
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicates,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"Installed artifact {field} is malformed.") from error
+    if not isinstance(parsed, dict):
+        raise EvidenceError(f"Installed artifact {field} must be a JSON object.")
+    return parsed
+
+
+def _path_is_contained(path: Path, root: Path) -> bool:
+    """Return whether a resolved artifact-runtime path is inside its fresh env."""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _lexically_contained(path: Path, root: Path) -> bool:
+    """Check a venv entrypoint without resolving its intentional interpreter symlink."""
+    try:
+        path.absolute().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _installed_environment() -> dict[str, str]:
+    """Remove checkout and project discovery from an installed-artifact child."""
+    environment = dict(os.environ)
+    for key in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "UV_PROJECT",
+        "UV_WORKING_DIR",
+        "UV_CONFIG_FILE",
+        "UV_RUN_RECURSION_DEPTH",
+        "FAST_FSM_PURE_PYTHON",
+    ):
+        environment.pop(key, None)
+    for key in tuple(environment):
+        if key.startswith("COV_CORE_") or key == "COVERAGE_PROCESS_START":
+            environment.pop(key)
+    environment["UV_NO_PROJECT"] = "1"
+    environment["UV_NO_CONFIG"] = "1"
+    return environment
+
+
+def _environment_python(environment_root: Path) -> Path:
+    """Resolve the absolute interpreter path for a fresh virtual environment."""
+    candidates = (
+        environment_root / "bin" / "python",
+        environment_root / "Scripts" / "python.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            # Preserve the venv entrypoint rather than resolving its interpreter
+            # symlink to uv's externally managed base Python.
+            return candidate.absolute()
+    raise EvidenceError("Installed artifact environment has no interpreter.")
+
+
+def _run_installed_command(
+    arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str], stage: str
+) -> str:
+    """Run an isolated child while retaining only bounded, non-manifest diagnostics."""
+    completed = subprocess.run(
+        list(arguments),
+        cwd=cwd,
+        env=dict(environment),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if (
+        len(completed.stdout.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES
+        or len(completed.stderr.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES
+    ):
+        raise EvidenceError(f"Installed artifact {stage} exceeded the output limit.")
+    if completed.returncode:
+        raise EvidenceError(
+            f"Installed artifact {stage} failed.",
+            diagnostics=(completed.stdout, completed.stderr),
+        )
+    return completed.stdout
+
+
+def _validate_runtime_probe(
+    runtime: Mapping[str, Any],
+    *,
+    environment_root: Path,
+    expected_mode: str,
+    version: str,
+) -> dict[str, Any]:
+    """Check runtime provenance and mode before semantic evidence is accepted."""
+    required = {
+        "distribution_version",
+        "package_version",
+        "package_origin",
+        "core_origin",
+        "core_loader",
+        "interpreter",
+        "python_implementation",
+        "python_version",
+        "platform",
+        "machine",
+        "direct_url",
+        "extension_suffixes",
+    }
+    if set(runtime) != required:
+        raise EvidenceError("Installed artifact runtime identity is incomplete.")
+    string_fields = required - {"direct_url", "extension_suffixes"}
+    if any(
+        not isinstance(runtime[field], str) or not runtime[field]
+        for field in string_fields
+    ):
+        raise EvidenceError("Installed artifact runtime identity is malformed.")
+    if (
+        runtime["distribution_version"] != version
+        or runtime["package_version"] != version
+    ):
+        raise EvidenceError(
+            "Installed artifact runtime version contradicts archive identity."
+        )
+    for field in ("package_origin", "core_origin"):
+        if not _path_is_contained(Path(runtime[field]), environment_root):
+            raise EvidenceError(
+                "Installed artifact runtime origin escapes its environment."
+            )
+    if not _lexically_contained(Path(runtime["interpreter"]), environment_root):
+        raise EvidenceError("Installed artifact interpreter escapes its environment.")
+    direct_url = runtime["direct_url"]
+    if direct_url is not None and not isinstance(direct_url, dict):
+        raise EvidenceError("Installed artifact direct-url provenance is malformed.")
+    if isinstance(direct_url, dict) and bool(
+        cast(Mapping[str, Any], direct_url).get("dir_info", {}).get("editable", False)
+    ):
+        raise EvidenceError("Installed artifact provenance is editable.")
+    suffixes = runtime["extension_suffixes"]
+    if (
+        not isinstance(suffixes, list)
+        or not suffixes
+        or not all(isinstance(suffix, str) and suffix for suffix in suffixes)
+    ):
+        raise EvidenceError("Installed artifact extension classification is malformed.")
+    core_origin = Path(runtime["core_origin"])
+    is_extension = core_origin.suffix in set(suffixes)
+    if expected_mode == "pure":
+        if core_origin.suffix != ".py" or is_extension:
+            raise EvidenceError(
+                "Installed artifact pure mode has a native core origin."
+            )
+    elif expected_mode == "compiled":
+        if not is_extension or runtime["core_loader"] != "ExtensionFileLoader":
+            raise EvidenceError(
+                "Installed artifact compiled mode lacks an extension core origin."
+            )
+    else:
+        raise EvidenceError("Installed artifact expected mode is invalid.")
+    return {
+        field: runtime[field]
+        for field in (
+            "distribution_version",
+            "package_version",
+            "package_origin",
+            "core_origin",
+            "core_loader",
+            "interpreter",
+            "python_implementation",
+            "python_version",
+            "platform",
+            "machine",
+        )
+    }
+
+
+def _validate_child_conformance(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Accept only the strict semantic contract emitted by the copied probe."""
+    expected = {
+        "schema_version",
+        "suite_sha256",
+        "scenarios",
+        "semantic_sha256",
+        "payload_leak_free",
+    }
+    if set(value) != expected:
+        raise EvidenceError("Installed artifact conformance schema is incomplete.")
+    if value["schema_version"] != 1 or value["payload_leak_free"] is not True:
+        raise EvidenceError("Installed artifact conformance verdict is invalid.")
+    if not all(
+        isinstance(value[field], str) and len(value[field]) == 64
+        for field in ("suite_sha256", "semantic_sha256")
+    ):
+        raise EvidenceError("Installed artifact conformance digest is malformed.")
+    if not isinstance(value["scenarios"], list) or not value["scenarios"]:
+        raise EvidenceError("Installed artifact conformance scenario set is invalid.")
+    return dict(value)
+
+
+def verify_installed_wheel(
+    wheel_path: Path, *, expected_mode: str, build_intent: str
+) -> dict[str, Any]:
+    """Prove one exact wheel in a neutral fresh environment before accepting semantics."""
+    if expected_mode not in {"pure", "compiled"} or build_intent not in {
+        "pure",
+        "compiled",
+    }:
+        raise EvidenceError(
+            "Installed artifact mode and build intent must be explicit."
+        )
+    if expected_mode != build_intent:
+        raise EvidenceError("Installed artifact mode contradicts build intent.")
+    artifact = wheel_path.resolve(strict=True)
+    artifact_sha256 = _artifact_sha256(artifact)
+    archive = inspect_wheel(artifact)
+    if archive["classified_mode"] != expected_mode:
+        raise EvidenceError(
+            "Installed artifact archive mode contradicts expected mode."
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="fast-fsm-installed-artifact-"
+    ) as temporary:
+        temporary_root = Path(temporary).resolve()
+        environment_root = temporary_root / "environment"
+        neutral_directory = temporary_root / "neutral"
+        neutral_directory.mkdir()
+        environment = _installed_environment()
+        _run_installed_command(
+            [
+                "uv",
+                "venv",
+                "--no-project",
+                "--no-config",
+                "--python",
+                sys.executable,
+                str(environment_root),
+            ],
+            cwd=neutral_directory,
+            environment=environment,
+            stage="environment creation",
+        )
+        interpreter = _environment_python(environment_root)
+        _run_installed_command(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--offline",
+                "--no-config",
+                "--python",
+                str(interpreter),
+                str(artifact),
+            ],
+            cwd=neutral_directory,
+            environment=environment,
+            stage="artifact installation",
+        )
+        probe = neutral_directory / "artifact_conformance.py"
+        shutil.copyfile(Path(__file__).with_name("artifact_conformance.py"), probe)
+        child = _strict_json_object(
+            _run_installed_command(
+                [str(interpreter), str(probe), "--installed-probe"],
+                cwd=neutral_directory,
+                environment=environment,
+                stage="conformance probe",
+            ),
+            field="child probe",
+        )
+        if set(child) != {"conformance", "runtime"}:
+            raise EvidenceError("Installed artifact child probe has an invalid schema.")
+        runtime = child["runtime"]
+        conformance = child["conformance"]
+        if not isinstance(runtime, dict) or not isinstance(conformance, dict):
+            raise EvidenceError("Installed artifact child probe is malformed.")
+        runtime_record = _validate_runtime_probe(
+            runtime,
+            environment_root=environment_root,
+            expected_mode=expected_mode,
+            version=str(archive["metadata_version"]),
+        )
+        conformance_record = _validate_child_conformance(conformance)
+
+    return {
+        "schema_version": _INSTALLED_ARTIFACT_SCHEMA_VERSION,
+        "artifact": {
+            "filename": archive["filename"],
+            "sha256": artifact_sha256,
+            "wheel_tags": archive["wheel_tags"],
+            "native_members": archive["native_members"],
+            "classified_mode": archive["classified_mode"],
+            "expected_mode": expected_mode,
+            "build_intent": build_intent,
+        },
+        "runtime": {**runtime_record, "expected_mode": expected_mode},
+        "conformance": conformance_record,
+    }
 
 
 def _module_name_for_path(source_root: Path, source_file: Path) -> str:
@@ -2825,6 +3173,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify_wheel_parser.add_argument("--json", action="store_true")
 
+    installed_wheel_parser = commands.add_parser(
+        "verify-installed-wheel",
+        help="install one exact wheel into a fresh neutral environment",
+    )
+    installed_wheel_parser.add_argument(
+        "--wheel", type=Path, required=True, help="exact wheel archive to install"
+    )
+    installed_wheel_parser.add_argument(
+        "--expected-mode", choices=("pure", "compiled"), required=True
+    )
+    installed_wheel_parser.add_argument(
+        "--build-intent", choices=("pure", "compiled"), required=True
+    )
+    installed_wheel_parser.add_argument("--json", action="store_true")
+
     slots_policy_parser = commands.add_parser(
         "slots-policy", help="recursively audit source classes against the slots policy"
     )
@@ -2896,6 +3259,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _emit(verify_source(parsed.source_root), parsed.json)
         elif parsed.command == "verify-wheel":
             _emit(verify_wheels(parsed.wheel), parsed.json)
+        elif parsed.command == "verify-installed-wheel":
+            _emit(
+                verify_installed_wheel(
+                    parsed.wheel,
+                    expected_mode=parsed.expected_mode,
+                    build_intent=parsed.build_intent,
+                ),
+                parsed.json,
+            )
         elif parsed.command == "slots-policy":
             _emit(slots_policy(parsed.source_root), parsed.json)
         elif parsed.command == "verify-history":

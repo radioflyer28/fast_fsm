@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools import artifact_conformance
+from tools import artifact_conformance  # noqa: E402
 
 
 def test_tracer_lifecycle_record_is_stable_and_payload_safe() -> None:
