@@ -5,16 +5,16 @@ milestone_name: Reliability & Runtime Hardening
 current_phase: 20
 current_phase_name: Installed Artifact Parity & Release Proof
 status: executing
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-09-05T01:10:59.280Z"
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-09-05T01:36:49.936Z"
 last_activity: 2026-09-04
 last_activity_desc: Phase 19 complete, transitioned to Phase 20
-state_head: 28c3ba0756885c137e5de1f00ed3dd3a0e9d3487
+state_head: 047cb4f5672343230d3db09cccd325c64ddba775
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 41
-  completed_plans: 36
+  completed_plans: 37
   percent: 83
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-04)
 ## Current Position
 
 Phase: 20 (Installed Artifact Parity & Release Proof) — READY TO EXECUTE
-Plan: Not started
+Plan: 2 of 6
 Status: Ready to execute
 Last activity: 2026-09-04 — Phase 19 complete, transitioned to Phase 20
 
@@ -48,12 +48,12 @@ Progress: [████████░░] 83%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 15–20 | 0 | TBD | — |
 | 15 | 9 | - | - |
 | 16 | 5 | - | - |
 | 17 | 5 | - | - |
 | 18 | 8 | - | - |
 | 19 | 8 | - | - |
+| 20 | 6 | - | - |
 
 **Recent Trend:** Phases 15 through 19 complete; Phase 20 is ready for discussion and planning.
 **Per-Plan Metrics:**
@@ -78,6 +78,7 @@ Progress: [████████░░] 83%
 | Phase 18 P07 | 1h 25m | 3 tasks | 10 files |
 | Phase 18 P08 | 44m | 3 tasks | 7 files |
 | Phase 20 P01 | 32m | 3 tasks | 4 files |
+| Phase 20 P02 | 20m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 19]: Fresh pure and compiled exports are authoritative for semantics and performance; installed-artifact parity remains Phase 20-owned.
 - [Phase 20]: Use one deterministic checkout-independent oracle for source, pure-wheel, and compiled-wheel semantics.
 - [Phase 20]: Bind archive and runtime identity before accepting semantic artifact evidence; semantic digests exclude origins and performance.
+- [Phase 20]: Only AUTO may fall back from mypyc; explicit COMPILED must propagate failure and prove native fast_fsm.core.
+- [Phase 20]: Verify bounded sdist inventory before extraction, then derive offline pure and compiled child wheels for the verifier interpreter with parent SHA-256 lineage.
 
 ### Pending Todos
 
@@ -147,6 +150,15 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T01:10:59.169Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-09-05T01:36:49.817Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
+
+## Rebuild Log
+
+- timestamp: 2026-09-05T01:36:48.999Z
+  kind: by-phase-table-reconciled
+  section: ## Performance Metrics
+  before: | Phase | Plans | Total | Avg/Plan | \n |-------|-------|-------|----------| \n | 15–20 | 0 | TBD | — | \n | 15 | 9 | - | - | \n | 16 | 5 | - | - | \n | 17 | 5 | - | - | \n | 18 | 8 | - | - | \n | 19 | 8 | - | - |
+  after: | Phase | Plans | Total | Avg/Plan | \n |-------|-------|-------|----------| \n | 15 | 9 | - | - | \n | 16 | 5 | - | - | \n | 17 | 5 | - | - | \n | 18 | 8 | - | - | \n | 19 | 8 | - | - | \n | 20 | 6 | - | - |
+  reason: phase dirs on disk are canonical; rows for missing phases dropped, missing phases added

@@ -240,7 +240,7 @@
   4. Benchmarks cover every performance-sensitive core phase, compiled `trigger()` remains at least 200,000 operations/sec, core runtime operations remain O(1), and diagnostics enforce their separate budgets.
   5. Package metadata, `fast_fsm.__version__`, changelog, documentation, release tag, quality gates, and published artifacts all identify and substantiate v0.3.0.
 
-**Plans**: 1/6 plans executed
+**Plans**: 2/6 plans executed
 
 **Wave 1**
 
@@ -248,7 +248,7 @@
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 20-02-PLAN.md — Fail closed on compiled intent and prove bounded sdist pure/compiled derivations
+- [x] 20-02-PLAN.md — Fail closed on compiled intent and prove bounded sdist pure/compiled derivations
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -277,4 +277,4 @@
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | Complete    | 2026-09-04 |
-| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 1/6 | In Progress|  |
+| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 2/6 | In Progress|  |
