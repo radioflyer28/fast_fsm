@@ -12,9 +12,9 @@ provides:
   - Non-authorizing local release-readiness projection plus read-only hosted evidence inspection procedure
 affects: [v0.3.0-release, CI, release-maintenance, UAT]
 actuals:
-  tokens: 28872
+  tokens: 28936
   tasks: 3
-  commits: 10
+  commits: 11
 tech-stack:
   added: []
   patterns: [resolved-SHA workflow fan-out, aggregate-approved artifact hash attachment, profile-scoped release evidence, non-authorizing local projection]
