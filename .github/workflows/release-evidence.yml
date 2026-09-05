@@ -334,7 +334,7 @@ jobs:
                   "artifact_sha256": artifact["sha256"],
               },
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
               "conformance": raw["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,

@@ -3193,6 +3193,17 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert '"performance": raw["performance"]' in native_runs
     assert '"core_loader"' in native_runs
 
+    pure_steps = jobs["verify_pure"].get("steps")
+    assert isinstance(pure_steps, list)
+    pure_runs = "\n".join(
+        step["run"]
+        for step in pure_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    # The producer itself, rather than a synthetic matrix fixture, must emit
+    # the exact strict runtime shape accepted by aggregate-matrix.
+    assert '"core_origin", "core_loader"' in pure_runs
+
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
         _workflow_needs(aggregate)
