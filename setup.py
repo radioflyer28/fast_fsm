@@ -22,8 +22,8 @@ from tools.build_modes import BuildMode, resolve_build_mode  # noqa: E402
 #
 # The C extension is OPTIONAL. FAST_FSM_BUILD_MODE accepts auto, pure, and
 # compiled intent; FAST_FSM_PURE_PYTHON=1 remains a compatibility alias for
-# pure. Auto and compiled retain the existing optional fallback in this phase.
-# Invalid selector values are resolved before this fallback so they fail closed.
+# pure. AUTO alone retains the optional fallback. Invalid selectors and explicit
+# compiled compiler failures fail closed before setup can claim an artifact.
 build_mode = resolve_build_mode(os.environ)
 ext_modules = []
 if build_mode is not BuildMode.PURE:
@@ -38,6 +38,8 @@ if build_mode is not BuildMode.PURE:
             multi_file=False,
         )
     except Exception as exc:
+        if build_mode is BuildMode.COMPILED:
+            raise
         import warnings
 
         warnings.warn(

@@ -115,6 +115,18 @@ def _is_native_member(name: str) -> bool:
     return any(normalized.endswith(suffix) for suffix in _native_suffixes())
 
 
+def _native_core_members(member_names: Iterable[str]) -> tuple[str, ...]:
+    """Return native archive members that can satisfy the core compilation seam."""
+    core_prefix = f"{PACKAGE_NAME}/core"
+    return tuple(
+        sorted(
+            name
+            for name in member_names
+            if name.startswith(core_prefix) and _is_native_member(name)
+        )
+    )
+
+
 def find_native_core_shadows(package_root: Path) -> list[Path]:
     """Find native siblings that would outrank ``core.py`` during import."""
     if not package_root.is_dir():
@@ -369,6 +381,7 @@ def inspect_wheel(
         native_members = tuple(
             sorted(name for name in archive.namelist() if _is_native_member(name))
         )
+        native_core_members = _native_core_members(archive.namelist())
 
     dist_info_name, dist_info_version = _dist_info_identity(dist_info_directory)
     metadata_name, metadata_version = _metadata_identity(
@@ -430,10 +443,10 @@ def inspect_wheel(
             )
         mode = "pure"
     else:
-        if not native_members:
+        if not native_core_members:
             raise EvidenceError(
-                f"Platform wheel {resolved_wheel.name} has no native members and "
-                "cannot be classified as compiled evidence."
+                f"Platform wheel {resolved_wheel.name} has no native {CORE_MODULE_NAME} "
+                "member and cannot be classified as compiled evidence."
             )
         mode = "compiled"
 
@@ -451,6 +464,7 @@ def inspect_wheel(
         "metadata_name": metadata_name,
         "metadata_version": str(metadata_version),
         "native_members": list(native_members),
+        "native_core_members": list(native_core_members),
         "classified_mode": mode,
         "mode": mode,
     }
