@@ -2733,7 +2733,10 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert "gh release" not in text
 
     resolver = jobs["resolve_ref"]
-    assert resolver.get("outputs", {}).get("head_sha") == "${{ steps.resolve.outputs.head_sha }}"
+    assert (
+        resolver.get("outputs", {}).get("head_sha")
+        == "${{ steps.resolve.outputs.head_sha }}"
+    )
     assert _checkout_refs(resolver) == ["${{ inputs.ref }}"]
     resolver_steps = resolver.get("steps")
     assert isinstance(resolver_steps, list)
@@ -2760,7 +2763,9 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     for job_id in expected_jobs:
         job = jobs[job_id]
         assert "resolve_ref" in _workflow_needs(job), job_id
-        assert _checkout_refs(job) == ["${{ needs.resolve_ref.outputs.head_sha }}"], job_id
+        assert _checkout_refs(job) == ["${{ needs.resolve_ref.outputs.head_sha }}"], (
+            job_id
+        )
         assert "always()" not in str(job.get("if", "")), job_id
         assert job.get("continue-on-error") is not True, job_id
 
@@ -2781,8 +2786,8 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     compiled_text = json.dumps(compiled, sort_keys=True)
     assert 'CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"' in text
     assert 'CIBW_SKIP: "*musllinux*"' in text
-    assert "FAST_FSM_BUILD_MODE=compiled" in compiled_text
-    assert "FAST_FSM_BUILD_MODE=auto" not in compiled_text
+    assert '"FAST_FSM_BUILD_MODE": "compiled"' in compiled_text
+    assert '"FAST_FSM_BUILD_MODE": "auto"' not in compiled_text
     assert "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074" in text
     assert "# v4.2.0" in text
 

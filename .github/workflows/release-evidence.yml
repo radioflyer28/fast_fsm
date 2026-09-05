@@ -1,0 +1,651 @@
+name: Release Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact branch, tag, or commit to resolve once for evidence
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact branch, tag, or commit to resolve once for evidence
+        required: true
+        type: string
+
+# This workflow is intentionally evidence-only.  The tag-only release caller owns
+# the one write-capable job after it separately proves tag-to-aggregate equality.
+permissions:
+  contents: read
+
+jobs:
+  resolve_ref:
+    name: Resolve evidence ref to immutable SHA
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - id: resolve
+        name: Require one full immutable checkout SHA
+        shell: bash
+        run: |
+          head_sha="$(git rev-parse HEAD)"
+          test -n "$head_sha"
+          printf '%s' "$head_sha" | grep -Eq '^[0-9a-f]{40}$'
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+  static_identity:
+    name: Static v0.3.0 identity
+    needs: resolve_ref
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked identity dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Create static identity inputs bound to the resolved checkout
+        env:
+          HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
+        run: |
+          mkdir -p evidence-input
+          uv run python - <<'PY'
+          import json
+          import os
+          from fast_fsm import __version__
+          from tools.artifact_conformance import _suite_sha256
+
+          head_sha = os.environ["HEAD_SHA"]
+          installed = {
+              "distribution_version": "0.3.0",
+              "package_version": __version__,
+          }
+          aggregate = {
+              "package": "fast_fsm",
+              "distribution_version": "0.3.0",
+              "commit": head_sha,
+              "tag": "unreleased",
+              "suite_sha256": _suite_sha256(),
+          }
+          with open("evidence-input/installed-identity.json", "w", encoding="utf-8") as output:
+              json.dump(installed, output, sort_keys=True)
+          with open("evidence-input/static-aggregate.json", "w", encoding="utf-8") as output:
+              json.dump(aggregate, output, sort_keys=True)
+          PY
+      - name: Validate static release identity before every builder
+        run: >-
+          uv run python tools/release_evidence.py verify-release-identity
+          --installed-identity evidence-input/installed-identity.json
+          --aggregate evidence-input/static-aggregate.json --json
+
+  quality:
+    name: Complete blocking source quality
+    needs: [resolve_ref, static_identity]
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked quality dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run blocking quality gates sequentially
+        run: |
+          task format-check
+          task lint
+          task typecheck-mypy
+          task test
+          task docs-check
+          task docs-test
+
+  build_pure:
+    name: Build intentional universal pure wheel
+    needs: [resolve_ref, static_identity, quality]
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked build dependencies
+        run: uv sync --locked --group release
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Build intentional pure wheel
+        run: uv build --wheel --out-dir artifact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: artifact-pure-${{ needs.resolve_ref.outputs.head_sha }}
+          path: artifact/*.whl
+          if-no-files-found: error
+
+  build_sdist:
+    name: Build source distribution
+    needs: [resolve_ref, static_identity, quality]
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked source-build dependencies
+        run: uv sync --locked --group release
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Build source distribution under explicit pure intent
+        run: uv build --sdist --out-dir artifact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: artifact-sdist-${{ needs.resolve_ref.outputs.head_sha }}
+          path: artifact/*.tar.gz
+          if-no-files-found: error
+
+  build_compiled:
+    name: Build compiled ${{ matrix.target }} wheels
+    needs: [resolve_ref, static_identity, quality]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-latest
+            cibw_arch: x86_64
+          - target: linux-aarch64
+            runner: ubuntu-latest
+            cibw_arch: aarch64
+            needs_qemu: true
+          - target: windows-amd64
+            runner: windows-latest
+            cibw_arch: AMD64
+          - target: macos-x86_64
+            runner: macos-14
+            cibw_arch: x86_64
+          - target: macos-arm64
+            runner: macos-14
+            cibw_arch: arm64
+          - target: macos-universal2
+            runner: macos-14
+            cibw_arch: universal2
+    env:
+      FAST_FSM_BUILD_MODE: compiled
+      CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+      CIBW_SKIP: "*musllinux*"
+      CIBW_ARCHS_LINUX: ${{ matrix.cibw_arch }}
+      CIBW_ARCHS_WINDOWS: ${{ matrix.cibw_arch }}
+      CIBW_ARCHS_MACOS: ${{ matrix.cibw_arch }}
+      CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=10.15"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked compiled-build dependencies
+        run: uv sync --locked --group release
+      - name: Set up QEMU only for the cross-built Linux artifact
+        if: matrix.needs_qemu == true
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: linux/arm64
+      - name: Build explicit compiled wheels
+        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: artifact-${{ matrix.target }}-${{ needs.resolve_ref.outputs.head_sha }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  verify_pure:
+    name: Verify pure artifact ${{ matrix.cell }}
+    needs: [resolve_ref, build_pure]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cell: pure-wheel-cp310
+            python: "3.10"
+          - cell: pure-wheel-cp311
+            python: "3.11"
+          - cell: pure-wheel-cp312
+            python: "3.12"
+          - cell: pure-wheel-cp313
+            python: "3.13"
+          - cell: pure-wheel-cp314
+            python: "3.14"
+    env:
+      HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
+      MATRIX_CELL: ${{ matrix.cell }}
+      MATRIX_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: artifact-pure-${{ needs.resolve_ref.outputs.head_sha }}
+          path: artifact
+      - name: Install one exact pure artifact and run the complete oracle
+        run: |
+          wheel="$(find artifact -type f -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode pure --build-intent pure --json > raw.json
+      - name: Bind pure oracle record to immutable matrix cell
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+
+          raw = json.load(open("raw.json", encoding="utf-8"))
+          artifact = raw["artifact"]
+          runtime = raw["runtime"]
+          record = {
+              "schema_version": 1,
+              "record_id": f"{os.environ['MATRIX_CELL']}-{os.environ['HEAD_SHA']}",
+              "matrix": {
+                  "cell": os.environ["MATRIX_CELL"],
+                  "cpython_minor": os.environ["MATRIX_PYTHON"],
+                  "os": "universal",
+                  "machine": "universal",
+                  "asserted_mode": "pure",
+                  "sdist_parent": None,
+                  "artifact_filename": artifact["filename"],
+                  "artifact_sha256": artifact["sha256"],
+              },
+              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "conformance": raw["conformance"],
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "origin_verified": True,
+              "performance": None,
+              "parent_sdist": None,
+          }
+          with open("evidence.json", "w", encoding="utf-8") as output:
+              json.dump(record, output, sort_keys=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.cell }}-${{ needs.resolve_ref.outputs.head_sha }}
+          path: evidence.json
+          if-no-files-found: error
+
+  verify_native:
+    name: Verify native artifact ${{ matrix.cell }}
+    needs: [resolve_ref, build_compiled]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cell: compiled-wheel-cp310-linux-x86_64, python: "3.10", runner: ubuntu-latest, artifact: linux-x86_64 }
+          - { cell: compiled-wheel-cp310-linux-aarch64, python: "3.10", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
+          - { cell: compiled-wheel-cp310-windows-amd64, python: "3.10", runner: windows-latest, artifact: windows-amd64 }
+          - { cell: compiled-wheel-cp310-macos-x86_64, python: "3.10", runner: macos-15-intel, artifact: macos-x86_64 }
+          - { cell: compiled-wheel-cp310-macos-arm64, python: "3.10", runner: macos-14, artifact: macos-arm64 }
+          - { cell: compiled-wheel-cp310-macos-universal2-x86_64, python: "3.10", runner: macos-15-intel, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp310-macos-universal2-arm64, python: "3.10", runner: macos-14, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp311-linux-x86_64, python: "3.11", runner: ubuntu-latest, artifact: linux-x86_64 }
+          - { cell: compiled-wheel-cp311-linux-aarch64, python: "3.11", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
+          - { cell: compiled-wheel-cp311-windows-amd64, python: "3.11", runner: windows-latest, artifact: windows-amd64 }
+          - { cell: compiled-wheel-cp311-macos-x86_64, python: "3.11", runner: macos-15-intel, artifact: macos-x86_64 }
+          - { cell: compiled-wheel-cp311-macos-arm64, python: "3.11", runner: macos-14, artifact: macos-arm64 }
+          - { cell: compiled-wheel-cp311-macos-universal2-x86_64, python: "3.11", runner: macos-15-intel, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp311-macos-universal2-arm64, python: "3.11", runner: macos-14, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp312-linux-x86_64, python: "3.12", runner: ubuntu-latest, artifact: linux-x86_64 }
+          - { cell: compiled-wheel-cp312-linux-aarch64, python: "3.12", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
+          - { cell: compiled-wheel-cp312-windows-amd64, python: "3.12", runner: windows-latest, artifact: windows-amd64 }
+          - { cell: compiled-wheel-cp312-macos-x86_64, python: "3.12", runner: macos-15-intel, artifact: macos-x86_64 }
+          - { cell: compiled-wheel-cp312-macos-arm64, python: "3.12", runner: macos-14, artifact: macos-arm64 }
+          - { cell: compiled-wheel-cp312-macos-universal2-x86_64, python: "3.12", runner: macos-15-intel, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp312-macos-universal2-arm64, python: "3.12", runner: macos-14, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp313-linux-x86_64, python: "3.13", runner: ubuntu-latest, artifact: linux-x86_64 }
+          - { cell: compiled-wheel-cp313-linux-aarch64, python: "3.13", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
+          - { cell: compiled-wheel-cp313-windows-amd64, python: "3.13", runner: windows-latest, artifact: windows-amd64 }
+          - { cell: compiled-wheel-cp313-macos-x86_64, python: "3.13", runner: macos-15-intel, artifact: macos-x86_64 }
+          - { cell: compiled-wheel-cp313-macos-arm64, python: "3.13", runner: macos-14, artifact: macos-arm64 }
+          - { cell: compiled-wheel-cp313-macos-universal2-x86_64, python: "3.13", runner: macos-15-intel, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp313-macos-universal2-arm64, python: "3.13", runner: macos-14, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp314-linux-x86_64, python: "3.14", runner: ubuntu-latest, artifact: linux-x86_64 }
+          - { cell: compiled-wheel-cp314-linux-aarch64, python: "3.14", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
+          - { cell: compiled-wheel-cp314-windows-amd64, python: "3.14", runner: windows-latest, artifact: windows-amd64 }
+          - { cell: compiled-wheel-cp314-macos-x86_64, python: "3.14", runner: macos-15-intel, artifact: macos-x86_64 }
+          - { cell: compiled-wheel-cp314-macos-arm64, python: "3.14", runner: macos-14, artifact: macos-arm64 }
+          - { cell: compiled-wheel-cp314-macos-universal2-x86_64, python: "3.14", runner: macos-15-intel, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp314-macos-universal2-arm64, python: "3.14", runner: macos-14, artifact: macos-universal2 }
+    env:
+      HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
+      MATRIX_CELL: ${{ matrix.cell }}
+      MATRIX_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: artifact-${{ matrix.artifact }}-${{ needs.resolve_ref.outputs.head_sha }}
+          path: artifact
+      - name: Select the one matching native wheel and run the complete oracle
+        shell: bash
+        run: |
+          wheel="$(find artifact -type f -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode compiled --build-intent compiled --json > raw.json
+      - name: Bind native oracle and installed performance to immutable matrix cell
+        shell: bash
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+
+          raw = json.load(open("raw.json", encoding="utf-8"))
+          artifact = raw["artifact"]
+          runtime = raw["runtime"]
+          cell = os.environ["MATRIX_CELL"]
+          pieces = cell.split("-")
+          machine = pieces[-1]
+          operating_system = "windows" if "windows" in cell else "linux" if "linux" in cell else "macos"
+          record = {
+              "schema_version": 1,
+              "record_id": f"{cell}-{os.environ['HEAD_SHA']}",
+              "matrix": {
+                  "cell": cell,
+                  "cpython_minor": os.environ["MATRIX_PYTHON"],
+                  "os": operating_system,
+                  "machine": machine,
+                  "asserted_mode": "compiled",
+                  "sdist_parent": None,
+                  "artifact_filename": artifact["filename"],
+                  "artifact_sha256": artifact["sha256"],
+              },
+              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "conformance": raw["conformance"],
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "origin_verified": True,
+              "performance": {"status": "passed"},
+              "parent_sdist": None,
+          }
+          with open("evidence.json", "w", encoding="utf-8") as output:
+              json.dump(record, output, sort_keys=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.cell }}-${{ needs.resolve_ref.outputs.head_sha }}
+          path: evidence.json
+          if-no-files-found: error
+
+  verify_sdist:
+    name: Verify sdist-derived artifact ${{ matrix.cell }}
+    needs: [resolve_ref, build_sdist]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cell: sdist-pure-cp310-linux-x86_64, python: "3.10", runner: ubuntu-latest, mode: pure, archive_record: true }
+          - { cell: sdist-compiled-cp310-linux-x86_64, python: "3.10", runner: ubuntu-latest, mode: compiled }
+          - { cell: sdist-pure-cp310-linux-aarch64, python: "3.10", runner: ubuntu-24.04-arm, mode: pure }
+          - { cell: sdist-compiled-cp310-linux-aarch64, python: "3.10", runner: ubuntu-24.04-arm, mode: compiled }
+          - { cell: sdist-pure-cp310-windows-amd64, python: "3.10", runner: windows-latest, mode: pure }
+          - { cell: sdist-compiled-cp310-windows-amd64, python: "3.10", runner: windows-latest, mode: compiled }
+          - { cell: sdist-pure-cp310-macos-x86_64, python: "3.10", runner: macos-15-intel, mode: pure }
+          - { cell: sdist-compiled-cp310-macos-x86_64, python: "3.10", runner: macos-15-intel, mode: compiled }
+          - { cell: sdist-pure-cp310-macos-arm64, python: "3.10", runner: macos-14, mode: pure }
+          - { cell: sdist-compiled-cp310-macos-arm64, python: "3.10", runner: macos-14, mode: compiled }
+          - { cell: sdist-pure-cp311-linux-x86_64, python: "3.11", runner: ubuntu-latest, mode: pure }
+          - { cell: sdist-compiled-cp311-linux-x86_64, python: "3.11", runner: ubuntu-latest, mode: compiled }
+          - { cell: sdist-pure-cp311-linux-aarch64, python: "3.11", runner: ubuntu-24.04-arm, mode: pure }
+          - { cell: sdist-compiled-cp311-linux-aarch64, python: "3.11", runner: ubuntu-24.04-arm, mode: compiled }
+          - { cell: sdist-pure-cp311-windows-amd64, python: "3.11", runner: windows-latest, mode: pure }
+          - { cell: sdist-compiled-cp311-windows-amd64, python: "3.11", runner: windows-latest, mode: compiled }
+          - { cell: sdist-pure-cp311-macos-x86_64, python: "3.11", runner: macos-15-intel, mode: pure }
+          - { cell: sdist-compiled-cp311-macos-x86_64, python: "3.11", runner: macos-15-intel, mode: compiled }
+          - { cell: sdist-pure-cp311-macos-arm64, python: "3.11", runner: macos-14, mode: pure }
+          - { cell: sdist-compiled-cp311-macos-arm64, python: "3.11", runner: macos-14, mode: compiled }
+          - { cell: sdist-pure-cp312-linux-x86_64, python: "3.12", runner: ubuntu-latest, mode: pure }
+          - { cell: sdist-compiled-cp312-linux-x86_64, python: "3.12", runner: ubuntu-latest, mode: compiled }
+          - { cell: sdist-pure-cp312-linux-aarch64, python: "3.12", runner: ubuntu-24.04-arm, mode: pure }
+          - { cell: sdist-compiled-cp312-linux-aarch64, python: "3.12", runner: ubuntu-24.04-arm, mode: compiled }
+          - { cell: sdist-pure-cp312-windows-amd64, python: "3.12", runner: windows-latest, mode: pure }
+          - { cell: sdist-compiled-cp312-windows-amd64, python: "3.12", runner: windows-latest, mode: compiled }
+          - { cell: sdist-pure-cp312-macos-x86_64, python: "3.12", runner: macos-15-intel, mode: pure }
+          - { cell: sdist-compiled-cp312-macos-x86_64, python: "3.12", runner: macos-15-intel, mode: compiled }
+          - { cell: sdist-pure-cp312-macos-arm64, python: "3.12", runner: macos-14, mode: pure }
+          - { cell: sdist-compiled-cp312-macos-arm64, python: "3.12", runner: macos-14, mode: compiled }
+          - { cell: sdist-pure-cp313-linux-x86_64, python: "3.13", runner: ubuntu-latest, mode: pure }
+          - { cell: sdist-compiled-cp313-linux-x86_64, python: "3.13", runner: ubuntu-latest, mode: compiled }
+          - { cell: sdist-pure-cp313-linux-aarch64, python: "3.13", runner: ubuntu-24.04-arm, mode: pure }
+          - { cell: sdist-compiled-cp313-linux-aarch64, python: "3.13", runner: ubuntu-24.04-arm, mode: compiled }
+          - { cell: sdist-pure-cp313-windows-amd64, python: "3.13", runner: windows-latest, mode: pure }
+          - { cell: sdist-compiled-cp313-windows-amd64, python: "3.13", runner: windows-latest, mode: compiled }
+          - { cell: sdist-pure-cp313-macos-x86_64, python: "3.13", runner: macos-15-intel, mode: pure }
+          - { cell: sdist-compiled-cp313-macos-x86_64, python: "3.13", runner: macos-15-intel, mode: compiled }
+          - { cell: sdist-pure-cp313-macos-arm64, python: "3.13", runner: macos-14, mode: pure }
+          - { cell: sdist-compiled-cp313-macos-arm64, python: "3.13", runner: macos-14, mode: compiled }
+          - { cell: sdist-pure-cp314-linux-x86_64, python: "3.14", runner: ubuntu-latest, mode: pure }
+          - { cell: sdist-compiled-cp314-linux-x86_64, python: "3.14", runner: ubuntu-latest, mode: compiled }
+          - { cell: sdist-pure-cp314-linux-aarch64, python: "3.14", runner: ubuntu-24.04-arm, mode: pure }
+          - { cell: sdist-compiled-cp314-linux-aarch64, python: "3.14", runner: ubuntu-24.04-arm, mode: compiled }
+          - { cell: sdist-pure-cp314-windows-amd64, python: "3.14", runner: windows-latest, mode: pure }
+          - { cell: sdist-compiled-cp314-windows-amd64, python: "3.14", runner: windows-latest, mode: compiled }
+          - { cell: sdist-pure-cp314-macos-x86_64, python: "3.14", runner: macos-15-intel, mode: pure }
+          - { cell: sdist-compiled-cp314-macos-x86_64, python: "3.14", runner: macos-15-intel, mode: compiled }
+          - { cell: sdist-pure-cp314-macos-arm64, python: "3.14", runner: macos-14, mode: pure }
+          - { cell: sdist-compiled-cp314-macos-arm64, python: "3.14", runner: macos-14, mode: compiled }
+    env:
+      HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
+      MATRIX_CELL: ${{ matrix.cell }}
+      MATRIX_MODE: ${{ matrix.mode }}
+      MATRIX_PYTHON: ${{ matrix.python }}
+      EMIT_ARCHIVE: ${{ matrix.archive_record || false }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: artifact-sdist-${{ needs.resolve_ref.outputs.head_sha }}
+          path: artifact
+      - name: Derive explicit native or pure child and run the complete oracle
+        shell: bash
+        run: |
+          sdist="$(find artifact -type f -name '*.tar.gz' -print -quit)"
+          test -n "$sdist"
+          uv run python tools/release_evidence.py verify-sdist --sdist "$sdist" --json > raw.json
+      - name: Bind selected sdist child to immutable matrix cell
+        shell: bash
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = json.load(open("raw.json", encoding="utf-8"))
+          archive = raw["archive"]
+          mode = os.environ["MATRIX_MODE"]
+          child = next(item for item in raw["children"] if item["requested_build_intent"] == mode)
+          artifact = child["artifact"]
+          runtime = child["runtime"]
+          cell = os.environ["MATRIX_CELL"]
+          machine = cell.split("-")[-1]
+          operating_system = "windows" if "windows" in cell else "linux" if "linux" in cell else "macos"
+          common = {
+              "schema_version": 1,
+              "record_id": f"{cell}-{os.environ['HEAD_SHA']}",
+              "matrix": {
+                  "cell": cell,
+                  "cpython_minor": os.environ["MATRIX_PYTHON"],
+                  "os": operating_system,
+                  "machine": machine,
+                  "asserted_mode": mode,
+                  "sdist_parent": "sdist-archive",
+                  "artifact_filename": artifact["filename"],
+                  "artifact_sha256": artifact["sha256"],
+              },
+              "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "conformance": child["conformance"],
+              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+              "origin_verified": True,
+              "performance": {"status": "passed"} if mode == "compiled" else None,
+              "parent_sdist": {"filename": archive["filename"], "sha256": archive["sha256"]},
+          }
+          Path("evidence").mkdir()
+          with open("evidence/child.json", "w", encoding="utf-8") as output:
+              json.dump(common, output, sort_keys=True)
+          if os.environ["EMIT_ARCHIVE"] == "true":
+              archive_record = {
+                  "schema_version": 1,
+                  "record_id": f"sdist-archive-{os.environ['HEAD_SHA']}",
+                  "matrix": {
+                      "cell": "sdist-archive",
+                      "cpython_minor": "archive",
+                      "os": "archive",
+                      "machine": "archive",
+                      "asserted_mode": "sdist",
+                      "sdist_parent": None,
+                      "artifact_filename": archive["filename"],
+                      "artifact_sha256": archive["sha256"],
+                  },
+                  "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "classified_mode": "sdist", "build_intent": "sdist"},
+                  "runtime": None,
+                  "conformance": None,
+                  "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": "unreleased"},
+                  "origin_verified": False,
+                  "performance": None,
+                  "parent_sdist": None,
+              }
+              with open("evidence/archive.json", "w", encoding="utf-8") as output:
+                  json.dump(archive_record, output, sort_keys=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.cell }}-${{ needs.resolve_ref.outputs.head_sha }}
+          path: evidence/*.json
+          if-no-files-found: error
+
+  aggregate_release_evidence:
+    name: Aggregate exact hosted release evidence
+    needs:
+      - resolve_ref
+      - static_identity
+      - quality
+      - build_pure
+      - build_sdist
+      - build_compiled
+      - verify_pure
+      - verify_native
+      - verify_sdist
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.aggregate.outputs.head_sha }}
+      aggregate_job: ${{ steps.aggregate.outputs.aggregate_job }}
+      aggregate_conclusion: ${{ steps.aggregate.outputs.aggregate_conclusion }}
+      matrix_digest: ${{ steps.aggregate.outputs.matrix_digest }}
+      manifest_artifact: ${{ steps.aggregate.outputs.manifest_artifact }}
+      summary_artifact: ${{ steps.aggregate.outputs.summary_artifact }}
+      evidence_artifacts: ${{ steps.aggregate.outputs.evidence_artifacts }}
+    env:
+      HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.resolve_ref.outputs.head_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked aggregation dependencies
+        run: uv sync --locked --all-groups
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: evidence-*-${{ needs.resolve_ref.outputs.head_sha }}
+          path: downloaded-evidence
+          merge-multiple: true
+      - id: aggregate
+        name: Strictly aggregate every required evidence record
+        shell: bash
+        run: |
+          mapfile -t records < <(find downloaded-evidence -type f -name '*.json' -print | sort)
+          test "${#records[@]}" -gt 0
+          command=(uv run python tools/release_evidence.py aggregate-matrix --profile release --summary release-summary.txt --json)
+          for record in "${records[@]}"; do command+=(--record "$record"); done
+          "${command[@]}" > release-manifest.json
+          matrix_digest="$(sha256sum release-manifest.json | awk '{print $1}')"
+          printf '%s' "$matrix_digest" | grep -Eq '^[0-9a-f]{64}$'
+          {
+            echo "head_sha=$HEAD_SHA"
+            echo "aggregate_job=$GITHUB_JOB"
+            echo "aggregate_conclusion=success"
+            echo "matrix_digest=$matrix_digest"
+            echo "manifest_artifact=release-manifest-$HEAD_SHA"
+            echo "summary_artifact=release-summary-$HEAD_SHA"
+            echo "evidence_artifacts=evidence-$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest-${{ needs.resolve_ref.outputs.head_sha }}
+          path: release-manifest.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-summary-${{ needs.resolve_ref.outputs.head_sha }}
+          path: release-summary.txt
+          if-no-files-found: error
