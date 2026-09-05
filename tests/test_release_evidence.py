@@ -194,6 +194,29 @@ def test_native_core_archive_detection_requires_an_exact_importable_basename(
     ]
 
 
+@pytest.mark.parametrize(
+    "member",
+    (
+        "fast_fsm/core.abi3_backup.so",
+        "fast_fsm/core.cpython-312-evil.so",
+        "fast_fsm/core.cp312-not-a-platform.pyd",
+    ),
+)
+def test_native_core_archive_detection_rejects_abi_suffix_lookalikes(
+    tmp_path: Path, member: str
+) -> None:
+    """Only complete extension suffixes can demonstrate an importable core."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+        wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+        native_members=(member,),
+    )
+
+    with pytest.raises(EvidenceError, match="no native fast_fsm.core"):
+        release_evidence.inspect_wheel(wheel)
+
+
 def test_wheel_archive_preflight_bounds_metadata_and_normalized_members(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

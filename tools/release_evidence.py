@@ -1442,13 +1442,21 @@ def _is_importable_native_core_basename(name: str) -> bool:
     normalized = name.casefold()
     if any(normalized == f"core{suffix}" for suffix in _native_suffixes()):
         return True
-    return (
-        re.fullmatch(
-            r"core\.(?:abi\d+|cp\d{2,3}|cpython-\d{2,3})(?:[-_.][a-z0-9_]+)*\.(?:so|pyd)",
-            normalized,
-        )
-        is not None
-    )
+    # A wheel can be inspected on a different target than the current host, so
+    # ``EXTENSION_SUFFIXES`` alone is not sufficient.  Do not compensate by
+    # accepting arbitrary text after an ABI marker: those names are not module
+    # extension suffixes and would let an archive prove a native core with a
+    # lookalike member.  The portable alternatives below are the CPython
+    # platform suffix forms used by the release matrix.
+    return re.fullmatch(
+        r"core\.(?:"
+        r"abi3|"
+        r"(?:cp\d{2,3}|cpython-\d{2,3})"
+        r"(?:-(?:darwin|(?:x86_64|aarch64|arm64|i686|ppc64le|s390x)-linux-gnu|"
+        r"win(?:32|_amd64|_arm64)))?"
+        r")\.(?:so|pyd)",
+        normalized,
+    ) is not None
 
 
 def _native_core_members(member_names: Iterable[str]) -> tuple[str, ...]:
