@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
-from typing import Iterable
+from typing import Iterable, Mapping
 from zipfile import ZipFile
 
 import pytest
@@ -2275,6 +2275,7 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
         rendered = _task_command_text(tasks[name])
         assert "uv run" in rendered, name
         assert "profile=release" not in rendered, name
+        assert "--profile release" not in rendered, name
         assert "release-evidence-complete" not in rendered, name
         assert "gh run" not in rendered, name
         assert "gh release" not in rendered, name
@@ -2301,6 +2302,7 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
     assert "ty_status=$?" in readiness_text
     assert "ADVISORY task typecheck-ty exit status" in readiness_text
     assert "profile=release" not in readiness_text
+    assert "--profile release" not in readiness_text
     assert "gh run" not in readiness_text
     assert "gh release" not in readiness_text
 
@@ -2340,7 +2342,9 @@ def test_phase20_taskfile_keeps_local_readiness_non_authorizing() -> None:
     local_commands = _task_commands(
         _task_definitions(release_profile)["release-evidence-local-check"]
     )
-    local_commands.append("uv run python tools/release_evidence.py aggregate-matrix --profile release")
+    local_commands.append(
+        "uv run python tools/release_evidence.py aggregate-matrix --profile release"
+    )
     with pytest.raises(AssertionError):
         _validate_phase20_release_taskfile(release_profile)
 
@@ -3065,6 +3069,8 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
     )
     assert "hashlib.sha256" in release_runs
     assert "release-manifest" in release_runs
+    assert "artifact_records" in release_runs
+    assert "release-artifacts" in release_runs
     assert "profile" in release_runs and "release" in release_runs
     assert "authorizes_release" in release_runs
     assert "local" not in release_runs

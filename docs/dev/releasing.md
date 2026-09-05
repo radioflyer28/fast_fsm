@@ -88,3 +88,65 @@ Python 3.10–3.14 build matrix. Finally, use authenticated GitHub tooling to
 compare the v0.2.3 release URL, tag target, and assets before/after publishing
 the canonical correction paragraph. Preserve those immutable fields and record
 the terminal job and release-check evidence in the release summary.
+
+## Phase 20 Local Installed-Artifact Projection
+
+Phase 20 separates a useful local proof from release authority. Each of the
+following commands builds only temporary artifacts and may read repository
+state, but does not change tracked evidence, create a ref, contact GitHub, or
+authorize a release:
+
+```bash
+task release-identity-check
+task release-installed-artifacts-check
+task release-sdist-check
+task release-evidence-local-check
+task release-installed-performance-check
+task release-slots-check
+```
+
+The local projection proves the executing interpreter/platform's direct pure
+and compiled wheels, source-distribution pure/compiled children, installed
+semantic parity, installed origin, source lineage, and the installed compiled
+performance measurement. It emits the explicit `local-non-authorizing` scope;
+it cannot stand in for the full CPython 3.10–3.14 hosted platform matrix.
+
+`task release-readiness-check` runs the blocking local sequence in this order:
+formatting, lint, mypy, full sequential tests, documentation HTML/doctests,
+pure-source origin, baseline freshness, then the six checks above. It records
+`task typecheck-ty` separately as advisory feedback; its exit status is not a
+release verdict. The compiled installed floor is 200,000 operations/second.
+The O(1) runtime and bounded diagnostic-work contracts are independent of that
+timing check. Historical Phase 16–19 observations remain categorical context,
+not a replacement for a fresh installed compiled measurement.
+
+## Authorized Hosted-Native Evidence Before Tagging
+
+Do not infer native-runner availability from workflow YAML or a local result.
+Before any tag operation, an authorized maintainer must manually run the
+read-only **Release Evidence** workflow for one reviewed full SHA, then obtain
+its run ID from GitHub Actions. Its `ref` input must be that SHA and its `tag`
+input must be `v0.3.0`; the workflow itself has read-only contents permission
+and contains no release job.
+
+After the run is terminal and successful, inspect it without mutation:
+
+```bash
+FAST_FSM_HOSTED_RUN_ID=<authorized-run-id> \
+FAST_FSM_EXPECTED_SHA=<40-character-reviewed-sha> \
+task release-hosted-prerelease-check
+```
+
+This check reads run metadata, requires the `Release Evidence` workflow and
+successful terminal `aggregate_release_evidence` job, downloads the exact
+SHA-keyed manifest/summary/per-cell records to a temporary directory, and
+recomputes the complete `release` matrix. Missing cells, an unavailable native
+runner, a queued/cancelled/non-evidence run, wrong head SHA, or a detached
+record fails closed. This repository has not treated that external checkpoint
+as passed merely because its local workflow contract tests pass.
+
+Only after that inspection passes may a separately authorized `v0.3.0` tag be
+created. The tag-only release workflow then independently peels the tag and
+requires it, the checkout, and the aggregate commit to be identical before its
+sole `contents: write` GitHub-release job can run. The evidence workflow and
+the local readiness task can never reach that job.

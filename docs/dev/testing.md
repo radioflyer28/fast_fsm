@@ -172,6 +172,54 @@ artifact is intentional to remove, first review the exact reported path and
 then explicitly remove only that artifact; rerun `task pure-source-check` to
 prove the cleanup. Never use broad cleanup commands for this procedure.
 
+## Phase 20 Installed-Artifact Evidence
+
+Source-tree tests, pure wheels, compiled wheels, source-distribution children,
+and hosted native evidence answer different questions. A pure source suite
+cannot prove an installed wheel; a cross-built wheel cannot prove its native
+runtime until it is consumed on a matching runner; historical measurements do
+not satisfy the current installed compiled performance contract.
+
+Run the local non-authorizing projection with:
+
+```bash
+task release-readiness-check
+```
+
+For focused local diagnosis, use the exact subcommands:
+
+```bash
+task release-identity-check
+task release-installed-artifacts-check
+task release-sdist-check
+task release-evidence-local-check
+task release-installed-performance-check
+task release-slots-check
+```
+
+The projection builds temporary direct pure/compiled artifacts and
+source-distribution pure/compiled children, checks their installed origins and
+semantic parity, and measures an installed native compiled wheel against the
+fixed 200,000 operations/second floor. It also runs the separate O(1) and
+diagnostic-budget contracts. Its aggregate is explicitly `local-non-authorizing`:
+do not use it to claim hosted-matrix success or to authorize a tag/release.
+
+The later externally authorized checkpoint is intentionally separate and must
+be completed before tagging:
+
+```bash
+FAST_FSM_HOSTED_RUN_ID=<authorized-run-id> \
+FAST_FSM_EXPECTED_SHA=<40-character-reviewed-sha> \
+task release-hosted-prerelease-check
+```
+
+That command only reads the manually dispatched **Release Evidence** run. It
+requires the expected head SHA, terminal successful `aggregate_release_evidence`
+job, the full canonical `release` matrix, and downloaded SHA-bound records.
+It neither dispatches a workflow nor creates a tag, release, or publication.
+Use the release runbook for the explicit authorization and tag-time equality
+procedure.
+
 ## Phase 17 Lifecycle Source-Tree Verification
 
 [`tools/phase16_isolated_verify.py`](../../tools/phase16_isolated_verify.py)
