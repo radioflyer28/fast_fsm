@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+from zipfile import ZipFile
 
 import pytest
 
@@ -69,8 +70,13 @@ def test_build_mode_is_python_310_compatible_string_enum() -> None:
     assert BuildMode.PURE.value == "pure"
 
 
-def _setup_extensions(environ: dict[str, str]) -> list[str]:
-    """Run setup.py with a fake mypyc module and capture its extension decision."""
+def _run_setup_extensions(
+    environ: dict[str, str], *, failure: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run setup.py with a controlled mypyc import or compiler failure."""
+    if failure not in {None, "import", "compile"}:
+        raise ValueError(f"Unsupported test mypyc failure mode: {failure!r}")
+
     script = """
 import json
 import runpy
@@ -78,27 +84,47 @@ import sys
 import types
 import setuptools
 
-build = types.ModuleType('mypyc.build')
-build.mypycify = lambda files, **kwargs: list(files)
-mypyc = types.ModuleType('mypyc')
-mypyc.build = build
-sys.modules['mypyc'] = mypyc
-sys.modules['mypyc.build'] = build
+failure = {failure!r}
+if failure == 'import':
+    class BlockMypyc:
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == 'mypyc' or fullname.startswith('mypyc.'):
+                raise ImportError('forced mypyc import failure')
+            return None
+    sys.meta_path.insert(0, BlockMypyc())
+else:
+    build = types.ModuleType('mypyc.build')
+    if failure == 'compile':
+        def mypycify(*args, **kwargs):
+            raise RuntimeError('forced mypyc compilation failure')
+        build.mypycify = mypycify
+    else:
+        build.mypycify = lambda files, **kwargs: list(files)
+    mypyc = types.ModuleType('mypyc')
+    mypyc.build = build
+    sys.modules['mypyc'] = mypyc
+    sys.modules['mypyc.build'] = build
 setuptools.setup = lambda **kwargs: print(json.dumps(kwargs['ext_modules']))
 runpy.run_path('setup.py', run_name='__setup__')
-"""
+""".format(failure=failure)
     process_environ = os.environ.copy()
     process_environ.pop("FAST_FSM_BUILD_MODE", None)
     process_environ.pop("FAST_FSM_PURE_PYTHON", None)
     process_environ.update(environ)
-    completed = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-c", script],
         cwd=ROOT,
         env=process_environ,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+
+
+def _setup_extensions(environ: dict[str, str]) -> list[str]:
+    """Capture setup.py's selected extensions for a successful fake build."""
+    completed = _run_setup_extensions(environ)
+    assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
 
 
@@ -127,6 +153,56 @@ def test_auto_and_compiled_select_only_core_for_mypyc(
 def test_pure_intent_suppresses_mypyc_extensions(environ: dict[str, str]) -> None:
     """Both pure selectors must reach setup.py and avoid extension generation."""
     assert _setup_extensions(environ) == []
+
+
+@pytest.mark.parametrize("failure", ("import", "compile"))
+def test_compiled_intent_propagates_mypyc_failures(failure: str) -> None:
+    """A requested compiled artifact must never silently become a pure fallback."""
+    completed = _run_setup_extensions(
+        {"FAST_FSM_BUILD_MODE": "compiled"}, failure=failure
+    )
+
+    assert completed.returncode != 0
+    assert "forced mypyc" in completed.stderr
+
+
+@pytest.mark.parametrize("failure", ("import", "compile"))
+def test_auto_intent_can_fall_back_when_mypyc_is_unavailable(failure: str) -> None:
+    """Optional automatic builds retain the documented pure-Python fallback."""
+    completed = _run_setup_extensions({"FAST_FSM_BUILD_MODE": "auto"}, failure=failure)
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == []
+
+
+def test_pure_intent_never_imports_mypyc() -> None:
+    """An explicit pure build bypasses even a deliberately broken mypyc import."""
+    completed = _run_setup_extensions({"FAST_FSM_BUILD_MODE": "pure"}, failure="import")
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == []
+
+
+def test_compiled_archive_requires_a_native_core_member(tmp_path: Path) -> None:
+    """A native extension elsewhere in the package cannot certify compiled core proof."""
+    wheel = tmp_path / "fast_fsm-0.2.2-cp312-cp312-macosx_11_0_arm64.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("fast_fsm/__init__.py", "")
+        archive.writestr("fast_fsm/core.py", "not the native core")
+        archive.writestr("fast_fsm/not_core.abi3.so", "native but irrelevant")
+        archive.writestr(
+            "fast_fsm-0.2.2.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nTag: cp312-cp312-macosx_11_0_arm64\n",
+        )
+        archive.writestr(
+            "fast_fsm-0.2.2.dist-info/METADATA",
+            "Name: fast_fsm\nVersion: 0.2.2\n",
+        )
+
+    from tools import release_evidence
+
+    with pytest.raises(release_evidence.EvidenceError, match="native fast_fsm.core"):
+        release_evidence.inspect_wheel(wheel)
 
 
 def test_invalid_selector_is_not_swallowed_by_mypyc_fallback() -> None:
