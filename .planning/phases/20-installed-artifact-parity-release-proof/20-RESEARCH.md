@@ -420,11 +420,11 @@ The exact required release value is `"v0.3.0"` at the tag surface and `"0.3.0"` 
 
 ## Historical Evidence Consolidation
 
-TEST-05 should be satisfied by inventorying the existing Phase 16–19 performance artifacts in the final manifest with their file SHA-256, exact recorded command, environment/build mode, measurement(s), and phase/commit provenance. D-13 expressly requires consolidation plus a final installed rerun, not retroactive replacement of historical source evidence. [VERIFIED: .planning/phases/20-installed-artifact-parity-release-proof/20-CONTEXT.md:38-42]
+TEST-05 should be satisfied by inventorying the existing Phase 16–19 performance artifacts in the final manifest with file SHA-256 and categorical provenance for each field: preserve an exact command, build mode, threshold/pass outcome, measurement/counter, environment fact, or commit only when the record captured it, and represent absent original detail explicitly as unavailable. Do not infer historical precision or use a later rerun to overwrite the original record. D-13's exact command/environment requirement is enforced for the new final installed Phase 20 rerun, which remains distinct from historical source evidence. [VERIFIED: .planning/phases/20-installed-artifact-parity-release-proof/20-CONTEXT.md:38-42]
 
 Plan the consolidation as a deterministic input allowlist, not a recursive glob. The existing tracked baseline currently records exact test values `"collected": 1503`, `"passed": 1503`, `"failed": 0`, `"errors": 0`, `"skipped": 0`, coverage values `"core_percent": 97.52` and `"total_percent": 98.11`, and only a pure observation; those are historical observations, not durable future minimums or compiled installed proof. [VERIFIED: evidence/release-baseline.json:39-73]
 
-The initial allowlist should name the exact existing evidence paths `".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"`, `".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"`, `".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"`, and `".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"`. Their contents explicitly record pure/compiled origin, environment, commands, or deterministic counters. [VERIFIED: .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md:7-28] [VERIFIED: .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md:1-24] [VERIFIED: .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md:1-26] [VERIFIED: .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md:1-30]
+The initial allowlist should name the exact existing evidence paths `".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"`, `".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"`, `".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"`, and `".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"`. Across the set, the files record some pure/compiled origin, environment, command, threshold/pass, measurement, or deterministic-counter facts; they do not establish every exact field uniformly, so the schema must accept explicit unavailability. [VERIFIED: .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md:7-28] [VERIFIED: .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md:1-24] [VERIFIED: .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md:1-26] [VERIFIED: .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md:1-30]
 
 ## Assumptions Log
 
@@ -442,24 +442,25 @@ The initial allowlist should name the exact existing evidence paths `".planning/
 ## Open Questions
 
 1. **Are all recommended native hosted runner labels enabled for this repository?**
+   - **Status: RESOLVED AS AN EVIDENCE-ONLY RUN PLUS FAIL-CLOSED EXTERNAL PRE-RELEASE CHECKPOINT.** Availability is intentionally not assumed or claimed by planning. Plan 20-06 adds a manual/reusable workflow that resolves an input ref to one exact SHA, executes the full native `release` matrix, exposes terminal evidence, and contains no release-capable job or write permission. After a maintainer separately authorizes that run, `task release-hosted-prerelease-check FAST_FSM_HOSTED_RUN_ID=<authorized-run-id> FAST_FSM_EXPECTED_SHA=<40-char-sha>` reads its terminal metadata and downloaded evidence before any `v0.3.0` tag is created. An unavailable/queued-without-capacity runner or missing evidence cell blocks tagging; cross-build output is never substituted. Planning does not dispatch CI.
    - What we know: GitHub documents public Linux arm64 and separate macOS Intel/arm labels. [CITED: https://docs.github.com/en/actions/reference/runners/github-hosted-runners]
    - What's unclear: Repository plan, quota, and label entitlement are external account state.
-   - Recommendation: Add an early workflow-dispatch matrix dry-run; if a label is unavailable, provision/authorize a matching native runner before release rather than accepting cross-build proof.
+   - Resolution: The maintainer must authorize the hosted run as a separate pre-release operation, then pass the exact-SHA read-only checkpoint. No runner success is recorded in this research or claimed by local workflow tests.
 
 2. **Should cibuildwheel be upgraded in this phase?**
+   - **Status: RESOLVED — YES.** Upgrade in Plan 20-06 Task 1 to official cibuildwheel v4.2.0 at immutable SHA `1828c10ab37f080699c7b81cea34097c684a7074`, with isolated workflow/tag/native-member regression coverage.
    - What we know: Release CI pins `v2.22.0`; official `v4.2.0` exists at the verified immutable tag SHA. [VERIFIED: .github/workflows/release.yml:52-76] [CITED: https://github.com/pypa/cibuildwheel/releases/tag/v4.2.0]
-   - What's unclear: Whether maintainers prefer to isolate the major action upgrade from the release-proof changes.
-   - Recommendation: Include the upgrade because the phase owns the v0.3.0 artifact matrix, but make it a separate plan task with workflow regression and wheel tag/content verification.
+   - Resolution: The phase owns the artifact matrix, so the upgrade is included and isolated inside the workflow-contract task; immutable pin tests and wheel tag/content checks must pass before the change is accepted.
 
 3. **What calendar date belongs in the v0.3.0 changelog section?**
+   - **Status: RESOLVED — KEEP `UNRELEASED` DURING IMPLEMENTATION.** A concrete UTC release date is supplied only in the separately authorized tag-time operation after the hosted-native checkpoint passes; static identity accepts the explicit unreleased marker and tag-time identity rejects it.
    - What we know: Every identity surface must say v0.3.0 before release. [VERIFIED: .planning/phases/20-installed-artifact-parity-release-proof/20-CONTEXT.md:33-36]
-   - What's unclear: The actual release date is operational state.
-   - Recommendation: Keep an unreleased v0.3.0 section during PR validation, then require the concrete date in the tag-time identity gate.
+   - Resolution: Planning does not invent a future calendar date. The changelog remains explicitly unreleased until the authorized release operator supplies the actual date immediately before the non-mutating tag identity check and later tag creation.
 
 4. **Which slots-exception registry is authoritative at release?**
+   - **Status: RESOLVED — THE EXECUTABLE THREE-ENTRY REGISTRY IS AUTHORITATIVE.** Plan 20-04 Task 3 reconciles contributor instructions and SPR text to `CompiledFuncCondition`, `TransitionError`, and the ADR-006-accepted `DiagnosticBudgetExceeded`, without changing runtime layout or the `core.py`-only compilation boundary.
    - What we know: repository instructions name two exceptions, but executable evidence names three exact qualified values: `"fast_fsm.conditions.CompiledFuncCondition"`, `"fast_fsm.core.TransitionError"`, and `"fast_fsm._diagnostics.DiagnosticBudgetExceeded"`. [VERIFIED: .github/copilot-instructions.md:40-45] [VERIFIED: tools/release_evidence.py:49-60]
-   - What's unclear: whether the instructions lag the accepted Phase 19 diagnostic exception or the evidence registry is too broad.
-   - Recommendation: Resolve against ADR/project intent before generating final evidence; update the stale side in the same implementation wave and do not alter runtime layout merely to make the documents agree.
+   - Resolution: ADR-006 and the shipped slotted RuntimeError establish the third measured exception as an accepted runtime fact. Documentation is the stale side and is updated in the same task as the executable evidence check.
 
 ## Environment Availability
 

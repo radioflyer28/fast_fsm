@@ -240,7 +240,7 @@
   4. Benchmarks cover every performance-sensitive core phase, compiled `trigger()` remains at least 200,000 operations/sec, core runtime operations remain O(1), and diagnostics enforce their separate budgets.
   5. Package metadata, `fast_fsm.__version__`, changelog, documentation, release tag, quality gates, and published artifacts all identify and substantiate v0.3.0.
 
-**Plans**: 5 plans
+**Plans**: 6 plans
 
 **Wave 1**
 
@@ -252,15 +252,19 @@
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 20-03-PLAN.md — Aggregate the exact artifact matrix, align v0.3.0 identity, and consolidate historical evidence
+- [ ] 20-03-PLAN.md — Define canonical release/local matrix profiles, aggregate exact records, and align v0.3.0 identity
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 20-04-PLAN.md — Prove O(1) runtime contracts and gate installed native compiled throughput
+- [ ] 20-04-PLAN.md — Consolidate truthful Phase 16-19 categorical evidence and reconcile the slots registry
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 20-05-PLAN.md — Wire matching-native CI evidence, exact aggregation, tag identity, and the release authorization gate
+- [ ] 20-05-PLAN.md — Prove O(1) runtime contracts and gate exact installed native compiled throughput
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 20-06-PLAN.md — Add exact-SHA evidence-only native CI, tag-only release authorization, and local/hosted proof commands
 
 ## Progress
 
@@ -273,4 +277,4 @@
 | 17. Atomic Transition Lifecycle | v0.3.0 | 5/5 | Complete    | 2026-09-01 |
 | 18. Safe Ownership & Concurrency | v0.3.0 | 8/8 | Complete    | 2026-09-02 |
 | 19. Bounded Diagnostics & Safe Output | v0.3.0 | 8/8 | Complete    | 2026-09-04 |
-| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/5 | Not started | - |
+| 20. Installed Artifact Parity & Release Proof | v0.3.0 | 0/6 | Not started | - |
