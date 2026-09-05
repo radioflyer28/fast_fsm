@@ -82,6 +82,11 @@ jobs:
         with:
           name: ${{ needs.release_evidence.outputs.manifest_artifact }}
           path: evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: artifact-*-${{ needs.release_evidence.outputs.head_sha }}
+          merge-multiple: true
+          path: release-artifacts
       - name: Require an aggregate-approved release manifest
         run: |
           uv run python - <<'PY'
@@ -97,9 +102,23 @@ jobs:
               raise SystemExit("release manifest is not aggregate-authorized")
           if payload.get("release_identity", {}).get("commit") != os.environ["GITHUB_SHA"]:
               raise SystemExit("release manifest commit does not equal tag checkout")
+          expected_artifacts = {
+              (record["artifact"]["filename"], record["artifact"]["sha256"])
+              for record in payload["artifact_records"]
+              if not record["matrix"]["cell"].startswith("sdist-")
+          }
+          downloaded = Path("release-artifacts")
+          for filename, expected_sha256 in sorted(expected_artifacts):
+              matches = list(downloaded.rglob(filename))
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one aggregate-approved artifact: {filename}")
+              observed_sha256 = hashlib.sha256(matches[0].read_bytes()).hexdigest()
+              if observed_sha256 != expected_sha256:
+                  raise SystemExit(f"artifact SHA differs from aggregate: {filename}")
           print(f"accepted release-manifest sha256={digest}")
           PY
       - name: Create aggregate-approved release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          files: release-artifacts/*
           generate_release_notes: true
