@@ -48,3 +48,60 @@ total source coverage, and 97.28% `core.py` coverage.  Those are fresh
 baseline observations captured after the direct-control exception paths,
 the async ownership observation, and the Plan 18-08 marker-isolation paths
 were covered.
+
+## Categorical Historical Provenance
+
+This categorical summary preserves the observed source-tree facts without
+reconstructing an exact invocation from the recorded command template. The
+parent verifier computes the file digest and treats the entry as non-gating.
+
+<!-- fast-fsm-historical-evidence:start -->
+```json
+{
+  "fields": {
+    "build_mode": {
+      "reason": "The record contains separate asserted-pure and freshly compiled observations.",
+      "searched_sources": ["original Phase 18 evidence narrative", "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "command": {
+      "reason": "The original evidence records a <mode> command template, not an exact executed command line and arguments.",
+      "searched_sources": ["original Phase 18 evidence narrative", "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "environment": {
+      "citation": "Final ownership release observations results table",
+      "status": "recorded",
+      "value": "CPython 3.12.10 / macOS arm64"
+    },
+    "measurement_outcome": {
+      "citation": "Final ownership release observations results table",
+      "status": "recorded",
+      "value": "686,116.94 sync ops/sec; 346,573.40 async ops/sec"
+    },
+    "original_evidence_commit": {
+      "reason": "The original record does not name the commit that captured this evidence file.",
+      "searched_sources": ["original Phase 18 evidence narrative", "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "phase": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": "18"
+    },
+    "source_path": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+    },
+    "threshold_outcome": {
+      "citation": "Final ownership release observations results table",
+      "status": "recorded",
+      "value": "compiled sync result is above the 200,000 ops/sec floor"
+    }
+  },
+  "kind": "historical_phase_performance",
+  "schema_version": 1
+}
+```
+<!-- fast-fsm-historical-evidence:end -->

@@ -453,3 +453,60 @@ mypy, full tests, Sphinx HTML/doctests, and baseline freshness). Mypy and the
 advisory ty checker passed with no diagnostics. No new condition-wrapper
 throughput claim is made: the existing compiled trigger/history floor remains
 the measured contract, and its selected performance checks passed.
+
+## Categorical Historical Provenance
+
+This block inventories only the original source-tree observations above. Its
+SHA-256 is calculated by the Phase 20 parent verifier from this final file; it
+does not claim installed-artifact parity or populate any throughput gate.
+
+<!-- fast-fsm-historical-evidence:start -->
+```json
+{
+  "fields": {
+    "build_mode": {
+      "reason": "The record contains distinct pure and compiled runs rather than one phase-wide build mode.",
+      "searched_sources": ["original Phase 16 evidence narrative", "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "command": {
+      "citation": "Final Pure/Compiled Parity and Freeze Gate, Blocking Commands",
+      "status": "recorded",
+      "value": "uv run python tools/phase16_isolated_verify.py --suite phase16"
+    },
+    "environment": {
+      "citation": "Final Pure/Compiled Parity and Freeze Gate environment",
+      "status": "recorded",
+      "value": "CPython 3.12.10; arm64; macOS 26.5 arm64; `uv` 0.12.6."
+    },
+    "measurement_outcome": {
+      "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+      "status": "recorded",
+      "value": "958,497.84 ops/s"
+    },
+    "original_evidence_commit": {
+      "reason": "The record identifies source-tree commits, not the commit that originally captured this evidence file.",
+      "searched_sources": ["original Phase 16 evidence narrative", "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "phase": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": "16"
+    },
+    "source_path": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+    },
+    "threshold_outcome": {
+      "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+      "status": "recorded",
+      "value": "semantic/performance suite passed; ≥200,000 floor"
+    }
+  },
+  "kind": "historical_phase_performance",
+  "schema_version": 1
+}
+```
+<!-- fast-fsm-historical-evidence:end -->

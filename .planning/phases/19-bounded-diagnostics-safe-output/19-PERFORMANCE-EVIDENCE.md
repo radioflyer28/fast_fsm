@@ -113,3 +113,60 @@ atomically exported to `evidence/release-baseline.json`. It is never hand-edited
 - This Phase 19 evidence does not prove package metadata, a release tag, release assets, or publication state.
 - This Phase 19 evidence does not accept a checkout native shadow as compiled proof.
 - Installed-artifact parity, hosted evidence, version/tag identity, and publication remain Phase 20 work.
+
+## Categorical Historical Provenance
+
+This block preserves the original local-gate facts. The Phase 20 parent verifier
+computes the source SHA-256 from the final bytes and never uses this history as
+installed-artifact, parity, or compiled-throughput proof.
+
+<!-- fast-fsm-historical-evidence:start -->
+```json
+{
+  "fields": {
+    "build_mode": {
+      "reason": "The record contains distinct isolated pure and freshly compiled gates rather than one phase-wide mode.",
+      "searched_sources": ["original Phase 19 evidence narrative", "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "command": {
+      "citation": "Commands table, order 16",
+      "status": "recorded",
+      "value": "uv run python tools/phase16_isolated_verify.py --suite phase19"
+    },
+    "environment": {
+      "citation": "Environment table, Python executable and version",
+      "status": "recorded",
+      "value": ".venv/bin/python3`; CPython `3.12.10` (Clang `20.1.0`)"
+    },
+    "measurement_outcome": {
+      "citation": "Performance Observations, Repository benchmark",
+      "status": "recorded",
+      "value": "455324.16"
+    },
+    "original_evidence_commit": {
+      "reason": "The original record proves an inventory skeleton at HEAD but does not identify the commit that captured this evidence file.",
+      "searched_sources": ["original Phase 19 evidence narrative", "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"],
+      "status": "unavailable"
+    },
+    "phase": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": "19"
+    },
+    "source_path": {
+      "citation": "Phase 20 fixed historical allowlist",
+      "status": "recorded",
+      "value": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+    },
+    "threshold_outcome": {
+      "citation": "Performance Observations, Compiled trigger floor",
+      "status": "recorded",
+      "value": "`trigger_min_throughput` passed with its fixed minimum of `200000` operations/second"
+    }
+  },
+  "kind": "historical_phase_performance",
+  "schema_version": 1
+}
+```
+<!-- fast-fsm-historical-evidence:end -->
