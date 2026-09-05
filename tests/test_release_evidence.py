@@ -470,6 +470,156 @@ def test_verify_wheel_keeps_one_pure_and_multiple_compiled_records_sorted(
     )
 
 
+def _historical_field_recorded(value: str) -> dict[str, str]:
+    """Build one exact original-fact fixture field."""
+    return {
+        "status": "recorded",
+        "value": value,
+        "citation": "original evidence narrative",
+    }
+
+
+def _historical_field_unavailable() -> dict[str, object]:
+    """Build one explicit no-precision fixture field."""
+    return {
+        "status": "unavailable",
+        "reason": "the original evidence did not record this exact fact",
+        "searched_sources": ["original evidence narrative"],
+    }
+
+
+def _write_historical_evidence_fixture(
+    repository: Path,
+    *,
+    unsupported_value: bool = False,
+    omit_status: bool = False,
+    retrospective_rerun: dict[str, object] | None = None,
+) -> None:
+    """Write one complete, deliberately sparse four-phase evidence inventory."""
+    for phase, relative_path in zip(
+        ("16", "17", "18", "19"), release_evidence.HISTORICAL_EVIDENCE_PATHS
+    ):
+        evidence_path = repository / relative_path
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        command = f"uv run historical-phase-{phase}"
+        fields: dict[str, dict[str, object]] = {
+            "phase": _historical_field_recorded(phase),
+            "source_path": _historical_field_recorded(relative_path),
+            "command": _historical_field_recorded(
+                "not present" if unsupported_value and phase == "16" else command
+            ),
+            "build_mode": _historical_field_unavailable(),
+            "threshold_outcome": _historical_field_unavailable(),
+            "measurement_outcome": _historical_field_unavailable(),
+            "environment": _historical_field_unavailable(),
+            "original_evidence_commit": _historical_field_unavailable(),
+        }
+        if omit_status and phase == "16":
+            del fields["command"]["status"]
+        record: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "historical_phase_performance",
+            "fields": fields,
+        }
+        if retrospective_rerun is not None and phase == "16":
+            record["retrospective_rerun"] = retrospective_rerun
+        evidence_path.write_text(
+            "\n".join(
+                (
+                    f"# Phase {phase} Performance Evidence",
+                    "",
+                    f"Original command: {command}",
+                    "",
+                    "<!-- fast-fsm-historical-evidence:start -->",
+                    "```json",
+                    json.dumps(record, indent=2, sort_keys=True),
+                    "```",
+                    "<!-- fast-fsm-historical-evidence:end -->",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+
+def test_historical_evidence_preserves_unavailable_original_precision(
+    tmp_path: Path,
+) -> None:
+    """Sparse original evidence is valid only with every categorical state explicit."""
+    _write_historical_evidence_fixture(tmp_path)
+
+    evidence = release_evidence.historical_evidence(repository_root=tmp_path)
+
+    assert evidence["schema_version"] == 1
+    assert [entry["phase"] for entry in evidence["entries"]] == [
+        "16",
+        "17",
+        "18",
+        "19",
+    ]
+    assert all(
+        entry["fields"]["environment"]["status"] == "unavailable"
+        for entry in evidence["entries"]
+    )
+    assert all("source_sha256" in entry for entry in evidence["entries"])
+    assert all(
+        not ({"artifact", "parity", "performance", "matrix"} & set(entry))
+        for entry in evidence["entries"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("unsupported_value", "omit_status", "expected"),
+    [
+        (True, False, "unsupported recorded value"),
+        (False, True, "Phase 16 field command"),
+    ],
+)
+def test_historical_evidence_rejects_unsupported_or_incomplete_provenance(
+    tmp_path: Path,
+    unsupported_value: bool,
+    omit_status: bool,
+    expected: str,
+) -> None:
+    """Invented precision and missing availability state cannot enter the manifest."""
+    _write_historical_evidence_fixture(
+        tmp_path, unsupported_value=unsupported_value, omit_status=omit_status
+    )
+
+    with pytest.raises(EvidenceError, match=expected):
+        release_evidence.historical_evidence(repository_root=tmp_path)
+
+
+def test_historical_evidence_rejects_retrospective_substitution(tmp_path: Path) -> None:
+    """A later run needs its own complete identity and cannot rewrite original facts."""
+    incomplete_rerun = {
+        "execution_commit": "a" * 40,
+        "command": "uv run later-proof",
+        "environment": {
+            "interpreter": "CPython 3.12.0",
+            "os": "macOS",
+            "architecture": "arm64",
+            "build_mode": "compiled",
+        },
+        "executed_at": "2026-09-01T00:00:00Z",
+    }
+    _write_historical_evidence_fixture(tmp_path, retrospective_rerun=incomplete_rerun)
+
+    with pytest.raises(EvidenceError, match="retrospective_rerun"):
+        release_evidence.historical_evidence(repository_root=tmp_path)
+
+    complete_rerun = {
+        **incomplete_rerun,
+        "observations": {"trigger_ops_per_sec": 250000},
+    }
+    _write_historical_evidence_fixture(tmp_path, retrospective_rerun=complete_rerun)
+    evidence = release_evidence.historical_evidence(repository_root=tmp_path)
+
+    rerun = evidence["entries"][0]["retrospective_rerun"]
+    assert rerun["execution_commit"] == "a" * 40
+    assert rerun["executed_at"] == "2026-09-01T00:00:00Z"
+
+
 def _write_nested_class(source_root: Path, name: str, base: str = "object") -> None:
     """Add a future production class to a nested source module fixture."""
     nested = source_root / "fast_fsm" / "nested"
