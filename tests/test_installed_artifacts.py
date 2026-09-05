@@ -209,6 +209,13 @@ def test_tracer_installs_exact_artifact_and_matches_source_lifecycle(
         )
         == []
     )
+    if mode == "compiled":
+        performance = record["performance"]
+        assert performance["core_loader"] == "ExtensionFileLoader"
+        assert performance["median_ops_per_second"] >= 200_000
+        assert len(performance["samples_ops_per_second"]) >= 3
+    else:
+        assert record["performance"] is None
 
 
 def _runtime_probe(
@@ -387,7 +394,7 @@ def test_installed_performance_evidence_validates_history_before_new_native_run(
 
     substituted = dict(installed)
     substituted["evidence_kind"] = "historical_phase_performance"
-    with pytest.raises(release_evidence.EvidenceError, match="installed"):
+    with pytest.raises(release_evidence.EvidenceError, match="evidence kind"):
         release_evidence.validate_installed_performance_evidence(
             historical=historical,
             installed=[substituted],

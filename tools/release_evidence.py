@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import ast
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.message import Message
 from email.parser import Parser
 import gc
 import hashlib
+import inspect
 import importlib
 from importlib import machinery, metadata, util
 import json
@@ -24,10 +26,12 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import time
 from typing import Any, Iterable, Mapping, Sequence, cast
 from urllib.parse import unquote, urlparse
@@ -49,6 +53,31 @@ _DIRECT_NATIVE_TARGETS = (
     ("windows", "amd64"),
     ("macos", "x86_64"),
     ("macos", "arm64"),
+)
+
+_COMPILED_TRIGGER_OPS_PER_SECOND_MIN = 200_000
+_INSTALLED_COMPILED_PERFORMANCE_FIELDS = frozenset(
+    {
+        "evidence_kind",
+        "artifact_sha256",
+        "asserted_mode",
+        "build_intent",
+        "core_origin",
+        "core_loader",
+        "exact_command",
+        "execution_commit",
+        "executed_at",
+        "warmup_operations",
+        "iterations",
+        "samples_ops_per_second",
+        "statistic",
+        "median_ops_per_second",
+        "python_implementation",
+        "python_version",
+        "platform",
+        "machine",
+        "environment_label",
+    }
 )
 
 _RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -576,6 +605,10 @@ def aggregate_matrix_records(
     if len(records) > 256:
         raise EvidenceError("matrix evidence has too many records.")
     expected = expected_matrix(profile, runtime)
+    # Historical Phase 16-19 provenance is a categorical prerequisite.  It is
+    # validated before any current artifact record can be accepted, but it is
+    # deliberately never transformed into an installed performance result.
+    historical_inventory = _historical_evidence()
     expected_cells = {cell.identifier: cell for cell in expected.cells}
     actual_cells: dict[str, MatrixCell] = {}
     accepted_records: list[dict[str, Any]] = []
@@ -638,6 +671,29 @@ def aggregate_matrix_records(
     if suite_sha256 is None or baseline_conformance is None:
         raise EvidenceError("matrix evidence is missing installed conformance.")
 
+    if expected.authorizes_release:
+        installed_performance = validate_installed_performance_evidence(
+            historical=historical_inventory,
+            installed=[
+                cast(Mapping[str, Any], record)["performance"]
+                for record in accepted_records
+                if cast(Mapping[str, Any], record)["performance"] is not None
+            ],
+        )["compiled"]
+    else:
+        # The local profile is expressly non-authorizing.  Its historical and
+        # legacy matrix observations stay visible, but cannot become a release
+        # throughput verdict without a fresh structured installed-native record.
+        installed_performance = [
+            {
+                "cell": cast(Mapping[str, Any], record["matrix"])["cell"],
+                "status": cast(Mapping[str, Any], record["performance"])["status"],
+            }
+            for record in accepted_records
+            if record["performance"] is not None
+        ]
+        installed_performance.sort(key=lambda item: str(item["cell"]))
+
     archive = next(
         record
         for record in accepted_records
@@ -678,15 +734,8 @@ def aggregate_matrix_records(
             "tag": tag,
             "suite_sha256": suite_sha256,
         },
-        "historical_evidence": [],
-        "installed_performance": [
-            {
-                "cell": cast(Mapping[str, Any], record["matrix"])["cell"],
-                "status": "passed",
-            }
-            for record in accepted_records
-            if record["performance"] is not None
-        ],
+        "historical_evidence": historical_inventory,
+        "installed_performance": installed_performance,
     }
 
 
@@ -2236,6 +2285,354 @@ def _validate_archive_runtime_architecture(
         )
 
 
+def _is_utc_timestamp(value: object) -> bool:
+    """Return whether one evidence timestamp is a complete second-precision UTC time."""
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None
+    ):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
+
+
+def validate_installed_compiled_performance(value: object) -> dict[str, Any]:
+    """Accept only a fresh native installed benchmark with a passing median.
+
+    This is deliberately independent from historical and pure observations.  The
+    caller must establish exact archive/runtime identity before this validator is
+    reached; this function binds the child record to that accepted native mode and
+    protects the measurement/statistic boundary itself.
+    """
+    checked = _exact_mapping(
+        value,
+        fields=_INSTALLED_COMPILED_PERFORMANCE_FIELDS,
+        field="installed compiled performance",
+    )
+    if checked["evidence_kind"] != "installed_compiled_performance":
+        raise EvidenceError("Installed performance evidence kind is invalid.")
+    if checked["asserted_mode"] != "compiled" or checked["build_intent"] != "compiled":
+        raise EvidenceError("Installed performance requires compiled mode and intent.")
+    artifact_sha256 = checked["artifact_sha256"]
+    if not _is_sha256(artifact_sha256):
+        raise EvidenceError("Installed performance artifact sha256 is malformed.")
+    core_origin = checked["core_origin"]
+    core_loader = checked["core_loader"]
+    if (
+        not isinstance(core_origin, str)
+        or not core_origin
+        or not isinstance(core_loader, str)
+        or core_loader != "ExtensionFileLoader"
+        or not any(
+            core_origin.endswith(suffix) for suffix in machinery.EXTENSION_SUFFIXES
+        )
+    ):
+        raise EvidenceError("Installed performance native core origin is invalid.")
+    command = checked["exact_command"]
+    execution_commit = checked["execution_commit"]
+    if not isinstance(command, str) or not command.strip():
+        raise EvidenceError("Installed performance exact command is missing.")
+    if (
+        not isinstance(execution_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", execution_commit) is None
+    ):
+        raise EvidenceError("Installed performance execution commit is malformed.")
+    if not _is_utc_timestamp(checked["executed_at"]):
+        raise EvidenceError("Installed performance execution time is malformed.")
+
+    for field in ("warmup_operations", "iterations"):
+        count = checked[field]
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise EvidenceError("Installed performance operation counts are invalid.")
+    for field in (
+        "python_implementation",
+        "python_version",
+        "platform",
+        "machine",
+        "environment_label",
+    ):
+        value_field = checked[field]
+        if not isinstance(value_field, str) or not value_field.strip():
+            raise EvidenceError("Installed performance environment is incomplete.")
+
+    samples = checked["samples_ops_per_second"]
+    if not isinstance(samples, list) or len(samples) < 3:
+        raise EvidenceError("Installed performance requires at least three samples.")
+    numeric_samples: list[float] = []
+    for sample in samples:
+        if isinstance(sample, bool) or not isinstance(sample, (int, float)):
+            raise EvidenceError("Installed performance samples must be finite numbers.")
+        numeric_sample = float(sample)
+        if not math.isfinite(numeric_sample) or numeric_sample <= 0:
+            raise EvidenceError(
+                "Installed performance samples must be finite positive numbers."
+            )
+        numeric_samples.append(numeric_sample)
+    if checked["statistic"] != "median":
+        raise EvidenceError("Installed performance statistic must be median.")
+    observed_median = checked["median_ops_per_second"]
+    if isinstance(observed_median, bool) or not isinstance(
+        observed_median, (int, float)
+    ):
+        raise EvidenceError("Installed performance median is invalid.")
+    numeric_median = float(observed_median)
+    if not math.isfinite(numeric_median) or numeric_median <= 0:
+        raise EvidenceError("Installed performance median is invalid.")
+    if numeric_median != float(statistics.median(numeric_samples)):
+        raise EvidenceError("Installed performance median does not match all samples.")
+    if numeric_median < _COMPILED_TRIGGER_OPS_PER_SECOND_MIN:
+        raise EvidenceError("Installed performance median is below the compiled floor.")
+    return dict(checked)
+
+
+def validate_installed_performance_evidence(
+    *, historical: Sequence[object], installed: Sequence[object]
+) -> dict[str, Any]:
+    """Require categorical Phase 16-19 provenance before installed native proof.
+
+    Historical entries are intentionally compared to the source-validated,
+    parent-computed inventory.  They must be complete records (including valid
+    ``unavailable`` facts), but they can never populate the installed compiled
+    evidence collection or satisfy its median gate.
+    """
+    canonical_historical = _historical_evidence()
+    try:
+        normalized_historical = json.loads(
+            serialize_manifest({"entries": list(historical)})
+        )["entries"]
+    except (TypeError, ValueError, KeyError) as error:
+        raise EvidenceError(
+            "Installed performance historical evidence is incomplete."
+        ) from error
+    if normalized_historical != canonical_historical:
+        raise EvidenceError("Installed performance historical evidence is incomplete.")
+    if not installed:
+        raise EvidenceError(
+            "Installed performance evidence has no installed native run."
+        )
+    compiled = [validate_installed_compiled_performance(record) for record in installed]
+    compiled.sort(
+        key=lambda record: (str(record["artifact_sha256"]), str(record["machine"]))
+    )
+    return {
+        "historical_phases": [entry["phase"] for entry in canonical_historical],
+        "compiled": compiled,
+    }
+
+
+def _collect_alternating_trigger_samples(
+    *, iterations: int, warmup_iterations: int, sample_count: int
+) -> list[float]:
+    """Measure equal installed-runtime alternating trigger samples after warmup."""
+    if iterations <= 0 or warmup_iterations <= 0 or sample_count < 3:
+        raise EvidenceError(
+            "Installed benchmark requires positive warmup and three samples."
+        )
+    from fast_fsm.core import State, StateMachine
+
+    idle = State("installed-benchmark-idle")
+    active = State("installed-benchmark-active")
+    machine = StateMachine(idle, name="installed-compiled-trigger-benchmark")
+    machine.add_state(active)
+    machine.add_transition("activate", idle, active)
+    machine.add_transition("deactivate", active, idle)
+    for _ in range(warmup_iterations):
+        machine.trigger("activate")
+        machine.trigger("deactivate")
+
+    operations = iterations * 2
+    samples: list[float] = []
+    for _ in range(sample_count):
+        gc.collect()
+        started = time.perf_counter()
+        for _ in range(iterations):
+            machine.trigger("activate")
+            machine.trigger("deactivate")
+        elapsed = time.perf_counter() - started
+        if elapsed <= 0:
+            raise EvidenceError(
+                "Installed benchmark did not produce a positive elapsed time."
+            )
+        samples.append(operations / elapsed)
+    return samples
+
+
+def _installed_benchmark_child_payload(
+    *,
+    artifact_sha256: str,
+    execution_commit: str,
+    executed_at: str,
+    iterations: int,
+    warmup_iterations: int,
+    sample_count: int,
+    exact_command: str,
+) -> dict[str, Any]:
+    """Collect a portable child record while importing only the installed package."""
+    core_module = importlib.import_module(CORE_MODULE_NAME)
+    core_origin = getattr(core_module, "__file__", None)
+    if not isinstance(core_origin, str) or not core_origin:
+        raise EvidenceError("Installed benchmark core origin is unavailable.")
+    samples = _collect_alternating_trigger_samples(
+        iterations=iterations,
+        warmup_iterations=warmup_iterations,
+        sample_count=sample_count,
+    )
+    return {
+        "evidence_kind": "installed_compiled_performance",
+        "artifact_sha256": artifact_sha256,
+        "asserted_mode": "compiled",
+        "build_intent": "compiled",
+        "core_origin": str(Path(core_origin).resolve()),
+        "core_loader": type(getattr(core_module, "__loader__", None)).__name__,
+        "exact_command": exact_command,
+        "execution_commit": execution_commit,
+        "executed_at": executed_at,
+        "warmup_operations": warmup_iterations * 2,
+        "iterations": iterations,
+        "samples_ops_per_second": samples,
+        "statistic": "median",
+        "median_ops_per_second": statistics.median(samples),
+        "python_implementation": sys.implementation.name,
+        "python_version": sys.version.split()[0],
+        "platform": platform.system(),
+        "machine": platform.machine(),
+        "environment_label": "installed-compiled-native",
+    }
+
+
+def _installed_benchmark_child_script() -> str:
+    """Render a stdlib-only installed child from the shared sampler callable.
+
+    The fresh artifact environment intentionally has only the wheel's runtime
+    dependencies.  Copying this full maintainer tool would incorrectly require
+    its development-only ``packaging`` import, so the child receives only the
+    source of the measured callable and imports the installed package itself.
+    """
+    sampler = textwrap.dedent(inspect.getsource(_collect_alternating_trigger_samples))
+    return "\n".join(
+        (
+            "from __future__ import annotations",
+            "import gc",
+            "import importlib",
+            "import json",
+            "from importlib import machinery",
+            "from pathlib import Path",
+            "import platform",
+            "import statistics",
+            "import sys",
+            "import time",
+            "",
+            "class EvidenceError(RuntimeError):",
+            "    pass",
+            "",
+            sampler.rstrip(),
+            "",
+            "(",
+            "    artifact_sha256, execution_commit, executed_at, iterations_text,",
+            "    warmup_text, samples_text, exact_command,",
+            ") = sys.argv[1:]",
+            "iterations = int(iterations_text)",
+            "warmup_iterations = int(warmup_text)",
+            "sample_count = int(samples_text)",
+            "core_module = importlib.import_module('fast_fsm.core')",
+            "core_origin = getattr(core_module, '__file__', None)",
+            "if not isinstance(core_origin, str) or not core_origin:",
+            "    raise EvidenceError('Installed benchmark core origin is unavailable.')",
+            "samples = _collect_alternating_trigger_samples(",
+            "    iterations=iterations,",
+            "    warmup_iterations=warmup_iterations,",
+            "    sample_count=sample_count,",
+            ")",
+            "payload = {",
+            "    'evidence_kind': 'installed_compiled_performance',",
+            "    'artifact_sha256': artifact_sha256,",
+            "    'asserted_mode': 'compiled',",
+            "    'build_intent': 'compiled',",
+            "    'core_origin': str(Path(core_origin).resolve()),",
+            "    'core_loader': type(getattr(core_module, '__loader__', None)).__name__,",
+            "    'exact_command': exact_command,",
+            "    'execution_commit': execution_commit,",
+            "    'executed_at': executed_at,",
+            "    'warmup_operations': warmup_iterations * 2,",
+            "    'iterations': iterations,",
+            "    'samples_ops_per_second': samples,",
+            "    'statistic': 'median',",
+            "    'median_ops_per_second': statistics.median(samples),",
+            "    'python_implementation': sys.implementation.name,",
+            "    'python_version': sys.version.split()[0],",
+            "    'platform': platform.system(),",
+            "    'machine': platform.machine(),",
+            "    'environment_label': 'installed-compiled-native',",
+            "}",
+            "print(json.dumps(payload, sort_keys=True, allow_nan=False))",
+            "",
+        )
+    )
+
+
+def _collect_installed_compiled_performance(
+    *,
+    interpreter: Path,
+    neutral_directory: Path,
+    environment: Mapping[str, str],
+    artifact_sha256: str,
+    runtime: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run the copied child only after archive, origin, and architecture acceptance."""
+    execution_commit = _checked_out_commit(repository_root=REPOSITORY_ROOT)
+    executed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    iterations = 20_000
+    warmup_iterations = 1_000
+    sample_count = 3
+    exact_command = (
+        "installed_benchmark_probe.py "
+        f"--artifact-sha256 {artifact_sha256} "
+        f"--execution-commit {execution_commit} --executed-at {executed_at} "
+        f"--iterations {iterations} --warmup-iterations {warmup_iterations} "
+        f"--samples {sample_count}"
+    )
+    probe = neutral_directory / "installed_benchmark_probe.py"
+    probe.write_text(_installed_benchmark_child_script(), encoding="utf-8")
+    child = _strict_json_object(
+        _run_installed_command(
+            [
+                str(interpreter),
+                str(probe),
+                artifact_sha256,
+                execution_commit,
+                executed_at,
+                str(iterations),
+                str(warmup_iterations),
+                str(sample_count),
+                exact_command,
+            ],
+            cwd=neutral_directory,
+            environment=environment,
+            stage="compiled benchmark",
+        ),
+        field="installed benchmark",
+    )
+    record = validate_installed_compiled_performance(child)
+    for field in (
+        "core_origin",
+        "core_loader",
+        "python_implementation",
+        "python_version",
+        "platform",
+        "machine",
+    ):
+        if record[field] != runtime[field]:
+            raise EvidenceError(
+                "Installed benchmark runtime identity contradicts probe."
+            )
+    if record["artifact_sha256"] != artifact_sha256:
+        raise EvidenceError("Installed benchmark artifact digest is detached.")
+    return record
+
+
 def _validate_child_conformance(
     value: Mapping[str, Any], *, expected_suite_sha256: str
 ) -> dict[str, Any]:
@@ -2424,6 +2821,17 @@ def verify_installed_wheel(
             runtime,
             expected_mode=expected_mode,
         )
+        performance = (
+            _collect_installed_compiled_performance(
+                interpreter=interpreter,
+                neutral_directory=neutral_directory,
+                environment=environment,
+                artifact_sha256=artifact_sha256,
+                runtime=runtime_record,
+            )
+            if expected_mode == "compiled"
+            else None
+        )
         conformance_record = _validate_child_conformance(
             conformance,
             expected_suite_sha256=expected_suite_sha256,
@@ -2442,6 +2850,7 @@ def verify_installed_wheel(
         },
         "runtime": {**runtime_record, "expected_mode": expected_mode},
         "conformance": conformance_record,
+        "performance": performance,
     }
 
 
@@ -4636,8 +5045,20 @@ def _collect_manifest_after_preflight(
             for cell in expected_matrix("local", _current_matrix_runtime()).cells
         ],
         "artifact_records": [],
-        "historical_evidence": _historical_evidence(),
-        "installed_performance": [],
+        "historical_phase_performance": {
+            "scope": "historical-non-gating",
+            "entries": _historical_evidence(),
+        },
+        "pure_source_performance": {
+            "scope": "environment-labeled-observation",
+            "observations": [benchmark],
+        },
+        "installed_compiled_performance": [],
+        "diagnostic_complexity": {
+            "scope": "deterministic-non-timing",
+            "dimensions": ["work", "results", "dense_cells", "path_expansions"],
+            "evidence": "tests/test_diagnostic_contracts.py",
+        },
         "quality_baseline": {
             "build_mode": "pure",
             "tests": tests,
@@ -4839,6 +5260,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     installed_wheel_parser.add_argument("--json", action="store_true")
 
+    installed_benchmark_parser = commands.add_parser(
+        "installed-benchmark-child",
+        help="collect one installed compiled trigger benchmark child record",
+    )
+    installed_benchmark_parser.add_argument("--artifact-sha256", required=True)
+    installed_benchmark_parser.add_argument("--execution-commit", required=True)
+    installed_benchmark_parser.add_argument("--executed-at", required=True)
+    installed_benchmark_parser.add_argument("--iterations", type=int, required=True)
+    installed_benchmark_parser.add_argument(
+        "--warmup-iterations", type=int, required=True
+    )
+    installed_benchmark_parser.add_argument("--samples", type=int, required=True)
+    installed_benchmark_parser.add_argument("--exact-command", required=True)
+
     sdist_parser = commands.add_parser(
         "verify-sdist",
         help="inspect one bounded sdist and prove explicit installed child wheels",
@@ -4979,6 +5414,19 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     build_intent=parsed.build_intent,
                 ),
                 parsed.json,
+            )
+        elif parsed.command == "installed-benchmark-child":
+            _emit(
+                _installed_benchmark_child_payload(
+                    artifact_sha256=parsed.artifact_sha256,
+                    execution_commit=parsed.execution_commit,
+                    executed_at=parsed.executed_at,
+                    iterations=parsed.iterations,
+                    warmup_iterations=parsed.warmup_iterations,
+                    sample_count=parsed.samples,
+                    exact_command=parsed.exact_command,
+                ),
+                True,
             )
         elif parsed.command == "verify-sdist":
             _emit(verify_sdist_derivations(parsed.sdist), parsed.json)

@@ -10,6 +10,8 @@ import gc
 import io
 import logging
 import os
+from pathlib import Path
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -26,6 +28,12 @@ from fast_fsm.core import (
 )
 from fast_fsm.conditions import Condition
 from fast_fsm.condition_templates import TimeoutCondition
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools import release_evidence  # noqa: E402
 
 
 _COMPLEXITY_TOPOLOGY_SIZES = (4, 64, 512)
@@ -207,6 +215,26 @@ def test_core_operations_coarse_scaling_backstop_is_not_an_asymptotic_proof() ->
         assert slowest / fastest < 20, (
             f"{operation} coarse scaling backstop exceeded its loose ratio: {timings}"
         )
+
+
+def test_installed_benchmark_child_collects_fixed_warmup_and_sample_counts() -> None:
+    """The child collector uses equal fixed iteration samples before validation."""
+    payload = release_evidence._installed_benchmark_child_payload(
+        artifact_sha256="a" * 64,
+        execution_commit="b" * 40,
+        executed_at="2026-09-05T02:36:33Z",
+        iterations=10,
+        warmup_iterations=5,
+        sample_count=3,
+        exact_command="release_evidence.py installed-benchmark-child",
+    )
+
+    assert payload["warmup_operations"] == 10
+    assert payload["iterations"] == 10
+    assert len(payload["samples_ops_per_second"]) == 3
+    assert (
+        payload["median_ops_per_second"] == sorted(payload["samples_ops_per_second"])[1]
+    )
 
 
 # Suppress print output during benchmarks

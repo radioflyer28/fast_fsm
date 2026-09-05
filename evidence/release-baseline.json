@@ -31,7 +31,7 @@
   },
   "artifact_records": [],
   "expected_matrix": [],
-  "historical_evidence": [
+  "historical_phase_performance_observations": [
     {
       "command": "uv run python tools/phase16_isolated_verify.py \\",
       "commit": "31f90e5",
@@ -65,7 +65,26 @@
       "sha256": "906524d28edb2f9f0542eb01cd21cbbe1bd9f3c3b25417317dd132485d132288"
     }
   ],
-  "installed_performance": [],
+  "installed_compiled_performance": {
+    "floor_ops_per_second": 200000,
+    "records": [],
+    "scope": "installed-native-blocking",
+    "status": "not-collected"
+  },
+  "diagnostic_complexity": {
+    "dimensions": [
+      "work",
+      "results",
+      "dense_cells",
+      "path_expansions"
+    ],
+    "scope": "deterministic-non-timing",
+    "status": "verified-by-targeted-tests"
+  },
+  "pure_source_performance": {
+    "observation_path": "performance_contract.observation",
+    "scope": "environment-labeled-nonblocking"
+  },
   "matrix_profile": {
     "profile": "local",
     "scope": "local-non-authorizing",
