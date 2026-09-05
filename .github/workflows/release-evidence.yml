@@ -91,7 +91,7 @@ jobs:
               "package": "fast_fsm",
               "distribution_version": "0.3.0",
               "commit": head_sha,
-              "tag": os.environ["EVIDENCE_TAG"],
+              "tag": "unreleased",
               "suite_sha256": _suite_sha256(),
           }
           with open("evidence-input/installed-identity.json", "w", encoding="utf-8") as output:
