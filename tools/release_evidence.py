@@ -783,6 +783,47 @@ def _validate_runtime_probe(
     }
 
 
+def _validate_archive_runtime_architecture(
+    archive_tags: Sequence[object],
+    runtime: Mapping[str, Any],
+    *,
+    expected_mode: str,
+) -> None:
+    """Require a compiled archive tag to match the native runtime that ran it."""
+    if expected_mode == "pure":
+        return
+    platform_name = runtime.get("platform")
+    machine = runtime.get("machine")
+    if not isinstance(platform_name, str) or not isinstance(machine, str):
+        raise EvidenceError("Installed artifact runtime architecture is malformed.")
+    platform_markers = {
+        "darwin": ("macosx",),
+        "windows": ("win",),
+        "linux": ("linux",),
+    }
+    architecture_markers = {
+        "arm64": ("arm64", "aarch64", "universal2"),
+        "aarch64": ("arm64", "aarch64", "universal2"),
+        "x86_64": ("x86_64", "amd64", "universal2"),
+        "amd64": ("x86_64", "amd64", "universal2"),
+    }
+    expected_platforms = platform_markers.get(platform_name.casefold())
+    expected_architectures = architecture_markers.get(machine.casefold())
+    if expected_platforms is None or expected_architectures is None:
+        raise EvidenceError("Installed artifact runtime architecture is unsupported.")
+    normalized_tags = [tag.casefold() for tag in archive_tags if isinstance(tag, str)]
+    if not normalized_tags or not any(
+        any(platform_marker in tag for platform_marker in expected_platforms)
+        and any(
+            architecture_marker in tag for architecture_marker in expected_architectures
+        )
+        for tag in normalized_tags
+    ):
+        raise EvidenceError(
+            "Installed artifact archive architecture does not match the runtime."
+        )
+
+
 def _validate_child_conformance(
     value: Mapping[str, Any], *, expected_suite_sha256: str
 ) -> dict[str, Any]:
@@ -840,13 +881,13 @@ def _validate_child_conformance(
     return dict(value)
 
 
-def _validate_child_probe(
+def _extract_child_probe(
     value: Mapping[str, Any],
     *,
     expected_artifact_sha256: str,
     expected_suite_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate untrusted child evidence before parent-owned provenance checks."""
+    """Validate child shape and parent-bound identity before provenance checks."""
     _validate_json_bounds(value)
     if set(value) != {"artifact_sha256", "conformance", "runtime"}:
         raise EvidenceError("Installed artifact child probe has an invalid schema.")
@@ -856,10 +897,25 @@ def _validate_child_probe(
     runtime = value["runtime"]
     if not isinstance(conformance, dict) or not isinstance(runtime, dict):
         raise EvidenceError("Installed artifact child probe is malformed.")
+    return dict(conformance), dict(runtime)
+
+
+def _validate_child_probe(
+    value: Mapping[str, Any],
+    *,
+    expected_artifact_sha256: str,
+    expected_suite_sha256: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate all untrusted child evidence for direct unit-test use."""
+    conformance, runtime = _extract_child_probe(
+        value,
+        expected_artifact_sha256=expected_artifact_sha256,
+        expected_suite_sha256=expected_suite_sha256,
+    )
     suite_sha256 = expected_suite_sha256 or _expected_conformance_suite_sha256()
     return (
         _validate_child_conformance(conformance, expected_suite_sha256=suite_sha256),
-        dict(runtime),
+        runtime,
     )
 
 
@@ -940,7 +996,7 @@ def verify_installed_wheel(
             ),
             field="child probe",
         )
-        conformance, runtime = _validate_child_probe(
+        conformance, runtime = _extract_child_probe(
             child,
             expected_artifact_sha256=artifact_sha256,
             expected_suite_sha256=expected_suite_sha256,
@@ -951,7 +1007,15 @@ def verify_installed_wheel(
             expected_mode=expected_mode,
             version=str(archive["metadata_version"]),
         )
-        conformance_record = conformance
+        _validate_archive_runtime_architecture(
+            cast(Sequence[object], archive["wheel_tags"]),
+            runtime,
+            expected_mode=expected_mode,
+        )
+        conformance_record = _validate_child_conformance(
+            conformance,
+            expected_suite_sha256=expected_suite_sha256,
+        )
 
     return {
         "schema_version": _INSTALLED_ARTIFACT_SCHEMA_VERSION,

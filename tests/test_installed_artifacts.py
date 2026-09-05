@@ -149,3 +149,13 @@ def test_child_probe_rejects_payloads_resource_abuse_and_parent_identity_drift()
     )
     with pytest.raises(release_evidence.EvidenceError, match="size limit"):
         release_evidence._strict_json_object(oversized, field="child probe")
+
+
+def test_compiled_archive_tags_must_match_the_installed_runtime_architecture() -> None:
+    """A cross-platform archive cannot be accepted as native local proof."""
+    with pytest.raises(release_evidence.EvidenceError, match="architecture"):
+        release_evidence._validate_archive_runtime_architecture(
+            ["cp312-cp312-manylinux_2_17_x86_64"],
+            {"platform": "Darwin", "machine": "arm64"},
+            expected_mode="compiled",
+        )
