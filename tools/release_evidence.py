@@ -22,16 +22,18 @@ from packaging.utils import (
     parse_wheel_filename,
 )
 from packaging.version import InvalidVersion, Version
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
 import tarfile
 import tempfile
 import textwrap
+import threading
 import time
 from typing import Any, Iterable, Mapping, Sequence, cast
 from urllib.parse import unquote, urlparse
@@ -286,6 +288,75 @@ def build_release_authorization(aggregate: Mapping[str, object]) -> dict[str, st
     return {"profile": "release", "authorization": "release-evidence-complete"}
 
 
+def stage_release_assets(
+    aggregate: Mapping[str, object], *, downloaded: Path, staging: Path
+) -> tuple[str, ...]:
+    """Copy only aggregate-approved direct assets into an empty private staging dir.
+
+    Matrix-derived sdist children are evidence records, not release attachments.
+    The aggregate-approved source archive is the sole sdist asset that may be
+    published.  Both the download layout and the staged bytes are checked so a
+    release action can receive only the exact allowlisted files.
+    """
+    build_release_authorization(aggregate)
+    records = aggregate.get("artifact_records")
+    if not isinstance(records, list):
+        raise EvidenceError("release aggregate artifact records are malformed.")
+
+    expected: dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise EvidenceError("release aggregate artifact record is malformed.")
+        matrix = record.get("matrix")
+        artifact = record.get("artifact")
+        if not isinstance(matrix, Mapping) or not isinstance(artifact, Mapping):
+            raise EvidenceError("release aggregate artifact record is malformed.")
+        cell = matrix.get("cell")
+        filename = artifact.get("filename")
+        digest = artifact.get("sha256")
+        if (
+            not isinstance(cell, str)
+            or not isinstance(filename, str)
+            or not _is_sha256(digest)
+        ):
+            raise EvidenceError("release aggregate artifact record is malformed.")
+        if cell.startswith("sdist-") and cell != "sdist-archive":
+            continue
+        if not filename or Path(filename).name != filename:
+            raise EvidenceError("release aggregate artifact filename is malformed.")
+        existing = expected.setdefault(filename, digest)
+        if existing != digest:
+            raise EvidenceError(
+                "release aggregate assigns conflicting artifact hashes."
+            )
+    if not expected or not downloaded.is_dir():
+        raise EvidenceError("aggregate-approved release artifacts are unavailable.")
+
+    entries = sorted(downloaded.iterdir(), key=lambda path: path.name)
+    if any(entry.is_symlink() or not entry.is_file() for entry in entries):
+        raise EvidenceError("release artifact download contains a non-regular entry.")
+    if {entry.name for entry in entries} != set(expected):
+        raise EvidenceError(
+            "release artifact download differs from aggregate allowlist."
+        )
+
+    try:
+        staging.mkdir(mode=0o700)
+    except OSError as error:
+        raise EvidenceError(
+            "release artifact staging directory is unavailable."
+        ) from error
+    for filename, digest in sorted(expected.items()):
+        source = downloaded / filename
+        if _artifact_sha256(source) != digest:
+            raise EvidenceError("artifact SHA differs from aggregate.")
+        destination = staging / filename
+        shutil.copyfile(source, destination)
+        if _artifact_sha256(destination) != digest:
+            raise EvidenceError("staged artifact SHA differs from aggregate.")
+    return tuple(sorted(expected))
+
+
 _MATRIX_RECORD_FIELDS = frozenset(
     {
         "schema_version",
@@ -354,6 +425,8 @@ def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> 
             "machine",
             "distribution_version",
             "package_version",
+            "core_origin",
+            "core_loader",
         }
     )
     checked = _exact_mapping(runtime, fields=fields, field="runtime")
@@ -408,6 +481,21 @@ def _matrix_runtime_matches(cell: MatrixCell, runtime: Mapping[str, object]) -> 
             raise EvidenceError(
                 f"matrix evidence runtime.{field} is not {_RELEASE_VERSION}."
             )
+    core_origin = checked["core_origin"]
+    if not isinstance(core_origin, str) or not core_origin:
+        raise EvidenceError("matrix evidence runtime.core_origin is malformed.")
+    if cell.asserted_mode == "compiled":
+        core_basename = PurePosixPath(core_origin.replace("\\", "/")).name
+        if checked[
+            "core_loader"
+        ] != "ExtensionFileLoader" or not _is_importable_native_core_basename(
+            core_basename
+        ):
+            raise EvidenceError("matrix evidence runtime native core is invalid.")
+    elif checked["core_loader"] != "SourceFileLoader" or not core_origin.endswith(
+        ".py"
+    ):
+        raise EvidenceError("matrix evidence runtime pure core is invalid.")
 
 
 def _matrix_conformance_matches(
@@ -570,11 +658,27 @@ def _validate_matrix_record(
     if checked["origin_verified"] is not cell.requires_origin:
         raise EvidenceError("matrix evidence origin proof contradicts matrix.")
     if cell.requires_performance:
-        performance = _exact_mapping(
-            checked["performance"], fields=frozenset({"status"}), field="performance"
+        performance = validate_installed_compiled_performance(checked["performance"])
+        if performance["artifact_sha256"] != artifact_sha:
+            raise EvidenceError("matrix evidence performance artifact is detached.")
+        if performance["execution_commit"] != commit:
+            raise EvidenceError("matrix evidence performance commit is detached.")
+        if (
+            performance["asserted_mode"] != cell.asserted_mode
+            or performance["build_intent"] != artifact["build_intent"]
+        ):
+            raise EvidenceError("matrix evidence performance mode is detached.")
+        runtime_fields = (
+            "core_origin",
+            "core_loader",
+            "python_implementation",
+            "python_version",
+            "platform",
+            "machine",
         )
-        if performance["status"] != "passed":
-            raise EvidenceError("matrix evidence installed performance is invalid.")
+        runtime = cast(Mapping[str, object], checked["runtime"])
+        if any(performance[field] != runtime[field] for field in runtime_fields):
+            raise EvidenceError("matrix evidence performance runtime is detached.")
     elif checked["performance"] is not None:
         raise EvidenceError("matrix evidence has unexpected installed performance.")
 
@@ -687,7 +791,10 @@ def aggregate_matrix_records(
         installed_performance = [
             {
                 "cell": cast(Mapping[str, Any], record["matrix"])["cell"],
-                "status": cast(Mapping[str, Any], record["performance"])["status"],
+                "status": "passed",
+                "median_ops_per_second": cast(Mapping[str, Any], record["performance"])[
+                    "median_ops_per_second"
+                ],
             }
             for record in accepted_records
             if record["performance"] is not None
@@ -1253,6 +1360,10 @@ def validate_release_identity(
 _INSTALLED_ARTIFACT_SCHEMA_VERSION = 1
 _SDIST_ARCHIVE_SCHEMA_VERSION = 1
 _MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
+_MAX_WHEEL_MEMBERS = 512
+_MAX_WHEEL_MEMBER_BYTES = 8 * 1024 * 1024
+_MAX_WHEEL_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+_MAX_WHEEL_COMPRESSION_RATIO = 200
 _MAX_SDIST_MEMBERS = 512
 _MAX_SDIST_MEMBER_BYTES = 32 * 1024 * 1024
 _MAX_SDIST_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
@@ -1261,6 +1372,7 @@ _MAX_CHILD_STRING_LENGTH = 4096
 _MAX_CHILD_NESTING = 12
 _MAX_CHILD_COLLECTION_LENGTH = 128
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+_INSTALLED_COMMAND_TIMEOUT_SECONDS = 300
 _FORBIDDEN_CONFORMANCE_FIELDS = frozenset(
     {"args", "kwargs", "exception", "error", "repr", "path", "timing", "duration"}
 )
@@ -1316,14 +1428,36 @@ def _is_native_member(name: str) -> bool:
     return any(normalized.endswith(suffix) for suffix in _native_suffixes())
 
 
+def _is_importable_native_core_basename(name: str) -> bool:
+    """Return whether ``name`` is a cross-platform importable core extension.
+
+    Matrix aggregation inspects wheels built for hosts other than the verifier.
+    A target-specific CPython ABI suffix (for example
+    ``.cpython-310-x86_64-linux-gnu.so``) is therefore valid even when it is
+    not in this host's :data:`importlib.machinery.EXTENSION_SUFFIXES`.  The
+    portable form remains deliberately narrow: ``core`` followed immediately
+    by a standard ABI suffix and ``.so``/``.pyd`` terminal extension.
+    """
+    normalized = name.casefold()
+    if any(normalized == f"core{suffix}" for suffix in _native_suffixes()):
+        return True
+    return (
+        re.fullmatch(
+            r"core\.(?:abi\d+|cp\d{2,3}|cpython-\d{2,3})(?:[-_.][a-z0-9_]+)*\.(?:so|pyd)",
+            normalized,
+        )
+        is not None
+    )
+
+
 def _native_core_members(member_names: Iterable[str]) -> tuple[str, ...]:
     """Return native archive members that can satisfy the core compilation seam."""
-    core_prefix = f"{PACKAGE_NAME}/core"
     return tuple(
         sorted(
             name
             for name in member_names
-            if name.startswith(core_prefix) and _is_native_member(name)
+            if PurePosixPath(name).parent.as_posix() == PACKAGE_NAME
+            and _is_importable_native_core_basename(PurePosixPath(name).name)
         )
     )
 
@@ -1519,13 +1653,74 @@ def _archive_dist_info_directory(archive: ZipFile) -> str:
     return directories[0]
 
 
+def _normalized_wheel_member_name(name: str) -> str:
+    """Return one safe archive-relative POSIX member name or reject ambiguity."""
+    if not name or "\\" in name or "\x00" in name:
+        raise EvidenceError("Wheel archive contains an unsafe member name.")
+    path = PurePosixPath(name)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise EvidenceError("Wheel archive contains an unsafe member name.")
+    return path.as_posix()
+
+
+def _validated_wheel_members(archive: ZipFile) -> tuple[str, ...]:
+    """Bound a wheel archive before metadata parsing can inflate attacker input."""
+    normalized: set[str] = set()
+    names: list[str] = []
+    total_uncompressed = 0
+    for info in archive.infolist():
+        if len(names) >= _MAX_WHEEL_MEMBERS:
+            raise EvidenceError("Wheel archive exceeds the member-count limit.")
+        name = _normalized_wheel_member_name(info.filename)
+        if name in normalized:
+            raise EvidenceError("Wheel archive contains a duplicate normalized member.")
+        normalized.add(name)
+        if info.is_dir():
+            names.append(name)
+            continue
+        if info.file_size < 0 or info.file_size > _MAX_WHEEL_MEMBER_BYTES:
+            raise EvidenceError("Wheel archive contains an oversized member.")
+        total_uncompressed += info.file_size
+        if total_uncompressed > _MAX_WHEEL_TOTAL_UNCOMPRESSED_BYTES:
+            raise EvidenceError("Wheel archive exceeds the uncompressed-size limit.")
+        compressed = max(info.compress_size, 1)
+        if info.file_size > compressed * _MAX_WHEEL_COMPRESSION_RATIO:
+            raise EvidenceError(
+                "Wheel archive member exceeds the compression-ratio limit."
+            )
+        names.append(name)
+    if not names:
+        raise EvidenceError("Wheel archive has no members.")
+    return tuple(names)
+
+
+def _read_bounded_archive_member(archive: ZipFile, name: str) -> bytes:
+    """Read a previously bounded metadata member without a second unbounded buffer."""
+    try:
+        info = archive.getinfo(name)
+    except KeyError as error:
+        raise EvidenceError(
+            f"Wheel archive metadata member is unavailable: {name}."
+        ) from error
+    if info.file_size > _MAX_WHEEL_MEMBER_BYTES:
+        raise EvidenceError("Wheel archive contains an oversized member.")
+    with archive.open(info, "r") as member:
+        payload = member.read(_MAX_WHEEL_MEMBER_BYTES + 1)
+        if len(payload) > _MAX_WHEEL_MEMBER_BYTES or member.read(1):
+            raise EvidenceError("Wheel archive contains an oversized member.")
+    return payload
+
+
 def _archive_metadata(archive: ZipFile, dist_info_directory: str, filename: str) -> str:
     """Read one required metadata file from the verified dist-info directory."""
     target = f"{dist_info_directory}/{filename}"
     matches = [name for name in archive.namelist() if name == target]
     if len(matches) != 1:
         raise EvidenceError(f"Expected exactly one {target} file, found {matches!r}.")
-    return archive.read(matches[0]).decode("utf-8")
+    try:
+        return _read_bounded_archive_member(archive, matches[0]).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"Wheel metadata is not UTF-8: {target}.") from error
 
 
 def _dist_info_identity(directory: str) -> tuple[str, Version]:
@@ -1566,11 +1761,13 @@ def inspect_wheel(
     resolved_wheel = wheel_path.resolve()
     if not resolved_wheel.is_file():
         raise EvidenceError(f"Wheel does not exist: {resolved_wheel}")
+    _artifact_sha256(resolved_wheel)
 
     filename_name, filename_version, filename_tags = _wheel_filename_identity(
         resolved_wheel
     )
     with ZipFile(resolved_wheel) as archive:
+        member_names = _validated_wheel_members(archive)
         dist_info_directory = _archive_dist_info_directory(archive)
         wheel_headers = Parser().parsestr(
             _archive_metadata(archive, dist_info_directory, "WHEEL")
@@ -1580,9 +1777,9 @@ def inspect_wheel(
         )
         wheel_tags = tuple(sorted(wheel_headers.get_all("Tag", [])))
         native_members = tuple(
-            sorted(name for name in archive.namelist() if _is_native_member(name))
+            sorted(name for name in member_names if _is_native_member(name))
         )
-        native_core_members = _native_core_members(archive.namelist())
+        native_core_members = _native_core_members(member_names)
 
     dist_info_name, dist_info_version = _dist_info_identity(dist_info_directory)
     metadata_name, metadata_version = _metadata_identity(
@@ -1962,6 +2159,57 @@ def _artifact_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _snapshot_artifact(wheel_path: Path, private_root: Path) -> tuple[Path, str]:
+    """Copy one caller-owned wheel through an open descriptor into private storage.
+
+    The verifier never inspects or installs the caller path after this point.  A
+    replacement after descriptor acquisition therefore cannot detach the recorded
+    hash from the bytes used for archive inspection or installation.
+    """
+    descriptor = -1
+    try:
+        source = wheel_path.resolve(strict=True)
+        descriptor = os.open(
+            source,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        raise EvidenceError("Artifact identity could not be opened.") from error
+    try:
+        source_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise EvidenceError("Artifact identity is not a regular file.")
+        if source_stat.st_size <= 0 or source_stat.st_size > _MAX_ARTIFACT_BYTES:
+            raise EvidenceError("Artifact identity violates the archive size limit.")
+        private_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+        destination = private_root / source.name
+        digest = hashlib.sha256()
+        copied = 0
+        artifact_handle = os.fdopen(descriptor, "rb", closefd=True)
+        descriptor = -1
+        with artifact_handle as artifact, destination.open("xb") as private_artifact:
+            for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                copied += len(chunk)
+                if copied > _MAX_ARTIFACT_BYTES:
+                    raise EvidenceError(
+                        "Artifact identity violates the archive size limit."
+                    )
+                digest.update(chunk)
+                private_artifact.write(chunk)
+        observed = digest.hexdigest()
+        if (
+            destination.stat().st_size != source_stat.st_size
+            or copied != source_stat.st_size
+        ):
+            raise EvidenceError("Artifact private snapshot size is detached.")
+        if _artifact_sha256(destination) != observed:
+            raise EvidenceError("Artifact private snapshot digest is detached.")
+        return destination, observed
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _strict_json_object(value: str, *, field: str) -> dict[str, Any]:
     """Parse one child object without accepting duplicate keys or NaN values."""
     if len(value.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES:
@@ -2127,26 +2375,57 @@ def _environment_python(environment_root: Path) -> Path:
 def _run_installed_command(
     arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str], stage: str
 ) -> str:
-    """Run an isolated child while retaining only bounded, non-manifest diagnostics."""
-    completed = subprocess.run(
+    """Run an isolated child with per-stream caps and a hard stage timeout."""
+    process = subprocess.Popen(
         list(arguments),
         cwd=cwd,
         env=dict(environment),
-        text=True,
-        capture_output=True,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    if (
-        len(completed.stdout.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES
-        or len(completed.stderr.encode("utf-8")) > _MAX_CHILD_OUTPUT_BYTES
-    ):
+    assert process.stdout is not None and process.stderr is not None
+    output: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    exceeded = threading.Event()
+
+    def read_capped(stream: Any, target: bytearray) -> None:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                return
+            if len(target) + len(chunk) > _MAX_CHILD_OUTPUT_BYTES:
+                exceeded.set()
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                return
+            target.extend(chunk)
+
+    readers = (
+        threading.Thread(target=read_capped, args=(process.stdout, output["stdout"])),
+        threading.Thread(target=read_capped, args=(process.stderr, output["stderr"])),
+    )
+    for reader in readers:
+        reader.start()
+    try:
+        process.wait(timeout=_INSTALLED_COMMAND_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        process.wait()
+        raise EvidenceError(f"Installed artifact {stage} timed out.") from error
+    finally:
+        for reader in readers:
+            reader.join()
+    if exceeded.is_set():
         raise EvidenceError(f"Installed artifact {stage} exceeded the output limit.")
-    if completed.returncode:
+    stdout = bytes(output["stdout"]).decode("utf-8", errors="replace")
+    stderr = bytes(output["stderr"]).decode("utf-8", errors="replace")
+    if process.returncode:
         raise EvidenceError(
             f"Installed artifact {stage} failed.",
-            diagnostics=(completed.stdout, completed.stderr),
+            diagnostics=(stdout, stderr),
         )
-    return completed.stdout
+    return stdout
 
 
 def _validate_runtime_probe(
@@ -2326,8 +2605,8 @@ def validate_installed_compiled_performance(value: object) -> dict[str, Any]:
         or not core_origin
         or not isinstance(core_loader, str)
         or core_loader != "ExtensionFileLoader"
-        or not any(
-            core_origin.endswith(suffix) for suffix in machinery.EXTENSION_SUFFIXES
+        or not _is_importable_native_core_basename(
+            PurePosixPath(core_origin.replace("\\", "/")).name
         )
     ):
         raise EvidenceError("Installed performance native core origin is invalid.")
@@ -2741,19 +3020,20 @@ def verify_installed_wheel(
         )
     if expected_mode != build_intent:
         raise EvidenceError("Installed artifact mode contradicts build intent.")
-    artifact = wheel_path.resolve(strict=True)
-    artifact_sha256 = _artifact_sha256(artifact)
-    archive = inspect_wheel(artifact)
-    if archive["classified_mode"] != expected_mode:
-        raise EvidenceError(
-            "Installed artifact archive mode contradicts expected mode."
-        )
     expected_suite_sha256 = _expected_conformance_suite_sha256()
 
     with tempfile.TemporaryDirectory(
         prefix="fast-fsm-installed-artifact-"
     ) as temporary:
         temporary_root = Path(temporary).resolve()
+        artifact, artifact_sha256 = _snapshot_artifact(
+            wheel_path, temporary_root / "artifact"
+        )
+        archive = inspect_wheel(artifact)
+        if archive["classified_mode"] != expected_mode:
+            raise EvidenceError(
+                "Installed artifact archive mode contradicts expected mode."
+            )
         environment_root = temporary_root / "environment"
         neutral_directory = temporary_root / "neutral"
         neutral_directory.mkdir()
@@ -2773,6 +3053,10 @@ def verify_installed_wheel(
             stage="environment creation",
         )
         interpreter = _environment_python(environment_root)
+        if _artifact_sha256(artifact) != artifact_sha256:
+            raise EvidenceError(
+                "Artifact private snapshot changed before installation."
+            )
         _run_installed_command(
             [
                 "uv",

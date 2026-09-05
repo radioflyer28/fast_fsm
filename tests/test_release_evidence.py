@@ -15,7 +15,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 from typing import Iterable, Mapping
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 import yaml
@@ -162,6 +162,113 @@ def _write_wheel(
         for member in native_members:
             archive.writestr(member, b"native-fixture")
     return wheel
+
+
+def test_native_core_archive_detection_requires_an_exact_importable_basename(
+    tmp_path: Path,
+) -> None:
+    """Prefix lookalikes and nested extensions cannot prove ``fast_fsm.core`` native."""
+    for member in (
+        "fast_fsm/core_backup.so",
+        "fast_fsm/core_evil.pyd",
+        "fast_fsm/nested/core.abi3.so",
+    ):
+        wheel = _write_wheel(
+            tmp_path,
+            filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+            wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+            native_members=(member,),
+        )
+        with pytest.raises(EvidenceError, match="no native fast_fsm.core"):
+            release_evidence.inspect_wheel(wheel)
+
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+        wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+        native_members=("fast_fsm/core.abi3.so",),
+    )
+    assert release_evidence.inspect_wheel(wheel)["native_core_members"] == [
+        "fast_fsm/core.abi3.so"
+    ]
+
+
+def test_wheel_archive_preflight_bounds_metadata_and_normalized_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct wheel inspection rejects zip-bomb and duplicate-path fixtures first."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=("py3-none-any",),
+    )
+    with ZipFile(wheel, "a", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("fast_fsm/core.py", b"duplicate")
+    with pytest.raises(EvidenceError, match="duplicate normalized"):
+        release_evidence.inspect_wheel(wheel)
+
+    compressed = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=("py3-none-any",),
+    )
+    with ZipFile(compressed, "a", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("fast_fsm/repeated-data", b"x" * 16_384)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_WHEEL_COMPRESSION_RATIO", 2)
+        with pytest.raises(EvidenceError, match="compression-ratio"):
+            release_evidence.inspect_wheel(compressed)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_WHEEL_MEMBERS", 1)
+        with pytest.raises(EvidenceError, match="member-count"):
+            release_evidence.inspect_wheel(compressed)
+
+
+def test_private_artifact_snapshot_survives_caller_path_replacement(
+    tmp_path: Path,
+) -> None:
+    """The install candidate is a private descriptor-derived copy, never the source path."""
+    original = tmp_path / "fast_fsm-0.3.0-py3-none-any.whl"
+    original.write_bytes(b"reviewed-bytes")
+
+    snapshot, digest = release_evidence._snapshot_artifact(
+        original, tmp_path / "private-artifact"
+    )
+    original.write_bytes(b"replacement-bytes")
+
+    assert snapshot != original
+    assert snapshot.read_bytes() == b"reviewed-bytes"
+    assert digest == hashlib.sha256(b"reviewed-bytes").hexdigest()
+
+
+def test_installed_command_enforces_timeout_and_incremental_output_caps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hanging or flooding artifact child fails before it consumes unbounded resources."""
+    environment = dict(os.environ)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_INSTALLED_COMMAND_TIMEOUT_SECONDS", 0.05)
+        with pytest.raises(EvidenceError, match="timed out"):
+            release_evidence._run_installed_command(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                cwd=tmp_path,
+                environment=environment,
+                stage="timeout fixture",
+            )
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_CHILD_OUTPUT_BYTES", 64)
+        with pytest.raises(EvidenceError, match="exceeded the output limit"):
+            release_evidence._run_installed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys, time; sys.stdout.buffer.write(b'x' * 4096); "
+                    "sys.stdout.flush(); time.sleep(5)",
+                ],
+                cwd=tmp_path,
+                environment=environment,
+                stage="flood fixture",
+            )
 
 
 CANONICAL_V023_CORRECTION = (
@@ -2315,8 +2422,13 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
         "aggregate-matrix --profile release",
         "aggregate_release_evidence",
         "Release Evidence",
+        "child.json",
+        "archive.json",
+        "matrix-records.txt",
     ):
         assert required in hosted
+    assert "-name evidence.json" in hosted
+    assert "while IFS= read -r record" in hosted
     assert "gh workflow run" not in hosted
     assert "gh release" not in hosted
     assert "git push" not in hosted
@@ -2347,6 +2459,53 @@ def test_phase20_taskfile_keeps_local_readiness_non_authorizing() -> None:
     )
     with pytest.raises(AssertionError):
         _validate_phase20_release_taskfile(release_profile)
+
+
+def test_hosted_record_discovery_preserves_every_artifact_subdirectory(
+    tmp_path: Path,
+) -> None:
+    """The Taskfile's portable ``find`` path retains colliding record basenames."""
+    artifacts = tmp_path / "artifacts"
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "linux",
+        "machine": "x86_64",
+    }
+    cells = release_evidence.expected_matrix("release", runtime).cells
+    for cell in cells:
+        if cell.identifier == "sdist-archive":
+            record_name = "archive.json"
+        elif cell.sdist_parent is not None:
+            record_name = "child.json"
+        else:
+            record_name = "evidence.json"
+        destination = artifacts / cell.identifier / record_name
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps({"matrix": {"cell": cell.identifier}}), encoding="utf-8"
+        )
+
+    completed = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            'find "$1" -type f \\( -name evidence.json -o -name child.json -o '
+            "-name archive.json \\) -print | LC_ALL=C sort",
+            "hosted-record-discovery",
+            str(artifacts),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    paths = [Path(line) for line in completed.stdout.splitlines()]
+    assert len(paths) == len(cells)
+    assert {
+        json.loads(path.read_text(encoding="utf-8"))["matrix"]["cell"] for path in paths
+    } == {cell.identifier for cell in cells}
 
 
 def _validate_hosted_evidence_run_metadata(
@@ -2889,6 +3048,26 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert "softprops/action-gh-release" not in text
     assert "gh release" not in text
 
+    reusable_outputs = (
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    )
+    callable_section = re.search(
+        r"workflow_call:(?P<body>.*?)(?=\n\n# This workflow)", text, re.DOTALL
+    )
+    assert callable_section
+    for output in reusable_outputs:
+        assert re.search(
+            rf"^      {output}:\n.*?^        value: \$\{{\{{ jobs\.aggregate_release_evidence\.outputs\.{output} \}}\}}$",
+            callable_section.group("body"),
+            flags=re.MULTILINE | re.DOTALL,
+        ), output
+
     resolver = jobs["resolve_ref"]
     assert (
         resolver.get("outputs", {}).get("head_sha")
@@ -2954,7 +3133,11 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
         for step in native_steps
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     )
-    assert "cp${MATRIX_PYTHON/./}" in native_runs
+    assert "mapfile" not in native_runs
+    assert 'Path("artifact").rglob' in native_runs
+    assert "expected exactly one" in native_runs
+    assert '"performance": raw["performance"]' in native_runs
+    assert '"core_loader"' in native_runs
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
@@ -2981,6 +3164,15 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     )
     assert "aggregate-matrix --profile release" in aggregate_runs
     assert "release-evidence-complete" not in aggregate_runs
+    evidence_download = next(
+        step
+        for step in aggregate_steps
+        if isinstance(step, dict)
+        and isinstance(step.get("with"), dict)
+        and step["with"].get("pattern")
+        == "evidence-*-${{ needs.resolve_ref.outputs.head_sha }}"
+    )
+    assert "merge-multiple" not in evidence_download["with"]
 
 
 def test_release_evidence_workflow_is_exact_sha_native_and_evidence_only() -> None:
@@ -3069,18 +3261,168 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
     )
     assert "hashlib.sha256" in release_runs
     assert "release-manifest" in release_runs
-    assert "artifact_records" in release_runs
+    assert "stage_release_assets" in release_runs
     assert "release-artifacts" in release_runs
-    assert "profile" in release_runs and "release" in release_runs
-    assert "authorizes_release" in release_runs
     assert "local" not in release_runs
     assert "softprops/action-gh-release" in text
+    assert "release-staging" in release_runs
+    assert "files: release-staging/*" in text
+    assert "files: release-artifacts/*" not in text
+
+    setup_index = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+    )
+    sync_index = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict) and step.get("run") == "uv sync --locked --all-groups"
+    )
+    first_uv_run = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and "uv run" in step["run"]
+    )
+    assert setup_index < sync_index < first_uv_run
+
+    evidence_text = _workflow_text(RELEASE_EVIDENCE_WORKFLOW)
+    reusable_outputs = {
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    }
+    caller_references = set(
+        re.findall(r"needs\.release_evidence\.outputs\.([A-Za-z_]+)", text)
+    )
+    assert caller_references <= reusable_outputs
+    for output in caller_references:
+        assert f"jobs.aggregate_release_evidence.outputs.{output}" in evidence_text
 
     for job_id, job in jobs.items():
         if job_id != "github_release":
             assert "permissions" not in job, job_id
         assert "always()" not in str(job.get("if", "")), job_id
         assert job.get("continue-on-error") is not True, job_id
+
+
+def _release_asset_aggregate(payloads: Mapping[str, bytes]) -> dict[str, object]:
+    """Build a minimal aggregate fixture with direct, archive, and derived records."""
+    direct_name = "fast_fsm-0.3.0-py3-none-any.whl"
+    archive_name = "fast_fsm-0.3.0.tar.gz"
+    child_name = "fast_fsm-0.3.0-derived.whl"
+    return {
+        "profile": "release",
+        "authorizes_release": True,
+        "artifact_records": [
+            {
+                "matrix": {"cell": "pure-wheel-cp312-linux-x86_64"},
+                "artifact": {
+                    "filename": direct_name,
+                    "sha256": hashlib.sha256(payloads[direct_name]).hexdigest(),
+                },
+            },
+            {
+                "matrix": {"cell": "sdist-archive"},
+                "artifact": {
+                    "filename": archive_name,
+                    "sha256": hashlib.sha256(payloads[archive_name]).hexdigest(),
+                },
+            },
+            {
+                "matrix": {"cell": "sdist-wheel-cp312-linux-x86_64"},
+                "artifact": {
+                    "filename": child_name,
+                    "sha256": hashlib.sha256(payloads[child_name]).hexdigest(),
+                },
+            },
+        ],
+    }
+
+
+def test_stage_release_assets_publishes_only_direct_and_sdist_archive(
+    tmp_path: Path,
+) -> None:
+    """The allowlist includes the source archive but excludes derived sdist children."""
+    payloads = {
+        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.3.0.tar.gz": b"source-archive",
+        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+    }
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for filename in (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    ):
+        (downloaded / filename).write_bytes(payloads[filename])
+
+    staged = release_evidence.stage_release_assets(
+        _release_asset_aggregate(payloads),
+        downloaded=downloaded,
+        staging=tmp_path / "staging",
+    )
+
+    assert staged == (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    )
+    assert sorted(path.name for path in (tmp_path / "staging").iterdir()) == list(
+        staged
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("extra", "allowlist"),
+        ("altered-sdist", "SHA differs"),
+        ("symlink", "non-regular"),
+        ("derived-child", "allowlist"),
+    ),
+)
+def test_stage_release_assets_rejects_unapproved_or_substituted_downloads(
+    tmp_path: Path, mutation: str, expected: str
+) -> None:
+    """Extra, altered, linked, or derived bytes never reach the publish staging dir."""
+    payloads = {
+        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.3.0.tar.gz": b"source-archive",
+        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+    }
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for filename in (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    ):
+        (downloaded / filename).write_bytes(payloads[filename])
+    if mutation == "extra":
+        (downloaded / "unexpected.bin").write_bytes(b"extra")
+    elif mutation == "altered-sdist":
+        (downloaded / "fast_fsm-0.3.0.tar.gz").write_bytes(b"substituted")
+    elif mutation == "symlink":
+        target = downloaded / "target.whl"
+        target.write_bytes(payloads["fast_fsm-0.3.0-py3-none-any.whl"])
+        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").unlink()
+        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").symlink_to(target.name)
+    else:
+        (downloaded / "fast_fsm-0.3.0-derived.whl").write_bytes(
+            payloads["fast_fsm-0.3.0-derived.whl"]
+        )
+
+    with pytest.raises(EvidenceError, match=expected):
+        release_evidence.stage_release_assets(
+            _release_asset_aggregate(payloads),
+            downloaded=downloaded,
+            staging=tmp_path / "staging",
+        )
 
 
 def test_tag_release_workflow_has_one_complete_non_advisory_path() -> None:
@@ -3495,6 +3837,17 @@ def _matrix_artifact_name(cell: object) -> str:
     return f"fast_fsm-0.3.0-{cell.identifier}.whl"
 
 
+def _matrix_core_origin(cell: object) -> str:
+    """Return a target-appropriate core origin fixture for each matrix cell."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.asserted_mode != "compiled":
+        return "/isolated/environment/site-packages/fast_fsm/core.py"
+    if cell.os == "windows":
+        minor = cell.cpython_minor.replace(".", "")
+        return rf"C:\isolated\site-packages\fast_fsm\core.cp{minor}-win_amd64.pyd"
+    return "/isolated/environment/site-packages/fast_fsm/core.abi3.so"
+
+
 def _matrix_record(
     cell: object,
     *,
@@ -3535,6 +3888,12 @@ def _matrix_record(
             "machine": runtime_machine,
             "distribution_version": "0.3.0",
             "package_version": "0.3.0",
+            "core_origin": _matrix_core_origin(cell),
+            "core_loader": (
+                "ExtensionFileLoader"
+                if cell.asserted_mode == "compiled"
+                else "SourceFileLoader"
+            ),
         },
         "conformance": None
         if cell.identifier == "sdist-archive"
@@ -3545,7 +3904,31 @@ def _matrix_record(
             "tag": "unreleased",
         },
         "origin_verified": cell.requires_origin,
-        "performance": {"status": "passed"} if cell.requires_performance else None,
+        "performance": (
+            {
+                "evidence_kind": "installed_compiled_performance",
+                "artifact_sha256": digest,
+                "asserted_mode": "compiled",
+                "build_intent": "compiled",
+                "core_origin": _matrix_core_origin(cell),
+                "core_loader": "ExtensionFileLoader",
+                "exact_command": "installed_benchmark_probe.py --exact",
+                "execution_commit": "a" * 40,
+                "executed_at": "2026-09-05T02:36:33Z",
+                "warmup_operations": 2_000,
+                "iterations": 20_000,
+                "samples_ops_per_second": [275_000.0, 250_000.0, 225_000.0],
+                "statistic": "median",
+                "median_ops_per_second": 250_000.0,
+                "python_implementation": "cpython",
+                "python_version": f"{cell.cpython_minor}.1",
+                "platform": runtime_platform,
+                "machine": runtime_machine,
+                "environment_label": "installed-compiled-native",
+            }
+            if cell.requires_performance
+            else None
+        ),
         "parent_sdist": None
         if cell.sdist_parent is None
         else {
@@ -3600,6 +3983,67 @@ def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministi
         release_evidence.build_release_authorization(first)
 
 
+def test_aggregate_matrix_records_accepts_complete_release_performance_proof() -> None:
+    """The authorizing profile consumes full, artifact-bound native records."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+
+    aggregate = release_evidence.aggregate_matrix_records(
+        _complete_matrix_records("release"), profile="release", runtime=runtime
+    )
+
+    assert aggregate["authorizes_release"] is True
+    assert aggregate["installed_performance"]
+    assert all(
+        record["median_ops_per_second"] >= 200_000
+        for record in aggregate["installed_performance"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "match"),
+    [
+        ("artifact_sha256", "b" * 64, "artifact"),
+        ("execution_commit", "b" * 40, "commit"),
+        ("asserted_mode", "pure", "mode"),
+        (
+            "core_origin",
+            "/isolated/environment/site-packages/fast_fsm/core.py",
+            "native",
+        ),
+        ("core_loader", "SourceFileLoader", "native"),
+        ("python_version", "3.9.1", "runtime"),
+        ("platform", "windows", "runtime"),
+        ("machine", "amd64", "runtime"),
+    ],
+)
+def test_aggregate_matrix_records_rejects_detached_performance_bindings(
+    field: str, replacement: object, match: str
+) -> None:
+    """No bare success flag can substitute for per-artifact native proof."""
+    records = _complete_matrix_records("release")
+    compiled = next(record for record in records if record["performance"] is not None)
+    performance = compiled["performance"]
+    assert isinstance(performance, dict)
+    performance[field] = replacement
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.aggregate_matrix_records(
+            records,
+            profile="release",
+            runtime={
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "macos",
+                "machine": "arm64",
+            },
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
@@ -3615,7 +4059,7 @@ def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministi
         ),
         (
             lambda records: records[1]["provenance"].update(commit="b" * 40),
-            "provenance.commit",
+            "commit",
         ),
         (
             lambda records: records[1]["runtime"].update(package_version="0.2.2"),

@@ -23,6 +23,28 @@ on:
         required: false
         default: unreleased
         type: string
+    outputs:
+      head_sha:
+        description: Immutable checkout SHA accepted by terminal aggregation
+        value: ${{ jobs.aggregate_release_evidence.outputs.head_sha }}
+      aggregate_job:
+        description: Terminal aggregate job identity
+        value: ${{ jobs.aggregate_release_evidence.outputs.aggregate_job }}
+      aggregate_conclusion:
+        description: Terminal aggregate conclusion
+        value: ${{ jobs.aggregate_release_evidence.outputs.aggregate_conclusion }}
+      matrix_digest:
+        description: SHA-256 of the exact aggregate manifest
+        value: ${{ jobs.aggregate_release_evidence.outputs.matrix_digest }}
+      manifest_artifact:
+        description: Aggregate manifest artifact name
+        value: ${{ jobs.aggregate_release_evidence.outputs.manifest_artifact }}
+      summary_artifact:
+        description: Aggregate summary artifact name
+        value: ${{ jobs.aggregate_release_evidence.outputs.summary_artifact }}
+      evidence_artifacts:
+        description: Matrix evidence artifact name prefix
+        value: ${{ jobs.aggregate_release_evidence.outputs.evidence_artifacts }}
 
 # This workflow is intentionally evidence-only.  The tag-only release caller owns
 # the one write-capable job after it separately proves tag-to-aggregate equality.
@@ -391,10 +413,24 @@ jobs:
       - name: Select the one matching native wheel and run the complete oracle
         shell: bash
         run: |
-          wheel_tag="cp${MATRIX_PYTHON/./}"
-          mapfile -t wheels < <(find artifact -type f -name "*${wheel_tag}-*.whl" -print | sort)
-          test "${#wheels[@]}" -eq 1
-          wheel="${wheels[0]}"
+          wheel="$(uv run python - <<'PY'
+          import os
+          from pathlib import Path
+
+          wheel_tag = f"cp{os.environ['MATRIX_PYTHON'].replace('.', '')}"
+          wheels = sorted(
+              path.resolve()
+              for path in Path("artifact").rglob(f"*{wheel_tag}-*.whl")
+              if path.is_file()
+          )
+          if len(wheels) != 1:
+              raise SystemExit(
+                  f"expected exactly one {wheel_tag} native wheel, found {len(wheels)}"
+              )
+          print(wheels[0])
+          PY
+          )"
+          test -n "$wheel"
           uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode compiled --build-intent compiled --json > raw.json
       - name: Bind native oracle and installed performance to immutable matrix cell
         shell: bash
@@ -424,11 +460,11 @@ jobs:
                   "artifact_sha256": artifact["sha256"],
               },
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
               "conformance": raw["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
-              "performance": {"status": "passed"},
+              "performance": raw["performance"],
               "parent_sdist": None,
           }
           with open("evidence.json", "w", encoding="utf-8") as output:
@@ -554,11 +590,11 @@ jobs:
                   "artifact_sha256": artifact["sha256"],
               },
               "artifact": {key: artifact[key] for key in ("filename", "sha256", "classified_mode", "build_intent")},
-              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version")},
+              "runtime": {key: runtime[key] for key in ("python_implementation", "python_version", "platform", "machine", "distribution_version", "package_version", "core_origin", "core_loader")},
               "conformance": child["conformance"],
               "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
-              "performance": {"status": "passed"} if mode == "compiled" else None,
+              "performance": child["performance"] if mode == "compiled" else None,
               "parent_sdist": {"filename": archive["filename"], "sha256": archive["sha256"]},
           }
           Path("evidence").mkdir()
@@ -633,7 +669,6 @@ jobs:
         with:
           pattern: evidence-*-${{ needs.resolve_ref.outputs.head_sha }}
           path: downloaded-evidence
-          merge-multiple: true
       - id: aggregate
         name: Strictly aggregate every required evidence record
         shell: bash

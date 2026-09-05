@@ -544,10 +544,15 @@ tasks:
           manifest="$(find "$evidence_dir/artifacts" -type f -name release-manifest.json -print -quit)"
           summary="$(find "$evidence_dir/artifacts" -type f -name release-summary.txt -print -quit)"
           test -n "$manifest" && test -n "$summary"
+          record_list="$evidence_dir/matrix-records.txt"
+          find "$evidence_dir/artifacts" -type f \
+            \( -name evidence.json -o -name child.json -o -name archive.json \) \
+            -print | LC_ALL=C sort > "$record_list"
           set -- uv run python tools/release_evidence.py aggregate-matrix --profile release --json
-          for record in $(find "$evidence_dir/artifacts" -type f -name evidence.json -print | sort); do
+          while IFS= read -r record; do
+            test -n "$record"
             set -- "$@" --record "$record"
-          done
+          done < "$record_list"
           test "$#" -gt 8
           "$@" > "$evidence_dir/recomputed-manifest.json"
           uv run python - "$manifest" "$evidence_dir/recomputed-manifest.json" "$FAST_FSM_EXPECTED_SHA" <<'PY'

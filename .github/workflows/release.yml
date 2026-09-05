@@ -78,6 +78,12 @@ jobs:
         with:
           ref: ${{ needs.release_evidence.outputs.head_sha }}
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install locked release-manifest verifier dependencies
+        run: uv sync --locked --all-groups
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.release_evidence.outputs.manifest_artifact }}
@@ -94,31 +100,25 @@ jobs:
           import json
           import os
           from pathlib import Path
+          from tools.release_evidence import stage_release_assets
 
           release_manifest = Path("evidence/release-manifest.json")
           payload = json.loads(release_manifest.read_text())
           digest = hashlib.sha256(release_manifest.read_bytes()).hexdigest()
-          if payload.get("profile") != "release" or payload.get("authorizes_release") is not True:
-              raise SystemExit("release manifest is not aggregate-authorized")
           if payload.get("release_identity", {}).get("commit") != os.environ["GITHUB_SHA"]:
               raise SystemExit("release manifest commit does not equal tag checkout")
-          expected_artifacts = {
-              (record["artifact"]["filename"], record["artifact"]["sha256"])
-              for record in payload["artifact_records"]
-              if not record["matrix"]["cell"].startswith("sdist-")
-          }
-          downloaded = Path("release-artifacts")
-          for filename, expected_sha256 in sorted(expected_artifacts):
-              matches = list(downloaded.rglob(filename))
-              if len(matches) != 1:
-                  raise SystemExit(f"expected one aggregate-approved artifact: {filename}")
-              observed_sha256 = hashlib.sha256(matches[0].read_bytes()).hexdigest()
-              if observed_sha256 != expected_sha256:
-                  raise SystemExit(f"artifact SHA differs from aggregate: {filename}")
+          try:
+              stage_release_assets(
+                  payload,
+                  downloaded=Path("release-artifacts"),
+                  staging=Path("release-staging"),
+              )
+          except Exception as error:
+              raise SystemExit(str(error)) from error
           print(f"accepted release-manifest sha256={digest}")
           PY
       - name: Create aggregate-approved release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: release-artifacts/*
+          files: release-staging/*
           generate_release_notes: true
