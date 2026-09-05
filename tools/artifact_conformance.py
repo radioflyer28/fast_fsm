@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import importlib
 from importlib import machinery, metadata
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -45,6 +46,11 @@ _SCENARIO_DEFINITIONS = (
         "fields": _LIFECYCLE_FIELDS,
     },
     {
+        "id": "lifecycle.precommit-failure-observation",
+        "family": "lifecycle-result-history",
+        "fields": _LIFECYCLE_FIELDS,
+    },
+    {
         "id": "builder-declarative.dispatch",
         "family": "builder-declarative",
         "fields": (
@@ -54,6 +60,8 @@ _SCENARIO_DEFINITIONS = (
             "declarative_success",
             "handler_calls",
             "state",
+            "builder_sealed",
+            "async_detected",
             "redacted",
         ),
     },
@@ -80,6 +88,9 @@ _SCENARIO_DEFINITIONS = (
             "stage",
             "state",
             "history",
+            "canonical_endpoints",
+            "duplicate_state_rejected",
+            "snapshot_immutable",
             "redacted",
         ),
     },
@@ -91,6 +102,8 @@ _SCENARIO_DEFINITIONS = (
             "family",
             "success",
             "recorded",
+            "custom_redactor_called",
+            "custom_redactor_safe",
             "redacted",
             "handler_restored",
         ),
@@ -109,6 +122,18 @@ _SCENARIO_DEFINITIONS = (
         ),
     },
     {
+        "id": "ownership.reentry-independent-machine",
+        "family": "ownership-cancellation",
+        "fields": (
+            "id",
+            "family",
+            "outer_success",
+            "nested_rejected",
+            "independent_success",
+            "redacted",
+        ),
+    },
+    {
         "id": "ownership.cancellation-reuse",
         "family": "ownership-cancellation",
         "fields": ("id", "family", "cancelled", "reused", "state", "redacted"),
@@ -121,8 +146,16 @@ _SCENARIO_DEFINITIONS = (
             "family",
             "sync_success",
             "async_success",
+            "sync_committed",
+            "async_committed",
+            "sync_stage",
+            "async_stage",
             "sync_state",
             "async_state",
+            "sync_callback_order",
+            "async_callback_order",
+            "sync_history",
+            "async_history",
             "redacted",
         ),
     },
@@ -147,10 +180,22 @@ def _sha256(value: Mapping[str, Any]) -> str:
 
 
 def _suite_sha256() -> str:
+    """Bind the schema to the reviewed collector and scenario implementation bytes."""
+    collectors = _scenario_collectors()
+    source_digests = {
+        collector.__name__: hashlib.sha256(
+            inspect.getsource(collector).encode("utf-8")
+        ).hexdigest()
+        for collector in collectors
+    }
     return _sha256(
         {
             "schema_version": SCHEMA_VERSION,
             "scenario_definitions": list(_SCENARIO_DEFINITIONS),
+            "collector_source_sha256": hashlib.sha256(
+                inspect.getsource(_scenario_collectors).encode("utf-8")
+            ).hexdigest(),
+            "scenario_source_sha256": source_digests,
         }
     )
 
@@ -213,6 +258,50 @@ def _lifecycle_destination_enter_failure() -> dict[str, Any]:
     }
 
 
+def _lifecycle_precommit_failure_observation() -> dict[str, Any]:
+    """Prove pre-commit failure, ordered observers, and empty history stay aligned."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    callback_state = core.CallbackState
+    callback_order: list[str] = []
+
+    def source_exit(*_args: object, **_kwargs: object) -> None:
+        callback_order.append("source-exit")
+        raise RuntimeError("destination-secret")
+
+    source = callback_state("source", on_exit=source_exit)
+    destination = core.State("destination")
+    machine = core.StateMachine(source, name="artifact-conformance-precommit")
+    machine.add_state(destination)
+    machine.add_transition("advance", source, destination)
+    machine.enable_history()
+
+    def first_observer(*_args: object, **_kwargs: object) -> None:
+        callback_order.append("observer-one")
+
+    def second_observer(*_args: object, **_kwargs: object) -> None:
+        callback_order.append("observer-two")
+
+    machine.on_failed(first_observer)
+    machine.on_failed(second_observer)
+    result = machine.trigger("advance", payload="caller-secret")
+    return {
+        "id": "lifecycle.precommit-failure-observation",
+        "family": "lifecycle-result-history",
+        "success": result.success,
+        "committed": result.committed,
+        "stage": result.stage,
+        "state": machine.current_state.name,
+        "callback_order": callback_order,
+        "history": [
+            [record.from_state, record.trigger, record.to_state]
+            for record in machine.history
+        ],
+        "redacted": all(
+            sentinel not in repr(result) for sentinel in _PAYLOAD_SENTINELS
+        ),
+    }
+
+
 def _graph_guard_rejection() -> dict[str, Any]:
     """Exercise a real guard failure without exposing its supplied context."""
     core = importlib.import_module(_CORE_MODULE_NAME)
@@ -228,6 +317,21 @@ def _graph_guard_rejection() -> dict[str, Any]:
         conditions.FuncCondition(lambda *_args, **_kwargs: False, "false-guard"),
     )
     machine.enable_history()
+    snapshot = machine._graph_snapshot()
+    canonical_endpoints = bool(snapshot.transitions) and (
+        snapshot.transitions[0].from_state is source
+        and snapshot.transitions[0].to_state is destination
+    )
+    duplicate_state_rejected = False
+    try:
+        machine.add_state(core.State("guard-source"))
+    except ValueError:
+        duplicate_state_rejected = True
+    snapshot_immutable = False
+    try:
+        snapshot.states += (core.State("forbidden"),)
+    except (AttributeError, TypeError):
+        snapshot_immutable = True
     result = machine.trigger("advance", payload="caller-secret")
     return {
         "id": "graph.guard-rejection",
@@ -237,6 +341,9 @@ def _graph_guard_rejection() -> dict[str, Any]:
         "stage": result.stage,
         "state": machine.current_state.name,
         "history": [],
+        "canonical_endpoints": canonical_endpoints,
+        "duplicate_state_rejected": duplicate_state_rejected,
+        "snapshot_immutable": snapshot_immutable,
         "redacted": "caller-secret" not in repr(result),
     }
 
@@ -257,9 +364,19 @@ def _sync_async_equivalence() -> dict[str, Any]:
     sync_machine = core.StateMachine(sync_source, name="artifact-conformance-sync")
     sync_machine.add_state(sync_destination)
     sync_machine.add_transition("advance", sync_source, sync_destination)
+    sync_callbacks: list[str] = []
+    sync_machine.on_exit(
+        "source", lambda *_args, **_kwargs: sync_callbacks.append("exit")
+    )
+    sync_machine.on_enter(
+        "destination", lambda *_args, **_kwargs: sync_callbacks.append("enter")
+    )
+    sync_machine.enable_history()
     sync_result = sync_machine.trigger("advance", payload="caller-secret")
 
-    async def collect_async() -> tuple[bool, str]:
+    async def collect_async() -> tuple[
+        bool, bool, str, str, list[str], list[list[str]]
+    ]:
         async_source = core.State("source")
         async_destination = core.State("destination")
         async_machine = core.AsyncStateMachine(
@@ -269,19 +386,58 @@ def _sync_async_equivalence() -> dict[str, Any]:
         async_machine.add_transition(
             "advance", async_source, async_destination, AlwaysAsync()
         )
+        async_callbacks: list[str] = []
+
+        async def on_exit(*_args: object, **_kwargs: object) -> None:
+            async_callbacks.append("exit")
+
+        async def on_enter(*_args: object, **_kwargs: object) -> None:
+            async_callbacks.append("enter")
+
+        async_machine.on_exit_async("source", on_exit)
+        async_machine.on_enter_async("destination", on_enter)
+        async_machine.enable_history()
         async_result = await async_machine.trigger_async(
             "advance", payload="caller-secret"
         )
-        return async_result.success, async_machine.current_state.name
+        return (
+            async_result.success,
+            async_result.committed,
+            async_result.stage,
+            async_machine.current_state.name,
+            async_callbacks,
+            [
+                [record.from_state, record.trigger, record.to_state]
+                for record in async_machine.history
+            ],
+        )
 
-    async_success, async_state = asyncio.run(collect_async())
+    (
+        async_success,
+        async_committed,
+        async_stage,
+        async_state,
+        async_callbacks,
+        async_history,
+    ) = asyncio.run(collect_async())
     return {
         "id": "sync-async.equivalence",
         "family": "sync-async",
         "sync_success": sync_result.success,
         "async_success": async_success,
+        "sync_committed": sync_result.committed,
+        "async_committed": async_committed,
+        "sync_stage": sync_result.stage,
+        "async_stage": async_stage,
         "sync_state": sync_machine.current_state.name,
         "async_state": async_state,
+        "sync_callback_order": sync_callbacks,
+        "async_callback_order": async_callbacks,
+        "sync_history": [
+            [record.from_state, record.trigger, record.to_state]
+            for record in sync_machine.history
+        ],
+        "async_history": async_history,
         "redacted": True,
     }
 
@@ -306,6 +462,25 @@ def _builder_declarative_dispatch() -> dict[str, Any]:
     builder.add_transition("advance", "source", "target")
     builder_machine = builder.build()
     builder_result = builder_machine.trigger("advance", payload="caller-secret")
+    builder_sealed = False
+    try:
+        builder.add_state(core.State("late"))
+    except RuntimeError:
+        builder_sealed = True
+
+    class NestedAsync(AsyncCondition):
+        def __init__(self) -> None:
+            super().__init__("nested-async", "artifact collector async guard")
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            return True
+
+    async_builder = core.FSMBuilder(core.State("async-source"))
+    async_builder.add_state(core.State("async-target"))
+    async_builder.add_transition(
+        "advance", "async-source", "async-target", NestedAsync()
+    )
+    async_detected = isinstance(async_builder.build(), core.AsyncStateMachine)
 
     declarative_source = DeclarativeCollectorState()
     declarative_target = core.State("target")
@@ -324,6 +499,8 @@ def _builder_declarative_dispatch() -> dict[str, Any]:
         "declarative_success": declarative_result.success,
         "handler_calls": declarative_source.calls,
         "state": declarative_machine.current_state.name,
+        "builder_sealed": builder_sealed,
+        "async_detected": async_detected,
         "redacted": True,
     }
 
@@ -375,6 +552,54 @@ def _ownership_cancellation_reuse() -> dict[str, Any]:
         "reused": reused,
         "state": state,
         "redacted": True,
+    }
+
+
+def _ownership_reentry_independent_machine() -> dict[str, Any]:
+    """Reject direct reentry without blocking an unrelated machine's progress."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    callback_state = core.CallbackState
+    independent = core.StateMachine(core.State("source"), name="artifact-independent")
+    independent.add_state(core.State("destination"))
+    independent.add_transition("advance", "source", "destination")
+    independent_results: list[Any] = []
+    nested_rejected = False
+    machine: Any
+
+    def source_exit(*_args: object, **_kwargs: object) -> None:
+        nonlocal nested_rejected
+        try:
+            machine.trigger("nested", payload="caller-secret")
+        except RuntimeError:
+            nested_rejected = True
+        independent_results.append(
+            independent.trigger("advance", payload="caller-secret")
+        )
+
+    source = callback_state("source", on_exit=source_exit)
+    destination = core.State("destination")
+    alternate = core.State("alternate")
+    machine = core.StateMachine(source, name="artifact-conformance-reentry")
+    machine.add_state(destination)
+    machine.add_state(alternate)
+    machine.add_transition("outer", source, destination)
+    machine.add_transition("nested", source, alternate)
+    outer = machine.trigger("outer", payload="caller-secret")
+
+    independent_result = independent_results[0] if independent_results else None
+    return {
+        "id": "ownership.reentry-independent-machine",
+        "family": "ownership-cancellation",
+        "outer_success": outer.success,
+        "nested_rejected": nested_rejected,
+        "independent_success": bool(
+            independent_result is not None and independent_result.success
+        ),
+        "redacted": all(
+            sentinel not in repr(value)
+            for value in (outer, independent_result)
+            for sentinel in _PAYLOAD_SENTINELS
+        ),
     }
 
 
@@ -462,6 +687,9 @@ def _logging_metadata_redaction() -> dict[str, Any]:
     logger.handlers = [handler]
     logger.setLevel(logging.DEBUG - 5)
     logger.propagate = False
+    custom_redactor_called = False
+    custom_redactor_safe = False
+    custom_handle: Any | None = None
     try:
         source = core.State("source")
         destination = core.State("destination")
@@ -473,7 +701,32 @@ def _logging_metadata_redaction() -> dict[str, Any]:
         result = machine.trigger("advance", payload="caller-secret")
         records = [record.getMessage() for record in handler.records]
         redacted = all("caller-secret" not in message for message in records)
+
+        custom_logger_name = f"{logger_name}.custom"
+
+        def redactor(_event: object) -> dict[str, str]:
+            nonlocal custom_redactor_called, custom_redactor_safe
+            custom_redactor_called = True
+            custom_redactor_safe = True
+            return {"operation": "trusted-redaction", "detail": "allowed"}
+
+        custom_handle = core.configure_fsm_logging(
+            logging.DEBUG - 5,
+            custom_logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        custom_machine = core.StateMachine(
+            core.State("source"),
+            name="artifact-conformance-custom-redactor",
+            logger_name=custom_logger_name,
+        )
+        custom_machine.add_state(core.State("destination"))
+        custom_machine.add_transition("advance", "source", "destination")
+        custom_machine.trigger("advance", payload="caller-secret")
     finally:
+        if custom_handle is not None:
+            custom_handle.restore()
         logger.handlers = prior_handlers
         logger.setLevel(prior_level)
         logger.propagate = prior_propagate
@@ -482,6 +735,8 @@ def _logging_metadata_redaction() -> dict[str, Any]:
         "family": "logging-redaction",
         "success": result.success,
         "recorded": bool(records),
+        "custom_redactor_called": custom_redactor_called,
+        "custom_redactor_safe": custom_redactor_safe,
         "redacted": redacted,
         "handler_restored": logger.handlers == prior_handlers,
     }
@@ -491,12 +746,14 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
     """Return ordered standalone scenario adapters; later families extend this seam."""
     return (
         _lifecycle_destination_enter_failure,
+        _lifecycle_precommit_failure_observation,
         _builder_declarative_dispatch,
         _diagnostic_exact_limit,
         _graph_guard_rejection,
         _logging_metadata_redaction,
         _output_grammar_containment,
         _ownership_cancellation_reuse,
+        _ownership_reentry_independent_machine,
         _sync_async_equivalence,
     )
 

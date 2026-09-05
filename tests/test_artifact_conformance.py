@@ -141,3 +141,93 @@ def test_hash_seed_does_not_change_canonical_semantics() -> None:
         assert completed.returncode == 0, completed.stderr
         outputs.append(json.loads(completed.stdout))
     assert outputs[0] == outputs[1]
+
+
+def test_suite_digest_binds_collector_implementation_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Schema-preserving scenario rewrites cannot retain the reviewed suite identity."""
+    original = artifact_conformance._lifecycle_destination_enter_failure
+    baseline = artifact_conformance._suite_sha256()
+
+    def altered_lifecycle() -> dict[str, object]:
+        return original()
+
+    monkeypatch.setattr(
+        artifact_conformance,
+        "_lifecycle_destination_enter_failure",
+        altered_lifecycle,
+    )
+
+    assert artifact_conformance._suite_sha256() != baseline
+
+
+def test_hardened_oracle_observes_each_phase_contract() -> None:
+    """Every hardened behavior has a concrete, payload-safe oracle assertion."""
+    records = {
+        record["id"]: record
+        for record in artifact_conformance.collect_conformance()["scenarios"]
+    }
+
+    graph = records["graph.guard-rejection"]
+    assert graph["canonical_endpoints"] is True
+    assert graph["duplicate_state_rejected"] is True
+    assert graph["snapshot_immutable"] is True
+
+    precommit = records["lifecycle.precommit-failure-observation"]
+    assert precommit["success"] is False
+    assert precommit["committed"] is False
+    assert precommit["stage"] == "source-exit"
+    assert precommit["state"] == "source"
+    assert precommit["callback_order"] == [
+        "source-exit",
+        "observer-one",
+        "observer-two",
+    ]
+    assert precommit["history"] == []
+
+    builder = records["builder-declarative.dispatch"]
+    assert builder["builder_sealed"] is True
+    assert builder["async_detected"] is True
+
+    ownership = records["ownership.reentry-independent-machine"]
+    assert ownership["outer_success"] is True
+    assert ownership["nested_rejected"] is True
+    assert ownership["independent_success"] is True
+
+    equivalence = records["sync-async.equivalence"]
+    for field in (
+        "success",
+        "committed",
+        "stage",
+        "state",
+        "callback_order",
+        "history",
+    ):
+        assert equivalence[f"sync_{field}"] == equivalence[f"async_{field}"]
+
+    logging_record = records["logging.metadata-redaction"]
+    assert logging_record["custom_redactor_called"] is True
+    assert logging_record["custom_redactor_safe"] is True
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    (
+        "graph.guard-rejection",
+        "lifecycle.precommit-failure-observation",
+        "builder-declarative.dispatch",
+        "ownership.reentry-independent-machine",
+        "sync-async.equivalence",
+        "logging.metadata-redaction",
+    ),
+)
+def test_each_hardened_contract_record_is_required(identifier: str) -> None:
+    """Removing one contract-specific scenario makes the installed oracle invalid."""
+    payload = artifact_conformance.collect_conformance()
+    payload["scenarios"] = [
+        record for record in payload["scenarios"] if record["id"] != identifier
+    ]
+
+    with pytest.raises(artifact_conformance.ConformanceError):
+        artifact_conformance.validate_conformance(payload)
