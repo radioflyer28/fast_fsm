@@ -5,11 +5,11 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 22
 current_phase_name: Ordered Runtime Selection & Lifecycle Integration
 status: planning
-stopped_at: Phase 21 complete, ready to plan Phase 22
-last_updated: "2026-09-06T23:32:15.327Z"
+stopped_at: Phase 22 context gathered
+last_updated: "2026-09-06T23:35:17.743Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 21 complete, transitioned to Phase 22
-state_head: 4baeceb8d8cff0de4a655fbd1123cc24edca4cab
+state_head: 6588148f4c20accf9d5a2bfa29e2ce66ce8c1691
 progress:
   total_phases: 5
   completed_phases: 1
@@ -168,9 +168,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T23:32:15.327Z
-Stopped at: Phase 21 complete, ready to plan Phase 22
-Resume file: None
+Last session: 2026-09-06T23:35:17.676Z
+Stopped at: Phase 22 context gathered
+Resume file: .planning/phases/22-ordered-runtime-selection-lifecycle-integration/22-CONTEXT.md
 
 ## Rebuild Log
 
