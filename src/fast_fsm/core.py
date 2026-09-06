@@ -1616,9 +1616,15 @@ class StateMachine:
             if len(entry) not in (3, 4, 5):
                 raise ValueError("each transition entry must contain 3, 4, or 5 items")
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
-            condition: Optional[Union[Condition, GuardCallable]] = (
-                rest[0] if rest else None
-            )
+            condition: Optional[Union[Condition, GuardCallable]]
+            if not rest or rest[0] is None:
+                condition = None
+            elif isinstance(rest[0], Condition) or callable(rest[0]):
+                condition = rest[0]
+            else:
+                raise TypeError(
+                    f"Condition must be Condition or callable, got {type(rest[0])}"
+                )
             priority: object = rest[1] if len(rest) == 2 else 0
             prepared.append(
                 self._normalize_transition_request(
@@ -5016,7 +5022,17 @@ class FSMBuilder:
 
         # Normalize every staged row before one batch registration call. The
         # candidate remains private until this complete topology commit succeeds.
-        transition_rows = []
+        transition_rows: List[
+            Union[
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, GuardCallable]],
+                    object,
+                ]
+            ]
+        ] = []
         for trigger, from_state, to_state, condition, priority in self._transitions:
             to_state_obj = (
                 self._states[to_state] if to_state in self._states else to_state
