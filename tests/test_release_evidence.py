@@ -2095,6 +2095,16 @@ def test_manifest_rejects_non_finite_benchmark_measurements(
         serialize_manifest(manifest)
 
 
+@pytest.mark.parametrize("value", (250_000.0, float("nan"), float("inf")))
+def test_child_evidence_numeric_bounds_accept_only_finite_floats(value: float) -> None:
+    """Installed benchmark fields are ordinary finite JSON numbers, never NaN/Infinity."""
+    if value == 250_000.0:
+        release_evidence._validate_json_bounds(value)
+    else:
+        with pytest.raises(EvidenceError, match="non-finite number"):
+            release_evidence._validate_json_bounds(value)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

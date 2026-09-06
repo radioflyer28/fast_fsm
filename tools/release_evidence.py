@@ -2473,6 +2473,12 @@ def _validate_json_bounds(value: Any, *, depth: int = 0) -> None:
                 "Installed artifact child evidence has an unsafe number."
             )
         return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise EvidenceError(
+                "Installed artifact child evidence has a non-finite number."
+            )
+        return
     if isinstance(value, str):
         if len(value) > _MAX_CHILD_STRING_LENGTH:
             raise EvidenceError(

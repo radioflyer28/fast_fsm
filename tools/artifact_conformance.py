@@ -284,7 +284,8 @@ def _suite_sha256(source_path: Path | None = None) -> str:
     the installed module itself.
     """
     path = source_path or Path(__file__)
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    source = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(source).hexdigest()
 
 
 def _lifecycle_destination_enter_failure() -> dict[str, Any]:

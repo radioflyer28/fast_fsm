@@ -203,6 +203,22 @@ def test_suite_digest_binds_all_collector_implementation_bytes(
     assert artifact_conformance._suite_sha256(mutated) != baseline
 
 
+def test_suite_digest_is_stable_across_checkout_newline_conventions(
+    tmp_path: Path,
+) -> None:
+    """The installed oracle identity is invariant to Git's CRLF checkout policy."""
+    source = Path(artifact_conformance.__file__)
+    lf_copy = tmp_path / "lf_artifact_conformance.py"
+    crlf_copy = tmp_path / "crlf_artifact_conformance.py"
+    contents = source.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    lf_copy.write_bytes(contents)
+    crlf_copy.write_bytes(contents.replace(b"\n", b"\r\n"))
+
+    assert artifact_conformance._suite_sha256(
+        lf_copy
+    ) == artifact_conformance._suite_sha256(crlf_copy)
+
+
 def test_hardened_oracle_observes_each_phase_contract() -> None:
     """Every hardened behavior has a concrete, payload-safe oracle assertion."""
     records = {
