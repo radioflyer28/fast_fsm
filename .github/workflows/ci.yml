@@ -2,86 +2,345 @@ name: CI
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - "CHANGELOG.md"
-      - ".github/copilot-instructions.md"
-      - "uv.lock"
+    branches: ["**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  # ── Lint ────────────────────────────────────────────────────────────────────
-  lint:
-    name: Lint
+  static_release_identity:
+    name: Static v0.3.0 identity
     runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
           python-version: "3.12"
+      - name: Install locked identity dependencies
+        run: uv sync --locked --all-groups
+      - name: Validate static release identity without requiring a tag
+        run: |
+          uv run python - <<'PY'
+          import json
+          import subprocess
+          from fast_fsm import __version__
+          from tools.artifact_conformance import _suite_sha256
 
-      - name: Install dev deps
-        run: uv sync --group dev
-        env:
-          FAST_FSM_PURE_PYTHON: "1"
+          head_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          with open("installed-identity.json", "w", encoding="utf-8") as output:
+              json.dump(
+                  {"distribution_version": "0.3.0", "package_version": __version__},
+                  output,
+                  sort_keys=True,
+              )
+          with open("static-aggregate.json", "w", encoding="utf-8") as output:
+              json.dump(
+                  {
+                      "package": "fast_fsm",
+                      "distribution_version": "0.3.0",
+                      "commit": head_sha,
+                      "tag": "unreleased",
+                      "suite_sha256": _suite_sha256(),
+                  },
+                  output,
+                  sort_keys=True,
+              )
+          PY
+          uv run python tools/release_evidence.py verify-release-identity \
+            --installed-identity installed-identity.json \
+            --aggregate static-aggregate.json --json
 
-      - name: ruff format check
-        run: uv run ruff format --check src/ tests/
+  format:
+    name: Ruff format
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked quality dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Check formatting
+        run: task format-check
 
-      - name: ruff lint
-        run: uv run ruff check src/ tests/
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked quality dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run lint
+        run: task lint
 
-      - name: ty type check
-        run: uv run ty check src/fast_fsm/
+  typecheck_mypy:
+    name: Mypy compatibility (blocking)
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked quality dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run blocking mypy compatibility check
+        run: task typecheck-mypy
 
-  # ── Tests (pure Python, all platforms × Python versions) ────────────────────
+  typecheck_ty:
+    name: Ty compatibility (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked quality dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run advisory ty compatibility check
+        run: task typecheck-ty
+
   test:
-    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    name: Tests · Python ${{ matrix.python-version }} · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest, windows-latest, macos-latest]
-
+    env:
+      FAST_FSM_BUILD_MODE: pure
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
           python-version: ${{ matrix.python-version }}
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked test dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run sequential test suite
+        run: task test
 
-      - name: Install deps
-        run: uv sync --group dev
-        env:
-          FAST_FSM_PURE_PYTHON: "1"
+  ownership_native_probe:
+    name: Ownership native probe · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      FAST_FSM_BUILD_MODE: compiled
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: ${{ matrix.python-version }}
+      - name: Install locked native probe dependencies
+        run: uv sync --locked --all-groups
+      - name: Validate ownership native matrix contract
+        run: uv run python tools/phase18_native_probe.py --check-ci .github/workflows/ci.yml
+      - name: Compile actual ownership core
+        run: uv run python setup.py build_ext --inplace -q
+      - name: Assert native ownership core origin
+        run: uv run python tools/phase18_native_probe.py --assert-core-native
+      - name: Run native ownership and lifecycle semantics
+        run: >-
+          uv run pytest
+          tests/test_ownership_concurrency.py
+          tests/test_transition_lifecycle.py
+          tests/test_async.py
+          tests/test_mypyc_guard.py
+          -x -q
+      - name: Compile and import ownership representation probe
+        run: uv run python tools/phase18_native_probe.py --build-mode compiled --assert-native
 
-      - name: Run test suite
-        run: uv run pytest tests/ -x -q
-        env:
-          FAST_FSM_PURE_PYTHON: "1"
+  supported_python_build:
+    name: Pure sdist build · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked release build dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Build and inspect pure source distribution
+        run: task supported-python-build-check
 
-  # ── Verify mypyc compilation still works (Ubuntu + latest Python) ────────────
-  build-check:
+  evidence:
+    name: Pure coverage and release evidence freshness
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked evidence dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Check evidence freshness and source coverage
+        run: task release-baseline-check
+
+  docs_html:
+    name: Sphinx HTML
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked documentation dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Build Sphinx HTML with warnings as errors
+        run: task docs-check
+
+  docs_doctest:
+    name: Sphinx doctest
+    runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
+          python-version: "3.12"
+      - name: Install pinned Task runner
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: "3.53.1"
+      - name: Install locked documentation dependencies
+        run: uv sync --locked --all-groups
+      - name: Verify pure source origin
+        run: uv run python tools/release_evidence.py verify-source --json
+      - name: Run Sphinx doctests
+        run: task docs-test
+
+  build_check:
     name: Verify mypyc build
     runs-on: ubuntu-latest
+    env:
+      FAST_FSM_BUILD_MODE: compiled
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
           python-version: "3.12"
-
-      - name: Install deps
-        run: uv sync --group dev
-
+      - name: Install locked build dependencies
+        run: uv sync --locked --group release --group dev
       - name: Build mypyc extension
         run: uv run python setup.py build_ext --inplace -q
-
       - name: Smoke test compiled module
         run: |
           uv run python -c "
@@ -94,23 +353,22 @@ jobs:
           print('Compiled smoke test: OK')
           "
 
-  # ── Benchmark throughput gate (compiled, push to main only) ─────────────────
   benchmark:
     name: Benchmark throughput gate
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    env:
+      FAST_FSM_BUILD_MODE: compiled
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: "0.12.6"
           python-version: "3.12"
-
-      - name: Install dev deps
-        run: uv sync --group dev
-
+      - name: Install locked benchmark dependencies
+        run: uv sync --locked --all-groups
       - name: Build mypyc extension
         run: uv run python setup.py build_ext --inplace -q
-
       - name: Run throughput regression gate
         run: uv run pytest tests/test_performance_benchmarks.py -m slow -x -q

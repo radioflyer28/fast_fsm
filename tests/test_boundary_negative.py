@@ -9,7 +9,7 @@ All tests use real FSM components — no mocking.
 
 import pytest
 
-from fast_fsm.core import State, StateMachine, TransitionResult
+from fast_fsm.core import State, StateMachine, TransitionError, TransitionResult
 from fast_fsm.conditions import Condition
 
 
@@ -87,12 +87,16 @@ class TestStateMachineConstruction:
         assert fsm.triggers == []
 
     def test_add_state_already_exists(self):
-        """Adding a state with a duplicate name — behaviour depends on impl."""
+        """A same-name foreign state cannot replace the canonical registry object."""
         fsm = StateMachine(State("a"), name="dup")
-        fsm.add_state(State("b"))
-        # Adding 'b' again — should overwrite silently (dict-based)
-        fsm.add_state(State("b"))
+        canonical = State("b")
+        fsm.add_state(canonical)
+        before = fsm._graph_snapshot()
+        with pytest.raises(ValueError, match="already registered"):
+            fsm.add_state(State("b"))
         assert fsm.states.count("b") == 1
+        assert fsm._states["b"] is canonical
+        assert fsm._graph_snapshot() == before
 
     def test_from_states_no_args_raises(self):
         with pytest.raises(ValueError, match="At least one state name"):
@@ -197,6 +201,43 @@ class TestTransitionResult:
         text = repr(r)
         assert "True" in text or "success" in text.lower()
 
+    def test_additive_lifecycle_fields_preserve_legacy_constructor_and_equality(self):
+        """Old five-field positional calls remain valid and do not expose causes."""
+        legacy = TransitionResult(False, "source", "destination", "go", "failed")
+        successful = TransitionResult(True, "source", "destination", "go")
+        first_cause = RuntimeError("first-secret")
+        second_cause = RuntimeError("second-secret")
+        first = TransitionResult(
+            False,
+            "source",
+            "destination",
+            "go",
+            "failed",
+            True,
+            "destination-enter",
+            first_cause,
+        )
+        second = TransitionResult(
+            False,
+            "source",
+            "destination",
+            "go",
+            "failed",
+            True,
+            "destination-enter",
+            second_cause,
+        )
+
+        assert (legacy.committed, legacy.stage, legacy.cause) == (False, None, None)
+        assert successful.raise_if_failed() is successful
+        assert first.cause is first_cause
+        assert first == second
+        assert "first-secret" not in repr(first)
+        with pytest.raises(TransitionError) as raised:
+            first.raise_if_failed()
+        assert raised.value.__cause__ is first_cause
+        assert "first-secret" not in str(raised.value)
+
 
 # ---------------------------------------------------------------------------
 # safe_trigger
@@ -212,12 +253,14 @@ class TestSafeTrigger:
     def test_safe_trigger_catches_exception(self):
         """safe_trigger wraps any exception into a TransitionResult."""
 
+        bomb_error = RuntimeError("bomb went off")
+
         class BombCondition(Condition):
             def __init__(self):
                 super().__init__("bomb", "boom")
 
             def check(self, **kwargs) -> bool:
-                raise RuntimeError("bomb went off")
+                raise bomb_error
 
         fsm = StateMachine(State("a"), name="bomb_test")
         fsm.add_state(State("b"))
@@ -226,12 +269,16 @@ class TestSafeTrigger:
         # Normal trigger — condition exceptions are already caught by trigger()
         result = fsm.trigger("go")
         assert not result.success
-        assert "bomb went off" in result.error
+        assert result.stage == "guard"
+        assert result.cause is bomb_error
+        assert "bomb went off" not in result.error
 
         # safe_trigger should also handle it gracefully
         fsm._current_state = fsm._states["a"]
         result = fsm.safe_trigger("go")
         assert not result.success
+        assert result.stage == "guard"
+        assert "bomb went off" not in result.error
 
 
 # ---------------------------------------------------------------------------
@@ -374,4 +421,5 @@ class TestSafeTriggerEdgeCases:
         result = fsm.safe_trigger("go")
         assert not result.success
         assert result.error is not None
-        assert "exploded" in result.error
+        assert result.stage == "guard"
+        assert "exploded" not in result.error

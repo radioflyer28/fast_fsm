@@ -6,6 +6,12 @@
 # Full test suite (merge gate)
 uv run pytest tests/ -x -q
 
+# Phase 18 ownership source-tree parity, origin, performance, and pure release gate
+uv run python tools/phase16_isolated_verify.py --suite phase18
+
+# Phase 19 diagnostic/output/logging source-tree parity and final local gate
+uv run python tools/phase16_isolated_verify.py --suite phase19
+
 # Single test file
 uv run pytest tests/test_basic_functionality.py -x -q
 
@@ -22,8 +28,15 @@ uv run python benchmarks/benchmark_fast_fsm.py
 ```text
 tests/
 ├── test_basic_functionality.py     # Core FSM: states, transitions, errors
-├── test_advanced_functionality.py  # Builder, callbacks, introspection
-├── test_safety_kwargs.py           # Kwargs sanitization, exception handling
+├── test_graph_invariants.py         # Canonical registry, atomicity, snapshots
+├── test_transition_lifecycle.py     # Sync/async lifecycle, result, observer, cancellation matrix
+├── test_ownership_concurrency.py    # Ownership, reentry, loop, writer, and cleanup matrix
+├── test_builder.py                  # Builder lifecycle and declarative dispatch
+├── test_async.py                    # Async guards, dispatch, and history parity
+├── test_advanced_functionality.py  # History, callbacks, introspection
+├── test_safety_kwargs.py            # Guard-context sanitization
+├── test_condition_templates.py      # Built-in wrapper behavior
+├── test_mypyc_guard.py              # One compiled-core boundary and public API
 ├── test_validation.py              # Validation module: validators, scoring, export
 ├── test_performance_benchmarks.py  # Throughput and memory thresholds
 └── test_readme_examples.py         # Verify README code samples work
@@ -36,10 +49,10 @@ then the full suite once before merge.
 
 | Source file changed | Primary test files |
 |---------------------|-------------------|
-| `core.py` | `test_basic_functionality.py`, `test_advanced_functionality.py` |
+| `core.py` | `test_basic_functionality.py`, `test_graph_invariants.py`, `test_transition_lifecycle.py`, `test_builder.py`, `test_async.py`, `test_advanced_functionality.py`, `test_mypyc_guard.py` |
 | `validation.py` | `test_validation.py` |
-| `conditions.py` | `test_safety_kwargs.py` |
-| `condition_templates.py` | `test_safety_kwargs.py` |
+| `conditions.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
+| `condition_templates.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
 | README / examples | `test_readme_examples.py` |
 | Performance-sensitive | `test_performance_benchmarks.py` |
 
@@ -57,10 +70,14 @@ Defined in `pytest.ini`:
 
 ### Guidelines
 
-1. **Use composition, not inheritance.** Do not subclass `StateMachine` or
-   `State` in tests — create instances and call methods. This is required
-   for compatibility with the mypyc-compiled build (compiled classes cannot
-   be subclassed from interpreted Python).
+1. **Prefer composition, with a deliberate state-subclass exception.** Do not
+   subclass `StateMachine` or `AsyncStateMachine` in tests; create instances
+   and call methods because machine types are closed compiled types. `State`,
+   `CallbackState`, `DeclarativeState`, and `AsyncDeclarativeState` are
+   supported interpreted-subclass hooks through
+   `@mypyc_attr(allow_interpreted_subclasses=True)`. Use a minimal local
+   subclass when testing behavior that depends on a state subclass hook, and
+   run it in both pure and compiled modes.
 2. **No logic mocking.** Never mock `trigger()`, `check()`, or state
    callbacks. Mock the *environment* (clock, RNG, I/O), not the logic
    being tested.
@@ -73,28 +90,27 @@ Defined in `pytest.ini`:
 
 ### Example
 
-```python
-import pytest
-from fast_fsm import State, StateMachine, CallbackState
+```{testcode}
+from fast_fsm import State, StateMachine
 
-class TestTrafficLight:
-    """Test a simple traffic light FSM."""
+red = State("red")
+yellow = State("yellow")
+green = State("green")
 
-    def test_basic_cycle(self):
-        red = State("red")
-        yellow = State("yellow")
-        green = State("green")
+fsm = StateMachine(red, name="traffic")
+fsm.add_state(yellow)
+fsm.add_state(green)
+fsm.add_transition("next", "red", "green")
+fsm.add_transition("next", "green", "yellow")
+fsm.add_transition("next", "yellow", "red")
 
-        fsm = StateMachine("traffic", initial_state=red)
-        fsm.add_state(yellow)
-        fsm.add_state(green)
-        fsm.add_transition("next", "red", "green")
-        fsm.add_transition("next", "green", "yellow")
-        fsm.add_transition("next", "yellow", "red")
+assert fsm.current_state.name == "red"
+fsm.trigger("next")
+print(fsm.current_state.name)
+```
 
-        assert fsm.current_state.name == "red"
-        fsm.trigger("next")
-        assert fsm.current_state.name == "green"
+```{testoutput}
+green
 ```
 
 ## Performance Benchmarks
@@ -116,6 +132,274 @@ Benchmark results are hardware-dependent. Do not commit results as
 
 ## Baseline
 
-- **62 tests passing** on `main`
-- **0 failures** expected
-- Full suite is the merge gate: `uv run pytest tests/ -x -q`
+Fast FSM maintains a durable baseline of **700+ tests**. The full suite is the
+merge gate:
+
+```bash
+uv run pytest tests/ -x -q
+```
+
+Exact test counts, coverage, toolchain versions, source origin, artifact mode,
+and collected environment-labeled trigger-throughput observations belong only in the tracked
+[`evidence/release-baseline.json`](../../evidence/release-baseline.json)
+manifest. Do not copy those changing observations into narrative documentation.
+
+## Release Evidence Workflow
+
+The checked-in manifest is produced from a clean pure-Python source collection.
+The Taskfile is the canonical interface:
+
+```bash
+# Confirm that imports resolve to pure Python and fail on native source shadows.
+task pure-source-check
+
+# Intentionally regenerate the tracked evidence after a reviewed change.
+task release-baseline-write
+
+# Read-only freshness and regression check (the command CI runs).
+task release-baseline-check
+```
+
+Use `FAST_FSM_BUILD_MODE=auto`, `pure`, or `compiled` to make a build intent
+explicit. `FAST_FSM_PURE_PYTHON=1` remains a compatible alias for pure mode.
+Before collecting evidence, select pure mode, run the source preflight, and
+only then run the write command. Review a generated manifest diff before
+committing it. CI runs the read-only check and never writes the baseline.
+
+The source preflight is deliberately non-destructive: it reports a native
+extension shadow before importing and leaves every file untouched. If a stale
+artifact is intentional to remove, first review the exact reported path and
+then explicitly remove only that artifact; rerun `task pure-source-check` to
+prove the cleanup. Never use broad cleanup commands for this procedure.
+
+## Phase 20 Installed-Artifact Evidence
+
+Source-tree tests, pure wheels, compiled wheels, source-distribution children,
+and hosted native evidence answer different questions. A pure source suite
+cannot prove an installed wheel; a cross-built wheel cannot prove its native
+runtime until it is consumed on a matching runner; historical measurements do
+not satisfy the current installed compiled performance contract.
+
+Run the local non-authorizing projection with:
+
+```bash
+task release-readiness-check
+```
+
+For focused local diagnosis, use the exact subcommands:
+
+```bash
+task release-identity-check
+task release-installed-artifacts-check
+task release-sdist-check
+task release-evidence-local-check
+task release-installed-performance-check
+task release-slots-check
+```
+
+The projection builds temporary direct pure/compiled artifacts and
+source-distribution pure/compiled children, checks their installed origins and
+semantic parity, and measures an installed native compiled wheel against the
+fixed 200,000 operations/second floor. It also runs the separate O(1) and
+diagnostic-budget contracts. Its aggregate is explicitly `local-non-authorizing`:
+do not use it to claim hosted-matrix success or to authorize a tag/release.
+
+The later externally authorized checkpoint is intentionally separate and must
+be completed before tagging:
+
+```bash
+FAST_FSM_HOSTED_RUN_ID=<authorized-run-id> \
+FAST_FSM_EXPECTED_SHA=<40-character-reviewed-sha> \
+task release-hosted-prerelease-check
+```
+
+That command only reads the manually dispatched **Release Evidence** run. It
+requires the expected head SHA, terminal successful `aggregate_release_evidence`
+job, the full canonical `release` matrix, and downloaded SHA-bound records.
+It neither dispatches a workflow nor creates a tag, release, or publication.
+Use the release runbook for the explicit authorization and tag-time equality
+procedure.
+
+## Phase 17 Lifecycle Source-Tree Verification
+
+[`tools/phase16_isolated_verify.py`](../../tools/phase16_isolated_verify.py)
+is the source-tree authority for the Phase 16 and Phase 17 conformance suites.
+The Phase 17 suite exports committed `HEAD` into fresh temporary repositories,
+overlays its fixed lifecycle source/test/doc/ADR/SPR/evidence inventory from
+the working tree, selects `FAST_FSM_BUILD_MODE` before locked setup, and
+asserts the imported `fast_fsm.core` origin before semantic tests begin. Pure
+mode refuses native artifacts; compiled mode builds a fresh native extension.
+The harness never imports from, deletes, or treats developer-checkout native
+shadows as evidence.
+
+Use task mode for a narrow check whose changed files are explicitly included:
+
+```bash
+uv run python tools/phase16_isolated_verify.py \
+  --mode task --build-mode pure \
+  --include src/fast_fsm/core.py \
+  --include tests/test_transition_lifecycle.py -- \
+  uv run pytest tests/test_transition_lifecycle.py -x -q
+```
+
+The final Phase 17 gate is deliberately broader:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase17
+task typecheck-mypy
+task typecheck-ty
+```
+
+That suite runs the same lifecycle, advanced, listener, builder, async,
+boundary, and mypyc matrix against asserted pure `.py` and freshly built native
+origins. It then runs the compiled lifecycle-success `trigger()` floor
+(`>= 200,000` operations per second), the slots-policy audit, and the complete
+asserted-pure sequential release gate (full tests, formatting/lint, blocking
+mypy, docs, doctests, and read-only baseline freshness). `typecheck-ty` stays
+visible as independent advisory feedback. Exact counts, timing, origin,
+toolchain, and hardware observations are environment-labelled evidence in the
+[Phase 17 performance record](../../.planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md)
+and [`evidence/release-baseline.json`](../../evidence/release-baseline.json),
+not durable prose claims.
+
+The focused Phase 17 families cover the explicit pre-commit/commit/post-commit
+order, stage/result/cause truth, exact-once non-recursive failure observers,
+commit-owned history, same-slot async callbacks, and event-synchronized
+cancellation. They also retain the Phase 16 graph/builder/guard/declarative
+compatibility matrix. Reentrancy and ownership are Phase 18, diagnostic and
+logging architecture is Phase 19, and installed-wheel parity is Phase 20; do
+not treat source-tree conformance as installed-artifact proof.
+
+## Phase 18 Ownership and Concurrency Verification
+
+[`tools/phase16_isolated_verify.py`](../../tools/phase16_isolated_verify.py)
+extends the source-tree protocol with the `phase18` suite:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase18
+```
+
+The runner archives committed `HEAD`, overlays the declared Phase 18 inventory,
+and verifies two fresh origins. Pure mode refuses a native shadow before import;
+compiled mode builds `core.py` first and asserts a fresh native module origin.
+Developer-checkout extension shadows are neither deleted nor treated as
+evidence. For a narrow work-in-progress check, use task mode with every
+uncommitted file that the command needs overlaid explicitly:
+
+```bash
+uv run python tools/phase16_isolated_verify.py \
+  --mode task --build-mode pure \
+  --include src/fast_fsm/core.py \
+  --include tests/test_ownership_concurrency.py -- \
+  uv run pytest tests/test_ownership_concurrency.py -x -q
+```
+
+Wave 0 created an executable ownership table. Each later plan removed only its
+own `xfail(strict=True)` rows, ran the focused selection and observed a real
+behavioral RED before production changes, then made that row GREEN. An XPASS
+was a failure. Plan 18-04 tightened the temporary writer-name inventory to a
+structural assertion that every public writer has one admission boundary and
+delegates only to already-owned private bodies. This protocol prevents a stale
+test from being mistaken for ownership proof.
+
+The deterministic matrix covers direct and callback-originated writes, two
+sync threads, independent same-loop tasks, causal child-task reentry,
+cross-loop rejection, the D-12 first-use reservation race, normal exceptions,
+`BaseException`, cancellation while waiting/owning, and every state/history
+commit boundary. It uses barriers, events, and explicit task handshakes—never
+timing sleeps. It also proves context-local declarative markers, inline sync
+callbacks, same-slot awaited async callbacks, complete registration coverage,
+slot layout, O(1) ownership operations, and the compiled `trigger()` floor of
+at least 200,000 operations/second.
+
+The final local gate includes the full sequential suite, Ruff, blocking mypy,
+advisory ty, docs/doctests, the slots audit, release-baseline freshness, and
+fresh pure/compiled source-tree execution. The final external gate is a hosted
+native ownership matrix for Python 3.10 through 3.14 whose successful run
+names the exact SHA of the implementation. A queued, running, cancelled,
+skipped, failed, or stale-SHA run is not completion evidence. Phase 19 owns
+diagnostic snapshot consistency; Phase 20 separately proves installed-wheel
+and sdist parity.
+
+## Phase 19 Bounded Diagnostics and Safe Output Verification
+
+Phase 19 uses strict-RED ownership before production implementation. Each
+future contract starts as `xfail(strict=True, reason="RED until 19-NN")` with
+one named owner. That owner removes only its own marker, runs the focused
+selection and observes a genuine behavioral RED, then makes it GREEN; an XPASS
+is a failure. Before the Phase 19 final gate, no Phase 19 strict-RED marker may
+remain. Documentation-only work does not move those ownership boundaries.
+
+The diagnostic matrix checks facts by exact counters, not elapsed time. For
+each of `max_work`, `max_results`, `max_dense_cells`, and
+`max_path_expansions`, tests first record the required count under a high cap,
+prove that exact cap succeeds, then prove that one less fails before the next
+work/allocation boundary. Deterministic state/edge/result order and counters
+are also exercised in separate child interpreters with `PYTHONHASHSEED=1` and
+`PYTHONHASHSEED=2`; no timing sleep or local throughput observation is a graph
+correctness assertion.
+
+The hostile-output and logging matrix supplies punctuation collisions, empty
+labels, controls, directives, fences, Unicode, and comment markers to every
+Mermaid, PlantUML, Markdown, JSON, and caller-supplied adjacency sink. It also
+places unique payload sentinels in trigger/state/arguments/keywords/errors and
+hostile `__repr__` values, then inspects log messages, args, record mappings,
+formatter output, and both application and library handlers. Redactor output,
+failure, propagation, handler identity/order, repeated configuration, and
+in-order/out-of-order/idempotent restore are all real-handler checks.
+
+Use focused loops while changing the implementation:
+
+```bash
+uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py tests/test_logging_config.py -x -q
+uv run pytest tests/test_validation.py tests/test_visualization.py tests/test_graph_invariants.py -x -q
+uv run pytest tests/test_mypyc_guard.py tests/test_validation.py tests/test_visualization.py tests/test_logging_config.py -x -q
+```
+
+The local final authority is:
+
+```bash
+uv run python tools/phase16_isolated_verify.py --suite phase19
+```
+
+It archives committed `HEAD`, overlays only the declared Phase 19 inventory,
+and proves two origins before semantics: an asserted pure source tree that
+refuses native shadows and a separate freshly compiled native tree. It does
+not import from, delete, or treat a developer-checkout native extension as
+evidence. The suite also runs the relevant diagnostic/output/logging matrix,
+slots policy, compiled `trigger()` floor, Ruff, blocking mypy, advisory ty,
+HTML docs, doctests, full sequential tests, and read-only baseline freshness.
+Exact test counts and timings stay environment-labelled evidence; the durable
+performance gate remains the compiled `trigger()` floor of 200,000 operations
+per second.
+
+This is local source-tree evidence, not hosted evidence or installed-artifact
+proof. Phase 20 owns the wheel/sdist pure/native parity matrix, publication,
+and final release evidence. Do not call a passing `--suite phase19` an
+installed-wheel claim.
+
+## Type-Checking Authority
+
+`task typecheck-mypy` is the blocking compatibility authority, including the
+mypyc boundary. `task typecheck-ty` is separate advisory feedback: keep it
+visible and address useful findings, but do not treat it as the release-gate
+verdict.
+
+## Measured Slots Policy
+
+The canonical policy command recursively discovers every relevant production
+class below `src/fast_fsm` and fails if an unregistered or omitted exception
+would escape the audit:
+
+```bash
+uv run python tools/release_evidence.py slots-policy --json
+```
+
+Hot-path classes use `__slots__`. Two measured exceptions are deliberately
+registered: `CompiledFuncCondition` stays interpreted for user subclassing and
+delegates evaluation to a compiled core helper, while `TransitionError` uses
+`native_class=False` to preserve ordinary Python exception behavior. Both can
+therefore have an instance `__dict__`; their environment-labeled measurements
+live in the
+evidence manifest rather than this guide. This is the measured exception policy
+recorded by ADR-003, not a relaxation of the general hot-path rule.

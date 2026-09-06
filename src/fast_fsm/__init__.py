@@ -16,19 +16,27 @@ from .core import (
     TransitionRecord,
     Condition,
     FuncCondition,
-    CompiledFuncCondition,
     AsyncCondition,
     NegatedCondition,
     DeclarativeState,
     AsyncDeclarativeState,
     transition,
+    FSMTraceEvent,
+    FSMTraceRedactor,
+    FSMLoggingHandle,
     configure_fsm_logging,
     set_fsm_logging_level,
     simple_fsm,
     quick_fsm,
     condition_builder,
 )
+from .conditions import CompiledFuncCondition, GuardCallable, GuardResult
 from .condition_templates import TimeoutCondition, CooldownCondition, ElapsedCondition
+from ._diagnostics import (
+    DiagnosticLimits,
+    DiagnosticStatus,
+    DiagnosticBudgetExceeded,
+)
 from .visualization import (
     to_mermaid,
     to_mermaid_fenced,
@@ -71,6 +79,8 @@ __all__ = [
     "Condition",
     "FuncCondition",
     "CompiledFuncCondition",
+    "GuardCallable",
+    "GuardResult",
     "AsyncCondition",
     "NegatedCondition",
     # Advanced state handling
@@ -78,6 +88,9 @@ __all__ = [
     "AsyncDeclarativeState",
     "transition",
     # Logging configuration
+    "FSMTraceEvent",
+    "FSMTraceRedactor",
+    "FSMLoggingHandle",
     "configure_fsm_logging",
     "set_fsm_logging_level",
     # Convenience functions
@@ -88,6 +101,10 @@ __all__ = [
     "TimeoutCondition",
     "CooldownCondition",
     "ElapsedCondition",
+    # Bounded diagnostics
+    "DiagnosticLimits",
+    "DiagnosticStatus",
+    "DiagnosticBudgetExceeded",
     # Visualization
     "to_mermaid",
     "to_mermaid_fenced",

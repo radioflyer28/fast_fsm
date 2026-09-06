@@ -9,7 +9,11 @@ StateMachine.add_transition() and FSMBuilder.add_transition().
 All tests use real condition objects — no mocking.
 """
 
+import gc
+import inspect
 import time
+import types
+from typing import Any, Awaitable, Callable, cast
 
 import pytest
 
@@ -27,7 +31,7 @@ from fast_fsm.condition_templates import (
     TimeoutCondition,
     ValueInSetCondition,
 )
-from fast_fsm.conditions import FuncCondition, NegatedCondition
+from fast_fsm.conditions import Condition, FuncCondition, GuardResult, NegatedCondition
 from fast_fsm.core import AsyncStateMachine, FSMBuilder, State, StateMachine
 
 
@@ -275,6 +279,439 @@ class TestNotCondition:
         c = NotCondition(inner)
         assert c.check(x=5) is True  # NOT (5 > 10) => True
         assert c.check(x=20) is False  # NOT (20 > 10) => False
+
+
+class RecordingCondition(Condition):
+    """Test-only leaf that records positional identity and keyword values."""
+
+    def __init__(self, result=True):
+        super().__init__("recording", "records guard context")
+        self.result = result
+        self.calls = []
+
+    def check(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.result
+
+
+class ShortCircuitCondition(Condition):
+    """Test-only leaf that makes evaluation order observable."""
+
+    def __init__(self, result):
+        super().__init__("short_circuit", "records short-circuit evaluation")
+        self.result = result
+        self.calls = 0
+
+    def check(self, *args, **kwargs):
+        self.calls += 1
+        return self.result
+
+
+class AwaitableResultCondition(Condition):
+    """Test-only leaf that records one deferred guard result."""
+
+    __slots__ = ("await_calls", "calls", "error", "result")
+
+    def __init__(self, result: bool, error: BaseException | None = None) -> None:
+        super().__init__("awaitable_result", "returns a deferred guard result")
+        self.result = result
+        self.error = error
+        self.calls = 0
+        self.await_calls = 0
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+
+        async def resolve() -> bool:
+            self.await_calls += 1
+            if self.error is not None:
+                raise self.error
+            return self.result
+
+        return resolve()
+
+
+class GeneratorAwaitableResultCondition(Condition):
+    """Test-only leaf that returns a legacy generator-based coroutine."""
+
+    __slots__ = ("await_calls", "calls", "result")
+
+    def __init__(self, result: bool) -> None:
+        super().__init__("generator_awaitable", "returns a legacy awaitable")
+        self.result = result
+        self.calls = 0
+        self.await_calls = 0
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+
+        @types.coroutine
+        def resolve():
+            self.await_calls += 1
+            if False:
+                yield None
+            return self.result
+
+        return resolve()
+
+
+class CloseTrackingAwaitable:
+    """Own a native child coroutine and record each explicit close."""
+
+    __slots__ = ("_close_events", "_coroutine")
+
+    def __init__(self, close_events: list[str]) -> None:
+        async def resolve() -> bool:
+            return True
+
+        self._close_events = close_events
+        self._coroutine = resolve()
+
+    def __await__(self):
+        return self._coroutine.__await__()
+
+    def close(self) -> None:
+        self._close_events.append("closed")
+        self._coroutine.close()
+
+
+class CloseTrackingAwaitableCondition(Condition):
+    """Create one child whose close lifecycle is observable by the test."""
+
+    __slots__ = ("calls", "close_events")
+
+    def __init__(self) -> None:
+        super().__init__("close_tracking", "records direct wrapper cleanup")
+        self.calls = 0
+        self.close_events: list[str] = []
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        self.calls += 1
+        return CloseTrackingAwaitable(self.close_events)
+
+
+async def _await_direct_guard_result(result: GuardResult) -> bool:
+    """Await a direct composite result after asserting its public channel."""
+    assert inspect.isawaitable(result)
+    return await cast(Awaitable[bool], result)
+
+
+class TestPositionalConditionForwarding:
+    """Built-in wrappers preserve the two-channel guard calling convention."""
+
+    @staticmethod
+    def _assert_context(condition, first, second, payload):
+        args, kwargs = condition.calls[-1]
+        assert args[0] is first
+        assert args[1] is second
+        assert kwargs["payload"] is payload
+
+    def test_direct_func_and_negated_conditions_forward_positional_context(self):
+        first = object()
+        second = object()
+        payload = object()
+        captured = []
+
+        def callable_guard(*args, **kwargs):
+            captured.append((args, kwargs))
+            return True
+
+        assert FuncCondition(callable_guard).check(first, second, payload=payload)
+        assert (
+            NegatedCondition(FuncCondition(callable_guard)).check(
+                first, second, payload=payload
+            )
+            is False
+        )
+        assert captured[0][0][0] is first
+        assert captured[0][0][1] is second
+        assert captured[0][1]["payload"] is payload
+        assert captured[1][0][0] is first
+        assert captured[1][0][1] is second
+        assert captured[1][1]["payload"] is payload
+
+    def test_and_or_and_not_forward_positional_context_to_every_leaf(self):
+        first = object()
+        second = object()
+        payload = object()
+        and_left = RecordingCondition(True)
+        and_right = RecordingCondition(True)
+        or_left = RecordingCondition(False)
+        or_right = RecordingCondition(True)
+        not_inner = RecordingCondition(False)
+
+        assert AndCondition(and_left, and_right).check(first, second, payload=payload)
+        assert OrCondition(or_left, or_right).check(first, second, payload=payload)
+        assert NotCondition(not_inner).check(first, second, payload=payload)
+
+        for condition in (and_left, and_right, or_left, or_right, not_inner):
+            self._assert_context(condition, first, second, payload)
+
+    def test_and_or_short_circuit_without_evaluating_later_leaves(self):
+        first = object()
+        false_left = ShortCircuitCondition(False)
+        skipped_and = ShortCircuitCondition(True)
+        true_left = ShortCircuitCondition(True)
+        skipped_or = ShortCircuitCondition(False)
+
+        assert not AndCondition(false_left, skipped_and).check(first, mode="and")
+        assert OrCondition(true_left, skipped_or).check(first, mode="or")
+
+        assert false_left.calls == 1
+        assert skipped_and.calls == 0
+        assert true_left.calls == 1
+        assert skipped_or.calls == 0
+
+    def test_legacy_kwargs_only_condition_calls_remain_compatible(self):
+        condition = FuncCondition(lambda **kwargs: kwargs["allowed"])
+
+        assert condition.check(allowed=True)
+        assert not condition.check(allowed=False)
+
+    def test_builtin_leaf_templates_accept_positional_context(self):
+        marker = object()
+
+        assert AlwaysCondition().check(marker)
+        assert not NeverCondition().check(marker)
+        assert KeyExistsCondition("key").check(marker, key="value")
+        assert ValueInSetCondition("key", {"value"}).check(marker, key="value")
+        assert RegexCondition("key", "value").check(marker, key="value")
+        assert ComparisonCondition("key", "==", "value").check(marker, key="value")
+        assert TimeoutCondition(10.0).check(marker)
+        assert CooldownCondition(10.0).check(marker)
+        assert isinstance(ElapsedCondition(10.0).check(marker), bool)
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+class TestDirectCompositeAwaitableChecks:
+    """Direct composite ``check`` calls retain the async guard channel."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "true_result", "false_result"),
+        (
+            (NegatedCondition, False, True),
+            (AndCondition, True, False),
+            (OrCondition, True, False),
+            (NotCondition, False, True),
+        ),
+    )
+    async def test_direct_checks_await_async_true_and_false_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        true_result: bool,
+        false_result: bool,
+    ) -> None:
+        for leaf_result, expected in ((True, true_result), (False, false_result)):
+            leaf = AwaitableResultCondition(leaf_result)
+            result = factory(leaf).check()
+
+            assert inspect.isawaitable(result)
+            assert await _await_direct_guard_result(result) is expected
+            assert leaf.calls == 1
+            assert leaf.await_calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "true_result", "false_result"),
+        (
+            (NegatedCondition, False, True),
+            (AndCondition, True, False),
+            (OrCondition, True, False),
+            (NotCondition, False, True),
+        ),
+    )
+    async def test_direct_checks_await_generator_based_coroutines_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        true_result: bool,
+        false_result: bool,
+    ) -> None:
+        for leaf_result, expected in ((True, true_result), (False, false_result)):
+            leaf = GeneratorAwaitableResultCondition(leaf_result)
+            result = factory(leaf).check()
+
+            assert inspect.isawaitable(result)
+            assert await _await_direct_guard_result(result) is expected
+            assert leaf.calls == 1
+            assert leaf.await_calls == 1
+
+    @pytest.mark.parametrize(
+        "factory",
+        (NegatedCondition, AndCondition, OrCondition, NotCondition),
+    )
+    def test_closing_unstarted_direct_check_closes_captured_child_once(
+        self, factory: Callable[[Condition], Condition]
+    ) -> None:
+        leaf = CloseTrackingAwaitableCondition()
+        result = factory(leaf).check()
+
+        assert inspect.isawaitable(result)
+        close = getattr(result, "close", None)
+        assert callable(close)
+        close()
+        close()
+        del result
+        gc.collect()
+
+        assert leaf.calls == 1
+        assert leaf.close_events == ["closed"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "factory",
+        (NegatedCondition, AndCondition, OrCondition, NotCondition),
+    )
+    async def test_direct_checks_propagate_async_errors_once(
+        self, factory: Callable[[Condition], Condition]
+    ) -> None:
+        leaf = AwaitableResultCondition(False, RuntimeError("guard exploded"))
+        result = factory(leaf).check()
+
+        with pytest.raises(RuntimeError, match="guard exploded"):
+            await _await_direct_guard_result(result)
+        assert leaf.calls == 1
+        assert leaf.await_calls == 1
+
+    def test_direct_checks_stay_immediate_for_all_synchronous_children(self) -> None:
+        assert NegatedCondition(AlwaysCondition()).check() is False
+        assert AndCondition(AlwaysCondition(), AlwaysCondition()).check() is True
+        assert OrCondition(NeverCondition(), AlwaysCondition()).check() is True
+        assert NotCondition(NeverCondition()).check() is True
+
+    @pytest.mark.asyncio
+    async def test_and_defers_later_children_until_the_async_branch_resolves(
+        self,
+    ) -> None:
+        left = ShortCircuitCondition(True)
+        middle = AwaitableResultCondition(False)
+        skipped = ShortCircuitCondition(True)
+
+        result = AndCondition(left, middle, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert left.calls == 1
+        assert middle.calls == 1
+        assert middle.await_calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is False
+        assert middle.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_or_defers_later_children_until_the_async_branch_resolves(
+        self,
+    ) -> None:
+        left = ShortCircuitCondition(False)
+        middle = AwaitableResultCondition(True)
+        skipped = ShortCircuitCondition(False)
+
+        result = OrCondition(left, middle, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert left.calls == 1
+        assert middle.calls == 1
+        assert middle.await_calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is True
+        assert middle.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "first_result", "second_result", "expected"),
+        (
+            (AndCondition, True, False, False),
+            (OrCondition, False, True, True),
+        ),
+    )
+    async def test_direct_compounds_await_later_async_children_in_order(
+        self,
+        factory: Callable[..., Condition],
+        first_result: bool,
+        second_result: bool,
+        expected: bool,
+    ) -> None:
+        first = AwaitableResultCondition(first_result)
+        second = AwaitableResultCondition(second_result)
+        skipped = ShortCircuitCondition(not second_result)
+
+        result = factory(first, second, skipped).check()
+
+        assert inspect.isawaitable(result)
+        assert first.calls == 1
+        assert first.await_calls == 0
+        assert second.calls == 0
+        assert skipped.calls == 0
+        assert await _await_direct_guard_result(result) is expected
+        assert first.await_calls == 1
+        assert second.calls == 1
+        assert second.await_calls == 1
+        assert skipped.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "first_result", "second_result", "expected"),
+        (
+            (AndCondition, True, False, False),
+            (OrCondition, False, True, True),
+        ),
+    )
+    async def test_direct_compounds_continue_to_later_sync_children(
+        self,
+        factory: Callable[..., Condition],
+        first_result: bool,
+        second_result: bool,
+        expected: bool,
+    ) -> None:
+        first = AwaitableResultCondition(first_result)
+        second = ShortCircuitCondition(second_result)
+
+        result = factory(first, second).check()
+
+        assert inspect.isawaitable(result)
+        assert first.calls == 1
+        assert first.await_calls == 0
+        assert second.calls == 0
+        assert await _await_direct_guard_result(result) is expected
+        assert first.await_calls == 1
+        assert second.calls == 1
+
+    def test_sync_short_circuit_does_not_create_later_async_leaf(self) -> None:
+        skipped_and = AwaitableResultCondition(True)
+        skipped_or = AwaitableResultCondition(False)
+
+        assert AndCondition(ShortCircuitCondition(False), skipped_and).check() is False
+        assert OrCondition(ShortCircuitCondition(True), skipped_or).check() is True
+        assert skipped_and.calls == 0
+        assert skipped_or.calls == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "leaf_result", "expected_success"),
+        (
+            (NegatedCondition, True, False),
+            (AndCondition, True, True),
+            (OrCondition, False, False),
+            (NotCondition, True, False),
+        ),
+    )
+    async def test_machine_iterative_evaluator_calls_async_composite_leaf_once(
+        self,
+        factory: Callable[[Condition], Condition],
+        leaf_result: bool,
+        expected_success: bool,
+    ) -> None:
+        leaf = AwaitableResultCondition(leaf_result)
+        machine = AsyncStateMachine(State("source"))
+        machine.add_state(State("target"))
+        machine.add_transition("advance", "source", "target", factory(leaf))
+
+        result = await machine.trigger_async("advance")
+
+        assert result.success is expected_success
+        assert leaf.calls == 1
+        assert leaf.await_calls == 1
 
 
 # ---------------------------------------------------------------------------

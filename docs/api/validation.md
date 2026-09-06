@@ -86,7 +86,7 @@ otherwise.
 
 ## Adjacency Matrix
 
-Use `FSMValidator.get_adjacency_matrix()` to get a stable, index-ordered
+Use `FSMValidator.get_adjacency_matrix()` to get a stable, snapshot-ordered
 representation of the FSM graph suitable for tooling or passing to
 {func}`~fast_fsm.to_mermaid_document`:
 
@@ -94,11 +94,89 @@ representation of the FSM graph suitable for tooling or passing to
 from fast_fsm.validation import FSMValidator
 
 adj = FSMValidator(fsm).get_adjacency_matrix()
-# adj["states"]      — alphabetically sorted list of state names
-# adj["events"]      — alphabetically sorted list of event names
+# adj["states"]      — snapshot-ordered list of state names
+# adj["events"]      — deterministically ordered list of event names
 # adj["transitions"] — flat list of {idx, from_state, to_state, event, ...}
 # adj["matrix"]      — N×N list-of-lists; matrix[i][j] = [transition_idx, ...]
 ```
+
+## Bounded Snapshot Diagnostics
+
+`FSMValidator(fsm, *, name=None, limits=None)` and
+`EnhancedFSMValidator(fsm, *, name=None, design_style_threshold=0.4,
+min_transitions_for_style=6, completeness_weight=0.0, limits=None)` capture
+one private immutable graph snapshot at construction. Every nested helper uses
+that capture and its one shared budget; it never rereads live topology. The
+declared initial state is the reachability root and is reported separately
+from the captured current state.
+
+`DiagnosticLimits` is a frozen, slotted keyword-only budget object with these
+finite integer defaults:
+
+| Field | Default | Counted boundary |
+|---|---:|---|
+| `max_work` | 50,000 | visits, edge examinations, and other diagnostic work |
+| `max_results` | 10,000 | emitted analysis results |
+| `max_dense_cells` | 200,000 | complete dense cells before allocation |
+| `max_path_expansions` | 20,000 | followed generated-path edges |
+
+All fields must be non-negative integers (not `bool`). These limits are not
+timeouts. A status is the frozen scalar `DiagnosticStatus(complete,
+exhausted_dimension, exhausted_stage, work_count, result_count,
+dense_cell_count, path_expansion_count)`. A structured report carries its
+`diagnostic_status`; a legacy set/list/scalar/printing/dense-matrix method
+raises `DiagnosticBudgetExceeded(status)` with the fixed message
+`diagnostic budget exhausted` before it can return a partial value.
+
+`validate_completeness(*, limits=None, include_dense=False)` returns
+`fsm_name`, `total_states`, `total_events`, `total_transitions`,
+`initial_state`, `current_state`, `unreachable_states`, `dead_states`,
+`missing_transitions`, `is_complete`, `is_reachable`, `has_dead_states`,
+`cyclic_components`, flattened `states_in_cycles`, `structural_depth`,
+`depth_interpretation`, `sparse_adjacency`, and `diagnostic_status`. It adds
+`transition_matrix` only when `include_dense=True`. `get_sparse_adjacency(*,
+limits=None)` is the normal `O(V + E)` result with snapshot-ordered `states`,
+ordered `events`, and ordered `edges`. `get_transition_matrix(*, limits=None)`
+preflights `V × events`, and `get_adjacency_matrix(*, limits=None)` preflights
+`V²`, before allocating either compatibility shape.
+
+`find_cycles(*, limits=None)` is a path-shaped compatibility view derived from
+iterative SCC membership. SCCs include every member of a self-loop or larger
+cycle exactly once in deterministic snapshot order. `structural_depth` is
+computed with iterative dynamic programming: `depth_interpretation` is
+`dag_longest_path` for an acyclic graph and `condensation_dag_depth` for a
+cyclic graph. The latter is deliberately not an exact simple-path claim
+inside an SCC. `generate_test_paths(max_length=10, max_paths=50, *,
+max_expansions=None, limits=None)` uses iterative DFS; its requested length
+and path caps are separate from shared work/result and expansion budgets.
+
+## Position-Safe Comparison and Batch Schemas
+
+`compare_fsms(*fsms, limits=None)` validates each input once and returns:
+
+```text
+{
+  "entries": [{"position", "name", "score", "metrics", "issue_count",
+               "diagnostic_status"}, ...],
+  "rankings": [{"position", "name", "score"}, ...],
+  "best_fsm": {"position", "name"} | None,
+  "comparison_metrics": {"count", "avg_score", "score_range",
+                         "total_issues", "diagnostic_status"},
+}
+```
+
+`position` is the zero-based identity. Duplicate and empty names are labels,
+not keys; stable ties sort by descending score and then ascending `position`.
+For no inputs, `entries` and `rankings` are empty, `best_fsm` is `None`,
+`count` and `total_issues` are `0`, and `avg_score` and `score_range` are
+`None`.
+
+`batch_validate(*fsms, show_summary=True, limits=None)` returns
+`{count, entries, diagnostic_status}` where each ordered entry is
+`{position, name, validator, diagnostic_status}`. It preserves every input,
+including duplicate labels. Each supplied `limits` value is independently
+applied to each one-capture input; aggregate status preserves the first
+exhaustion boundary and sums deterministic counters.
 
 ## Validators
 

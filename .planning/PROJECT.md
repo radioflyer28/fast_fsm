@@ -67,14 +67,14 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ **INT-03/04**: Timing conditions work as guards on StateMachine, AsyncStateMachine, and FSMBuilder — v0.2.3
 - ✓ **PERF-01**: `trigger()` with timing guard ≥ 200k ops/sec — v0.2.3
 - ✓ **DOC-01/02**: README + Sphinx docs updated with timing condition examples — v0.2.3
+- ✓ Runtime graph construction, transition dispatch, guards, history, declarative states, and builders preserve explicit invariants — Phase 16
+- ✓ Callback failures, reentrant transitions, and concurrent access use safe default behavior — Phases 17–18
+- ✓ Validation, comparison, visualization, and diagnostic APIs produce correct bounded results — Phase 19
+- ✓ Logging and trace output avoid leaking payloads or disrupting application-owned handlers — Phase 19
 
 ### Active
 
 - [ ] Release metadata, changelog, documentation, and quality gates agree on one auditable version and test baseline
-- [ ] Runtime graph construction, transition dispatch, guards, history, declarative states, and builders preserve explicit invariants
-- [ ] Callback failures, reentrant transitions, and concurrent access use safe default behavior
-- [ ] Validation, comparison, visualization, and diagnostic APIs produce correct bounded results
-- [ ] Logging and trace output avoid leaking payloads or disrupting application-owned handlers
 - [ ] Compiled and pure-Python execution paths pass equivalent tests while preserving the throughput contract
 
 ### Out of Scope
@@ -93,7 +93,7 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` and `condition_templates.py` stay interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
-- **Test count:** 722 (post-v0.2.3)
+- **Test count:** 1,503 (after Phase 19)
 - **Clock source:** `time.monotonic()` for all timing — immune to NTP jumps across macOS/Linux/Windows
 - **v0.3.0 scope source:** `.planning/codebase/CONCERNS.md` audit dated 2026-08-29
 - **Compatibility posture:** Existing public symbols remain available, but safe default behavior takes precedence over preserving unsafe pre-production semantics
@@ -115,7 +115,10 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 | Detect compiled mode by module file suffix | `FAST_FSM_PURE_PYTHON` env var only suppresses build-time compilation; can't reliably detect runtime mode | ✓ `find_spec().origin.endswith(".so")` is accurate |
 | History recording is zero-cost when disabled | Single `None` check in `trigger()` hot path; bounded `deque` when enabled | ✓ Verified ≤ 2× overhead in benchmark |
 | Timing conditions in condition_templates.py (not core.py) | condition_templates.py stays interpreted for user subclassing; no mypyc rebuild needed | ✓ Purely additive — no core.py changes |
-| Adopt safe defaults for callback failure, reentrancy, and concurrent access in v0.3.0 | The library is not yet used in production; correcting unsafe semantics now is cheaper than preserving them indefinitely | — Pending implementation |
+| Adopt safe defaults for callback failure, reentrancy, and concurrent access in v0.3.0 | The library is not yet used in production; correcting unsafe semantics now is cheaper than preserving them indefinitely | ✓ Implemented and verified in Phases 17–19 |
+| Use immutable graph snapshots plus explicit deterministic budgets for diagnostics | Diagnostics must remain truthful under concurrent mutation and bounded on adversarial graphs | ✓ Implemented in Phase 19; incomplete work is explicit |
+| Keep default trace metadata-only and fail closed on redactor errors | Diagnostic convenience must not expose application payloads | ✓ Implemented and accepted in Phase 19 |
+| Treat logging handlers as application-owned unless the library created them | Configuration must be reversible and non-invasive | ✓ Implemented and accepted in Phase 19 |
 
 ## Evolution
 
@@ -135,4 +138,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-08-29 after starting v0.3.0 milestone*
+*Last updated: 2026-09-04 after completing Phase 19*

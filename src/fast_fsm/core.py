@@ -14,11 +14,486 @@ Key design principles:
 
 import logging
 import time
-from typing import Optional, Dict, Any, Callable, List, Union, Tuple, overload
-from dataclasses import dataclass
+import threading
+import contextvars
+from collections import deque
+from typing import (
+    Optional,
+    Dict,
+    Any,
+    Callable,
+    List,
+    Mapping,
+    Sequence,
+    Union,
+    Tuple,
+    cast,
+    overload,
+)
+from dataclasses import dataclass, field
 import asyncio
 from mypy_extensions import mypyc_attr
-from .conditions import Condition, FuncCondition, AsyncCondition, NegatedCondition
+from .conditions import (
+    AsyncCondition as AsyncCondition,
+    CompiledFuncCondition as CompiledFuncCondition,
+    Condition as Condition,
+    FuncCondition as FuncCondition,
+    GuardCallable as GuardCallable,
+    GuardResult as GuardResult,
+    NegatedCondition as NegatedCondition,
+    _bind_compiled_func_condition_check,
+    _is_awaitable_result,
+)
+
+
+# The machine-owned dispatch seam evaluates a declarative decorator guard before
+# invoking state policy. The context-local marker suppresses only the base
+# declarative class's duplicate evaluation for one exact machine/source/trigger/
+# target tuple. A separate context-local consumer identity is installed by each
+# enclosing public machine-dispatch boundary, so a nested machine cannot consume
+# another machine's live preparation marker. Tokens restore both scopes after
+# every nested, exceptional, or cancelled path in pure Python and mypyc builds.
+_PreparedDeclarativeGuard = Tuple[int, int, str, int]
+_prepared_declarative_guard: contextvars.ContextVar[
+    Optional[_PreparedDeclarativeGuard]
+] = contextvars.ContextVar[Optional[_PreparedDeclarativeGuard]](
+    "_prepared_declarative_guard", default=None
+)
+_declarative_consumer_machine_id: contextvars.ContextVar[Optional[int]] = (
+    contextvars.ContextVar[Optional[int]](
+        "_declarative_consumer_machine_id", default=None
+    )
+)
+
+
+# A task created by an owned async callback inherits this marker.  The marker
+# identifies a causal dispatch scope rather than a concrete Task so a parent
+# that awaits a child task cannot deadlock the machine behind itself.
+_ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextVar[
+    Optional[object]
+]("_ownership_root", default=None)
+
+
+# Stable lifecycle labels are deliberately strings so callers can inspect a
+# failure result without importing a private implementation type. Every stage
+# producer consumes these constants; the tuple below is the corresponding
+# catalog for contract validation and documentation.
+_LIFECYCLE_STAGE_RESOLUTION = "resolution"
+_LIFECYCLE_STAGE_GUARD = "guard"
+_LIFECYCLE_STAGE_STATE_PERMISSION = "state-permission"
+_LIFECYCLE_STAGE_BEFORE_TRANSITION = "before-transition"
+_LIFECYCLE_STAGE_SOURCE_EXIT = "source-exit"
+_LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK = "source-exit-callback"
+_LIFECYCLE_STAGE_EXIT_STATE_LISTENER = "exit-state-listener"
+_LIFECYCLE_STAGE_COMMIT = "commit"
+_LIFECYCLE_STAGE_DESTINATION_ENTER = "destination-enter"
+_LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK = "destination-enter-callback"
+_LIFECYCLE_STAGE_ENTER_STATE_LISTENER = "enter-state-listener"
+_LIFECYCLE_STAGE_DECLARATIVE_HANDLER = "declarative-handler"
+_LIFECYCLE_STAGE_TRIGGER_CALLBACK = "trigger-callback"
+_LIFECYCLE_STAGE_AFTER_TRANSITION = "after-transition"
+
+_LIFECYCLE_STAGES: Tuple[str, ...] = (
+    _LIFECYCLE_STAGE_RESOLUTION,
+    _LIFECYCLE_STAGE_GUARD,
+    _LIFECYCLE_STAGE_STATE_PERMISSION,
+    _LIFECYCLE_STAGE_BEFORE_TRANSITION,
+    _LIFECYCLE_STAGE_SOURCE_EXIT,
+    _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
+    _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
+    _LIFECYCLE_STAGE_COMMIT,
+    _LIFECYCLE_STAGE_DESTINATION_ENTER,
+    _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
+    _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
+    _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+    _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
+    _LIFECYCLE_STAGE_AFTER_TRANSITION,
+)
+
+
+_FSM_TRACE_LEVEL = logging.DEBUG - 5
+_FSM_TRACE_KEY_LIMIT = 50
+_FSM_TRACE_KEY_LENGTH_LIMIT = 100
+_FSM_TRACE_STRING_LIMIT = 200
+_FSM_TRACE_ALLOWED_OUTPUT_KEYS = frozenset(("operation", "stage", "result", "detail"))
+_fsm_logging_generation = 0
+_fsm_logging_configuration_lock = threading.RLock()
+
+
+@dataclass(frozen=True, slots=True)
+class FSMTraceEvent:
+    """Ephemeral raw transition context visible only to an explicit redactor.
+
+    The default trace path never constructs this value. In particular, the raw
+    values below must never be copied into a ``LogRecord``.
+    """
+
+    operation: str
+    stage: str
+    result: str
+    trigger: Optional[str]
+    source_state: Optional[str]
+    destination_state: Optional[str]
+    positional_args: Tuple[Any, ...]
+    keyword_args: Mapping[str, Any]
+    error: Optional[BaseException]
+
+
+FSMTraceRedactor = Callable[[FSMTraceEvent], Mapping[str, object] | None]
+
+
+def _next_fsm_logging_generation() -> int:
+    """Return the next monotonic generation for one library configuration."""
+    global _fsm_logging_generation
+    _fsm_logging_generation += 1
+    return _fsm_logging_generation
+
+
+def _validate_fsm_logging_level(level: int) -> int:
+    """Validate a logging level without relying on an untyped stdlib private API."""
+    return cast(int, getattr(logging, "_checkLevel")(level))
+
+
+def _prepare_fsm_logging_handler(
+    configured_level: int, format_string: str
+) -> Optional[logging.StreamHandler]:
+    """Build a complete library handler before changing any logger state."""
+    if configured_level > logging.INFO:
+        return None
+
+    handler: Optional[logging.StreamHandler] = None
+    try:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(format_string))
+    except BaseException:
+        if handler is not None:
+            handler.close()
+        raise
+    return handler
+
+
+def _trace_keyword_names(keyword_args: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Return bounded keyword labels without inspecting caller-provided values."""
+    names: List[str] = []
+    for key in keyword_args:
+        if (
+            isinstance(key, str)
+            and not key.startswith("_")
+            and len(key) <= _FSM_TRACE_KEY_LENGTH_LIMIT
+        ):
+            names.append(key)
+            if len(names) == _FSM_TRACE_KEY_LIMIT:
+                break
+    return tuple(names)
+
+
+def _validate_fsm_trace_output(
+    output: Mapping[str, object] | None,
+) -> Optional[Dict[str, object]]:
+    """Accept only bounded scalar redactor output or fail closed."""
+    if output is None or not isinstance(output, Mapping):
+        return None
+
+    safe_output: Dict[str, object] = {}
+    for key, value in output.items():
+        if key not in _FSM_TRACE_ALLOWED_OUTPUT_KEYS:
+            return None
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            return None
+        if isinstance(value, str) and len(value) > _FSM_TRACE_STRING_LIMIT:
+            return None
+        safe_output[key] = value
+    return safe_output
+
+
+def _library_trace_redactor(logger: logging.Logger) -> Optional[FSMTraceRedactor]:
+    """Return the redactor from the first marked handler the record can reach."""
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            marker = getattr(handler, "_fast_fsm_marker", None)
+            if isinstance(marker, _FSMStreamHandler):
+                return marker.redactor
+        if not current.propagate:
+            break
+        current = current.parent
+    return None
+
+
+def _has_reachable_trace_configuration(logger: logging.Logger) -> bool:
+    """Return whether propagation reaches a library handler configured for TRACE."""
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            marker = getattr(handler, "_fast_fsm_marker", None)
+            if (
+                isinstance(marker, _FSMStreamHandler)
+                and marker.configured_level <= _FSM_TRACE_LEVEL
+            ):
+                return True
+        if not current.propagate:
+            break
+        current = current.parent
+    return False
+
+
+def _trace_configuration_active(logger: logging.Logger) -> bool:
+    """Return whether effective TRACE output requires confidential diagnostics."""
+    return logger.isEnabledFor(_FSM_TRACE_LEVEL) or _has_reachable_trace_configuration(
+        logger
+    )
+
+
+def _emit_fsm_trace(
+    logger: logging.Logger,
+    *,
+    operation: str,
+    stage: str,
+    result: str,
+    trigger: Optional[str],
+    source_state: Optional[str],
+    destination_state: Optional[str],
+    positional_args: Tuple[Any, ...],
+    keyword_args: Mapping[str, Any],
+    error: Optional[BaseException],
+) -> None:
+    """Emit metadata-only trace output or an explicitly redacted variant."""
+    if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
+        return
+
+    trace_fields: Dict[str, object] = {
+        "trace_operation": operation,
+        "trace_stage": stage,
+        "trace_result": result,
+        "trace_arg_count": len(positional_args),
+        "trace_keyword_names": _trace_keyword_names(keyword_args),
+    }
+    redactor = _library_trace_redactor(logger)
+    if redactor is not None:
+        try:
+            output = _validate_fsm_trace_output(
+                redactor(
+                    FSMTraceEvent(
+                        operation=operation,
+                        stage=stage,
+                        result=result,
+                        trigger=trigger,
+                        source_state=source_state,
+                        destination_state=destination_state,
+                        positional_args=positional_args,
+                        keyword_args=keyword_args,
+                        error=error,
+                    )
+                )
+            )
+        except Exception:
+            output = None
+        if output is None:
+            trace_fields = {
+                "trace_operation": "redaction_failure",
+                "trace_stage": "redaction_failure",
+                "trace_result": "failure",
+                "trace_arg_count": 0,
+                "trace_keyword_names": (),
+            }
+        else:
+            for key, value in output.items():
+                trace_fields[f"trace_{key}"] = value
+
+    logger.log(_FSM_TRACE_LEVEL, "fsm_trace", extra=trace_fields)
+
+
+def _legacy_debug_enabled(logger: logging.Logger) -> bool:
+    """Return whether legacy DEBUG formatting is both enabled and safe to emit."""
+    return logger.isEnabledFor(logging.DEBUG) and not _trace_configuration_active(
+        logger
+    )
+
+
+def _emit_legacy_debug(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy DEBUG diagnostics out of metadata-only TRACE configuration."""
+    if _legacy_debug_enabled(logger):
+        logger.debug(message, *args)
+
+
+def _emit_legacy_warning(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy WARNING diagnostics out of redacted TRACE configuration."""
+    if not _trace_configuration_active(logger):
+        logger.warning(message, *args)
+
+
+def _emit_legacy_error(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy ERROR diagnostics out of redacted TRACE configuration."""
+    if not _trace_configuration_active(logger):
+        logger.error(message, *args)
+
+
+def _emit_legacy_info(logger: logging.Logger, message: str, *args: object) -> None:
+    """Keep legacy INFO diagnostics out of redacted TRACE configuration."""
+    if not _trace_configuration_active(logger):
+        logger.info(message, *args)
+
+
+def _set_prepared_declarative_guard(
+    machine: "StateMachine", source_state: "State", trigger: str, to_state: "State"
+) -> contextvars.Token[Optional[_PreparedDeclarativeGuard]]:
+    """Mark one machine-qualified guard and return its ContextVar token."""
+    return _prepared_declarative_guard.set(
+        (
+            id(machine),
+            id(source_state),
+            trigger,
+            id(to_state),
+        )
+    )
+
+
+def _reset_prepared_declarative_guard(
+    token: contextvars.Token[Optional[_PreparedDeclarativeGuard]],
+) -> None:
+    """Restore the precise outer marker after one policy callback returns."""
+    _prepared_declarative_guard.reset(token)
+
+
+def _has_prepared_declarative_guard(
+    source_state: "State", trigger: str, to_state: "State"
+) -> bool:
+    """Return whether this base declarative check already ran in machine dispatch."""
+    marker = _prepared_declarative_guard.get()
+    return (
+        marker is not None
+        and marker[0] == _declarative_consumer_machine_id.get()
+        and marker[1:] == (id(source_state), trigger, id(to_state))
+    )
+
+
+def _reject_sync_awaitable(awaitable: Any) -> None:
+    """Close a newly created coroutine before rejecting it in sync dispatch."""
+    close = getattr(awaitable, "close", None)
+    if callable(close):
+        close()
+    raise TypeError("Async condition requires AsyncStateMachine and trigger_async()")
+
+
+def _is_awaitable(value: Any) -> bool:
+    """Recognize every awaitable shape accepted by Python's ``await`` protocol."""
+    return _is_awaitable_result(value)
+
+
+def _is_async_callable(value: Any) -> bool:
+    """Classify a callable or its effective ``__call__`` hook without invoking it."""
+    return asyncio.iscoroutinefunction(value) or asyncio.iscoroutinefunction(
+        getattr(value, "__call__", None)
+    )
+
+
+def _compiled_func_condition_check(
+    condition: CompiledFuncCondition, *args: Any, **kwargs: Any
+) -> GuardResult:
+    """Evaluate an opt-in condition wrapper in the compiled core module.
+
+    The public guard contract permits an awaitable result, which the async
+    dispatcher must receive unchanged when a callable instance has an async
+    ``__call__`` hook.
+    """
+    return condition.func(*args, **kwargs)
+
+
+_bind_compiled_func_condition_check(_compiled_func_condition_check)
+
+
+async def _evaluate_condition_async_iteratively(
+    condition: Condition,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> bool:
+    """Await supported condition wrappers without falling through to ``check``.
+
+    Both machine-owned dispatch and direct ``AsyncDeclarativeState`` policy
+    calls use this seam. Built-in wrapper traversal remains iterative so deep
+    condition graphs do not consume the Python call stack, and leaves may
+    return either an awaitable or an ordinary truthy result.
+    """
+    from .condition_templates import AndCondition, NotCondition, OrCondition
+
+    active: set[int] = set()
+    entered: set[int] = set()
+    stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
+    result: Any = False
+
+    try:
+        while stack:
+            action, current, child_index = stack.pop()
+            current_id = id(current)
+
+            if action == "evaluate":
+                if current_id in active:
+                    raise ValueError("supported condition wrapper cycle detected")
+                active.add(current_id)
+                entered.add(current_id)
+                condition_type = type(current)
+                children = StateMachine._condition_children(current)
+
+                if condition_type is NegatedCondition or condition_type is NotCondition:
+                    stack.append(("negate", current, 0))
+                    stack.append(("evaluate", children[0], 0))
+                elif condition_type is AndCondition:
+                    if children:
+                        stack.append(("and", current, 1))
+                        stack.append(("evaluate", children[0], 0))
+                    else:
+                        result = True
+                        active.remove(current_id)
+                elif condition_type is OrCondition:
+                    if children:
+                        stack.append(("or", current, 1))
+                        stack.append(("evaluate", children[0], 0))
+                    else:
+                        result = False
+                        active.remove(current_id)
+                elif isinstance(current, AsyncCondition):
+                    result = await current.check_async(*args, **kwargs)
+                    active.remove(current_id)
+                elif condition_type in (FuncCondition, CompiledFuncCondition):
+                    # Exact built-in callable wrappers call their stored
+                    # function directly so mypyc can still observe and await
+                    # a ``GuardResult`` async leaf. Public FuncCondition
+                    # subclasses must instead use their effective ``check``
+                    # override below.
+                    func = getattr(current, "func")
+                    result = func(*args, **kwargs)
+                    if _is_awaitable(result):
+                        result = await result
+                    active.remove(current_id)
+                else:
+                    # Keep an interpreted subclass's ``GuardResult`` at the
+                    # dynamic boundary so a legitimate awaitable override
+                    # reaches the awaitability check under mypyc.
+                    result = cast(Any, current).check(*args, **kwargs)
+                    if _is_awaitable(result):
+                        result = await result
+                    active.remove(current_id)
+            elif action == "negate":
+                result = not result
+                active.remove(current_id)
+            elif action == "and":
+                children = StateMachine._condition_children(current)
+                if not result or child_index == len(children):
+                    active.remove(current_id)
+                else:
+                    stack.append(("and", current, child_index + 1))
+                    stack.append(("evaluate", children[child_index], 0))
+            else:  # action == "or"
+                children = StateMachine._condition_children(current)
+                if result or child_index == len(children):
+                    active.remove(current_id)
+                else:
+                    stack.append(("or", current, child_index + 1))
+                    stack.append(("evaluate", children[child_index], 0))
+
+        return bool(result)
+    finally:
+        active.difference_update(entered)
 
 
 @mypyc_attr(native_class=False)
@@ -31,10 +506,13 @@ class TransitionError(RuntimeError):
 
     def __init__(self, result: "TransitionResult") -> None:
         self.result: "TransitionResult" = result
+        stage_part = f" at {result.stage}" if result.stage else ""
         trigger_part = f" (trigger={result.trigger!r})" if result.trigger else ""
         from_part = f" from {result.from_state!r}" if result.from_state else ""
         error_part = f": {result.error}" if result.error else ""
-        super().__init__(f"Transition failed{from_part}{trigger_part}{error_part}")
+        super().__init__(
+            f"Transition failed{stage_part}{from_part}{trigger_part}{error_part}"
+        )
 
 
 @dataclass(slots=True)
@@ -46,6 +524,12 @@ class TransitionResult:
     to_state: Optional[str] = None
     trigger: Optional[str] = None
     error: str = ""
+    # These fields extend the legacy five-field result value.  They remain
+    # directly inspectable, but cannot change comparisons made by callers
+    # that constructed a result using the pre-lifecycle surface.
+    committed: bool = field(default=False, compare=False)
+    stage: Optional[str] = field(default=None, compare=False)
+    cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
 
     def raise_if_failed(self) -> "TransitionResult":
         """Raise :class:`TransitionError` if the transition did not succeed.
@@ -58,7 +542,13 @@ class TransitionResult:
             TransitionError: when ``self.success`` is ``False``.
         """
         if not self.success:
-            raise TransitionError(self)
+            error = TransitionError(self)
+            if self.cause is not None:
+                # Assign explicitly before raising so mypyc and CPython expose
+                # the same public cause identity on the opt-in error boundary.
+                error.__cause__ = self.cause
+                raise error from self.cause
+            raise error
         return self
 
 
@@ -102,64 +592,58 @@ class TransitionEntry:
         self.condition: Optional[Condition] = condition
 
 
-@mypyc_attr(native_class=False)
-class CompiledFuncCondition(Condition):
-    """A mypyc-compiled wrapper around a callable for use as a transition guard.
+@dataclass(frozen=True, slots=True)
+class _GraphTransition:
+    """Immutable private projection of one canonical transition edge."""
 
-    This is the **opt-in fast path** alternative to :class:`~fast_fsm.FuncCondition`.
-    Because this class lives in ``core.py`` (the compiled module), its ``check()``
-    method body is compiled to native machine code by mypyc.  This eliminates the
-    per-call CPython bytecode interpretation overhead that the uncompiled
-    :class:`~fast_fsm.FuncCondition` incurs when the guard fires on a hot
-    transition path.
+    from_state: "State"
+    trigger: str
+    to_state: "State"
+    condition: Optional[Condition]
+    from_state_name: str
+    to_state_name: str
+    condition_name: Optional[str]
 
-    **When to use this over** :class:`~fast_fsm.FuncCondition`:
 
-    * You have measured that condition evaluation is a bottleneck (≥ 5 % of
-      ``trigger()`` wall time in a profile).
-    * Your guard is a simple, self-contained callable with no need for
-      mixing-in additional behaviour.
+@dataclass(frozen=True, slots=True)
+class _GraphSnapshot:
+    """Immutable private projection of a machine's canonical topology.
 
-    **Implementation notes** — the class uses
-    ``@mypyc_attr(native_class=False)`` so that it can inherit from the
-    uncompiled ``Condition`` ABC without `__slots__` conflicts.  Attribute
-    storage falls back to a ``__dict__``.  The ``check()`` dispatch is
-    compiled; attribute access is not.  Unlike a fully-native mypyc class,
-    this class *can* be subclassed from interpreted Python — use
-    :class:`~fast_fsm.FuncCondition` as a base when subclassing is needed.
-
-    Args:
-        func: Any callable ``(**kwargs) -> bool``.  Receives the same sanitised
-            keyword arguments as every other condition (private ``_``-prefixed
-            keys stripped, capped at 50 items).
-        name: Human-readable label.  Defaults to ``func.__name__`` when
-            available, otherwise ``"compiled_func"``.
-        description: Optional longer description.
-
-    Example::
-
-        from fast_fsm import StateMachine, CompiledFuncCondition
-
-        is_ready = CompiledFuncCondition(lambda **kw: kw.get("ready", False))
-        fsm = StateMachine.quick_build("idle", [("start", "idle", "running")])
-        fsm.add_transition("go", "idle", "running", condition=is_ready)
+    This is intentionally not a public serialization format.  Its tuples prevent
+    callers from replacing structural rows while retaining identity-bearing State
+    and Condition references for internal analysis tools.
     """
 
-    def __init__(
-        self,
-        func: Callable[..., bool],
-        name: Optional[str] = None,
-        description: str = "",
-    ) -> None:
-        resolved_name: str = (
-            name if name is not None else getattr(func, "__name__", "compiled_func")
-        )
-        super().__init__(resolved_name, description)
-        self.func: Callable[..., bool] = func
+    name: str
+    initial_state: "State"
+    graph_version: int
+    states: Tuple["State", ...]
+    transitions: Tuple[_GraphTransition, ...]
+    initial_state_name: str
+    current_state_name: str
+    state_names: Tuple[str, ...]
 
-    def check(self, **kwargs: Any) -> bool:
-        """Call the wrapped function and return its result."""
-        return self.func(**kwargs)
+
+@dataclass(frozen=True, slots=True)
+class _PreparedTransition:
+    """Fully validated private transition request awaiting one graph commit."""
+
+    trigger: str
+    sources: Tuple["State", ...]
+    target: "State"
+    condition: Optional[Condition]
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedDispatch:
+    """One fresh canonical lookup and optional guard context for dispatch."""
+
+    entry: TransitionEntry
+    current_name: str
+    trigger: str
+    args: Tuple[Any, ...]
+    condition_kwargs: Optional[Dict[str, Any]]
+    declarative_handler: Optional[Dict[str, Any]]
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -186,16 +670,21 @@ class State:
 
         Args:
             name: State name
-            on_enter: Optional callback for entering the state
-            on_exit: Optional callback for exiting the state
+            on_enter: Optional callback for entering the state. It receives
+                ``*args`` and ``**kwargs``.
+            on_exit: Optional callback for exiting the state. It receives
+                ``*args`` and ``**kwargs``.
 
         Returns:
             CallbackState instance with configured callbacks
 
-        Example:
-            state = State.create('processing',
-                               on_enter=lambda *args, **kwargs: print('Processing started'),
-                               on_exit=lambda *args, **kwargs: print('Processing finished'))
+        Example::
+
+            state = State.create(
+                "processing",
+                on_enter=lambda *args, **kwargs: print("Processing started"),
+                on_exit=lambda *args, **kwargs: print("Processing finished"),
+            )
         """
         return CallbackState(name, on_enter, on_exit)
 
@@ -271,6 +760,7 @@ class StateMachine:
         "_current_state",
         "_states",
         "_transitions",
+        "_graph_version",
         "_logger",
         "_before_listeners",
         "_on_exit_listeners",
@@ -282,6 +772,8 @@ class StateMachine:
         "_state_enter_callbacks",
         "_history",
         "_history_max",
+        "_sync_ownership_lock",
+        "_sync_owner_thread_id",
     )
 
     def __init__(
@@ -302,11 +794,17 @@ class StateMachine:
             name: Human-readable name for this state machine
             logger_name: Name of the logger to use (defaults to 'fast_fsm.{name}')
         """
+        if not isinstance(initial_state, State):
+            raise TypeError(
+                "initial_state must be a State instance, "
+                f"got {type(initial_state).__name__}"
+            )
         self._name = name
         self._initial_state = initial_state
         self._current_state = initial_state
-        self._states: Dict[str, State] = {initial_state.name: initial_state}
+        self._states: Dict[str, State] = {}
         self._transitions: Dict[str, Dict[str, TransitionEntry]] = {}
+        self._graph_version = 0
 
         # Use name-based logger if not specified
         if logger_name is None:
@@ -329,11 +827,33 @@ class StateMachine:
         self._state_enter_callbacks: Dict[str, List[Any]] = {}
 
         # History — opt-in transition recording (None = disabled)
-        self._history: Optional[List[TransitionRecord]] = None
+        self._history: Optional[deque[TransitionRecord]] = None
         self._history_max: int = 1000
+
+        # One private primitive per machine serializes whole sync operations.
+        # The owner marker is examined before lock acquisition so callback
+        # reentry cannot wait behind itself and deadlock the dispatch thread.
+        self._sync_ownership_lock = threading.Lock()
+        self._sync_owner_thread_id: Optional[int] = None
 
         # Register the initial state
         self._register_state(initial_state)
+
+    def _acquire_sync_ownership(self, operation: str) -> int:
+        """Enter one synchronous public-write envelope for this machine."""
+        owner_thread_id = threading.get_ident()
+        if self._sync_owner_thread_id == owner_thread_id:
+            raise RuntimeError(f"FSM ownership violation: reentrant {operation}")
+        self._sync_ownership_lock.acquire()
+        self._sync_owner_thread_id = owner_thread_id
+        return owner_thread_id
+
+    def _release_sync_ownership(self, owner_thread_id: int) -> None:
+        """Clear one synchronous owner marker and release its paired primitive."""
+        if self._sync_owner_thread_id != owner_thread_id:
+            raise RuntimeError("FSM ownership violation: foreign trigger release")
+        self._sync_owner_thread_id = None
+        self._sync_ownership_lock.release()
 
     @classmethod
     def from_states(
@@ -376,7 +896,13 @@ class StateMachine:
     def quick_build(
         cls,
         initial_state: Union[str, State],
-        transitions: List[Tuple[str, str, str]],
+        transitions: Sequence[
+            Tuple[
+                str,
+                Union[str, State, List[Union[str, State]]],
+                Union[str, State],
+            ]
+        ],
         states: Optional[List[Union[str, State]]] = None,
         name: str = "FSM",
     ) -> "StateMachine":
@@ -385,56 +911,97 @@ class StateMachine:
 
         Args:
             initial_state: Initial state name or State object
-            transitions: List of (trigger, from_state, to_state) tuples
+            transitions: List of (trigger, from_state, to_state) tuples. State
+                endpoints may be strings or State objects; from_state may also
+                be a list of either form.
             states: Optional additional states to add
             name: Name for the state machine
 
         Returns:
             Configured StateMachine
 
-        Example:
-            fsm = StateMachine.quick_build('idle', [
-                ('start', 'idle', 'running'),
-                ('stop', 'running', 'idle'),
-                ('error', 'running', 'error')
-            ])
+        Example::
+
+            fsm = StateMachine.quick_build(
+                "idle",
+                [
+                    ("start", "idle", "running"),
+                    ("stop", "running", "idle"),
+                    ("error", "running", "error"),
+                ],
+            )
         """
-        # Collect all state names from transitions
-        all_states = set()
+        # Collect exact supplied state objects first. String endpoints remain a
+        # convenience shorthand, but they must never replace caller-owned
+        # State identities or subclass behavior.
+        state_objects: Dict[str, State] = {}
+        unresolved_names: set[str] = set()
+
+        def register_supplied_state(state: State) -> None:
+            existing = state_objects.get(state.name)
+            if existing is not None and existing is not state:
+                raise ValueError(
+                    f"State name {state.name!r} was supplied with different objects"
+                )
+            state_objects[state.name] = state
+
+        def collect_state(value: Union[str, State]) -> None:
+            if isinstance(value, State):
+                register_supplied_state(value)
+            elif isinstance(value, str):
+                unresolved_names.add(value)
+            else:
+                raise TypeError(
+                    "quick_build state endpoints must be strings or State objects, "
+                    f"got {type(value).__name__}"
+                )
+
         if isinstance(initial_state, str):
-            all_states.add(initial_state)
+            unresolved_names.add(initial_state)
+        else:
+            register_supplied_state(initial_state)
 
         for trigger, from_state, to_state in transitions:
             if isinstance(from_state, list):
-                all_states.update(from_state)
+                for source_state in from_state:
+                    collect_state(source_state)
+            elif isinstance(from_state, (str, State)):
+                collect_state(from_state)
             else:
-                all_states.add(from_state)
-            all_states.add(to_state)
+                raise TypeError(
+                    "quick_build source state must be a string, State, or list of either, "
+                    f"got {type(from_state).__name__}"
+                )
+            collect_state(to_state)
 
-        # Add additional states
+        # Add additional state identities or deferred string shorthand.
         if states:
             for state in states:
                 if isinstance(state, str):
-                    all_states.add(state)
+                    unresolved_names.add(state)
+                elif isinstance(state, State):
+                    register_supplied_state(state)
                 else:
-                    all_states.add(state.name)
+                    raise TypeError(
+                        "quick_build states must contain strings or State objects, "
+                        f"got {type(state).__name__}"
+                    )
 
-        # Create state objects
-        state_objects = {}
-        for state_name in all_states:
-            state_objects[state_name] = State(state_name)
+        # Create only the string endpoints that are still unresolved.
+        for state_name in unresolved_names:
+            if state_name not in state_objects:
+                state_objects[state_name] = State(state_name)
 
         # Handle initial state
         if isinstance(initial_state, str):
             initial_obj = state_objects[initial_state]
         else:
             initial_obj = initial_state
-            state_objects[initial_state.name] = initial_state
 
         # Create FSM
         fsm = cls(initial_obj, name=name)
         for state_obj in state_objects.values():
-            if state_obj != initial_obj:
+            if state_obj is not initial_obj:
                 fsm.add_state(state_obj)
 
         # Add transitions
@@ -449,7 +1016,7 @@ class StateMachine:
         config: Dict[str, Any],
         *,
         name: Optional[str] = None,
-        conditions: Optional[Dict[str, Union[Condition, Callable[..., bool]]]] = None,
+        conditions: Optional[Dict[str, Union[Condition, GuardCallable]]] = None,
     ) -> "StateMachine":
         """Build a :class:`StateMachine` from a plain dictionary description.
 
@@ -498,7 +1065,7 @@ class StateMachine:
             name: Override the machine name.  Takes precedence over
                 ``config["name"]`` if both are provided.
             conditions: Optional mapping of ``trigger_name → Condition``
-                (or any ``(**kwargs) -> bool`` callable).  Keys that do not
+                (or any ``(**kwargs) -> GuardResult`` callable).  Keys that do not
                 match any trigger in *config* are silently ignored.
 
         Returns:
@@ -548,7 +1115,7 @@ class StateMachine:
         fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
 
         # Add transitions — add_transition natively supports str-or-list from_state
-        _conditions: Dict[str, Union[Condition, Callable[..., bool]]] = conditions or {}
+        _conditions: Dict[str, Union[Condition, GuardCallable]] = conditions or {}
         for entry in raw_transitions:
             cond = _conditions.get(entry["trigger"])
             fsm.add_transition(
@@ -591,7 +1158,7 @@ class StateMachine:
             "transitions": transitions,
         }
 
-    def enable_history(self, max_entries: int = 1000) -> None:
+    def enable_history(self, max_entries: Any = 1000) -> None:
         """Enable transition history recording.
 
         When enabled, every successful :meth:`trigger` call appends a
@@ -604,12 +1171,36 @@ class StateMachine:
 
         Args:
             max_entries: Maximum number of records to keep.
+
+        Raises:
+            TypeError: If ``max_entries`` is not a non-boolean integer.
+            ValueError: If ``max_entries`` is zero or negative.
         """
+        owner_thread_id = self._acquire_sync_ownership("enable_history")
+        try:
+            self._enable_history_owned(max_entries)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _enable_history_owned(self, max_entries: Any) -> None:
+        """Validate and replace history while the caller owns this machine."""
+        if type(max_entries) is bool or not isinstance(max_entries, int):
+            raise TypeError("max_entries must be a positive integer")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be a positive integer")
         self._history_max = max_entries
-        self._history = []
+        self._history = deque(maxlen=max_entries)
 
     def disable_history(self) -> None:
         """Disable transition history recording and discard all records."""
+        owner_thread_id = self._acquire_sync_ownership("disable_history")
+        try:
+            self._disable_history_owned()
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _disable_history_owned(self) -> None:
+        """Discard history while the caller owns this machine."""
         self._history = None
 
     @property
@@ -622,11 +1213,27 @@ class StateMachine:
             return []
         return list(self._history)
 
-    def _register_state(self, state: State) -> None:
-        """Register a state and initialize its transition table"""
+    def _register_state(self, state: State) -> bool:
+        """Register an exact state identity and initialize its transition table.
+
+        Returns ``True`` only when the registry gains a new canonical object.
+        Re-registering the same object is a safe no-op; a distinct object with the
+        same name is rejected before either topology dictionary changes.
+        """
+        if not isinstance(state, State):
+            raise TypeError(
+                f"state must be a State instance, got {type(state).__name__}"
+            )
+        existing = self._states.get(state.name)
+        if existing is not None:
+            if existing is state:
+                return False
+            raise ValueError(
+                f"State name {state.name!r} is already registered with a different object"
+            )
         self._states[state.name] = state
-        if state.name not in self._transitions:
-            self._transitions[state.name] = {}
+        self._transitions[state.name] = {}
+        return True
 
     def add_state(self, state: State) -> None:
         """
@@ -635,65 +1242,124 @@ class StateMachine:
         Performance: O(1) - Constant time state registration
         Memory: +~32 bytes per state (slots optimization)
         """
-        self._register_state(state)
+        owner_thread_id = self._acquire_sync_ownership("add_state")
+        try:
+            self._add_state_owned(state)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
-    def add_transition(
+    def _add_state_owned(self, state: State) -> None:
+        """Register one state while the caller owns this machine."""
+        if self._register_state(state):
+            self._graph_version += 1
+
+    def _graph_snapshot(self) -> _GraphSnapshot:
+        """Return a fresh, deterministically ordered, immutable topology view.
+
+        The private snapshot intentionally leaves the public ``snapshot()`` and
+        ``to_dict()`` schemas untouched.  It is assembled from the authoritative
+        dictionaries on demand, so no stale cached structural view can escape.
+        """
+        # Snapshot capture is a read boundary.  A callback can request a
+        # diagnostic snapshot while it already owns the machine; capturing
+        # directly in that case avoids waiting on its own non-reentrant lock.
+        # Other callers hold the same primitive as topology writers, so they
+        # cannot observe a partially committed graph update.
+        if self._sync_owner_thread_id == threading.get_ident():
+            return self._graph_snapshot_owned()
+
+        self._sync_ownership_lock.acquire()
+        try:
+            return self._graph_snapshot_owned()
+        finally:
+            self._sync_ownership_lock.release()
+
+    def _graph_snapshot_owned(self) -> _GraphSnapshot:
+        """Capture canonical topology while a caller holds the read boundary."""
+        states = tuple(state for _, state in sorted(self._states.items()))
+        state_names = tuple(state.name for state in states)
+        transitions = tuple(
+            _GraphTransition(
+                self._states[from_name],
+                trigger,
+                entry.to_state,
+                entry.condition,
+                self._states[from_name].name,
+                entry.to_state.name,
+                entry.condition.name if entry.condition is not None else None,
+            )
+            for from_name, entries in sorted(self._transitions.items())
+            for trigger, entry in sorted(entries.items())
+        )
+        return _GraphSnapshot(
+            self._name,
+            self._initial_state,
+            self._graph_version,
+            states,
+            transitions,
+            self._initial_state.name,
+            self._current_state.name,
+            state_names,
+        )
+
+    def _resolve_canonical_state(self, state: Any, *, role: str) -> State:
+        """Resolve a transition endpoint to its exact registered State object."""
+        if isinstance(state, str):
+            canonical = self._states.get(state)
+            if canonical is None:
+                raise ValueError(
+                    f"{role} state {state!r} is not registered; "
+                    "add it with add_state() before adding transitions."
+                )
+            return canonical
+        if isinstance(state, State):
+            canonical = self._states.get(state.name)
+            if canonical is None:
+                raise ValueError(f"{role} state {state.name!r} is not registered")
+            if canonical is not state:
+                raise ValueError(
+                    f"{role} state {state.name!r} is not the canonical registered object"
+                )
+            return canonical
+        raise ValueError(
+            f"{role} state must be a registered state name or State object, "
+            f"got {type(state).__name__}"
+        )
+
+    def _normalize_transition_request(
         self,
         trigger: str,
         from_state: Union[str, State, List[Union[str, State]]],
         to_state: Union[str, State],
-        condition: Optional[Union[Condition, Callable[..., bool]]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable[..., bool]]] = None,
-    ) -> None:
-        """
-        Add a transition to the state machine.
-
-        Performance: O(1) - Direct dictionary insertion, no loops
-        Memory: +~64 bytes per transition (dict entry overhead)
-
-        Args:
-            trigger: Event that triggers the transition
-            from_state: Source state(s) - can be string, state object, or list
-            to_state: Target state - can be string or state object
-            condition: Optional condition - can be Condition or callable function.
-                      Callable functions receive (*args, **kwargs) from trigger calls.
-                      :class:`~fast_fsm.AsyncCondition` instances are **not** allowed
-                      on a sync ``StateMachine`` — use :class:`AsyncStateMachine` instead.
-            unless: Negation shorthand — the transition is allowed when this
-                    condition is **False**.  Mutually exclusive with ``condition``.
-                    Same :class:`~fast_fsm.AsyncCondition` restriction applies.
-        """
-        # Normalize inputs
-        if not isinstance(from_state, list):
-            from_state = [from_state]
-
-        # Convert to state names
-        from_names = []
-        for state in from_state:
-            if isinstance(state, State):
-                from_names.append(state.name)
-            else:
-                from_names.append(state)
-
-        to_name = to_state.name if isinstance(to_state, State) else to_state
-        if isinstance(to_state, str):
-            to_state_obj = self._states.get(to_name)
-            if to_state_obj is None:
-                raise ValueError(
-                    f"Target state '{to_name}' not found. "
-                    "Add it with add_state() before adding transitions."
-                )
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> _PreparedTransition:
+        """Materialize and validate a complete transition request without writing."""
+        raw_sources: List[Any]
+        if isinstance(from_state, list):
+            raw_sources = list(from_state)
         else:
-            to_state_obj = to_state
+            raw_sources = [from_state]
+        if not raw_sources:
+            raise ValueError("transition source list cannot be empty")
 
-        # unless= and condition= are mutually exclusive
+        sources: List[State] = []
+        source_names: set[str] = set()
+        for raw_source in raw_sources:
+            source = self._resolve_canonical_state(raw_source, role="source")
+            if source.name in source_names:
+                raise ValueError(
+                    f"duplicate canonical source state {source.name!r} in one request"
+                )
+            source_names.add(source.name)
+            sources.append(source)
+        target = self._resolve_canonical_state(to_state, role="target")
+
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
             )
-
-        # AsyncCondition requires AsyncStateMachine — check before any wrapping
         if not isinstance(self, AsyncStateMachine):
             if isinstance(condition, AsyncCondition):
                 raise TypeError(
@@ -707,8 +1373,6 @@ class StateMachine:
                     "cannot be used with a sync StateMachine via 'unless='. "
                     "Use AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
                 )
-
-        # Resolve unless= into a NegatedCondition
         if unless is not None:
             if isinstance(unless, Condition):
                 condition = NegatedCondition(unless)
@@ -718,28 +1382,83 @@ class StateMachine:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
                 )
-
-        # Normalize condition - wrap functions in FuncCondition for consistency
-        normalized_condition = None
-        if condition is not None:
-            if isinstance(condition, Condition):
-                normalized_condition = condition
-            elif callable(condition):
-                # Wrap function in FuncCondition for consistent interface
-                normalized_condition = FuncCondition(condition)
-            else:
-                raise TypeError(
-                    f"Condition must be Condition or callable, got {type(condition)}"
-                )
-
-        # Add transitions for each source state
-        for from_state_name in from_names:
-            if from_state_name not in self._transitions:
-                self._transitions[from_state_name] = {}
-
-            self._transitions[from_state_name][trigger] = TransitionEntry(
-                to_state_obj, normalized_condition
+        if condition is None:
+            normalized_condition: Optional[Condition] = None
+        elif isinstance(condition, Condition):
+            normalized_condition = condition
+        elif callable(condition):
+            normalized_condition = FuncCondition(condition)
+        else:
+            raise TypeError(
+                f"Condition must be Condition or callable, got {type(condition)}"
             )
+        if normalized_condition is not None:
+            has_async_requirement = self._contains_async_requirement(
+                normalized_condition
+            )
+            if not isinstance(self, AsyncStateMachine) and has_async_requirement:
+                raise TypeError(
+                    "AsyncCondition nested in a supported condition wrapper "
+                    "cannot be used with a sync StateMachine. Use "
+                    "AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
+                )
+        return _PreparedTransition(
+            trigger, tuple(sources), target, normalized_condition
+        )
+
+    def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
+        """Commit a complete validated topology plan and advance once if changed."""
+        final_entries: Dict[Tuple[str, str], Tuple[State, Optional[Condition]]] = {}
+        for plan in plans:
+            for source in plan.sources:
+                final_entries[(source.name, plan.trigger)] = (
+                    plan.target,
+                    plan.condition,
+                )
+        changed = any(
+            (existing := self._transitions[source_name].get(trigger)) is None
+            or existing.to_state is not target
+            or existing.condition is not guard
+            for (source_name, trigger), (target, guard) in final_entries.items()
+        )
+        if not changed:
+            return
+        for (source_name, trigger), (target, guard) in final_entries.items():
+            self._transitions[source_name][trigger] = TransitionEntry(target, guard)
+        self._graph_version += 1
+
+    def add_transition(
+        self,
+        trigger: str,
+        from_state: Union[str, State, List[Union[str, State]]],
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Add a validated, canonical transition in one topology operation."""
+        owner_thread_id = self._acquire_sync_ownership("add_transition")
+        try:
+            self._add_transition_owned(
+                trigger, from_state, to_state, condition, unless=unless
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_transition_owned(
+        self,
+        trigger: str,
+        from_state: Union[str, State, List[Union[str, State]]],
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit one transition while the caller owns this machine."""
+        prepared = self._normalize_transition_request(
+            trigger, from_state, to_state, condition, unless=unless
+        )
+        self._commit_transition_plan((prepared,))
 
     def add_transitions(
         self,
@@ -752,7 +1471,7 @@ class StateMachine:
                     str,
                     Union[str, State, List[Union[str, State]]],
                     Union[str, State],
-                    Optional[Union[Condition, Callable[..., bool]]],
+                    Optional[Union[Condition, GuardCallable]],
                 ],
             ]
         ],
@@ -763,8 +1482,9 @@ class StateMachine:
         Each entry is either a 3-tuple ``(trigger, from_state, to_state)`` or a
         4-tuple ``(trigger, from_state, to_state, condition)`` where *condition*
         follows the same rules as :meth:`add_transition` — a
-        :class:`~fast_fsm.Condition` instance, a plain ``(**kwargs) -> bool``
-        callable, or ``None`` / omitted for an unconditional transition.
+        :class:`~fast_fsm.Condition` instance, a plain
+        ``(**kwargs) -> GuardResult`` callable, or ``None`` / omitted for an
+        unconditional transition.
 
         Args:
             transitions: List of 3- or 4-tuples describing each transition.
@@ -778,12 +1498,43 @@ class StateMachine:
                 ('reset', 'stopped', 'idle',    None),   # explicit None == no guard
             ])
         """
+        owner_thread_id = self._acquire_sync_ownership("add_transitions")
+        try:
+            self._add_transitions_owned(transitions)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_transitions_owned(
+        self,
+        transitions: List[
+            Union[
+                Tuple[
+                    str, Union[str, State, List[Union[str, State]]], Union[str, State]
+                ],
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, GuardCallable]],
+                ],
+            ]
+        ],
+    ) -> None:
+        """Validate and commit a complete batch while the caller owns it."""
+        prepared: List[_PreparedTransition] = []
         for entry in transitions:
+            if len(entry) not in (3, 4):
+                raise ValueError("each transition entry must contain 3 or 4 items")
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
-            condition: Optional[Union[Condition, Callable[..., bool]]] = (
+            condition: Optional[Union[Condition, GuardCallable]] = (
                 rest[0] if rest else None
             )
-            self.add_transition(trigger, from_state, to_state, condition)
+            prepared.append(
+                self._normalize_transition_request(
+                    trigger, from_state, to_state, condition
+                )
+            )
+        self._commit_transition_plan(tuple(prepared))
 
     def add_bidirectional_transition(
         self,
@@ -791,11 +1542,11 @@ class StateMachine:
         trigger2: str,
         state1: Union[str, State],
         state2: Union[str, State],
-        condition1: Optional[Union[Condition, Callable]] = None,
-        condition2: Optional[Union[Condition, Callable]] = None,
+        condition1: Optional[Union[Condition, GuardCallable]] = None,
+        condition2: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless1: Optional[Union[Condition, Callable]] = None,
-        unless2: Optional[Union[Condition, Callable]] = None,
+        unless1: Optional[Union[Condition, GuardCallable]] = None,
+        unless2: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """
         Add transitions in both directions between two states.
@@ -820,16 +1571,49 @@ class StateMachine:
             fsm.add_bidirectional_transition('open', 'close', 'closed', 'open',
                                              unless1=is_locked)
         """
-        self.add_transition(trigger1, state1, state2, condition1, unless=unless1)
-        self.add_transition(trigger2, state2, state1, condition2, unless=unless2)
+        owner_thread_id = self._acquire_sync_ownership("add_bidirectional_transition")
+        try:
+            self._add_bidirectional_transition_owned(
+                trigger1,
+                trigger2,
+                state1,
+                state2,
+                condition1,
+                condition2,
+                unless1=unless1,
+                unless2=unless2,
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_bidirectional_transition_owned(
+        self,
+        trigger1: str,
+        trigger2: str,
+        state1: Union[str, State],
+        state2: Union[str, State],
+        condition1: Optional[Union[Condition, GuardCallable]] = None,
+        condition2: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless1: Optional[Union[Condition, GuardCallable]] = None,
+        unless2: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit both directions while the caller owns it."""
+        first = self._normalize_transition_request(
+            trigger1, state1, state2, condition1, unless=unless1
+        )
+        second = self._normalize_transition_request(
+            trigger2, state2, state1, condition2, unless=unless2
+        )
+        self._commit_transition_plan((first, second))
 
     def add_emergency_transition(
         self,
         trigger: str,
         to_state: Union[str, State],
-        condition: Optional[Union[Condition, Callable]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> None:
         """
         Add an emergency transition from all states to a specific state.
@@ -850,8 +1634,31 @@ class StateMachine:
             # With negation shorthand:
             fsm.add_emergency_transition('fallback', 'safe', unless=is_safe)
         """
-        all_states: List[Union[str, State]] = list(self._states.keys())
-        self.add_transition(trigger, all_states, to_state, condition, unless=unless)
+        owner_thread_id = self._acquire_sync_ownership("add_emergency_transition")
+        try:
+            self._add_emergency_transition_owned(
+                trigger, to_state, condition, unless=unless
+            )
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_emergency_transition_owned(
+        self,
+        trigger: str,
+        to_state: Union[str, State],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+    ) -> None:
+        """Validate and commit an all-state transition while the caller owns it."""
+        prepared = self._normalize_transition_request(
+            trigger,
+            list(self._states.values()),
+            to_state,
+            condition,
+            unless=unless,
+        )
+        self._commit_transition_plan((prepared,))
 
     @property
     def name(self) -> str:
@@ -911,10 +1718,10 @@ class StateMachine:
                 def on_enter_state(self, target, source, trigger, **kwargs): ...
                 def after_transition(self, source, target, trigger, **kwargs): ...
 
-        **Argument semantics:**
+        .. rubric:: Argument semantics
 
-        - *source* / *target* — :class:`State` objects (access ``.name`` for the string)
-        - *trigger* — the trigger name string
+        - ``source`` / ``target`` — :class:`State` objects (access ``.name`` for the string)
+        - ``trigger`` — the trigger name string
         - ``**kwargs`` — forwarded from the original :meth:`trigger` call
 
         Bound method references are extracted at registration time so the
@@ -927,13 +1734,22 @@ class StateMachine:
         Args:
             *listeners: One or more observer objects.
 
-        Example:
+        Example::
+
             class TransitionLogger:
                 def after_transition(self, source, target, trigger, **kwargs):
                     print(f"{source.name} --[{trigger}]--> {target.name}")
 
             fsm.add_listener(TransitionLogger())
         """
+        owner_thread_id = self._acquire_sync_ownership("add_listener")
+        try:
+            self._add_listener_owned(*listeners)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _add_listener_owned(self, *listeners: Any) -> None:
+        """Extract and register listener methods while the caller owns this machine."""
         for listener in listeners:
             fn = getattr(listener, "before_transition", None)
             if callable(fn):
@@ -968,6 +1784,14 @@ class StateMachine:
 
             fsm.on_enter("running", lambda from_s, t, **kw: print("entered running"))
         """
+        owner_thread_id = self._acquire_sync_ownership("on_enter")
+        try:
+            self._on_enter_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_enter_owned(self, state_name: str, callback: Any) -> None:
+        """Append one enter callback while the caller owns this machine."""
         if state_name not in self._state_enter_callbacks:
             self._state_enter_callbacks[state_name] = []
         self._state_enter_callbacks[state_name].append(callback)
@@ -991,6 +1815,14 @@ class StateMachine:
 
             fsm.on_exit("running", lambda to_s, t, **kw: print("left running"))
         """
+        owner_thread_id = self._acquire_sync_ownership("on_exit")
+        try:
+            self._on_exit_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_exit_owned(self, state_name: str, callback: Any) -> None:
+        """Append one exit callback while the caller owns this machine."""
         if state_name not in self._state_exit_callbacks:
             self._state_exit_callbacks[state_name] = []
         self._state_exit_callbacks[state_name].append(callback)
@@ -1001,6 +1833,14 @@ class StateMachine:
         Args:
             callback: Callable ``fn(source, target, trigger, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("after_transition")
+        try:
+            self._after_transition_owned(callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _after_transition_owned(self, callback: Any) -> None:
+        """Append one post-transition callback while the caller owns it."""
         self._after_listeners.append(callback)
 
     def on_failed(self, callback: Any) -> None:
@@ -1009,6 +1849,14 @@ class StateMachine:
         Args:
             callback: Callable ``fn(trigger, from_state, error, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("on_failed")
+        try:
+            self._on_failed_owned(callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_failed_owned(self, callback: Any) -> None:
+        """Append one failure observer while the caller owns this machine."""
         self._on_failed_callbacks.append(callback)
 
     def on_trigger(self, trigger_name: str, callback: Any) -> None:
@@ -1018,6 +1866,14 @@ class StateMachine:
             trigger_name: The trigger name to watch.
             callback: Callable ``fn(from_state, to_state, trigger, **kwargs)``.
         """
+        owner_thread_id = self._acquire_sync_ownership("on_trigger")
+        try:
+            self._on_trigger_owned(trigger_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_trigger_owned(self, trigger_name: str, callback: Any) -> None:
+        """Append one trigger callback while the caller owns this machine."""
         if trigger_name not in self._trigger_callbacks:
             self._trigger_callbacks[trigger_name] = []
         self._trigger_callbacks[trigger_name].append(callback)
@@ -1104,24 +1960,185 @@ class StateMachine:
         Performance: O(1) - Direct dictionary lookup + condition check
         Use this for validation before expensive operations.
         """
-        current_name = self._current_state.name
-
-        if current_name not in self._transitions:
-            return False
-
-        if trigger not in self._transitions[current_name]:
-            return False
-
-        entry = self._transitions[current_name][trigger]
-
-        if entry.condition:
-            safe_kwargs = self._sanitize_condition_kwargs(kwargs)
-            if not entry.condition.check(*args, **safe_kwargs):
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            prepared = self._prepare_transition(trigger, args, kwargs)
+            if isinstance(prepared, TransitionResult):
                 return False
 
-        return self._current_state.can_transition(
-            trigger, entry.to_state, *args, **kwargs
+            entry = prepared.entry
+            if entry.condition:
+                assert prepared.condition_kwargs is not None
+                if not self._evaluate_condition_sync(
+                    entry.condition, prepared.args, prepared.condition_kwargs
+                ):
+                    return False
+
+            if not self._evaluate_declarative_condition_sync(prepared):
+                return False
+
+            return self._can_transition_after_declarative_guard(
+                trigger, entry.to_state, args, kwargs
+            )
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
+
+    def _prepare_transition(
+        self, trigger: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+    ) -> Union[_PreparedDispatch, TransitionResult]:
+        """Resolve one canonical transition and prepare its guard context.
+
+        Every public can/do path calls this once.  The direct dictionary lookup
+        keeps missing and unconditional transitions allocation-free with respect
+        to guard context, while a guarded transition gets one fresh sanitized
+        mapping for exactly that evaluation.
+        """
+        current_name = self._current_state.name
+        entries = self._transitions.get(current_name)
+        entry = entries.get(trigger) if entries is not None else None
+        if entry is None:
+            error_msg = (
+                f"No transition for trigger '{trigger}' from state '{current_name}'"
+            )
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
+            )
+        declarative_handler = _resolve_declarative_handler(
+            self._current_state, trigger, entry.to_state
         )
+        has_declarative_guard = bool(
+            declarative_handler and declarative_handler.get("condition")
+        )
+        condition_kwargs = (
+            self._sanitize_condition_kwargs(kwargs)
+            if entry.condition or has_declarative_guard
+            else None
+        )
+        return _PreparedDispatch(
+            entry, current_name, trigger, args, condition_kwargs, declarative_handler
+        )
+
+    def _evaluate_declarative_condition_sync(
+        self, prepared: _PreparedDispatch, *, raise_on_error: bool = False
+    ) -> bool:
+        """Evaluate one resolved declarative guard through the sync guard seam."""
+        handler_info = prepared.declarative_handler
+        if handler_info is None:
+            return True
+        condition = handler_info.get("condition")
+        if not condition:
+            return True
+
+        source_state = cast(DeclarativeState, self._current_state)
+        try:
+            assert prepared.condition_kwargs is not None
+            condition_result: Any
+            if isinstance(condition, Condition):
+                condition_result = self._evaluate_condition_sync(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
+            elif callable(condition):
+                if _is_async_callable(condition):
+                    raise TypeError(
+                        "Async declarative condition requires AsyncStateMachine and "
+                        "trigger_async()"
+                    )
+                condition_result = condition(
+                    *prepared.args, **prepared.condition_kwargs
+                )
+                if _is_awaitable(condition_result):
+                    _reject_sync_awaitable(condition_result)
+            else:
+                condition_result = bool(condition)
+            _emit_legacy_debug(
+                source_state._logger,
+                "State '%s': Condition check for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                condition_result,
+            )
+            return bool(condition_result)
+        except Exception as exc:  # broad catch preserves can_trigger compatibility
+            if raise_on_error:
+                raise
+            _emit_legacy_warning(
+                source_state._logger,
+                "State '%s': Condition evaluation failed for trigger '%s' type=%s",
+                source_state.name,
+                prepared.trigger,
+                type(exc).__name__,
+            )
+            return False
+
+    async def _evaluate_declarative_condition_async(
+        self, prepared: _PreparedDispatch, *, raise_on_error: bool = False
+    ) -> bool:
+        """Evaluate one resolved declarative guard through the async guard seam."""
+        handler_info = prepared.declarative_handler
+        if handler_info is None:
+            return True
+        condition = handler_info.get("condition")
+        if not condition:
+            return True
+
+        source_state = cast(DeclarativeState, self._current_state)
+        try:
+            assert prepared.condition_kwargs is not None
+            condition_result: Any
+            if isinstance(condition, Condition):
+                condition_result = await self._evaluate_condition_async(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
+            elif callable(condition):
+                condition_result = condition(
+                    *prepared.args, **prepared.condition_kwargs
+                )
+                if _is_awaitable(condition_result):
+                    condition_result = await condition_result
+            else:
+                condition_result = bool(condition)
+            _emit_legacy_debug(
+                source_state._logger,
+                "State '%s': Async condition check for trigger '%s': %s",
+                source_state.name,
+                prepared.trigger,
+                condition_result,
+            )
+            return bool(condition_result)
+        except Exception as exc:  # broad catch preserves can_trigger compatibility
+            if raise_on_error:
+                raise
+            _emit_legacy_warning(
+                source_state._logger,
+                "State '%s': Async condition evaluation failed for trigger '%s' type=%s",
+                source_state.name,
+                prepared.trigger,
+                type(exc).__name__,
+            )
+            return False
+
+    def _can_transition_after_declarative_guard(
+        self,
+        trigger: str,
+        to_state: State,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> bool:
+        """Run effective sync state policy without re-evaluating its base guard."""
+        source_state = self._current_state
+        if not isinstance(source_state, DeclarativeState):
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
+        try:
+            # Preserve the public subclass hook. DeclarativeState itself sees
+            # the narrow context and skips only its duplicate decorator guard.
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        finally:
+            _reset_prepared_declarative_guard(token)
 
     def _sanitize_condition_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1136,39 +2153,211 @@ class StateMachine:
         Returns:
             Sanitized kwargs safe for condition evaluation
         """
-        # Default implementation: basic safety checks
-        safe_kwargs = {}
+        safe_kwargs: Dict[str, Any] = {}
 
-        # Limit to reasonable number of arguments to prevent memory issues
+        # Retain the established diagnostic only; values are never logged.
         if len(kwargs) > 50:
-            self._logger.warning(
+            _emit_legacy_warning(
+                self._logger,
                 "%s: Too many kwargs (%d) passed to condition, truncating",
                 self._name,
                 len(kwargs),
             )
-            # Keep only first 50 items
-            kwargs = dict(list(kwargs.items())[:50])
 
-        # Copy kwargs, filtering out potentially dangerous items
+        # Filter first so invalid leading entries cannot consume the bounded
+        # guard context budget.  Dict insertion order makes the retained safe
+        # keys deterministic without retaining the caller's mapping.
         for key, value in kwargs.items():
-            # Skip private/protected attributes
-            if key.startswith("_"):
-                self._logger.debug(
-                    "%s: Skipping private kwarg '%s' for condition", self._name, key
-                )
-                continue
-
-            # Validate key is reasonable string
             if not isinstance(key, str) or len(key) > 100:
-                self._logger.warning(
-                    "%s: Skipping invalid kwarg key: %s", self._name, repr(key)
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: Skipping invalid kwarg key for condition",
+                    self._name,
                 )
                 continue
-
-            # Add value (conditions should validate their own expected types)
+            if key.startswith("_"):
+                _emit_legacy_debug(
+                    self._logger,
+                    "%s: Skipping private kwarg '%s' for condition",
+                    self._name,
+                    key,
+                )
+                continue
+            if len(safe_kwargs) == 50:
+                continue
             safe_kwargs[key] = value
 
         return safe_kwargs
+
+    @staticmethod
+    def _condition_children(condition: Condition) -> Tuple[Condition, ...]:
+        """Return only the supported private built-in wrapper child edges."""
+        from .condition_templates import AndCondition, NotCondition, OrCondition
+
+        condition_type = type(condition)
+        if condition_type is NegatedCondition:
+            return (cast(NegatedCondition, condition)._inner,)
+        if condition_type is AndCondition:
+            return cast(AndCondition, condition).conditions
+        if condition_type is OrCondition:
+            return cast(OrCondition, condition).conditions
+        if condition_type is NotCondition:
+            return (cast(NotCondition, condition).condition,)
+        return ()
+
+    @staticmethod
+    def _contains_async_requirement(condition: Condition) -> bool:
+        """Detect nested async leaves while rejecting active wrapper cycles."""
+        active: set[int] = set()
+        completed: Dict[int, bool] = {}
+        stack: List[Tuple[Condition, bool]] = [(condition, False)]
+
+        while stack:
+            current, leaving = stack.pop()
+            current_id = id(current)
+            if leaving:
+                children = StateMachine._condition_children(current)
+                if children:
+                    completed[current_id] = any(
+                        completed[id(child)] for child in children
+                    )
+                else:
+                    current_type = type(current)
+                    if current_type in (FuncCondition, CompiledFuncCondition):
+                        leaf_async = _is_async_callable(getattr(current, "func"))
+                    elif isinstance(current, FuncCondition) and (
+                        current_type.check is FuncCondition.check
+                    ):
+                        leaf_async = _is_async_callable(current.func)
+                    elif isinstance(current, CompiledFuncCondition) and (
+                        current_type.check is CompiledFuncCondition.check
+                    ):
+                        leaf_async = _is_async_callable(getattr(current, "func"))
+                    else:
+                        leaf_async = _is_async_callable(current.check)
+                    completed[current_id] = (
+                        isinstance(current, AsyncCondition) or leaf_async
+                    )
+                active.remove(current_id)
+                continue
+
+            if current_id in active:
+                raise ValueError("supported condition wrapper cycle detected")
+            if current_id in completed:
+                continue
+
+            active.add(current_id)
+            stack.append((current, True))
+            for child in reversed(StateMachine._condition_children(current)):
+                stack.append((child, False))
+
+        return completed[id(condition)]
+
+    def _evaluate_condition_sync(
+        self,
+        condition: Condition,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        active: Optional[set[int]] = None,
+        completed: Optional[set[int]] = None,
+    ) -> bool:
+        """Evaluate supported wrappers synchronously without hiding async leaves."""
+        from .condition_templates import AndCondition, NotCondition, OrCondition
+
+        if active is None:
+            active = set()
+        if completed is None:
+            completed = set()
+        entered: set[int] = set()
+        stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
+        result: Any = False
+
+        try:
+            while stack:
+                action, current, child_index = stack.pop()
+                current_id = id(current)
+
+                if action == "evaluate":
+                    if current_id in active:
+                        raise ValueError("supported condition wrapper cycle detected")
+                    active.add(current_id)
+                    entered.add(current_id)
+                    condition_type = type(current)
+                    children = self._condition_children(current)
+
+                    if (
+                        condition_type is NegatedCondition
+                        or condition_type is NotCondition
+                    ):
+                        stack.append(("negate", current, 0))
+                        stack.append(("evaluate", children[0], 0))
+                    elif condition_type is AndCondition:
+                        if children:
+                            stack.append(("and", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = True
+                            active.remove(current_id)
+                    elif condition_type is OrCondition:
+                        if children:
+                            stack.append(("or", current, 1))
+                            stack.append(("evaluate", children[0], 0))
+                        else:
+                            result = False
+                            active.remove(current_id)
+                    elif isinstance(current, AsyncCondition):
+                        raise TypeError(
+                            "AsyncCondition requires AsyncStateMachine and trigger_async()"
+                        )
+                    elif condition_type in (FuncCondition, CompiledFuncCondition):
+                        result = getattr(current, "func")(*args, **kwargs)
+                        if _is_awaitable(result):
+                            _reject_sync_awaitable(result)
+                        active.remove(current_id)
+                    else:
+                        # Keep public condition subclasses at the dynamic
+                        # boundary so mypyc does not reject an awaitable
+                        # override before sync dispatch can close and reject it.
+                        result = cast(Any, current).check(*args, **kwargs)
+                        if _is_awaitable(result):
+                            _reject_sync_awaitable(result)
+                        active.remove(current_id)
+                elif action == "negate":
+                    result = not result
+                    active.remove(current_id)
+                elif action == "and":
+                    children = self._condition_children(current)
+                    if not result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("and", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+                else:  # action == "or"
+                    children = self._condition_children(current)
+                    if result or child_index == len(children):
+                        active.remove(current_id)
+                    else:
+                        stack.append(("or", current, child_index + 1))
+                        stack.append(("evaluate", children[child_index], 0))
+
+            return result
+        finally:
+            active.difference_update(entered)
+            completed.update(entered)
+
+    async def _evaluate_condition_async(
+        self,
+        condition: Condition,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        active: Optional[set[int]] = None,
+        completed: Optional[set[int]] = None,
+    ) -> bool:
+        """Await async leaves through supported built-in wrappers iteratively."""
+        # Retain the existing private signature, but keep traversal state inside
+        # the shared evaluator so direct async state-policy calls cannot diverge
+        # from machine-owned dispatch.
+        return await _evaluate_condition_async_iteratively(condition, args, kwargs)
 
     def force_state(self, state_name: str) -> None:
         """Force the machine into a named state, bypassing guard conditions.
@@ -1186,13 +2375,20 @@ class StateMachine:
         Raises:
             KeyError: If ``state_name`` is not a registered state.
         """
+        owner_thread_id = self._acquire_sync_ownership("force_state")
+        try:
+            self._force_state_owned(state_name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _force_state_owned(self, state_name: str) -> None:
+        """Run direct control after one public caller owns this machine."""
         if state_name not in self._states:
             raise KeyError(
                 f"State '{state_name}' is not registered in '{self._name}'. "
                 f"Registered states: {list(self._states)}"
             )
-        to_state = self._states[state_name]
-        self._execute_transition(to_state, "__force__")
+        self._execute_control_transition(self._states[state_name], "__force__")
 
     def reset(self) -> None:
         """Return the machine to its initial state, bypassing guard conditions.
@@ -1204,7 +2400,11 @@ class StateMachine:
         Safe to call when the machine is already in its initial state
         (callbacks still fire).
         """
-        self.force_state(self._initial_state.name)
+        owner_thread_id = self._acquire_sync_ownership("reset")
+        try:
+            self._force_state_owned(self._initial_state.name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
     def snapshot(self) -> Dict[str, Any]:
         """Capture a lightweight, serialisable snapshot of the current state.
@@ -1226,8 +2426,9 @@ class StateMachine:
     def restore(self, snapshot: Dict[str, Any]) -> None:
         """Restore the machine to a previously captured snapshot.
 
-        Calls :meth:`force_state` under the hood, so the full callback chain
-        fires and guards are bypassed.
+        Runs the same private direct-control body as :meth:`force_state`, so
+        the full callback chain fires and guards are bypassed without a second
+        public ownership admission.
 
         Args:
             snapshot: A dict previously returned by :meth:`snapshot`.
@@ -1238,18 +2439,23 @@ class StateMachine:
             KeyError: If the state named in the snapshot is no longer
                 registered (e.g. machine topology changed since capture).
         """
-        version = snapshot.get("version", 1)
-        if version != 1:
-            raise ValueError(
-                f"Unsupported snapshot version: {version!r}. "
-                "Only version 1 is currently supported."
-            )
-        state_name = snapshot.get("state")
-        if not isinstance(state_name, str):
-            raise ValueError(
-                f"Snapshot 'state' must be a string, got {type(state_name).__name__!r}."
-            )
-        self.force_state(state_name)
+        owner_thread_id = self._acquire_sync_ownership("restore")
+        try:
+            version = snapshot.get("version", 1)
+            if version != 1:
+                raise ValueError(
+                    f"Unsupported snapshot version: {version!r}. "
+                    "Only version 1 is currently supported."
+                )
+            state_name = snapshot.get("state")
+            if not isinstance(state_name, str):
+                raise ValueError(
+                    "Snapshot 'state' must be a string, got "
+                    f"{type(state_name).__name__!r}."
+                )
+            self._force_state_owned(state_name)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
 
     def clone(self) -> "StateMachine":
         """Create a verbatim clone of this machine reset to its initial state.
@@ -1282,6 +2488,7 @@ class StateMachine:
             state_name: dict(triggers)
             for state_name, triggers in self._transitions.items()
         }
+        new_fsm._graph_version = self._graph_version
         # current_state is already _initial_state from __init__ — correct.
         # Per-state callbacks are copied (shallow copy of each list).
         new_fsm._state_exit_callbacks = {
@@ -1316,56 +2523,134 @@ class StateMachine:
             ``(entry, current_state_name)`` on success, or a failure
             :class:`TransitionResult` if no transition exists.
         """
-        current_name = self._current_state.name
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
+            return prepared
+        return prepared.entry, prepared.current_name
 
-        # Log trigger attempt (most verbose level)
-        if self._logger.isEnabledFor(
-            logging.DEBUG - 5
-        ):  # Custom level for ultra-verbose
-            args_str = f"args={args}, kwargs={kwargs}" if args or kwargs else "no args"
-            self._logger.log(
-                logging.DEBUG - 5,
-                "%s: Attempting trigger '%s' from state '%s' with %s",
-                self._name,
-                trigger,
-                current_name,
-                args_str,
+    def _commit_transition(
+        self, old_state: State, to_state: State, trigger: str
+    ) -> None:
+        """Commit state and optional history without invoking user code."""
+        record: Optional[TransitionRecord] = None
+        history = self._history
+        if history is not None:
+            record = TransitionRecord(
+                old_state.name, trigger, to_state.name, time.monotonic()
             )
+        if record is not None:
+            assert history is not None
+            history.append(record)
+        self._current_state = to_state
 
-        # Check if transition exists
-        if (
-            current_name not in self._transitions
-            or trigger not in self._transitions[current_name]
-        ):
-            error_msg = (
-                f"No transition for trigger '{trigger}' from state '{current_name}'"
-            )
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
-            )
+    @staticmethod
+    def _build_failure_result(
+        from_state: str,
+        trigger: str,
+        error: str,
+        *,
+        stage: str,
+        to_state: Optional[str] = None,
+        committed: bool = False,
+        cause: Optional[BaseException] = None,
+    ) -> TransitionResult:
+        """Construct one staged failure without observing it.
 
-        return self._transitions[current_name][trigger], current_name
+        Public trigger boundaries own observer notification through
+        :meth:`_finalize_failure`; lower resolution, guard, permission, and
+        lifecycle helpers only describe their truthful outcome here.
+        """
+        return TransitionResult(
+            False,
+            from_state=from_state,
+            to_state=to_state,
+            trigger=trigger,
+            error=error,
+            committed=committed,
+            stage=stage,
+            cause=cause,
+        )
+
+    def _build_lifecycle_failure(
+        self,
+        old_state: State,
+        to_state: State,
+        trigger: str,
+        stage: str,
+        cause: BaseException,
+        *,
+        committed: bool,
+    ) -> TransitionResult:
+        """Describe one redacted lifecycle failure without observing it."""
+        return self._build_failure_result(
+            old_state.name,
+            trigger,
+            f"Transition callback failed at {stage}",
+            stage=stage,
+            to_state=to_state.name if committed else None,
+            committed=committed,
+            cause=cause,
+        )
+
+    def _finalize_failure(
+        self, result: TransitionResult, kwargs: Dict[str, Any]
+    ) -> TransitionResult:
+        """Notify failure observers once without replacing the original outcome."""
+        observers = tuple(self._on_failed_callbacks)
+        for observer_index, observer in enumerate(observers):
+            try:
+                observer(
+                    result.trigger,
+                    result.from_state,
+                    result.error,
+                    **kwargs,
+                )
+            except BaseException as observer_error:
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: failure observer failed stage=%s index=%d type=%s",
+                    self._name,
+                    result.stage,
+                    observer_index,
+                    type(observer_error).__name__,
+                )
+        return result
 
     def _execute_transition(
-        self, to_state: State, trigger: str, *args: Any, **kwargs: Any
+        self,
+        to_state: State,
+        trigger: str,
+        *args: Any,
+        declarative_handler: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> TransitionResult:
-        """Perform exit/enter callbacks and state change.
+        """Run the synchronous lifecycle around one non-callback commit seam.
 
-        Assumes all pre-checks (condition, permission) have already passed.
+        Assumes canonical resolution, guard evaluation, and source permission
+        have already passed.  The direct calls retain their registration order;
+        each ordinary callback failure returns immediately so no later lifecycle
+        surface can observe a partially completed suffix.
         """
         old_state = self._current_state
 
-        # Fire before_transition listeners (before on_exit)
+        # Pre-commit: before-transition listeners.
         if self._before_listeners:
             for fn in self._before_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.error("before_transition listener error: %s", e)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_BEFORE_TRANSITION,
+                        cause,
+                        committed=False,
+                    )
 
         # Log transition start
-        self._logger.debug(
+        _emit_legacy_debug(
+            self._logger,
             "%s: Executing transition %s --[%s]--> %s",
             self._name,
             old_state.name,
@@ -1373,121 +2658,296 @@ class StateMachine:
             to_state.name,
         )
 
-        # Call exit handler
+        # Pre-commit: source state hook, then registered source callbacks.
         try:
             old_state.on_exit(to_state, trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-            self._logger.warning(
-                "%s: Exception in on_exit for state '%s': %s",
-                self._name,
-                old_state.name,
-                e,
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                _LIFECYCLE_STAGE_SOURCE_EXIT,
+                cause,
+                committed=False,
             )
 
-        # Fire per-state exit callbacks registered via on_exit(state, fn)
         _exit_cbs = self._state_exit_callbacks.get(old_state.name)
         if _exit_cbs:
             for fn in _exit_cbs:
                 try:
                     fn(to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit callback for state '%s': %s",
-                        self._name,
-                        old_state.name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
+                        cause,
+                        committed=False,
                     )
 
-        # Notify on_exit_state listeners (after state's own on_exit)
+        # Pre-commit: machine exit-state listeners.
         if self._on_exit_listeners:
             for fn in self._on_exit_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit_state listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
+                        cause,
+                        committed=False,
                     )
 
-        # Change state
-        self._current_state = to_state
-
-        # Call enter handler
+        # Commit: this section invokes no user code, so current state and
+        # optional history cannot diverge through a lifecycle callback.
         try:
-            to_state.on_enter(old_state, trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-            self._logger.warning(
-                "%s: Exception in on_enter for state '%s': %s",
-                self._name,
-                to_state.name,
-                e,
+            self._commit_transition(old_state, to_state, trigger)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                _LIFECYCLE_STAGE_COMMIT,
+                cause,
+                committed=False,
             )
 
-        # Fire per-state enter callbacks registered via on_enter(state, fn)
+        # Post-commit: destination state hook, then registered callbacks.
+        try:
+            to_state.on_enter(old_state, trigger, *args, **kwargs)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                _LIFECYCLE_STAGE_DESTINATION_ENTER,
+                cause,
+                committed=True,
+            )
+
         _enter_cbs = self._state_enter_callbacks.get(to_state.name)
         if _enter_cbs:
             for fn in _enter_cbs:
                 try:
                     fn(old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter callback for state '%s': %s",
-                        self._name,
-                        to_state.name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
+                        cause,
+                        committed=True,
                     )
 
-        # Notify on_enter_state listeners (after state's own on_enter)
+        # Post-commit: machine enter-state listeners.
         if self._on_enter_listeners:
             for fn in self._on_enter_listeners:
                 try:
                     fn(to_state, old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter_state listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
+                        cause,
+                        committed=True,
                     )
 
+        # Post-commit: the selected ordinary declarative handler runs once.
+        if declarative_handler is not None:
+            declarative_result = _invoke_declarative_handler_for_transition(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage=_LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                )
+
         # Log successful transition (main transition log)
-        self._logger.debug(
-            "%s: %s --[%s]--> %s", self._name, old_state.name, trigger, to_state.name
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
         )
 
-        # Notify after_transition listeners
+        # Post-commit: trigger-specific callbacks precede after listeners.
+        _trigger_cbs = self._trigger_callbacks.get(trigger)
+        if _trigger_cbs:
+            for fn in _trigger_cbs:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
+                        cause,
+                        committed=True,
+                    )
+
         if self._after_listeners:
             for fn in self._after_listeners:
                 try:
                     fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in after_transition listener: %s",
-                        self._name,
-                        e,
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_AFTER_TRANSITION,
+                        cause,
+                        committed=True,
                     )
 
-        # Fire per-trigger callbacks registered via on_trigger(name, fn)
-        if trigger in self._trigger_callbacks:
-            for fn in self._trigger_callbacks[trigger]:
-                try:
-                    fn(old_state, to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.error("on_trigger callback error: %s", e)
+        return TransitionResult(
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
+        )
 
-        # Record transition in history (zero-cost when disabled — single None check)
-        if self._history is not None:
-            if len(self._history) >= self._history_max:
-                del self._history[0]
-            self._history.append(
-                TransitionRecord(
-                    old_state.name, trigger, to_state.name, time.monotonic()
-                )
+    def _execute_control_transition(self, to_state: State, trigger: str) -> None:
+        """Preserve direct-control callback behavior outside ordinary trigger results.
+
+        ``force_state()``, ``reset()``, and ``restore()`` have no result return
+        contract.  They retain their historical best-effort callback flow and
+        must therefore not borrow the ordinary trigger's fail-fast finalizer.
+        """
+        old_state = self._current_state
+
+        if self._before_listeners:
+            for fn in self._before_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_BEFORE_TRANSITION,
+                        type(cause).__name__,
+                    )
+
+        try:
+            old_state.on_exit(to_state, trigger)
+        except Exception as cause:
+            _emit_legacy_warning(
+                self._logger,
+                "%s: control callback failed stage=%s type=%s",
+                self._name,
+                _LIFECYCLE_STAGE_SOURCE_EXIT,
+                type(cause).__name__,
             )
 
-        return TransitionResult(
-            True, from_state=old_state.name, to_state=to_state.name, trigger=trigger
-        )
+        _exit_cbs = self._state_exit_callbacks.get(old_state.name)
+        if _exit_cbs:
+            for fn in _exit_cbs:
+                try:
+                    fn(to_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
+                        type(cause).__name__,
+                    )
+
+        if self._on_exit_listeners:
+            for fn in self._on_exit_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
+                        type(cause).__name__,
+                    )
+
+        self._commit_transition(old_state, to_state, trigger)
+
+        try:
+            to_state.on_enter(old_state, trigger)
+        except Exception as cause:
+            _emit_legacy_warning(
+                self._logger,
+                "%s: control callback failed stage=%s type=%s",
+                self._name,
+                _LIFECYCLE_STAGE_DESTINATION_ENTER,
+                type(cause).__name__,
+            )
+
+        _enter_cbs = self._state_enter_callbacks.get(to_state.name)
+        if _enter_cbs:
+            for fn in _enter_cbs:
+                try:
+                    fn(old_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
+                        type(cause).__name__,
+                    )
+
+        if self._on_enter_listeners:
+            for fn in self._on_enter_listeners:
+                try:
+                    fn(to_state, old_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
+                        type(cause).__name__,
+                    )
+
+        if self._after_listeners:
+            for fn in self._after_listeners:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_AFTER_TRANSITION,
+                        type(cause).__name__,
+                    )
+
+        _trigger_cbs = self._trigger_callbacks.get(trigger)
+        if _trigger_cbs:
+            for fn in _trigger_cbs:
+                try:
+                    fn(old_state, to_state, trigger)
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: control callback failed stage=%s type=%s",
+                        self._name,
+                        _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
+                        type(cause).__name__,
+                    )
 
     def trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
@@ -1504,107 +2964,217 @@ class StateMachine:
         Returns:
             TransitionResult indicating success or failure
         """
-        resolved = self._resolve_trigger(trigger, *args, **kwargs)
-        if isinstance(resolved, TransitionResult):
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return resolved
-        entry, current_name = resolved
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            owner_thread_id = self._acquire_sync_ownership("trigger")
+            try:
+                trace_result = self._trigger_owned(trigger, *args, **kwargs)
+                _emit_fsm_trace(
+                    self._logger,
+                    operation="trigger",
+                    stage=(
+                        trace_result.stage
+                        if trace_result.stage in _LIFECYCLE_STAGES
+                        else "complete"
+                    ),
+                    result="success" if trace_result.success else "failure",
+                    trigger=trigger,
+                    source_state=trace_result.from_state,
+                    destination_state=trace_result.to_state,
+                    positional_args=args,
+                    keyword_args=kwargs,
+                    error=trace_result.cause,
+                )
+                return trace_result
+            finally:
+                self._release_sync_ownership(owner_thread_id)
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
+
+    def _trigger_owned(self, trigger: str, *args, **kwargs) -> TransitionResult:
+        """Run one ordinary trigger while its caller owns this machine."""
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
+            return self._finalize_failure(prepared, kwargs)
+        entry = prepared.entry
+        current_name = prepared.current_name
         to_state = entry.to_state
         condition = entry.condition
 
         # Check condition with logging
         if condition:
-            condition_name = str(condition)
-            self._logger.debug(
-                "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                self._name,
-                condition_name,
-                current_name,
-                to_state.name,
-            )
-            try:
-                # Validate kwargs before passing to condition (safety improvement)
-                safe_kwargs = self._sanitize_condition_kwargs(kwargs)
-                condition_result = condition.check(*args, **safe_kwargs)
-                self._logger.debug(
-                    "%s: Condition '%s' result: %s",
+            condition_name = ""
+            if _legacy_debug_enabled(self._logger):
+                condition_name = str(condition)
+                _emit_legacy_debug(
+                    self._logger,
+                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
                     self._name,
                     condition_name,
-                    condition_result,
+                    current_name,
+                    to_state.name,
                 )
-                if not condition_result:
-                    error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-                    if self._on_failed_callbacks:
-                        for fn in self._on_failed_callbacks:
-                            try:
-                                fn(trigger, current_name, error_msg, **kwargs)
-                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                                self._logger.error("on_failed callback error: %s", e)
-                    return TransitionResult(
-                        False, from_state=current_name, trigger=trigger, error=error_msg
+            try:
+                assert prepared.condition_kwargs is not None
+                condition_result = self._evaluate_condition_sync(
+                    condition, prepared.args, prepared.condition_kwargs
+                )
+                if condition_name:
+                    _emit_legacy_debug(
+                        self._logger,
+                        "%s: Condition '%s' result: %s",
+                        self._name,
+                        condition_name,
+                        condition_result,
                     )
-            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
-                error_msg = f"Condition '{condition_name}' raised exception: {e}"
-                self._logger.warning("%s: FAILED - %s", self._name, error_msg)
-                if self._on_failed_callbacks:
-                    for fn in self._on_failed_callbacks:
-                        try:
-                            fn(trigger, current_name, error_msg, **kwargs)
-                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                            self._logger.error("on_failed callback error: %s", e)
-                return TransitionResult(
-                    False, from_state=current_name, trigger=trigger, error=error_msg
+                if not condition_result:
+                    error_msg = (
+                        f"Transition guard rejected trigger '{trigger}' "
+                        f"from state '{current_name}'"
+                    )
+                    _emit_legacy_debug(
+                        self._logger, "%s: FAILED - %s", self._name, error_msg
+                    )
+                    return self._finalize_failure(
+                        self._build_failure_result(
+                            current_name,
+                            trigger,
+                            error_msg,
+                            stage=_LIFECYCLE_STAGE_GUARD,
+                        ),
+                        kwargs,
+                    )
+            except Exception as cause:  # guard failure is a truthful result
+                error_msg = "Transition guard raised an exception"
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        error_msg,
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        cause=cause,
+                    ),
+                    kwargs,
                 )
 
+        try:
+            declarative_guard_passed = self._evaluate_declarative_condition_sync(
+                prepared, raise_on_error=True
+            )
+        except Exception as cause:
+            error_msg = "Transition guard raised an exception"
+            _emit_legacy_warning(
+                self._logger,
+                "%s: FAILED guard type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=cause,
+                ),
+                kwargs,
+            )
+        if not declarative_guard_passed:
+            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                ),
+                kwargs,
+            )
+
         # Check if source state allows transition
-        self._logger.debug(
+        _emit_legacy_debug(
+            self._logger,
             "%s: Checking if state '%s' allows transition '%s'",
             self._name,
             current_name,
             trigger,
         )
-        if not self._current_state.can_transition(trigger, to_state, *args, **kwargs):
+        try:
+            can_proceed = self._can_transition_after_declarative_guard(
+                trigger, to_state, args, kwargs
+            )
+        except Exception as cause:
+            error_msg = "State permission raised an exception"
+            _emit_legacy_warning(
+                self._logger,
+                "%s: FAILED state-permission type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                    cause=cause,
+                ),
+                kwargs,
+            )
+        if not can_proceed:
             error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._finalize_failure(
+                self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                ),
+                kwargs,
             )
 
-        return self._execute_transition(to_state, trigger, *args, **kwargs)
+        result = self._execute_transition(
+            to_state,
+            trigger,
+            *args,
+            declarative_handler=prepared.declarative_handler,
+            **kwargs,
+        )
+        if not result.success:
+            return self._finalize_failure(result, kwargs)
+        return result
 
     def safe_trigger(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """
-        Safe version of trigger that never raises exceptions.
+        Safe version of trigger with an explicit ownership-admission boundary.
 
-        Unlike :meth:`trigger`, which propagates any exception that escapes
-        callback/condition isolation (e.g. a ``BaseException`` subclass or an
-        unexpected internal error), ``safe_trigger()`` wraps the entire call in a
-        broad ``except Exception`` barrier.  Any exception that reaches this
-        barrier is caught, logged at ERROR level, and returned as a failed
-        :class:`TransitionResult`.
+        Like :meth:`trigger`, this public writer first enters the per-machine
+        ownership envelope.  Admission failures are programming and concurrency
+        errors, so they deliberately propagate before the compatibility barrier.
+        Once admitted, ordinary ``Exception`` instances escaping the owned
+        transition retain safe-trigger's value-returning compatibility behavior.
 
         **Exception semantics:**
 
         * Exceptions from user callbacks (on_enter, on_exit, listeners) and
-          conditions are *already isolated* inside :meth:`trigger` —
+          conditions are *already isolated* inside the owned transition —
           they are caught, logged at WARNING level, and result in a failed
           ``TransitionResult``.  They do **not** propagate to this barrier.
         * ``safe_trigger()`` is a last-resort safety net — it catches any
           exception that somehow escapes those inner guards (e.g. an unexpected
           internal FSM error).  Normal user code should never see exceptions
           land here.
+        * Ownership, loop, causal-root, foreign-thread, and busy-admission
+          ``RuntimeError`` instances occur before this barrier and propagate
+          with their stable redacted metadata.
         * ``BaseException`` subclasses (``KeyboardInterrupt``, ``SystemExit``)
           are **not** caught — they propagate normally.
 
@@ -1616,17 +3186,31 @@ class StateMachine:
         Returns:
             TransitionResult with detailed error information
         """
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
-            return self.trigger(trigger, *args, **kwargs)
-        except Exception as e:  # broad catch intentional — last-resort safe_trigger() barrier; see docstring
-            error_msg = f"Exception during trigger '{trigger}': {e}"
-            self._logger.error("%s: %s", self._name, error_msg)
-            return TransitionResult(
-                False,
-                from_state=self.current_state_name,
-                trigger=trigger,
-                error=error_msg,
-            )
+            owner_thread_id = self._acquire_sync_ownership("safe_trigger")
+            try:
+                try:
+                    return self._trigger_owned(trigger, *args, **kwargs)
+                except (
+                    Exception
+                ) as cause:  # intentional post-admission compatibility barrier
+                    _emit_legacy_error(
+                        self._logger,
+                        "%s: safe trigger failed type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+                    return TransitionResult(
+                        False,
+                        from_state=self.current_state_name,
+                        trigger=trigger,
+                        error="Safe trigger failed",
+                    )
+            finally:
+                self._release_sync_ownership(owner_thread_id)
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
 
     def debug_info(self) -> Dict[str, Any]:
         """
@@ -1697,10 +3281,20 @@ class AsyncStateMachine(StateMachine):
     - :meth:`trigger_async` / :meth:`can_trigger_async` — await-safe transition
       methods that evaluate :class:`AsyncCondition` guards.
     - :meth:`on_enter_async` / :meth:`on_exit_async` — register ``async``
-      callbacks for specific states, fired after all synchronous callbacks.
+      callbacks for specific states at their matching lifecycle slots.
     """
 
-    __slots__ = ("_state_enter_async_callbacks", "_state_exit_async_callbacks")
+    __slots__ = (
+        "_state_enter_async_callbacks",
+        "_state_exit_async_callbacks",
+        "_async_ownership_lock",
+        "_async_admission_lock",
+        "_bound_loop",
+        "_bound_loop_thread_id",
+        "_async_owner_task",
+        "_async_owner_root",
+        "_sync_admission_reservations",
+    )
 
     def __init__(
         self,
@@ -1712,12 +3306,131 @@ class AsyncStateMachine(StateMachine):
         super().__init__(initial_state, name=name, logger_name=logger_name)
         self._state_enter_async_callbacks: Dict[str, List[Any]] = {}
         self._state_exit_async_callbacks: Dict[str, List[Any]] = {}
+        # ``asyncio.Lock`` is deliberately per machine and is touched only
+        # after the permanent loop identity has been checked.
+        self._async_ownership_lock = asyncio.Lock()
+        # This short gate only protects loop-binding and sync-admission
+        # metadata.  Async callers use non-blocking acquisition and it is
+        # never held over an await or lifecycle callback.
+        self._async_admission_lock = threading.Lock()
+        self._bound_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._bound_loop_thread_id: Optional[int] = None
+        self._async_owner_task: Optional[asyncio.Task[Any]] = None
+        self._async_owner_root: Optional[object] = None
+        self._sync_admission_reservations = 0
+
+    def _acquire_sync_ownership(self, operation: str) -> int:
+        """Apply the async machine's mixed sync/async writer policy.
+
+        Before async binding, inherited synchronous public writers retain the
+        base machine's per-instance serialization.  A bound machine accepts
+        those writers only from its loop thread while no async operation owns
+        the lifecycle.  The small metadata gate closes the bind-vs-sync race;
+        it is released before the normal synchronous lock can block.
+        """
+        owner_thread_id = threading.get_ident()
+        self._async_admission_lock.acquire()
+        try:
+            if self._bound_loop is not None:
+                if self._bound_loop_thread_id != owner_thread_id:
+                    raise RuntimeError(
+                        "FSM ownership violation: foreign async-machine writer"
+                    )
+                if self._async_owner_task is not None:
+                    raise RuntimeError("FSM ownership violation: async machine busy")
+            self._sync_admission_reservations += 1
+        finally:
+            self._async_admission_lock.release()
+
+        try:
+            return super()._acquire_sync_ownership(operation)
+        except BaseException:
+            self._release_sync_admission_reservation()
+            raise
+
+    def _release_sync_admission_reservation(self) -> None:
+        """Drop one sync writer reservation without exposing async metadata."""
+        self._async_admission_lock.acquire()
+        try:
+            if self._sync_admission_reservations <= 0:
+                raise RuntimeError("FSM ownership violation: invalid sync release")
+            self._sync_admission_reservations -= 1
+        finally:
+            self._async_admission_lock.release()
+
+    def _release_sync_ownership(self, owner_thread_id: int) -> None:
+        """Release base ownership and its matching mixed-mode reservation."""
+        try:
+            super()._release_sync_ownership(owner_thread_id)
+        finally:
+            self._release_sync_admission_reservation()
+
+    def _bind_or_check_async_loop(self, operation: str) -> asyncio.AbstractEventLoop:
+        """Bind this machine once, or reject a different loop before work."""
+        loop = asyncio.get_running_loop()
+        if not self._async_admission_lock.acquire(blocking=False):
+            raise RuntimeError("FSM ownership violation: async admission busy")
+        try:
+            if self._sync_admission_reservations:
+                raise RuntimeError("FSM ownership violation: sync machine busy")
+            if self._bound_loop is None:
+                self._bound_loop = loop
+                self._bound_loop_thread_id = threading.get_ident()
+            elif self._bound_loop is not loop:
+                raise RuntimeError("FSM ownership violation: foreign async loop")
+            elif self._bound_loop_thread_id != threading.get_ident():
+                raise RuntimeError("FSM ownership violation: foreign async thread")
+        finally:
+            self._async_admission_lock.release()
+        return loop
+
+    async def _acquire_async_ownership(
+        self, operation: str
+    ) -> Tuple[asyncio.Task[Any], object, contextvars.Token[Optional[object]]]:
+        """Await this machine's async lock after loop and causal prechecks."""
+        self._bind_or_check_async_loop(operation)
+        inherited_root = _ownership_root.get()
+        if inherited_root is not None and inherited_root is self._async_owner_root:
+            raise RuntimeError("FSM ownership violation: reentrant async operation")
+        await self._async_ownership_lock.acquire()
+        try:
+            task = asyncio.current_task()
+            if task is None:
+                raise RuntimeError("FSM ownership violation: missing async task")
+            root = inherited_root if inherited_root is not None else object()
+            token = _ownership_root.set(root)
+            self._async_owner_task = task
+            self._async_owner_root = root
+            return task, root, token
+        except BaseException:
+            self._async_ownership_lock.release()
+            raise
+
+    def _release_async_ownership(
+        self,
+        owner_task: asyncio.Task[Any],
+        owner_root: object,
+        token: contextvars.Token[Optional[object]],
+    ) -> None:
+        """Clear owner metadata and release the async lock on every exit."""
+        try:
+            if self._async_owner_task is not owner_task:
+                raise RuntimeError("FSM ownership violation: foreign async release")
+            if self._async_owner_root is not owner_root:
+                raise RuntimeError("FSM ownership violation: invalid async release")
+            self._async_owner_task = None
+            self._async_owner_root = None
+        finally:
+            _ownership_root.reset(token)
+            self._async_ownership_lock.release()
 
     def on_enter_async(self, state_name: str, callback: Any) -> None:
         """Register an ``async`` callback fired when the machine enters *state_name*.
 
-        Fires **after** the synchronous :meth:`~StateMachine.on_enter` callbacks,
-        still within the same ``trigger_async`` call.
+        Fires immediately after the synchronous :meth:`~StateMachine.on_enter`
+        callbacks and before enter-state listeners, still within the same
+        ``trigger_async`` call.  Cancellation propagates natively after the
+        machine observes the reached lifecycle boundary once.
 
         Signature: ``async callback(from_state: State, trigger: str, **kwargs)``
 
@@ -1735,6 +3448,14 @@ class AsyncStateMachine(StateMachine):
 
             fsm.on_enter_async("running", log_entry)
         """
+        owner_thread_id = self._acquire_sync_ownership("on_enter_async")
+        try:
+            self._on_enter_async_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_enter_async_owned(self, state_name: str, callback: Any) -> None:
+        """Append one async enter callback while the caller owns this machine."""
         if state_name not in self._state_enter_async_callbacks:
             self._state_enter_async_callbacks[state_name] = []
         self._state_enter_async_callbacks[state_name].append(callback)
@@ -1742,8 +3463,10 @@ class AsyncStateMachine(StateMachine):
     def on_exit_async(self, state_name: str, callback: Any) -> None:
         """Register an ``async`` callback fired when the machine exits *state_name*.
 
-        Fires **after** the synchronous :meth:`~StateMachine.on_exit` callbacks,
-        still within the same ``trigger_async`` call.
+        Fires immediately after the synchronous :meth:`~StateMachine.on_exit`
+        callbacks and before exit-state listeners, still within the same
+        ``trigger_async`` call.  Cancellation propagates natively after the
+        machine observes the reached lifecycle boundary once.
 
         Signature: ``async callback(to_state: State, trigger: str, **kwargs)``
 
@@ -1761,6 +3484,14 @@ class AsyncStateMachine(StateMachine):
 
             fsm.on_exit_async("running", log_exit)
         """
+        owner_thread_id = self._acquire_sync_ownership("on_exit_async")
+        try:
+            self._on_exit_async_owned(state_name, callback)
+        finally:
+            self._release_sync_ownership(owner_thread_id)
+
+    def _on_exit_async_owned(self, state_name: str, callback: Any) -> None:
+        """Append one async exit callback while the caller owns this machine."""
         if state_name not in self._state_exit_async_callbacks:
             self._state_exit_async_callbacks[state_name] = []
         self._state_exit_async_callbacks[state_name].append(callback)
@@ -1779,169 +3510,483 @@ class AsyncStateMachine(StateMachine):
         }
         return base
 
+    async def _execute_transition_async(
+        self,
+        to_state: State,
+        trigger: str,
+        *args: Any,
+        declarative_handler: Optional[Dict[str, Any]] = None,
+        lifecycle_stage: List[str],
+        committed: List[bool],
+        **kwargs: Any,
+    ) -> TransitionResult:
+        """Run the async lifecycle with awaits at their matching callback slots.
+
+        The public :meth:`trigger_async` boundary owns cancellation finalization.
+        This runner merely keeps the reached stage and no-user-code commit seam
+        explicit while converting ordinary callback exceptions into one staged
+        result, exactly like the synchronous runner.
+        """
+        old_state = self._current_state
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_BEFORE_TRANSITION
+        for fn in self._before_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: Executing async transition %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_SOURCE_EXIT
+        try:
+            old_state.on_exit(to_state, trigger, *args, **kwargs)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=False,
+            )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK
+        for fn in self._state_exit_callbacks.get(old_state.name, ()):
+            try:
+                fn(to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+        for fn in self._state_exit_async_callbacks.get(old_state.name, ()):
+            try:
+                await fn(to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_EXIT_STATE_LISTENER
+        for fn in self._on_exit_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_COMMIT
+        try:
+            self._commit_transition(old_state, to_state, trigger)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=False,
+            )
+        committed[0] = True
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DESTINATION_ENTER
+        try:
+            to_state.on_enter(old_state, trigger, *args, **kwargs)
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=True,
+            )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK
+        for fn in self._state_enter_callbacks.get(to_state.name, ()):
+            try:
+                fn(old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+        for fn in self._state_enter_async_callbacks.get(to_state.name, ()):
+            try:
+                await fn(old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_ENTER_STATE_LISTENER
+        for fn in self._on_enter_listeners:
+            try:
+                fn(to_state, old_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DECLARATIVE_HANDLER
+        if declarative_handler is not None:
+            declarative_result = await _invoke_declarative_handler_for_transition_async(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage=lifecycle_stage[0],
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_TRIGGER_CALLBACK
+        for fn in self._trigger_callbacks.get(trigger, ()):
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_AFTER_TRANSITION
+        for fn in self._after_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                )
+
+        return TransitionResult(
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
+        )
+
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Async version of can_trigger"""
-        current_name = self._current_state.name
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            self._bind_or_check_async_loop("can_trigger_async")
+            prepared = self._prepare_transition(trigger, args, kwargs)
+            if isinstance(prepared, TransitionResult):
+                return False
 
-        if current_name not in self._transitions:
-            return False
+            entry = prepared.entry
+            condition = entry.condition
 
-        if trigger not in self._transitions[current_name]:
-            return False
-
-        entry = self._transitions[current_name][trigger]
-        condition = entry.condition
-
-        if condition:
-            if isinstance(condition, AsyncCondition):
-                if not await condition.check_async(*args, **kwargs):
-                    return False
-            else:
-                if not condition.check(*args, **kwargs):
+            if condition:
+                assert prepared.condition_kwargs is not None
+                if not await self._evaluate_condition_async(
+                    condition, prepared.args, prepared.condition_kwargs
+                ):
                     return False
 
-        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
-        if hasattr(self._current_state, "can_transition_async"):
-            return await self._current_state.can_transition_async(
-                trigger, entry.to_state, *args, **kwargs
+            if not await self._evaluate_declarative_condition_async(prepared):
+                return False
+
+            return await self._can_transition_after_declarative_guard_async(
+                trigger, entry.to_state, args, kwargs
             )
-        return self._current_state.can_transition(
-            trigger, entry.to_state, *args, **kwargs
-        )
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
+
+    async def _can_transition_after_declarative_guard_async(
+        self,
+        trigger: str,
+        to_state: State,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> bool:
+        """Run effective async policy while suppressing only a prepared base guard."""
+        source_state = self._current_state
+        if not isinstance(source_state, DeclarativeState):
+            if hasattr(source_state, "can_transition_async"):
+                return await source_state.can_transition_async(
+                    trigger, to_state, *args, **kwargs
+                )
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
+        try:
+            if hasattr(source_state, "can_transition_async"):
+                return await source_state.can_transition_async(
+                    trigger, to_state, *args, **kwargs
+                )
+            return source_state.can_transition(trigger, to_state, *args, **kwargs)
+        finally:
+            _reset_prepared_declarative_guard(token)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
-        """
-        Async version of trigger that properly handles AsyncCondition instances.
-
-        Args:
-            trigger: The trigger/event name
-            *args: Positional arguments for the transition
-            **kwargs: Keyword arguments for the transition
-
-        Returns:
-            TransitionResult indicating success or failure
-        """
-        resolved = self._resolve_trigger(trigger, *args, **kwargs)
-        if isinstance(resolved, TransitionResult):
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, self._current_state.name, resolved.error, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return resolved
-        entry, current_name = resolved
-        to_state = entry.to_state
-        condition = entry.condition
-
-        # Check condition with async support
-        if condition:
-            condition_name = str(condition)
-            self._logger.debug(
-                "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                self._name,
-                condition_name,
-                current_name,
-                to_state.name,
+        """Run one owned async transition with permanent-loop admission."""
+        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        try:
+            owner_task, owner_root, token = await self._acquire_async_ownership(
+                "trigger_async"
             )
             try:
-                if isinstance(condition, AsyncCondition):
-                    condition_result = await condition.check_async(*args, **kwargs)
-                else:
-                    condition_result = condition.check(*args, **kwargs)
-
-                self._logger.debug(
-                    "%s: Condition '%s' result: %s",
-                    self._name,
-                    condition_name,
-                    condition_result,
+                trace_result = await self._trigger_async_owned(trigger, *args, **kwargs)
+                _emit_fsm_trace(
+                    self._logger,
+                    operation="trigger_async",
+                    stage=(
+                        trace_result.stage
+                        if trace_result.stage in _LIFECYCLE_STAGES
+                        else "complete"
+                    ),
+                    result="success" if trace_result.success else "failure",
+                    trigger=trigger,
+                    source_state=trace_result.from_state,
+                    destination_state=trace_result.to_state,
+                    positional_args=args,
+                    keyword_args=kwargs,
+                    error=trace_result.cause,
                 )
-                if not condition_result:
-                    error_msg = f"Transition condition '{condition_name}' failed for '{trigger}' from '{current_name}'"
-                    self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-                    if self._on_failed_callbacks:
-                        for fn in self._on_failed_callbacks:
-                            try:
-                                fn(trigger, current_name, error_msg, **kwargs)
-                            except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                                self._logger.error("on_failed callback error: %s", e)
-                    return TransitionResult(
-                        False, from_state=current_name, trigger=trigger, error=error_msg
-                    )
-            except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions; failed condition = failed transition
-                error_msg = f"Condition '{condition_name}' raised exception: {e}"
-                self._logger.warning("%s: FAILED - %s", self._name, error_msg)
-                if self._on_failed_callbacks:
-                    for fn in self._on_failed_callbacks:
-                        try:
-                            fn(trigger, current_name, error_msg, **kwargs)
-                        except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                            self._logger.error("on_failed callback error: %s", e)
-                return TransitionResult(
-                    False, from_state=current_name, trigger=trigger, error=error_msg
-                )
+                return trace_result
+            finally:
+                self._release_async_ownership(owner_task, owner_root, token)
+        finally:
+            _declarative_consumer_machine_id.reset(consumer_token)
 
-        # Check if source state allows transition
-        self._logger.debug(
-            "%s: Checking if state '%s' allows transition '%s'",
-            self._name,
-            current_name,
-            trigger,
-        )
-        # Use async can_transition when the state supports it (e.g. AsyncDeclarativeState)
-        if hasattr(self._current_state, "can_transition_async"):
-            can_proceed = await self._current_state.can_transition_async(
-                trigger, to_state, *args, **kwargs
-            )
-        else:
-            can_proceed = self._current_state.can_transition(
-                trigger, to_state, *args, **kwargs
-            )
-        if not can_proceed:
-            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            self._logger.debug("%s: FAILED - %s", self._name, error_msg)
-            if self._on_failed_callbacks:
-                for fn in self._on_failed_callbacks:
-                    try:
-                        fn(trigger, current_name, error_msg, **kwargs)
-                    except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                        self._logger.error("on_failed callback error: %s", e)
-            return TransitionResult(
-                False, from_state=current_name, trigger=trigger, error=error_msg
-            )
+    async def _trigger_async_owned(
+        self, trigger: str, *args, **kwargs
+    ) -> TransitionResult:
+        """Run one async transition with same-slot callback and cancellation semantics.
 
+        Synchronous callbacks run inline.  Registered asynchronous callbacks
+        are awaited immediately after their synchronous callback collection at
+        the source-exit and destination-enter lifecycle slots.  Cancellation is
+        observed once and re-raised unchanged after failure observers run; the
+        reached commit/history boundary is never shielded or rolled back.
+        """
+        prepared = self._prepare_transition(trigger, args, kwargs)
+        if isinstance(prepared, TransitionResult):
+            return self._finalize_failure(prepared, kwargs)
+        entry = prepared.entry
+        current_name = prepared.current_name
+        to_state = entry.to_state
+        condition = entry.condition
         old_state = self._current_state
-        result = self._execute_transition(to_state, trigger, *args, **kwargs)
+        lifecycle_stage = [_LIFECYCLE_STAGE_GUARD]
+        committed = [False]
 
-        # Fire async per-state exit callbacks (after all sync callbacks)
-        _async_exit = self._state_exit_async_callbacks.get(old_state.name)
-        if _async_exit:
-            for fn in _async_exit:
-                try:
-                    await fn(to_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_exit_async callback for state '%s': %s",
+        try:
+            if condition:
+                condition_name = ""
+                if _legacy_debug_enabled(self._logger):
+                    condition_name = str(condition)
+                    _emit_legacy_debug(
+                        self._logger,
+                        "%s: Evaluating condition '%s' for '%s' -> '%s'",
                         self._name,
-                        old_state.name,
-                        e,
-                    )
-
-        # Fire async per-state enter callbacks
-        _async_enter = self._state_enter_async_callbacks.get(to_state.name)
-        if _async_enter:
-            for fn in _async_enter:
-                try:
-                    await fn(old_state, trigger, **kwargs)
-                except Exception as e:  # broad catch intentional — isolates user callback exceptions from FSM control flow
-                    self._logger.warning(
-                        "%s: Exception in on_enter_async callback for state '%s': %s",
-                        self._name,
+                        condition_name,
+                        current_name,
                         to_state.name,
-                        e,
+                    )
+                try:
+                    assert prepared.condition_kwargs is not None
+                    condition_result = await self._evaluate_condition_async(
+                        condition, prepared.args, prepared.condition_kwargs
+                    )
+                    if condition_name:
+                        _emit_legacy_debug(
+                            self._logger,
+                            "%s: Condition '%s' result: %s",
+                            self._name,
+                            condition_name,
+                            condition_result,
+                        )
+                    if not condition_result:
+                        error_msg = (
+                            f"Transition guard rejected trigger '{trigger}' "
+                            f"from state '{current_name}'"
+                        )
+                        return self._finalize_failure(
+                            self._build_failure_result(
+                                current_name,
+                                trigger,
+                                error_msg,
+                                stage=_LIFECYCLE_STAGE_GUARD,
+                            ),
+                            kwargs,
+                        )
+                except Exception as cause:
+                    _emit_legacy_warning(
+                        self._logger,
+                        "%s: FAILED guard type=%s",
+                        self._name,
+                        type(cause).__name__,
+                    )
+                    return self._finalize_failure(
+                        self._build_failure_result(
+                            current_name,
+                            trigger,
+                            "Transition guard raised an exception",
+                            stage=_LIFECYCLE_STAGE_GUARD,
+                            cause=cause,
+                        ),
+                        kwargs,
                     )
 
-        return result
+            try:
+                declarative_guard_passed = (
+                    await self._evaluate_declarative_condition_async(
+                        prepared, raise_on_error=True
+                    )
+                )
+            except Exception as cause:
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        "Transition guard raised an exception",
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        cause=cause,
+                    ),
+                    kwargs,
+                )
+            if not declarative_guard_passed:
+                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        error_msg,
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                    ),
+                    kwargs,
+                )
+
+            lifecycle_stage[0] = _LIFECYCLE_STAGE_STATE_PERMISSION
+            try:
+                can_proceed = await self._can_transition_after_declarative_guard_async(
+                    trigger, to_state, args, kwargs
+                )
+            except Exception as cause:
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED state-permission type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name,
+                        trigger,
+                        "State permission raised an exception",
+                        stage=lifecycle_stage[0],
+                        cause=cause,
+                    ),
+                    kwargs,
+                )
+            if not can_proceed:
+                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+                return self._finalize_failure(
+                    self._build_failure_result(
+                        current_name, trigger, error_msg, stage=lifecycle_stage[0]
+                    ),
+                    kwargs,
+                )
+
+            result = await self._execute_transition_async(
+                to_state,
+                trigger,
+                *args,
+                declarative_handler=prepared.declarative_handler,
+                lifecycle_stage=lifecycle_stage,
+                committed=committed,
+                **kwargs,
+            )
+            if not result.success:
+                return self._finalize_failure(result, kwargs)
+            return result
+        except asyncio.CancelledError as cancellation:
+            cancelled_result = self._build_failure_result(
+                old_state.name,
+                trigger,
+                f"Transition cancelled at {lifecycle_stage[0]}",
+                stage=lifecycle_stage[0],
+                to_state=to_state.name if committed[0] else None,
+                committed=committed[0],
+                cause=cancellation,
+            )
+            self._finalize_failure(cancelled_result, kwargs)
+            raise
 
 
 # Convenience functions and classes
@@ -1973,6 +4018,226 @@ def transition(
         return func
 
     return decorator
+
+
+def _metadata_matches_state(metadata: Any, state_name: str) -> bool:
+    """Return whether optional declarative metadata accepts one canonical name."""
+    if metadata is None:
+        return True
+    if isinstance(metadata, list):
+        return state_name in metadata
+    return metadata == state_name
+
+
+def _resolve_declarative_handler(
+    source_state: State, trigger: str, target_state: Optional[State]
+) -> Optional[Dict[str, Any]]:
+    """Find a handler by canonical source, trigger, and optional target metadata.
+
+    Ordinary machine dispatch always supplies both canonical endpoints.  The
+    compatibility helpers pass ``None`` for ``target_state`` because their
+    public signatures have never accepted a target; that keeps their legacy
+    direct-call behavior while sharing this resolver and invocation boundary.
+    """
+    if not isinstance(source_state, DeclarativeState):
+        return None
+    handler_info = source_state._handlers.get(trigger)
+    if handler_info is None:
+        return None
+    if not _metadata_matches_state(handler_info["from_state"], source_state.name):
+        return None
+    if target_state is not None and not _metadata_matches_state(
+        handler_info["to_state"], target_state.name
+    ):
+        return None
+    return handler_info
+
+
+def _normalize_declarative_handler_result(result: Any) -> TransitionResult:
+    """Preserve the compatibility helper's normalized handler result shape."""
+    if result is None:
+        return TransitionResult(True)
+    if isinstance(result, bool):
+        return TransitionResult(result)
+    if isinstance(result, TransitionResult):
+        return result
+    return TransitionResult(
+        True, error=f"Invalid return type from handler: {type(result)}"
+    )
+
+
+def _invoke_declarative_handler_for_transition(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Run one ordinary sync handler without compatibility-result coercion.
+
+    Direct ``handle_event()`` retains its historical normalization helper.  A
+    machine-owned ordinary transition instead needs a redacted success/failure
+    signal so its post-commit lifecycle stage can be finalized exactly once.
+    """
+    method = handler_info["method"]
+    logger = cast(DeclarativeState, source_state)._logger
+    if handler_info["is_async"]:
+        _emit_legacy_warning(
+            logger,
+            "State '%s': declarative handler failed stage=%s type=async",
+            source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+        )
+        return TransitionResult(False)
+    try:
+        raw_result = method(*args, **kwargs)
+    except Exception as cause:
+        _emit_legacy_warning(
+            logger,
+            "State '%s': declarative handler failed stage=%s type=%s",
+            source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+            type(cause).__name__,
+        )
+        return TransitionResult(False, cause=cause)
+    if raw_result is None or raw_result is True:
+        return TransitionResult(True)
+    if isinstance(raw_result, TransitionResult):
+        if raw_result.success:
+            return TransitionResult(True)
+        return TransitionResult(False, cause=raw_result.cause)
+    return TransitionResult(False)
+
+
+async def _invoke_declarative_handler_for_transition_async(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Run one ordinary async handler without direct-handler coercion or leaks."""
+    method = handler_info["method"]
+    logger = cast(DeclarativeState, source_state)._logger
+    try:
+        raw_result = (
+            await method(*args, **kwargs)
+            if handler_info["is_async"]
+            else method(*args, **kwargs)
+        )
+    except Exception as cause:
+        _emit_legacy_warning(
+            logger,
+            "State '%s': declarative handler failed stage=%s type=%s",
+            source_state.name,
+            _LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+            type(cause).__name__,
+        )
+        return TransitionResult(False, cause=cause)
+    if raw_result is None or raw_result is True:
+        return TransitionResult(True)
+    if isinstance(raw_result, TransitionResult):
+        if raw_result.success:
+            return TransitionResult(True)
+        return TransitionResult(False, cause=raw_result.cause)
+    return TransitionResult(False)
+
+
+def _invoke_declarative_handler(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Invoke one resolved synchronous declarative handler exactly once."""
+    method = handler_info["method"]
+    method_name = method.__name__
+    logger = cast(DeclarativeState, source_state)._logger
+    _emit_legacy_debug(
+        logger,
+        "State '%s': Executing handler '%s' for event '%s'",
+        source_state.name,
+        method_name,
+        event,
+    )
+    if handler_info["is_async"]:
+        _emit_legacy_warning(
+            logger,
+            "State '%s': Async handler '%s' cannot be executed in sync context. "
+            "Use AsyncDeclarativeState for async methods.",
+            source_state.name,
+            method_name,
+        )
+        return TransitionResult(
+            False, error=f"Async handler '{method_name}' in sync context"
+        )
+    try:
+        result = _normalize_declarative_handler_result(method(*args, **kwargs))
+    except Exception as exc:  # broad catch isolates user handler failures
+        error_msg = f"Handler '{method_name}' raised exception: {exc}"
+        _emit_legacy_warning(logger, "State '%s': %s", source_state.name, error_msg)
+        return TransitionResult(False, error=error_msg)
+    if result.success:
+        _emit_legacy_debug(
+            logger, "State '%s': Handler '%s' succeeded", source_state.name, method_name
+        )
+    else:
+        _emit_legacy_debug(
+            logger,
+            "State '%s': Handler '%s' failed: %s",
+            source_state.name,
+            method_name,
+            result.error or "Unknown error",
+        )
+    return result
+
+
+async def _invoke_declarative_handler_async(
+    source_state: State,
+    handler_info: Dict[str, Any],
+    event: str,
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> TransitionResult:
+    """Invoke one resolved declarative handler through the async boundary once."""
+    method = handler_info["method"]
+    method_name = method.__name__
+    logger = cast(DeclarativeState, source_state)._logger
+    _emit_legacy_debug(
+        logger,
+        "State '%s': Executing async handler '%s' for event '%s'",
+        source_state.name,
+        method_name,
+        event,
+    )
+    try:
+        raw_result = (
+            await method(*args, **kwargs)
+            if handler_info["is_async"]
+            else method(*args, **kwargs)
+        )
+        result = _normalize_declarative_handler_result(raw_result)
+    except Exception as exc:  # broad catch isolates user handler failures
+        error_msg = f"Async handler '{method_name}' raised exception: {exc}"
+        _emit_legacy_warning(logger, "State '%s': %s", source_state.name, error_msg)
+        return TransitionResult(False, error=error_msg)
+    if result.success:
+        _emit_legacy_debug(
+            logger,
+            "State '%s': Async handler '%s' succeeded",
+            source_state.name,
+            method_name,
+        )
+    else:
+        _emit_legacy_debug(
+            logger,
+            "State '%s': Async handler '%s' failed: %s",
+            source_state.name,
+            method_name,
+            result.error or "Unknown error",
+        )
+    return result
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -2017,13 +4282,14 @@ class DeclarativeState(State):
                         "from_state": getattr(attr, "_fsm_from_state", None),
                         "to_state": getattr(attr, "_fsm_to_state", None),
                         "condition": getattr(attr, "_fsm_condition", None),
-                        "is_async": asyncio.iscoroutinefunction(attr),
+                        "is_async": _is_async_callable(attr),
                     }
 
                     self._handlers[trigger] = handler_info
 
                     # Log handler registration
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Registered handler '%s' for trigger '%s'%s",
                         self.name,
                         attr_name,
@@ -2036,18 +4302,24 @@ class DeclarativeState(State):
         Enhanced transition validation with condition support.
         Checks both decorator conditions and custom logic.
         """
-        # Check if we have a handler for this trigger
-        if trigger in self._handlers:
+        # Machine-owned dispatch has already evaluated the decorator guard when
+        # its private context matches this exact request; direct state use keeps
+        # the legacy guard evaluation.
+        if trigger in self._handlers and not _has_prepared_declarative_guard(
+            self, trigger, to_state
+        ):
             handler_info = self._handlers[trigger]
             condition = handler_info.get("condition")
 
             # Evaluate decorator condition if present
             if condition:
                 try:
+                    condition_result: Any
                     # Handle different condition types
                     if isinstance(condition, AsyncCondition):
                         # For sync context, we can't handle async conditions properly
-                        self._logger.warning(
+                        _emit_legacy_warning(
+                            self._logger,
                             "State '%s': Async condition '%s' in sync context. "
                             "Consider using AsyncDeclarativeState.",
                             self.name,
@@ -2056,12 +4328,22 @@ class DeclarativeState(State):
                         return False
                     elif isinstance(condition, Condition):
                         condition_result = condition.check(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            _reject_sync_awaitable(condition_result)
                     elif callable(condition):
+                        if _is_async_callable(condition):
+                            raise TypeError(
+                                "Async declarative condition requires "
+                                "AsyncStateMachine and trigger_async()"
+                            )
                         condition_result = condition(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            _reject_sync_awaitable(condition_result)
                     else:
                         condition_result = bool(condition)
 
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Condition check for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -2072,7 +4354,8 @@ class DeclarativeState(State):
                         return False
 
                 except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from DeclarativeState control flow
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "State '%s': Condition evaluation failed for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -2087,63 +4370,9 @@ class DeclarativeState(State):
         """
         Enhanced event handling with full logging and async support.
         """
-        if event in self._handlers:
-            handler_info = self._handlers[event]
-            method = handler_info["method"]
-            method_name = method.__name__
-
-            self._logger.debug(
-                "State '%s': Executing handler '%s' for event '%s'",
-                self.name,
-                method_name,
-                event,
-            )
-
-            try:
-                # Handle async methods
-                if handler_info["is_async"]:
-                    self._logger.warning(
-                        "State '%s': Async handler '%s' cannot be executed in sync context. "
-                        "Use AsyncDeclarativeState for async methods.",
-                        self.name,
-                        method_name,
-                    )
-                    return TransitionResult(
-                        False, error=f"Async handler '{method_name}' in sync context"
-                    )
-
-                # Execute synchronous handler
-                result = method(*args, **kwargs)
-
-                # Normalize result
-                if result is None:
-                    result = TransitionResult(True)
-                elif isinstance(result, bool):
-                    result = TransitionResult(result)
-                elif not isinstance(result, TransitionResult):
-                    result = TransitionResult(
-                        True, error=f"Invalid return type from handler: {type(result)}"
-                    )
-
-                # Log result
-                if result.success:
-                    self._logger.debug(
-                        "State '%s': Handler '%s' succeeded", self.name, method_name
-                    )
-                else:
-                    self._logger.debug(
-                        "State '%s': Handler '%s' failed: %s",
-                        self.name,
-                        method_name,
-                        result.error or "Unknown error",
-                    )
-
-                return result
-
-            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
-                error_msg = f"Handler '{method_name}' raised exception: {e}"
-                self._logger.warning("State '%s': %s", self.name, error_msg)
-                return TransitionResult(False, error=error_msg)
+        handler_info = _resolve_declarative_handler(self, event, None)
+        if handler_info is not None:
+            return _invoke_declarative_handler(self, handler_info, event, args, kwargs)
 
         # Fallback to parent implementation
         return super().handle_event(event, *args, **kwargs)
@@ -2164,25 +4393,34 @@ class AsyncDeclarativeState(DeclarativeState):
         """
         Async version of can_transition with async condition support.
         """
-        # Check if we have a handler for this trigger
-        if trigger in self._handlers:
+        # The matching machine-owned dispatch path has already evaluated the
+        # decorator guard. Keep direct calls backward-compatible.
+        if trigger in self._handlers and not _has_prepared_declarative_guard(
+            self, trigger, to_state
+        ):
             handler_info = self._handlers[trigger]
             condition = handler_info.get("condition")
 
             # Evaluate decorator condition if present
             if condition:
                 try:
+                    condition_result: Any
                     # Handle async conditions
                     if isinstance(condition, AsyncCondition):
                         condition_result = await condition.check_async(*args, **kwargs)
                     elif isinstance(condition, Condition):
-                        condition_result = condition.check(*args, **kwargs)
+                        condition_result = await _evaluate_condition_async_iteratively(
+                            condition, args, kwargs
+                        )
                     elif callable(condition):
                         condition_result = condition(*args, **kwargs)
+                        if _is_awaitable(condition_result):
+                            condition_result = await condition_result
                     else:
                         condition_result = bool(condition)
 
-                    self._logger.debug(
+                    _emit_legacy_debug(
+                        self._logger,
                         "State '%s': Async condition check for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -2193,7 +4431,8 @@ class AsyncDeclarativeState(DeclarativeState):
                         return False
 
                 except Exception as e:  # broad catch intentional — isolates user-defined condition exceptions from AsyncDeclarativeState control flow
-                    self._logger.warning(
+                    _emit_legacy_warning(
+                        self._logger,
                         "State '%s': Async condition evaluation failed for trigger '%s': %s",
                         self.name,
                         trigger,
@@ -2210,56 +4449,11 @@ class AsyncDeclarativeState(DeclarativeState):
         """
         Async version of handle_event that can execute both sync and async handlers.
         """
-        if event in self._handlers:
-            handler_info = self._handlers[event]
-            method = handler_info["method"]
-            method_name = method.__name__
-
-            self._logger.debug(
-                "State '%s': Executing async handler '%s' for event '%s'",
-                self.name,
-                method_name,
-                event,
+        handler_info = _resolve_declarative_handler(self, event, None)
+        if handler_info is not None:
+            return await _invoke_declarative_handler_async(
+                self, handler_info, event, args, kwargs
             )
-
-            try:
-                # Handle both async and sync methods
-                if handler_info["is_async"]:
-                    result = await method(*args, **kwargs)
-                else:
-                    result = method(*args, **kwargs)
-
-                # Normalize result
-                if result is None:
-                    result = TransitionResult(True)
-                elif isinstance(result, bool):
-                    result = TransitionResult(result)
-                elif not isinstance(result, TransitionResult):
-                    result = TransitionResult(
-                        True, error=f"Invalid return type from handler: {type(result)}"
-                    )
-
-                # Log result
-                if result.success:
-                    self._logger.debug(
-                        "State '%s': Async handler '%s' succeeded",
-                        self.name,
-                        method_name,
-                    )
-                else:
-                    self._logger.debug(
-                        "State '%s': Async handler '%s' failed: %s",
-                        self.name,
-                        method_name,
-                        result.error or "Unknown error",
-                    )
-
-                return result
-
-            except Exception as e:  # broad catch intentional — isolates user-defined handler exceptions from FSM control flow
-                error_msg = f"Async handler '{method_name}' raised exception: {e}"
-                self._logger.warning("State '%s': %s", self.name, error_msg)
-                return TransitionResult(False, error=error_msg)
 
         # Fallback to sync parent implementation
         return super().handle_event(event, *args, **kwargs)
@@ -2315,6 +4509,8 @@ class FSMBuilder:
             async_mode: Force async (True) or sync (False) mode, or auto-detect (None)
             **machine_kwargs: Arguments passed to StateMachine/AsyncStateMachine constructor
         """
+        if not isinstance(initial_state, State):
+            raise TypeError("initial_state must be a State instance")
         self._initial_state = initial_state
         self._machine_kwargs = machine_kwargs
         self._states: Dict[str, State] = {initial_state.name: initial_state}
@@ -2324,20 +4520,26 @@ class FSMBuilder:
         logger_name = machine_kwargs.get("name", "FSM")
         self._logger = logging.getLogger(f"fast_fsm.builder.{logger_name}")
 
+        # Validate every initial declarative guard regardless of selected mode.
+        # Auto mode additionally uses the complete traversal for classification.
+        detected_type = self._detect_async_requirements(initial_state)
+
         # Determine machine type
         if async_mode is None:
-            # Auto-detect based on initial state
             self._auto_detect = True
-            self._machine_type = self._detect_async_requirements(initial_state)
-            self._logger.debug(
+            self._machine_type = detected_type
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Auto-detected %s mode based on initial state",
                 "async" if self._machine_type == AsyncStateMachine else "sync",
             )
         else:
             self._auto_detect = False
             self._machine_type = AsyncStateMachine if async_mode else StateMachine
-            self._logger.debug(
-                "Builder: Explicitly set to %s mode", "async" if async_mode else "sync"
+            _emit_legacy_debug(
+                self._logger,
+                "Builder: Explicitly set to %s mode",
+                "async" if async_mode else "sync",
             )
 
         # Per-state callback queues — applied in build()
@@ -2349,6 +4551,13 @@ class FSMBuilder:
         # We'll create the machine in build() to allow for re-evaluation
         self._machine = None
 
+    def _ensure_mutable(self) -> None:
+        """Raise when a successful build has published the immutable cache."""
+        if self._machine is not None:
+            raise RuntimeError(
+                "Cannot mutate builder; Cannot change machine type after build() has been called"
+            )
+
     def _detect_async_requirements(self, *states_or_conditions) -> type:
         """
         Detect if async FSM is required based on states and conditions.
@@ -2359,49 +4568,70 @@ class FSMBuilder:
         Returns:
             AsyncStateMachine if async support needed, StateMachine otherwise
         """
+        async_required = False
         for item in states_or_conditions:
             # Check for AsyncDeclarativeState
             if isinstance(item, AsyncDeclarativeState):
-                return AsyncStateMachine
+                async_required = True
 
-            # Check for AsyncCondition
-            if isinstance(item, AsyncCondition):
-                return AsyncStateMachine
+            # Check direct and nested built-in condition wrappers through the
+            # canonical graph classifier used by runtime dispatch.
+            if isinstance(item, Condition) and StateMachine._contains_async_requirement(
+                item
+            ):
+                async_required = True
+            elif callable(item) and _is_async_callable(item):
+                async_required = True
 
             # Check DeclarativeState for async handlers
             if isinstance(item, DeclarativeState):
                 for handler_info in item._handlers.values():
                     if handler_info.get("is_async", False):
-                        return AsyncStateMachine
+                        async_required = True
                     condition = handler_info.get("condition")
-                    if isinstance(condition, AsyncCondition):
-                        return AsyncStateMachine
+                    if isinstance(
+                        condition, Condition
+                    ) and StateMachine._contains_async_requirement(condition):
+                        async_required = True
+                    elif callable(condition) and _is_async_callable(condition):
+                        async_required = True
 
-        return StateMachine
+        return AsyncStateMachine if async_required else StateMachine
 
     def add_state(self, state: State) -> "FSMBuilder":
         """Add a state to the builder with async detection"""
-        self._states[state.name] = state
+        self._ensure_mutable()
+        if not isinstance(state, State):
+            raise TypeError("state must be a State instance")
+        registered = self._states.get(state.name)
+        if registered is not None:
+            if registered is state:
+                return self
+            raise ValueError(
+                f"Builder already contains a different State object named '{state.name}'"
+            )
 
-        # Only upgrade if in auto-detect mode
-        if self._machine is None and self._auto_detect:
-            required_type = self._detect_async_requirements(state)
+        # Validate the complete candidate graph in every mode before publishing
+        # staging. Explicit modes ignore the classification but not validation.
+        detected_type = self._detect_async_requirements(state)
+        required_type = self._machine_type
+        if self._auto_detect:
             if (
-                required_type == AsyncStateMachine
+                detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
             ):
-                self._machine_type = AsyncStateMachine
-                self._logger.debug(
-                    "Builder: Upgraded to async mode due to state '%s'", state.name
-                )
-        elif not self._auto_detect and self._machine_type == StateMachine:
-            # In explicit sync mode, warn about async components
-            if isinstance(state, AsyncDeclarativeState):
-                self._logger.warning(
-                    "Builder: AsyncDeclarativeState '%s' in explicit sync mode may have limited functionality",
-                    state.name,
-                )
+                required_type = AsyncStateMachine
 
+        # Detection can reject malformed condition graphs. Do not publish the
+        # candidate state or machine-mode upgrade until that validation passes.
+        self._states[state.name] = state
+        if required_type != self._machine_type:
+            self._machine_type = required_type
+            _emit_legacy_debug(
+                self._logger,
+                "Builder: Upgraded to async mode due to state '%s'",
+                state.name,
+            )
         return self
 
     def add_transition(
@@ -2409,9 +4639,9 @@ class FSMBuilder:
         trigger: str,
         from_state: Union[str, List[str]],
         to_state: str,
-        condition: Optional[Union[Condition, Callable]] = None,
+        condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
-        unless: Optional[Union[Condition, Callable]] = None,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
     ) -> "FSMBuilder":
         """Add a transition to the builder with async detection.
 
@@ -2423,6 +4653,7 @@ class FSMBuilder:
             unless: Negation shorthand — allowed when this condition is False.
                     Mutually exclusive with ``condition``.
         """
+        self._ensure_mutable()
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
@@ -2436,28 +4667,27 @@ class FSMBuilder:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
                 )
-        self._transitions.append((trigger, from_state, to_state, condition))
-
-        # Only upgrade if in auto-detect mode
-        if condition and self._machine is None and self._auto_detect:
-            required_type = self._detect_async_requirements(condition)
+        # Validate a supported guard graph before changing staging in auto and
+        # explicit modes alike. Only auto mode consumes its async classification.
+        detected_type = self._detect_async_requirements(condition)
+        required_type = self._machine_type
+        if self._auto_detect:
             if (
-                required_type == AsyncStateMachine
+                detected_type == AsyncStateMachine
                 and self._machine_type == StateMachine
             ):
-                self._machine_type = AsyncStateMachine
-                self._logger.debug(
-                    "Builder: Upgraded to async mode due to async condition '%s'",
-                    getattr(condition, "name", str(condition)),
-                )
-        elif condition and not self._auto_detect and self._machine_type == StateMachine:
-            # In explicit sync mode, warn about async conditions
-            if isinstance(condition, AsyncCondition):
-                self._logger.warning(
-                    "Builder: AsyncCondition '%s' in explicit sync mode will be rejected",
-                    getattr(condition, "name", str(condition)),
-                )
+                required_type = AsyncStateMachine
 
+        # Keep the builder staging area atomic: graph validation must succeed
+        # before either the transition or the auto-detected machine type lands.
+        self._transitions.append((trigger, from_state, to_state, condition))
+        if required_type != self._machine_type:
+            self._machine_type = required_type
+            _emit_legacy_debug(
+                self._logger,
+                "Builder: Upgraded to async mode due to async condition '%s'",
+                getattr(condition, "name", str(condition)),
+            )
         return self
 
     def on_enter(self, state_name: str, callback: Any) -> "FSMBuilder":
@@ -2474,6 +4704,7 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._enter_callbacks.append((state_name, callback))
         return self
 
@@ -2488,6 +4719,7 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._exit_callbacks.append((state_name, callback))
         return self
 
@@ -2496,8 +4728,9 @@ class FSMBuilder:
 
         Registering at least one async callback auto-upgrades the builder to
         :class:`AsyncStateMachine` when *async_mode* is ``None`` (auto-detect).
-        Has no effect if the machine is forced to sync mode via *async_mode=False*
-        or :meth:`force_sync` — a warning is logged instead.
+        When the machine is explicitly forced to synchronous mode via
+        *async_mode=False* or :meth:`force_sync`, the callback remains staged but
+        :meth:`build` raises before publishing a machine.
 
         Args:
             state_name: Name of the state to watch.
@@ -2507,14 +4740,12 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._enter_async_callbacks.append((state_name, callback))
-        if (
-            self._machine is None
-            and self._auto_detect
-            and self._machine_type == StateMachine
-        ):
+        if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to on_enter_async callback for '%s'",
                 state_name,
             )
@@ -2534,14 +4765,12 @@ class FSMBuilder:
         Returns:
             self, for method chaining.
         """
+        self._ensure_mutable()
         self._exit_async_callbacks.append((state_name, callback))
-        if (
-            self._machine is None
-            and self._auto_detect
-            and self._machine_type == StateMachine
-        ):
+        if self._auto_detect and self._machine_type == StateMachine:
             self._machine_type = AsyncStateMachine
-            self._logger.debug(
+            _emit_legacy_debug(
+                self._logger,
                 "Builder: Upgraded to async mode due to on_exit_async callback for '%s'",
                 state_name,
             )
@@ -2549,54 +4778,97 @@ class FSMBuilder:
 
     def force_async(self) -> "FSMBuilder":
         """Force the builder to create an AsyncStateMachine"""
-        if self._machine is not None:
-            raise RuntimeError(
-                "Cannot change machine type after build() has been called"
-            )
-
+        self._ensure_mutable()
+        self._auto_detect = False
         self._machine_type = AsyncStateMachine
-        self._logger.debug("Builder: Forced to async mode")
+        _emit_legacy_debug(self._logger, "Builder: Forced to async mode")
         return self
 
     def force_sync(self) -> "FSMBuilder":
         """Force the builder to create a regular StateMachine"""
-        if self._machine is not None:
-            raise RuntimeError(
-                "Cannot change machine type after build() has been called"
-            )
+        self._ensure_mutable()
+        self._auto_detect = False
+        self._machine_type = StateMachine
+        _emit_legacy_debug(self._logger, "Builder: Forced to sync mode")
+        return self
 
-        # Validate that sync mode is compatible
+    def _preflight_async_requirements(self) -> Optional[str]:
+        """Validate all staged graphs and describe their first async requirement."""
+        first_requirement: Optional[str] = None
         for state in self._states.values():
             if isinstance(state, AsyncDeclarativeState):
-                self._logger.warning(
-                    "Builder: AsyncDeclarativeState '%s' in sync mode may have limited functionality",
-                    state.name,
-                )
+                if first_requirement is None:
+                    first_requirement = f"AsyncDeclarativeState '{state.name}'"
+            if isinstance(state, DeclarativeState):
+                for trigger, handler_info in state._handlers.items():
+                    if handler_info.get("is_async", False):
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative handler for trigger '{trigger}'"
+                            )
+                    condition = handler_info.get("condition")
+                    if isinstance(
+                        condition, Condition
+                    ) and StateMachine._contains_async_requirement(condition):
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative condition for trigger '{trigger}'"
+                            )
+                    elif callable(condition) and _is_async_callable(condition):
+                        if first_requirement is None:
+                            first_requirement = (
+                                f"declarative condition for trigger '{trigger}'"
+                            )
 
-        for _, _, _, condition in self._transitions:
-            if isinstance(condition, AsyncCondition):
-                self._logger.warning(
-                    "Builder: AsyncCondition '%s' in sync mode will be rejected",
-                    getattr(condition, "name", str(condition)),
-                )
+        for trigger, _, _, condition in self._transitions:
+            if isinstance(
+                condition, Condition
+            ) and StateMachine._contains_async_requirement(condition):
+                if first_requirement is None:
+                    first_requirement = f"transition '{trigger}' condition"
+            elif callable(condition) and _is_async_callable(condition):
+                if first_requirement is None:
+                    first_requirement = f"transition '{trigger}' condition"
 
-        self._machine_type = StateMachine
-        self._logger.debug("Builder: Forced to sync mode")
-        return self
+        if self._enter_async_callbacks:
+            state_name, _ = self._enter_async_callbacks[0]
+            if first_requirement is None:
+                first_requirement = f"on_enter_async callback for '{state_name}'"
+        if self._exit_async_callbacks:
+            state_name, _ = self._exit_async_callbacks[0]
+            if first_requirement is None:
+                first_requirement = f"on_exit_async callback for '{state_name}'"
+        return first_requirement
 
     def build(self) -> Union[StateMachine, AsyncStateMachine]:
         """Build and return the final state machine"""
         if self._machine is not None:
             return self._machine
 
-        # Create the appropriate machine type
-        self._machine = self._machine_type(self._initial_state, **self._machine_kwargs)
-        assert self._machine is not None  # Help mypy understand this is not None
+        async_requirement = self._preflight_async_requirements()
+        candidate_type = self._machine_type
+        if async_requirement is not None:
+            if self._auto_detect:
+                candidate_type = AsyncStateMachine
+            elif self._machine_type == StateMachine:
+                raise RuntimeError(
+                    "Cannot build explicit sync FSM with async requirement in "
+                    f"{async_requirement}"
+                )
+        elif self._auto_detect:
+            # Auto mode must reflect the current staged graph on every build
+            # attempt. In particular, a public callable may have changed after
+            # it was staged or after an earlier failed candidate build.
+            candidate_type = StateMachine
+
+        # Keep all construction local until every registration succeeds. A failed
+        # candidate must not freeze staging or become observable through _machine.
+        candidate = candidate_type(self._initial_state, **self._machine_kwargs)
 
         # Add all states
         for state in self._states.values():
-            if state != self._initial_state:  # Initial state already added
-                self._machine.add_state(state)
+            if state is not self._initial_state:  # Initial state already added
+                candidate.add_state(state)
 
         # Add all transitions
         for trigger, from_state, to_state, condition in self._transitions:
@@ -2610,7 +4882,7 @@ class FSMBuilder:
                     self._states[name] if name in self._states else name
                     for name in from_state
                 ]
-                self._machine.add_transition(
+                candidate.add_transition(
                     trigger, from_state_list, to_state_obj, condition
                 )
             else:
@@ -2619,43 +4891,41 @@ class FSMBuilder:
                     if from_state in self._states
                     else from_state
                 )
-                self._machine.add_transition(
+                candidate.add_transition(
                     trigger, from_state_single, to_state_obj, condition
                 )
 
         # Wire per-state sync callbacks
         for state_name, cb in self._enter_callbacks:
-            self._machine.on_enter(state_name, cb)
+            candidate.on_enter(state_name, cb)
         for state_name, cb in self._exit_callbacks:
-            self._machine.on_exit(state_name, cb)
+            candidate.on_exit(state_name, cb)
 
         # Wire per-state async callbacks (AsyncStateMachine only)
-        if isinstance(self._machine, AsyncStateMachine):
+        if isinstance(candidate, AsyncStateMachine):
             for state_name, cb in self._enter_async_callbacks:
-                self._machine.on_enter_async(state_name, cb)
+                candidate.on_enter_async(state_name, cb)
             for state_name, cb in self._exit_async_callbacks:
-                self._machine.on_exit_async(state_name, cb)
-        elif self._enter_async_callbacks or self._exit_async_callbacks:
-            self._logger.warning(
-                "Builder: %d async callback(s) registered but building sync machine — they will be ignored",
-                len(self._enter_async_callbacks) + len(self._exit_async_callbacks),
-            )
+                candidate.on_exit_async(state_name, cb)
 
         # Log final machine type and stats
         machine_type_name = (
             "AsyncStateMachine"
-            if isinstance(self._machine, AsyncStateMachine)
+            if isinstance(candidate, AsyncStateMachine)
             else "StateMachine"
         )
-        self._logger.info(
+        _emit_legacy_info(
+            self._logger,
             "Builder: Created %s '%s' with %d states and %d transitions",
             machine_type_name,
-            self._machine.name,
+            candidate.name,
             len(self._states),
             len(self._transitions),
         )
 
-        return self._machine
+        self._machine_type = candidate_type
+        self._machine = candidate
+        return candidate
 
     @property
     def machine_type(self) -> type:
@@ -2676,27 +4946,110 @@ class FSMBuilder:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _FSMStreamHandler:
+    """Slotted identity/generation marker attached to a library stream handler."""
+
+    generation: int
+    redactor: Optional[FSMTraceRedactor]
+    configured_level: int
+
+
+class FSMLoggingHandle:
+    """One library-owned logging configuration that may be removed once."""
+
+    __slots__ = (
+        "_logger",
+        "_handler",
+        "_prior_level",
+        "_prior_propagate",
+        "_configured_level",
+        "_configured_propagate",
+        "_generation",
+        "_restored",
+    )
+
+    def __init__(
+        self,
+        logger: logging.Logger,
+        handler: Optional[logging.StreamHandler],
+        prior_level: int,
+        prior_propagate: bool,
+        configured_level: int,
+        configured_propagate: Optional[bool],
+        generation: int,
+    ) -> None:
+        self._logger = logger
+        self._handler = handler
+        self._prior_level = prior_level
+        self._prior_propagate = prior_propagate
+        self._configured_level = configured_level
+        self._configured_propagate = configured_propagate
+        self._generation = generation
+        self._restored = False
+
+    def restore(self) -> None:
+        """Undo only this configuration's still-current library changes."""
+        with _fsm_logging_configuration_lock:
+            if self._restored:
+                return
+            self._restored = True
+            if self._handler is not None and self._handler in self._logger.handlers:
+                self._logger.removeHandler(self._handler)
+                self._handler.close()
+            if getattr(self._logger, "_fast_fsm_generation", None) != self._generation:
+                return
+            if self._logger.level == self._configured_level:
+                self._logger.setLevel(self._prior_level)
+            if (
+                self._configured_propagate is not None
+                and self._logger.propagate == self._configured_propagate
+            ):
+                self._logger.propagate = self._prior_propagate
+            setattr(self._logger, "_fast_fsm_generation", None)
+
+
 def configure_fsm_logging(
     level: int = logging.WARNING,
     logger_name: str = "fast_fsm",
     format_string: str = "%(message)s",
-) -> None:
-    """
-    Configure logging for FSM instances.
+    *,
+    propagate: Optional[bool] = None,
+    redactor: Optional[FSMTraceRedactor] = None,
+) -> FSMLoggingHandle:
+    """Configure a named Fast FSM logger and return its reversible handle.
 
     Args:
-        level: Logging level (e.g., logging.DEBUG, logging.INFO, logging.WARNING)
-        logger_name: Name of the logger to configure. Can use wildcards:
-                    - 'fast_fsm' for all FSMs with default naming
-                    - 'fast_fsm.MyFSM' for a specific named FSM
-                    - 'traffic_light' for FSMs with custom logger names
-        format_string: Format string for log messages
+        level: Logging level to set (for example, ``logging.DEBUG`` or
+            ``logging.WARNING``).
+        logger_name: Name of the logger to configure, such as ``"fast_fsm"``
+            for the default hierarchy or a specific named FSM logger.
+        format_string: Formatter applied to the library-owned stream handler.
+        propagate: ``None`` preserves the logger's current propagation setting;
+            a Boolean explicitly sets it.
+        redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
+            ordinary ``Exception`` from the redactor emits fixed
+            ``redaction_failure`` metadata. Non-``Exception``
+            ``BaseException`` subclasses (including ``KeyboardInterrupt``,
+            ``SystemExit``, and ``asyncio.CancelledError``) are not caught:
+            they emit no trace record and are re-raised.
+
+    Returns:
+        FSMLoggingHandle: A reversible handle that removes only its exact
+            library-owned handler. ``restore()`` conditionally restores the
+            prior level and propagation only while this configuration remains
+            current.
 
     Logging Levels for FSM:
         - WARNING: No FSM logging (default)
         - INFO: Successful transitions and failures
         - DEBUG: + condition evaluation, state validation
-        - DEBUG-5 (5): + trigger attempts with arguments (ultra-verbose)
+        - DEBUG-5 (5): metadata-only TRACE records with fixed
+          ``trace_operation``, ``trace_stage``, and ``trace_result``
+          categories, ``trace_arg_count``, and capped sanitized
+          ``trace_keyword_names``. They never contain trigger/state names,
+          positional or keyword values, exception payloads, or object
+          representations.
 
     Examples:
         # Enable transition logging
@@ -2705,38 +5058,129 @@ def configure_fsm_logging(
         # Enable detailed debugging
         configure_fsm_logging(logging.DEBUG, 'fast_fsm')
 
-        # Enable ultra-verbose logging
+        # Enable metadata-only TRACE logging
         configure_fsm_logging(5, 'fast_fsm')  # DEBUG-5 level
 
         # Enable logging for a specific named FSM
         configure_fsm_logging(logging.INFO, 'fast_fsm.TrafficLight')
     """
+    configured_level = _validate_fsm_logging_level(level)
+    handler = _prepare_fsm_logging_handler(configured_level, format_string)
     logger = logging.getLogger(logger_name)
-    logger.setLevel(level)
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    with _fsm_logging_configuration_lock:
+        original_level = logger.level
+        original_propagate = logger.propagate
+        original_metadata = {
+            name: (hasattr(logger, name), getattr(logger, name, None))
+            for name in metadata_names
+        }
+        try:
+            previous_generation = getattr(logger, "_fast_fsm_generation", None)
+            previous_level = getattr(logger, "_fast_fsm_configured_level", None)
+            previous_propagate = getattr(logger, "_fast_fsm_configured_propagate", None)
+            if previous_generation is not None and logger.level == previous_level:
+                prior_level = getattr(logger, "_fast_fsm_prior_level", logger.level)
+            else:
+                prior_level = logger.level
+            if previous_generation is not None and (
+                previous_propagate is not None
+                and logger.propagate == previous_propagate
+            ):
+                prior_propagate = getattr(
+                    logger, "_fast_fsm_prior_propagate", logger.propagate
+                )
+            else:
+                prior_propagate = logger.propagate
+            generation = _next_fsm_logging_generation()
 
-    # Remove existing handlers to avoid duplicates
-    logger.handlers.clear()
+            logger.setLevel(configured_level)
+            setattr(logger, "_fast_fsm_generation", generation)
+            setattr(logger, "_fast_fsm_prior_level", prior_level)
+            setattr(logger, "_fast_fsm_prior_propagate", prior_propagate)
+            setattr(logger, "_fast_fsm_configured_level", configured_level)
+            setattr(logger, "_fast_fsm_configured_propagate", propagate)
+            if propagate is not None:
+                logger.propagate = propagate
+            if handler is not None:
+                setattr(
+                    handler,
+                    "_fast_fsm_marker",
+                    _FSMStreamHandler(generation, redactor, configured_level),
+                )
+                logger.addHandler(handler)
 
-    # Only add handler if we want to see output
-    if level <= logging.INFO:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(format_string)
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+            for existing_handler in tuple(logger.handlers):
+                if existing_handler is handler:
+                    continue
+                marker = getattr(existing_handler, "_fast_fsm_marker", None)
+                if isinstance(marker, _FSMStreamHandler):
+                    logger.removeHandler(existing_handler)
+                    existing_handler.close()
+            return FSMLoggingHandle(
+                logger,
+                handler,
+                prior_level,
+                prior_propagate,
+                configured_level,
+                propagate,
+                generation,
+            )
+        except BaseException:
+            if handler is not None:
+                if handler in logger.handlers:
+                    logger.removeHandler(handler)
+                handler.close()
+            logger.setLevel(original_level)
+            logger.propagate = original_propagate
+            for name, (was_present, value) in original_metadata.items():
+                if was_present:
+                    setattr(logger, name, value)
+                else:
+                    delattr(logger, name)
+            raise
 
 
 def set_fsm_logging_level(
-    verbosity: str = "warning", logger_name: str = "fast_fsm"
-) -> None:
-    """
-    Set FSM logging level using standard Python logging level names.
+    verbosity: str = "warning",
+    logger_name: str = "fast_fsm",
+    *,
+    propagate: Optional[bool] = None,
+    redactor: Optional[FSMTraceRedactor] = None,
+) -> FSMLoggingHandle:
+    """Set a named Fast FSM logger by verbosity and return its reversible handle.
 
     Args:
         verbosity: Logging level name (case-insensitive).
-                  Standard levels: 'debug', 'info', 'warning', 'error', 'critical'.
-                  Convenience alias: 'off' (same as 'warning' — silences FSM logs).
-                  Custom level: 'trace' (DEBUG-5, ultra-verbose trigger attempts).
-        logger_name: Logger name to configure
+            Standard levels: 'debug', 'info', 'warning', 'error', and 'critical'.
+            Convenience alias: 'off' (same as 'warning' — silences FSM logs).
+            Custom level: 'trace' (``logging.DEBUG - 5``) emits metadata-only
+            TRACE records with fixed ``trace_operation``, ``trace_stage``, and
+            ``trace_result`` categories, ``trace_arg_count``, and capped
+            sanitized ``trace_keyword_names``. They never contain trigger/state
+            names, positional or keyword values, exception payloads, or object
+            representations.
+        logger_name: Name of the logger to configure.
+        propagate: ``None`` preserves the logger's current propagation setting;
+            a Boolean explicitly sets it.
+        redactor: Optional ``FSMTraceRedactor`` for active TRACE records. An
+            ordinary ``Exception`` from the redactor emits fixed
+            ``redaction_failure`` metadata. Non-``Exception``
+            ``BaseException`` subclasses (including ``KeyboardInterrupt``,
+            ``SystemExit``, and ``asyncio.CancelledError``) are not caught:
+            they emit no trace record and are re-raised.
+
+    Returns:
+        FSMLoggingHandle: A reversible handle that removes only its exact
+            library-owned handler. ``restore()`` conditionally restores the
+            prior level and propagation only while this configuration remains
+            current.
 
     Examples:
         # Show transitions (DEBUG level)
@@ -2748,7 +5192,7 @@ def set_fsm_logging_level(
         # Silence FSM logs
         set_fsm_logging_level('warning')  # or 'off'
 
-        # Ultra-verbose trigger tracing
+        # Enable metadata-only TRACE logging
         set_fsm_logging_level('trace')
     """
     level_map = {
@@ -2758,7 +5202,7 @@ def set_fsm_logging_level(
         "error": logging.ERROR,
         "critical": logging.CRITICAL,
         "off": logging.WARNING,  # convenience alias
-        "trace": logging.DEBUG - 5,  # custom ultra-verbose level
+        "trace": logging.DEBUG - 5,  # custom metadata-only TRACE level
     }
 
     key = verbosity.lower()
@@ -2768,7 +5212,9 @@ def set_fsm_logging_level(
             f"Valid options: {list(level_map.keys())}"
         )
 
-    configure_fsm_logging(level_map[key], logger_name)
+    return configure_fsm_logging(
+        level_map[key], logger_name, propagate=propagate, redactor=redactor
+    )
 
 
 # Convenience factory functions
@@ -2808,31 +5254,35 @@ def quick_fsm(
     Returns:
         Configured StateMachine
 
-    Example:
-        fsm = quick_fsm('idle', [
-            ('start', 'idle', 'running'),
-            ('stop', 'running', 'idle')
-        ])
+    Example::
+
+        fsm = quick_fsm(
+            "idle",
+            [
+                ("start", "idle", "running"),
+                ("stop", "running", "idle"),
+            ],
+        )
     """
     return StateMachine.quick_build(initial_state, transitions, name=name)
 
 
 @overload
-def condition_builder(func: Callable[..., bool]) -> FuncCondition: ...
+def condition_builder(func: GuardCallable) -> FuncCondition: ...
 
 
 @overload
 def condition_builder(
     func: None = None, *, name: str = "", description: str = ""
-) -> Callable[[Callable[..., bool]], FuncCondition]: ...
+) -> Callable[[GuardCallable], FuncCondition]: ...
 
 
 def condition_builder(
-    func: Optional[Callable[..., bool]] = None,
+    func: Optional[GuardCallable] = None,
     *,
     name: str = "",
     description: str = "",
-) -> Union[FuncCondition, Callable[[Callable[..., bool]], FuncCondition]]:
+) -> Union[FuncCondition, Callable[[GuardCallable], FuncCondition]]:
     """
     Decorator to create condition functions with metadata.
 
@@ -2848,13 +5298,14 @@ def condition_builder(
         ``FuncCondition`` when used as bare decorator, or a decorator
         callable when used with arguments.
 
-    Example:
+    Example::
+
         @condition_builder(name="fuel_check", description="Check fuel level")
         def has_fuel(level=0, **kwargs):
             return level > 0
     """
 
-    def decorator(f: Callable[..., bool]) -> FuncCondition:
+    def decorator(f: GuardCallable) -> FuncCondition:
         func_name = getattr(f, "__name__", "anonymous_condition")
         return FuncCondition(f, name or func_name, description)
 

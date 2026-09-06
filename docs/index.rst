@@ -3,8 +3,9 @@ Fast FSM Documentation
 
 **High-performance, memory-efficient finite state machines for Python.**
 
-Fast FSM delivers 5–20× faster transitions and ~1000× lower memory usage
-than popular alternatives, while maintaining a clean, intuitive API.
+Fast FSM provides high-performance transitions and memory-conscious state
+management while maintaining a clean, intuitive API. Exact local observations
+are recorded in the tracked ``evidence/release-baseline.json`` manifest.
 
 .. toctree::
    :maxdepth: 2
@@ -41,6 +42,13 @@ than popular alternatives, while maintaining a clean, intuitive API.
    dev/architecture
    dev/testing
    dev/contributing
+   dev/releasing
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Release Records
+
+   release-corrections/v0.2.3
 
 
 Indices and tables

@@ -15,6 +15,8 @@ vars:
   SRC_DIR: src/fast_fsm
   DOCS_DIR: docs
   DOCS_BUILD: docs/_build/html
+  EVIDENCE_TOOL: tools/release_evidence.py
+  EVIDENCE_MANIFEST: evidence/release-baseline.json
 
 tasks:
   # ─────────────────────────────────────────────
@@ -23,29 +25,37 @@ tasks:
 
   test:
     desc: "Run full test suite — merge gate (pure Python, -x -q)"
+    deps:
+      - task: pure-source-check
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -x -q
 
   test-verbose:
     desc: Run full test suite with verbose output
+    deps:
+      - task: pure-source-check
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -v --tb=short
 
   test-fast:
     desc: Run tests excluding slow/integration markers
+    deps:
+      - task: pure-source-check
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ -x -q -m "not slow and not integration"
 
   test-coverage:
     desc: Run tests with HTML coverage report
+    deps:
+      - task: pure-source-check
     env:
-      FAST_FSM_PURE_PYTHON: "1"
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run pytest tests/ --cov={{.SRC_DIR}} --cov-report=html --cov-report=term
 
@@ -60,12 +70,22 @@ tasks:
       - uv run ruff format src/ tests/
       - uv run ruff check --fix src/ tests/
 
-  check:
-    desc: "Phase 2: Validate formatting, linting, and types (blocks merge)"
+  format-check:
+    desc: Check Ruff formatting without rewriting files
     cmds:
       - uv run ruff format --check src/ tests/
+
+  lint:
+    desc: Check Ruff lint rules without rewriting files
+    cmds:
       - uv run ruff check src/ tests/
-      - uv run ty check {{.SRC_DIR}}/
+
+  check:
+    desc: "Phase 2: Validate formatting, linting, and stable mypy compatibility"
+    cmds:
+      - task: format-check
+      - task: lint
+      - task: typecheck-mypy
 
   quality:
     desc: "Full quality gate: Phase 1 (auto-fix) → Phase 2 (validate)"
@@ -78,14 +98,81 @@ tasks:
   # ─────────────────────────────────────────────
 
   typecheck:
-    desc: Type check with ty (primary type checker)
+    desc: Type check with ty (advisory compatibility feedback)
+    cmds:
+      - task: typecheck-ty
+
+  typecheck-ty:
+    desc: Type check with ty (advisory compatibility feedback)
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run ty check {{.SRC_DIR}}/
 
   typecheck-mypy:
-    desc: Type check with mypy (mypyc compatibility verification)
+    desc: Type check with mypy (blocking mypyc compatibility verification)
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run mypy {{.SRC_DIR}}/
+
+  pure-source-check:
+    desc: Fail closed when a native core artifact would shadow pure source
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+
+  release-baseline-write:
+    desc: Intentionally regenerate the tracked pure-source release baseline
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - uv run python {{.EVIDENCE_TOOL}} evidence --write --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
+
+  release-baseline-check:
+    desc: Read-only pure-source release evidence freshness and coverage check
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
+
+  release-history-check:
+    desc: Audit immutable v0.2.3 metadata against its additive correction record
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv run python {{.EVIDENCE_TOOL}} verify-history --tag v0.2.3 --correction docs/release-corrections/v0.2.3.md --json
+
+  supported-python-build-check:
+    desc: Prove pure sdist inclusion and unpacked-wheel build for this interpreter
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv sync --locked --all-groups
+      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
+      - uv run pytest tests/test_build_modes.py -x -q -k pure_sdist_contains_selector_and_can_build_wheel_in_isolation
+
+  supported-python-build-matrix-local:
+    desc: Exercise every locally available CPython 3.10-3.14 build proof
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - |
+          for version in 3.10 3.11 3.12 3.13 3.14; do
+            if interpreter="$(uv python find "$version" --no-python-downloads 2>/dev/null)"; then
+              echo "Python $version: $interpreter"
+              uv sync --locked --all-groups --python "$interpreter"
+              uv run --python "$interpreter" python {{.EVIDENCE_TOOL}} verify-source --json
+              uv run --python "$interpreter" pytest tests/test_build_modes.py -x -q -k pure_sdist_contains_selector_and_can_build_wheel_in_isolation
+            else
+              echo "Python $version: unavailable locally"
+            fi
+          done
 
   # ─────────────────────────────────────────────
   # mypyc Build
@@ -139,16 +226,28 @@ tasks:
 
   docs:
     desc: Build Sphinx HTML documentation
+    deps:
+      - task: pure-source-check
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}}
 
   docs-check:
     desc: "Build docs with warnings-as-errors (CI-ready)"
+    deps:
+      - task: pure-source-check
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b html {{.DOCS_DIR}} {{.DOCS_BUILD}} -W --keep-going
 
   docs-test:
     desc: "Test code examples in docs ({testcode}/{testoutput} blocks)"
+    deps:
+      - task: pure-source-check
+    env:
+      FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run sphinx-build -b doctest {{.DOCS_DIR}} {{.DOCS_DIR}}/_build/doctest
 
@@ -164,6 +263,320 @@ tasks:
       - uv run python -m http.server 8765 -d {{.DOCS_BUILD}}
 
   # ─────────────────────────────────────────────
+  # Phase 20 installed-artifact evidence
+  # ─────────────────────────────────────────────
+
+  release-identity-check:
+    desc: Validate static v0.3.0 identity without creating a tag
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - |
+          uv run python - <<'PY'
+          import json
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          from fast_fsm import __version__
+          from tools.artifact_conformance import _suite_sha256
+
+          with tempfile.TemporaryDirectory(prefix="fast-fsm-release-identity-") as temporary:
+              root = Path(temporary)
+              head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+              installed = root / "installed-identity.json"
+              aggregate = root / "static-aggregate.json"
+              installed.write_text(json.dumps({"distribution_version": "0.3.0", "package_version": __version__}), encoding="utf-8")
+              aggregate.write_text(json.dumps({"package": "fast_fsm", "distribution_version": "0.3.0", "commit": head_sha, "tag": "unreleased", "suite_sha256": _suite_sha256()}), encoding="utf-8")
+              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-release-identity", "--installed-identity", str(installed), "--aggregate", str(aggregate), "--json"], check=True)
+          PY
+
+  release-installed-artifacts-check:
+    desc: Build direct pure and compiled wheels in temporary output and prove installed parity
+    cmds:
+      - |
+          uv run python - <<'PY'
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          with tempfile.TemporaryDirectory(prefix="fast-fsm-direct-artifacts-") as temporary:
+              root = Path(temporary)
+              for intent in ("pure", "compiled"):
+                  output = root / intent
+                  environment = dict(os.environ, FAST_FSM_BUILD_MODE=intent)
+                  environment.pop("FAST_FSM_PURE_PYTHON", None)
+                  subprocess.run(["uv", "build", "--wheel", "--out-dir", str(output)], check=True, env=environment)
+                  wheels = sorted(output.glob("*.whl"))
+                  if len(wheels) != 1:
+                      raise SystemExit(f"expected one {intent} wheel, got {wheels!r}")
+                  subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-installed-wheel", "--wheel", str(wheels[0]), "--expected-mode", intent, "--build-intent", intent, "--json"], check=True)
+          PY
+
+  release-sdist-check:
+    desc: Build one explicit source distribution and prove pure and compiled child lineage
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - |
+          uv run python - <<'PY'
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          with tempfile.TemporaryDirectory(prefix="fast-fsm-sdist-artifacts-") as temporary:
+              output = Path(temporary)
+              subprocess.run(["uv", "build", "--sdist", "--out-dir", str(output)], check=True)
+              sdists = sorted(output.glob("*.tar.gz"))
+              if len(sdists) != 1:
+                  raise SystemExit(f"expected one source archive, got {sdists!r}")
+              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-sdist", "--sdist", str(sdists[0]), "--json"], check=True)
+          PY
+
+  release-evidence-local-check:
+    desc: Build the non-authorizing current-platform local evidence projection
+    cmds:
+      - |
+          uv run python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          from tools import release_evidence
+
+          root = Path.cwd()
+          runtime = release_evidence._current_matrix_runtime()
+          cells = {cell.identifier: cell for cell in release_evidence.expected_matrix("local", runtime).cells}
+          head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=root).strip()
+
+          def invoke(arguments, *, environment=None):
+              subprocess.run(arguments, check=True, cwd=root, env=environment)
+
+          def one_wheel(directory):
+              wheels = sorted(directory.glob("*.whl"))
+              if len(wheels) != 1:
+                  raise SystemExit(f"expected exactly one wheel: {wheels!r}")
+              return wheels[0]
+
+          def record(cell_id, proof, *, parent_sdist=None):
+              cell = cells[cell_id]
+              artifact = proof["artifact"]
+              runtime_record = proof["runtime"]
+              return {
+                  "schema_version": 1,
+                  "record_id": f"{cell_id}-{head_sha}",
+                  "matrix": {
+                      "cell": cell.identifier,
+                      "cpython_minor": cell.cpython_minor,
+                      "os": cell.os,
+                      "machine": cell.machine,
+                      "asserted_mode": cell.asserted_mode,
+                      "sdist_parent": cell.sdist_parent,
+                      "artifact_filename": artifact["filename"],
+                      "artifact_sha256": artifact["sha256"],
+                  },
+                  "artifact": release_evidence.matrix_artifact_evidence(artifact),
+                  "runtime": release_evidence.matrix_runtime_evidence(runtime_record),
+                  "conformance": proof["conformance"],
+                  "provenance": {"release_version": "0.3.0", "commit": head_sha, "tag": "unreleased"},
+                  "origin_verified": True,
+                  "performance": proof["performance"] if cell.requires_performance else None,
+                  "parent_sdist": parent_sdist,
+              }
+
+          with tempfile.TemporaryDirectory(prefix="fast-fsm-local-evidence-") as temporary:
+              temporary_root = Path(temporary)
+              records = []
+              for intent, prefix in (("pure", "pure-wheel-"), ("compiled", "compiled-wheel-")):
+                  output = temporary_root / f"direct-{intent}"
+                  environment = dict(os.environ, FAST_FSM_BUILD_MODE=intent)
+                  environment.pop("FAST_FSM_PURE_PYTHON", None)
+                  invoke(["uv", "build", "--wheel", "--out-dir", str(output)], environment=environment)
+                  wheel = one_wheel(output)
+                  proof = release_evidence.verify_installed_wheel(wheel, expected_mode=intent, build_intent=intent)
+                  matching = [identifier for identifier in cells if identifier.startswith(prefix) and "universal2" not in identifier]
+                  if len(matching) != 1:
+                      raise SystemExit(f"local direct {intent} matrix is ambiguous: {matching!r}")
+                  records.append(record(matching[0], proof))
+
+              universal2_cells = [identifier for identifier in cells if "universal2" in identifier]
+              if universal2_cells:
+                  if len(universal2_cells) != 1:
+                      raise SystemExit(f"local universal2 matrix is ambiguous: {universal2_cells!r}")
+                  output = temporary_root / "direct-universal2"
+                  environment = dict(
+                      os.environ,
+                      FAST_FSM_BUILD_MODE="compiled",
+                      ARCHFLAGS="-arch x86_64 -arch arm64",
+                      MACOSX_DEPLOYMENT_TARGET="10.15",
+                  )
+                  environment.pop("FAST_FSM_PURE_PYTHON", None)
+                  invoke(["uv", "build", "--wheel", "--out-dir", str(output)], environment=environment)
+                  proof = release_evidence.verify_installed_wheel(one_wheel(output), expected_mode="compiled", build_intent="compiled")
+                  records.append(record(universal2_cells[0], proof))
+
+              sdist_dir = temporary_root / "sdist"
+              pure_environment = dict(os.environ, FAST_FSM_BUILD_MODE="pure")
+              pure_environment.pop("FAST_FSM_PURE_PYTHON", None)
+              invoke(["uv", "build", "--sdist", "--out-dir", str(sdist_dir)], environment=pure_environment)
+              sdist = next(iter(sorted(sdist_dir.glob("*.tar.gz"))), None)
+              if sdist is None:
+                  raise SystemExit("source build did not produce an sdist")
+              derivation = release_evidence.verify_sdist_derivations(sdist)
+              archive = derivation["archive"]
+              records.append({
+                  "schema_version": 1,
+                  "record_id": f"sdist-archive-{head_sha}",
+                  "matrix": {"cell": "sdist-archive", "cpython_minor": "archive", "os": "archive", "machine": "archive", "asserted_mode": "sdist", "sdist_parent": None, "artifact_filename": archive["filename"], "artifact_sha256": archive["sha256"]},
+                  "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "wheel_tags": [], "classified_mode": "sdist", "build_intent": "sdist"},
+                  "runtime": None,
+                  "conformance": None,
+                  "provenance": {"release_version": "0.3.0", "commit": head_sha, "tag": "unreleased"},
+                  "origin_verified": False,
+                  "performance": None,
+                  "parent_sdist": None,
+              })
+              for child in derivation["children"]:
+                  intent = child["requested_build_intent"]
+                  matching = [identifier for identifier in cells if identifier.startswith(f"sdist-{intent}-")]
+                  if len(matching) != 1:
+                      raise SystemExit(f"local sdist {intent} matrix is ambiguous: {matching!r}")
+                  records.append(record(matching[0], child, parent_sdist=child["parent_sdist"]))
+
+              aggregate = release_evidence.aggregate_matrix_records(records, profile="local", runtime=runtime)
+              if aggregate.get("scope") != "local-non-authorizing" or aggregate.get("authorizes_release") is not False:
+                  raise SystemExit("local evidence unexpectedly authorizes release")
+              print(json.dumps(aggregate, sort_keys=True))
+          PY
+
+  release-installed-performance-check:
+    desc: Prove the installed native compiled median without using historical or pure observations
+    cmds:
+      - |
+          uv run python - <<'PY'
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          with tempfile.TemporaryDirectory(prefix="fast-fsm-installed-performance-") as temporary:
+              output = Path(temporary)
+              environment = dict(os.environ, FAST_FSM_BUILD_MODE="compiled")
+              environment.pop("FAST_FSM_PURE_PYTHON", None)
+              subprocess.run(["uv", "build", "--wheel", "--out-dir", str(output)], check=True, env=environment)
+              wheels = sorted(output.glob("*.whl"))
+              if len(wheels) != 1:
+                  raise SystemExit(f"expected one compiled wheel, got {wheels!r}")
+              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-installed-wheel", "--wheel", str(wheels[0]), "--expected-mode", "compiled", "--build-intent", "compiled", "--json"], check=True)
+          PY
+
+  release-slots-check:
+    desc: Run the recursive slots authority with the Phase 19 exception registry
+    env:
+      FAST_FSM_BUILD_MODE: pure
+    cmds:
+      - uv run python {{.EVIDENCE_TOOL}} slots-policy --json
+
+  release-readiness-check:
+    desc: Run ordered local-only release proof; ty remains explicitly advisory
+    cmds:
+      - task: format-check
+      - task: lint
+      - task: typecheck-mypy
+      - task: test
+      - task: docs-check
+      - task: docs-test
+      - task: pure-source-check
+      - task: release-baseline-check
+      - task: release-identity-check
+      - task: release-installed-artifacts-check
+      - task: release-sdist-check
+      - task: release-evidence-local-check
+      - task: release-installed-performance-check
+      - task: release-slots-check
+      - |
+          set +e
+          task typecheck-ty
+          ty_status=$?
+          set -e
+          printf 'ADVISORY task typecheck-ty exit status: %s\n' "$ty_status"
+
+  release-hosted-prerelease-check:
+    desc: Read-only inspection of an authorized completed Release Evidence run before tagging
+    cmds:
+      - |
+          : "${FAST_FSM_HOSTED_RUN_ID:?set FAST_FSM_HOSTED_RUN_ID to an authorized Release Evidence run ID}"
+          : "${FAST_FSM_EXPECTED_SHA:?set FAST_FSM_EXPECTED_SHA to the expected 40-character SHA}"
+          case "$FAST_FSM_EXPECTED_SHA" in
+            *[!0-9a-f]*|???????????????????????????????????????)
+              echo "FAST_FSM_EXPECTED_SHA must be exactly 40 lowercase hexadecimal characters" >&2
+              exit 1
+              ;;
+          esac
+          evidence_dir="$(uv run python -c 'import tempfile; print(tempfile.mkdtemp(prefix="fast-fsm-hosted-evidence-"))')"
+          trap 'uv run python -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$evidence_dir"' EXIT
+          gh run view "$FAST_FSM_HOSTED_RUN_ID" --json workflowName,event,status,conclusion,headSha,jobs > "$evidence_dir/run.json"
+          uv run python - "$evidence_dir/run.json" "$FAST_FSM_EXPECTED_SHA" <<'PY'
+          import json
+          import re
+          import sys
+
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected_sha = sys.argv[2]
+          if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+              raise SystemExit("expected SHA is malformed")
+          if payload.get("workflowName") != "Release Evidence":
+              raise SystemExit("run is not the evidence-only workflow")
+          if payload.get("event") != "workflow_dispatch":
+              raise SystemExit("run was not explicitly authorized by workflow_dispatch")
+          if payload.get("status") != "completed" or payload.get("conclusion") != "success":
+              raise SystemExit("evidence run is not terminal and successful")
+          if payload.get("headSha") != expected_sha:
+              raise SystemExit("evidence run head SHA differs from expected SHA")
+          terminal = [job for job in payload.get("jobs", []) if isinstance(job, dict) and job.get("name") == "Aggregate exact hosted release evidence"]
+          if len(terminal) != 1 or terminal[0].get("status") != "completed" or terminal[0].get("conclusion") != "success":
+              raise SystemExit("terminal aggregate_release_evidence job is absent or unsuccessful")
+          PY
+          gh run download "$FAST_FSM_HOSTED_RUN_ID" --pattern "*-$FAST_FSM_EXPECTED_SHA" --dir "$evidence_dir/artifacts"
+          manifest="$(find "$evidence_dir/artifacts" -type f -name release-manifest.json -print -quit)"
+          summary="$(find "$evidence_dir/artifacts" -type f -name release-summary.txt -print -quit)"
+          test -n "$manifest" && test -n "$summary"
+          record_list="$evidence_dir/matrix-records.txt"
+          find "$evidence_dir/artifacts" -type f \
+            \( -name evidence.json -o -name child.json -o -name archive.json \) \
+            -print | LC_ALL=C sort > "$record_list"
+          set -- uv run python tools/release_evidence.py aggregate-matrix --profile release --json
+          while IFS= read -r record; do
+            test -n "$record"
+            set -- "$@" --record "$record"
+          done < "$record_list"
+          test "$#" -gt 8
+          "$@" > "$evidence_dir/recomputed-manifest.json"
+          uv run python - "$manifest" "$evidence_dir/recomputed-manifest.json" "$FAST_FSM_EXPECTED_SHA" <<'PY'
+          import json
+          import sys
+          from tools.release_evidence import build_release_authorization, expected_matrix
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          recomputed = json.load(open(sys.argv[2], encoding="utf-8"))
+          expected_sha = sys.argv[3]
+          if manifest != recomputed:
+              raise SystemExit("downloaded manifest differs from exact evidence recomputation")
+          if manifest.get("profile") != "release" or manifest.get("authorizes_release") is not True:
+              raise SystemExit("downloaded aggregate is not the release profile")
+          if manifest.get("release_identity", {}).get("commit") != expected_sha:
+              raise SystemExit("downloaded aggregate commit differs from expected SHA")
+          expected = expected_matrix("release", {"implementation": "cpython", "python_minor": "3.12", "platform": "linux", "machine": "x86_64"})
+          if manifest.get("expected_matrix") != [{"identifier": cell.identifier, "cpython_minor": cell.cpython_minor, "os": cell.os, "machine": cell.machine, "asserted_mode": cell.asserted_mode, "sdist_parent": cell.sdist_parent, "requires_parity": cell.requires_parity, "requires_origin": cell.requires_origin, "requires_performance": cell.requires_performance} for cell in expected.cells]:
+              raise SystemExit("downloaded aggregate matrix digest or contents are incomplete")
+          build_release_authorization(manifest)
+          print("read-only hosted evidence inspection passed")
+          PY
+
+  # ─────────────────────────────────────────────
   # Combined Workflows
   # ─────────────────────────────────────────────
 
@@ -175,11 +588,21 @@ tasks:
       - task: test-fast
 
   ci:
-    desc: "Full CI pipeline: lint → pure-python tests → mypyc build check (mirrors ci.yml)"
+    desc: "Full local gate: independently named pure-source quality commands"
     cmds:
-      - task: check
+      - task: release-gate
+
+  release-gate:
+    desc: "Complete local release gate with named components and no hidden shell chain"
+    cmds:
+      - task: pure-source-check
+      - task: format-check
+      - task: lint
+      - task: typecheck-mypy
       - task: test
-      - task: build-check
+      - task: docs-check
+      - task: docs-test
+      - task: release-baseline-check
 
   # ─────────────────────────────────────────────
   # Maintenance

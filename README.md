@@ -1,8 +1,7 @@
 # Fast FSM — High-Performance Finite State Machine Library
 
-A blazing-fast, memory-efficient finite state machine library for Python that
-outperforms popular alternatives by **5–20×** while providing a clean,
-intuitive API.
+A high-performance, memory-efficient finite state machine library for Python
+with a clean, intuitive API.
 
 **Full documentation:** after installing, run
 `uv run sphinx-build -b html docs docs/_build/html` and open
@@ -10,19 +9,28 @@ intuitive API.
 
 ## Performance Highlights
 
-- **~250,000 transitions/sec** — maintains parity with hand-tuned implementations
-- **Ultra-low memory footprint** — ~1,000× more efficient than popular libraries
-- **Zero-overhead design** — `__slots__` optimization, direct dictionary lookups
-- **Production ready** — 290 tests, optional validation, mypyc compilation
+- **Stable performance contract** — compiled `trigger()` throughput is at least
+  200,000 operations per second.
+- **Memory-conscious design** — direct dictionary lookups and `__slots__` keep
+  the hot path lean.
+- **Production-ready verification** — 700+ tests, optional validation, and
+  optional mypyc compilation.
 
-| Library | Speed (ops/sec) | Memory | Ratio |
-|---------|----------------|--------|-------|
-| **fast_fsm** | ~250K | ~0.2 KB | baseline |
-| python-statemachine | ~30K | ~25–40 KB | 8× slower, 125× more memory |
-| transitions | ~50K | ~30–50 KB | 5× slower, 150× more memory |
+Exact test, coverage, toolchain, source-origin, artifact-mode, and collected
+environment-labeled benchmark observations are recorded in the tracked
+[`evidence/release-baseline.json`](evidence/release-baseline.json) manifest.
+Regenerate or verify that evidence with the commands in the developer testing
+guide; do not treat a historical local benchmark as a universal result.
 
-*100,000 transitions with realistic usage patterns.*
-*Run with* `uv run python benchmarks/benchmark_fast_fsm.py`
+## v0.3.0 Installed-Artifact Release Proof
+
+v0.3.0 requires a complete installed-artifact proof matrix: pure, compiled, and
+source-derived artifacts must be verified from fresh environments before a
+release can be authorized. The local matrix is an explicitly non-authorizing
+projection for development; only the complete hosted release matrix can
+authorize publication. SHA-256 binds exact bytes to the recorded evidence, not
+publisher authenticity. Exact artifact records, environment labels, and any
+performance observations remain in the manifest rather than this narrative.
 
 ## Requirements
 
@@ -176,24 +184,42 @@ fsm.add_transition("emergency_reset", ["error", "processing", "waiting"], "idle"
 
 ### Error Handling
 
-By default `trigger()` returns a `TransitionResult` and never raises. Use
-`raise_if_failed()` for exception-based flow:
+By default `trigger()` returns a `TransitionResult`, including ordinary
+transition failures. Inspect its structured lifecycle fields before deciding
+whether to use exception-based flow:
 
 ```python
 from fast_fsm import TransitionError
 
-# Raises TransitionError when success is False
+# `committed` tells you whether the destination/history commit happened.
+result = fsm.trigger("start")
+if not result.success:
+    assert result.stage is not None       # stable lowercase lifecycle stage
+    assert result.cause is None or isinstance(result.cause, BaseException)
+    if result.committed:
+        # A later callback failed; the destination remains current.
+        assert fsm.current_state.name == result.to_state
+
+# Raises TransitionError only when success is False. Its original cause is
+# available through exception chaining; avoid formatting callback payloads or
+# causes into application logs.
 try:
-    fsm.trigger("start").raise_if_failed()
+    result.raise_if_failed()
 except TransitionError as exc:
-    print(exc.result.error)       # human-readable reason
+    assert exc.result is result
+    print(exc.result.error)       # concise, stage-aware reason
     print(exc.result.from_state)  # state at time of failure
 
 # Chain directly when you also need the destination
-target = fsm.trigger("start").raise_if_failed().to_state
+target = result.raise_if_failed().to_state
 ```
 
 `TransitionError.result` holds the original `TransitionResult` for inspection.
+Successful results have `success=True`, `committed=True`, `stage=None`, and
+`cause=None`. Failed pre-commit results preserve the source state with
+`committed=False`; failed post-commit results preserve the destination with
+`committed=True`. `cause` retains the original exception object when one
+exists, but is deliberately omitted from result representations and error text.
 
 ### Checking Active State
 
@@ -291,22 +317,33 @@ class TransitionLogger:
 fsm.add_listener(TransitionLogger())
 ```
 
-All four methods are optional — omit any you don't need. Multiple listeners can
-be registered; they are called in registration order. Listener exceptions are
-caught and logged without crashing the FSM. The empty-list guard
-(`if self._on_exit_listeners:`) means **zero overhead** when no listeners are
-attached.
+All four methods are optional — omit any you don't need. Multiple callbacks in
+every collection preserve registration order. An ordinary lifecycle callback
+failure is fail-fast: it stops the remaining lifecycle suffix, produces a
+failed `TransitionResult`, and never rolls back a completed commit. The
+empty-list guards keep the no-listener path lean.
 
-**Listener protocol — execution order per successful transition:**
+**Ordinary trigger lifecycle order:**
 
-| Method | Fires | Signature |
-|---|---|---|
-| `before_transition` | First — before any `on_exit` callback | `(source, target, trigger, **kw)` |
-| `on_exit_state` | After state's own `on_exit` | `(source, target, trigger, **kw)` |
-| `on_enter_state` | After state's own `on_enter` | `(target, source, trigger, **kw)` |
-| `after_transition` | Last — after all enter callbacks | `(source, target, trigger, **kw)` |
+| Stage | Ordered work |
+|---|---|
+| Pre-commit | `before_transition` listeners → source `State.on_exit` → registered source `on_exit` callbacks → `on_exit_state` listeners |
+| Commit | Update the current state and append one optional history record together; no user callback or async await occurs here. |
+| Post-commit | destination `State.on_enter` → registered destination `on_enter` callbacks → `on_enter_state` listeners → selected declarative handler → trigger-specific callbacks → `after_transition` listeners |
 
-**Common pattern — transition history:**
+The stable result stages identify the failing slot, including
+`before-transition`, `source-exit`, `source-exit-callback`,
+`exit-state-listener`, `destination-enter`, `destination-enter-callback`,
+`enter-state-listener`, `declarative-handler`, `trigger-callback`, and
+`after-transition` (with `resolution`, `guard`, and `state-permission` for
+pre-lifecycle failures).
+
+`on_failed(trigger, from_state, error, **kwargs)` keeps its existing
+signature. Each failed trigger invokes registered failure observers exactly
+once in registration order. An observer failure cannot replace the original
+result/cause or prevent the remaining observers from receiving their one call.
+
+**Common pattern — application-side transition history:**
 
 ```python
 class History:
@@ -325,7 +362,8 @@ fsm.add_listener(hist)
 # Fires after every successful transition
 fsm.after_transition(lambda src, tgt, t, **kw: print(f"{src.name} → {tgt.name}"))
 
-# Fires whenever a trigger attempt fails (wrong state, condition blocked, unknown trigger)
+# Fires once whenever a trigger attempt fails (wrong state, condition blocked,
+# lifecycle callback, or cancellation observation)
 fsm.on_failed(lambda t, from_s, err, **kw: print(f"BLOCKED: {t} from {from_s} — {err}"))
 
 # Fires after every successful "submit" trigger specifically
@@ -335,8 +373,9 @@ fsm.on_trigger("submit", lambda src, tgt, t, **kw: metrics.record(t))
 `clone()` copies all callbacks and listeners (shallow copy). Adding new callbacks
 to the clone after cloning does not affect the original.
 
-Listeners work identically on `AsyncStateMachine` (same `_execute_transition`
-hook, called from `trigger_async`).
+Listeners work identically on `AsyncStateMachine` through the paired async
+lifecycle runner. Synchronous callbacks still run inline; Fast FSM never
+automatically offloads them to a worker.
 
 ### Async Support
 
@@ -369,7 +408,10 @@ async def main():
 asyncio.run(main())
 ```
 
-Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()` — they fire after all synchronous callbacks, within the same `trigger_async()` call:
+Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()`.
+They are awaited at the matching source-exit or destination-enter slot,
+immediately after that slot's synchronous callbacks—not as an async tail after
+the whole transition:
 
 ```python
 async def log_alert(from_s, trigger, **kw):
@@ -377,6 +419,54 @@ async def log_alert(from_s, trigger, **kw):
 
 fsm.on_enter_async("alert", log_alert)
 ```
+
+If an awaited lifecycle operation is cancelled, `trigger_async()` invokes the
+registered failure observers once for the reached stage and re-raises the same
+`asyncio.CancelledError`. It does not shield work, roll back a completed
+transition, or invoke later lifecycle callbacks. Cancellation before commit
+leaves the source/history untouched; cancellation after commit leaves the
+destination and its one history record intact.
+
+### Ownership, Concurrency, and Reentry
+
+Fast FSM serializes **each machine independently**. This is an ownership
+contract for public writes, not a global scheduler:
+
+- `trigger()`, `safe_trigger()`, `force_state()`, `reset()`, `restore()`, graph
+  mutators, history enable/disable, and listener/callback/failure-observer
+  registration all share the same per-machine ownership policy. Reads remain
+  available, but do not promise a cross-field topology or diagnostic snapshot.
+- On `StateMachine`, independent threads serialize one complete write at a
+  time. A same-thread call made from an owned callback (or another owned write)
+  raises a redacted `RuntimeError` before validation, preparation, a guard,
+  callback, or mutation runs. Ownership is released after every result,
+  ordinary exception, and `BaseException` without altering the existing
+  state/history commit boundary.
+- On `AsyncStateMachine`, the first async control operation permanently binds
+  the machine to its running event loop. Independent tasks on that loop wait
+  with an asyncio-native per-machine lock, so the event loop remains
+  responsive. A foreign loop/thread, a direct reentry, or a child task created
+  by an owned callback raises `RuntimeError` before lock acquisition; child
+  tasks inherit the causal ownership root rather than waiting behind their
+  parent. Cancellation while waiting propagates unchanged and never installs
+  ownership; cancellation while owning follows the lifecycle's `finally`
+  cleanup and Phase 17 state/history rules.
+- `safe_trigger()` performs ownership, loop, causal-root, foreign-thread, and
+  busy preconditions **before** its ordinary exception-conversion catch, so
+  misuse raises `RuntimeError`. Ordinary post-admission `Exception` failures
+  still return the usual value result. Ownership messages use stable operation
+  categories only; they never contain trigger arguments, callback payloads,
+  causes, or arbitrary exception text.
+- Synchronous callbacks on an async machine run inline on its event-loop
+  thread. Registered async callbacks are awaited at their matching lifecycle
+  slots. Fast FSM does not infer blocking work or automatically offload a
+  callback to a worker.
+
+This contract intentionally makes **no** fairness, timeout, queue-order,
+loop-transfer, automatic-offload, cross-field-snapshot, or installed-artifact
+promise. Queueing reentry, loop transfer, and worker offload are future design
+work; stable diagnostic snapshots are Phase 19, and installed-wheel/sdist
+parity is Phase 20.
 
 ### Visualization
 
@@ -401,6 +491,104 @@ print(doc)   # or save to a .md file
 print(to_plantuml(fsm))
 ```
 
+### Bounded Diagnostics and Safe Output
+
+Diagnostics are opt-in design-time work. `trigger()`, `can_trigger()`,
+`add_state()`, and `add_transition()` remain O(1); importing or using the
+diagnostic APIs adds no runtime dependency and never puts graph traversal on
+that path. Each top-level validator, comparison, JSON export, or renderer
+captures one immutable private graph view and shares one budget through its
+nested analysis. Structural reachability always begins at the machine's
+declared initial state. The captured current state is reported separately; it
+does not change the answer.
+
+Use a keyword-only `DiagnosticLimits` override when the default ceilings are
+too small for a known diagnostic job:
+
+| Limit | Default | Counted before the operation |
+|---|---:|---|
+| `max_work` | 50,000 | graph visits, edge examinations, and other analysis work |
+| `max_results` | 10,000 | published diagnostic rows, components, paths, and similar results |
+| `max_dense_cells` | 200,000 | a requested dense matrix's complete cell allocation |
+| `max_path_expansions` | 20,000 | followed edges during generated-path exploration |
+
+These are finite operation counters, not elapsed-time limits. `DiagnosticStatus`
+is the structured completion record: `complete`, `exhausted_dimension`,
+`exhausted_stage`, `work_count`, `result_count`, `dense_cell_count`, and
+`path_expansion_count`. Structured validation, comparison, batch, report, and
+JSON output expose it. A legacy set, list, scalar, printed report, diagram, or
+dense-matrix shape cannot safely carry partial metadata, so it raises
+`DiagnosticBudgetExceeded` with the fixed message `diagnostic budget exhausted`
+instead of returning hidden partial output.
+
+`compare_fsms(*fsms, limits=None)` and
+`batch_validate(*fsms, show_summary=True, limits=None)` preserve every input
+by zero-based `position`, even when labels are empty or duplicated. Comparison
+entries are `{position, name, score, metrics, issue_count, diagnostic_status}`;
+rankings are `{position, name, score}` records sorted by descending score then
+ascending position, and `best_fsm` is `{position, name}`. Batch entries are
+`{position, name, validator, diagnostic_status}`. Names are display labels,
+never dictionary keys. Comparing zero machines returns empty `entries` and
+`rankings`, `best_fsm=None`, `count=0`, `total_issues=0`, and
+`avg_score=score_range=None`—the zero-machine numeric aggregates are `None`,
+not invented zeroes.
+
+Cycle membership is complete strongly connected component (SCC) membership:
+self-loops and every member of longer cycles appear once in deterministic
+snapshot order. A DAG reports `dag_longest_path`; a cyclic graph reports the
+longest depth of its SCC condensation DAG as `condensation_dag_depth`. This is
+not an exact longest-simple-path claim inside a cycle. Sparse state/event/edge
+rows are the default `O(V + E)` representation. Dense `V × events` transition
+and `V²` adjacency matrices are explicit compatibility outputs that preflight
+their full counted allocation before construction. Generated paths use
+iterative traversal and are bounded independently by requested length/path
+caps and the shared expansion, work, and result budgets.
+
+Diagram identity and text are separate. Mermaid and PlantUML use opaque,
+snapshot-position node IDs (`s0`, `s1`, ...) rather than labels, so labels that
+sanitize alike remain collision-free. Mermaid text, PlantUML text, and Markdown
+headings/table cells each use their own grammar-specific, one-line encoding
+boundary for titles, state labels, triggers, and condition names. JSON and
+documents preserve snapshot order; dense JSON/document output is opt-in. A
+caller-supplied adjacency matrix must exactly match the captured states,
+events, transitions, and every cell or fails with
+`ValueError("adjacency matrix does not match captured snapshot")`.
+
+### Safe Trace Logging
+
+Trace output is metadata-only by default. At `logging.DEBUG - 5` it records
+fixed operation/stage/result categories, `trace_arg_count`, and capped,
+sanitized `trace_keyword_names`; it never puts trigger/state names, argument
+or keyword values, exception payloads, object representations, or raw values
+in a `LogRecord`, its arguments, `extra`, or formatted output. The disabled
+trace guard runs before event allocation, value traversal, handler lookup, or
+redactor work.
+
+An explicit `FSMTraceRedactor` receives one ephemeral frozen `FSMTraceEvent`
+with exactly `operation`, `stage`, `result`, `trigger`, `source_state`,
+`destination_state`, `positional_args`, `keyword_args`, and `error`. It may
+return only the scalar keys `operation`, `stage`, `result`, and `detail`; text
+is capped at 200 characters. An ordinary `Exception` raised by a redactor,
+`None`/non-mapping result, forbidden key, non-scalar value, or oversized
+string fails closed by emitting only the fixed `redaction_failure`
+metadata—never a raw fallback. Non-`Exception` `BaseException` subclasses
+(including `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`) are
+not converted: they emit no trace record and are re-raised. This is a
+fail-closed boundary, not best-effort formatting.
+
+`configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
+format_string="%(message)s", *, propagate=None, redactor=None)` returns an
+`FSMLoggingHandle`. It preserves application-owned handlers, filters,
+formatters, ordering, and open state; repeated library configuration replaces
+only its marked library handler. `propagate=None` preserves the application's
+existing setting, while a Boolean is a deliberate library choice.
+`FSMLoggingHandle.restore()` is idempotent and generation-scoped: it removes
+only its own library handler and restores a previous level/propagation value
+only when a newer configuration or application change has not superseded it.
+`set_fsm_logging_level(verbosity, logger_name="fast_fsm", *, propagate=None,
+redactor=None)` validates its verbosity name and delegates to the same
+ownership-preserving configuration seam. No logging backend is introduced.
+
 ### Serialization & Introspection
 
 Round-trip topology snapshots and machine-readable JSON export for agents:
@@ -421,7 +609,10 @@ data["analysis"]["quality"]            # overall_score, grade, issues
 
 ### Transition History
 
-Opt-in bounded recording of every transition — zero cost when disabled:
+Opt-in bounded recording of committed transitions — zero cost when disabled.
+The machine appends each record at the internal commit point, so a pre-commit
+failure or cancellation records nothing while a later failure retains the
+already committed record:
 
 ```python
 fsm.enable_history(max_entries=1000)
@@ -465,8 +656,8 @@ print(v.export_report('json'))
 
 ## Key Capabilities
 
-- **Ultra-High Performance** — 250K+ transitions/sec
-- **Memory Efficient** — ~1,000× less than alternatives
+- **Ultra-High Performance** — compiled `trigger()` contract ≥200,000 ops/sec
+- **Memory Efficient** — direct dictionary lookups and slots-aware hot paths
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
@@ -475,7 +666,7 @@ print(v.export_report('json'))
 - **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
 - **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
 - **Declarative States** — `@transition` decorator for inline state definitions
-- **Transition History** — opt-in `enable_history()` / `disable_history()` with bounded `TransitionRecord` buffer; zero cost when disabled, ≤ 2× overhead when enabled
+- **Transition History** — opt-in `enable_history()` / `disable_history()` with a bounded `TransitionRecord` buffer and environment-labeled performance evidence
 - **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
 - **Visualization** — Mermaid diagrams, PlantUML output, fenced blocks, full Markdown documents with adjacency matrix
 - **Agent Tooling** — `to_json()` exports topology + reachability + cycles + quality for programmatic consumption
@@ -501,8 +692,12 @@ uv run python examples/<script>.py
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -x -q     # full suite (653 tests)
+uv run pytest tests/ -x -q     # full suite (700+ tests)
 ```
+
+For the authoritative, exact release evidence, use
+[`evidence/release-baseline.json`](evidence/release-baseline.json) with the
+write/check workflow in [`docs/dev/testing.md`](docs/dev/testing.md).
 
 ## Architecture
 
@@ -516,7 +711,8 @@ src/fast_fsm/
 
 ### Design Principles
 
-1. **`__slots__` everywhere** — all core classes, no `__dict__` on hot paths
+1. **`__slots__` on hot paths** — all relevant production classes are audited
+   recursively; the measured exceptions are documented in the contributor guide
 2. **Direct dictionary lookups** — O(1) `trigger()`, `can_trigger()`, `add_state()`, `add_transition()`
 3. **Minimal abstraction** — clean API without unnecessary layers
 4. **Optional features** — validation/logging add zero runtime overhead when unused
@@ -527,12 +723,15 @@ src/fast_fsm/
 
 | Operation | Complexity | Throughput | Memory |
 |-----------|-----------|------------|--------|
-| `trigger()` | O(1) | ~250K/sec | zero allocation |
-| `trigger()` + history | O(1) | ~125K+/sec | +TransitionRecord/trigger |
-| `can_trigger()` | O(1) | ~500K/sec | zero allocation |
-| `add_state()` | O(1) | instant | +~32 B/state |
-| `add_transition()` | O(1) | instant | +~64 B/transition |
-| `FSMBuilder.build()` | O(n) | one-time | optimized result |
+| `trigger()` | O(1) | compiled ≥200,000 ops/sec | implementation-dependent |
+| `trigger()` + history | O(1) | environment-labeled evidence | implementation-dependent |
+| `can_trigger()` | O(1) | environment-labeled evidence | implementation-dependent |
+| `add_state()` | O(1) | implementation-dependent | implementation-dependent |
+| `add_transition()` | O(1) | implementation-dependent | implementation-dependent |
+| `FSMBuilder.build()` | O(n) | one-time | implementation-dependent |
+
+See the [release evidence manifest](evidence/release-baseline.json) for exact
+observations from the reviewed clean-source collection.
 
 ## Contributing
 

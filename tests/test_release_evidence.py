@@ -1,0 +1,4454 @@
+"""Regression coverage for the maintainer-only release evidence CLI."""
+
+from __future__ import annotations
+
+import argparse
+from copy import deepcopy
+import hashlib
+import json
+import os
+from pathlib import Path
+import py_compile
+import re
+import shutil
+import subprocess
+import sys
+import time
+from types import SimpleNamespace
+from typing import Iterable, Mapping
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import pytest
+import yaml
+
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import tools.release_evidence as release_evidence  # noqa: E402
+import tools.artifact_conformance as artifact_conformance  # noqa: E402
+import tools.phase16_isolated_verify as isolated_verify  # noqa: E402
+from tools.release_evidence import (  # noqa: E402
+    REGISTERED_SLOTS_EXCEPTIONS,
+    EvidenceError,
+    compare_manifests,
+    collect_class_declarations,
+    collect_runtime_class_layouts,
+    serialize_manifest,
+    validate_runtime_slots_layouts,
+    validate_slots_inventory,
+    validate_manifest_regressions,
+    validate_performance_observation,
+)
+
+
+PACKAGE_SOURCE = ROOT / "src" / "fast_fsm"
+TOOL = ROOT / "tools" / "release_evidence.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+DOCS_WORKFLOW = ROOT / ".github" / "workflows" / "docs.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_EVIDENCE_WORKFLOW = ROOT / ".github" / "workflows" / "release-evidence.yml"
+TASKFILE = ROOT / "Taskfile.yml"
+
+TASK_SETUP_ACTION = "arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52"
+TASK_VERSION = "3.53.1"
+SETUP_UV_ACTION = "astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
+THIRD_PARTY_ACTION_PINS = {
+    "actions/checkout": ("11d5960a326750d5838078e36cf38b85af677262", "v4"),
+    "actions/configure-pages": ("983d7736d9b0ae728b81ab479565c72886d7745b", "v5"),
+    "actions/deploy-pages": ("d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e", "v4"),
+    "actions/download-artifact": ("d3f86a106a0bac45b974a628896c90dbdf5c8093", "v4"),
+    "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4"),
+    "actions/upload-pages-artifact": (
+        "56afc609e74202658d3ffba0e8f6dda462b719fa",
+        "v3",
+    ),
+    "arduino/setup-task": ("c0bc642852239c2689f73f4ea6459c29405f3c52", "v3.0.0"),
+    "astral-sh/setup-uv": ("d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86", "v5"),
+    "docker/setup-qemu-action": ("c7c53464625b32c7a7e944ae62b3e17d2b600130", "v3"),
+    "pypa/cibuildwheel": (
+        "1828c10ab37f080699c7b81cea34097c684a7074",
+        "v4.2.0",
+    ),
+    "pypa/gh-action-pypi-publish": (
+        "ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
+        "v1.9.0",
+    ),
+    "softprops/action-gh-release": (
+        "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+        "v2",
+    ),
+}
+TASK_CONSUMING_CI_JOBS = frozenset(
+    {
+        "format",
+        "lint",
+        "typecheck_mypy",
+        "typecheck_ty",
+        "test",
+        "supported_python_build",
+        "evidence",
+        "docs_html",
+        "docs_doctest",
+    }
+)
+_TASK_COMMAND = re.compile(
+    r"""(?mx)
+    (?:^|[;&|])\s*
+    (?:
+        [A-Za-z_][A-Za-z0-9_]*=
+        (?:\"[^\"\n]*\"|'[^'\n]*'|[^\s;&|\n]+)\s+
+    )*
+    task(?:\s|$)
+    """
+)
+
+
+def _run_evidence(
+    *arguments: str, environ: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the evidence CLI in an isolated subprocess."""
+    return subprocess.run(
+        [sys.executable, str(TOOL), *arguments],
+        cwd=ROOT,
+        env={**os.environ, **(environ or {})},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _copy_clean_source(tmp_path: Path) -> Path:
+    """Copy package source without native build leftovers into a temp source root."""
+    source_root = tmp_path / "src"
+    shutil.copytree(
+        PACKAGE_SOURCE,
+        source_root / "fast_fsm",
+        ignore=shutil.ignore_patterns("core*.so", "core*.pyd", "__pycache__"),
+    )
+    return source_root
+
+
+def _write_wheel(
+    directory: Path,
+    *,
+    filename_tag: str,
+    wheel_tags: Iterable[str],
+    native_members: Iterable[str] = (),
+    version: str = "0.3.0",
+    filename_name: str = "fast_fsm",
+    dist_info_name: str = "fast_fsm",
+    dist_info_version: str | None = None,
+    metadata_name: str = "fast-fsm",
+    metadata_version: str | None = None,
+) -> Path:
+    """Create a minimal wheel archive with independently controllable evidence."""
+    wheel = directory / f"{filename_name}-{version}-{filename_tag}.whl"
+    dist_info = f"{dist_info_name}-{dist_info_version or version}.dist-info"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            f"{dist_info}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: release-evidence-test\n"
+            + "".join(f"Tag: {tag}\n" for tag in wheel_tags),
+        )
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            "Metadata-Version: 2.1\n"
+            f"Name: {metadata_name}\n"
+            f"Version: {metadata_version or version}\n",
+        )
+        archive.writestr("fast_fsm/__init__.py", "")
+        archive.writestr("fast_fsm/core.py", "")
+        for member in native_members:
+            archive.writestr(member, b"native-fixture")
+    return wheel
+
+
+def test_native_core_archive_detection_requires_an_exact_importable_basename(
+    tmp_path: Path,
+) -> None:
+    """Prefix lookalikes and nested extensions cannot prove ``fast_fsm.core`` native."""
+    for member in (
+        "fast_fsm/core_backup.so",
+        "fast_fsm/core_evil.pyd",
+        "fast_fsm/nested/core.abi3.so",
+    ):
+        wheel = _write_wheel(
+            tmp_path,
+            filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+            wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+            native_members=(member,),
+        )
+        with pytest.raises(EvidenceError, match="no native fast_fsm.core"):
+            release_evidence.inspect_wheel(wheel)
+
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+        wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+        native_members=("fast_fsm/core.abi3.so",),
+    )
+    assert release_evidence.inspect_wheel(wheel)["native_core_members"] == [
+        "fast_fsm/core.abi3.so"
+    ]
+
+
+@pytest.mark.parametrize(
+    "member",
+    (
+        "fast_fsm/core.abi3_backup.so",
+        "fast_fsm/core.cpython-312-evil.so",
+        "fast_fsm/core.cp312-not-a-platform.pyd",
+    ),
+)
+def test_native_core_archive_detection_rejects_abi_suffix_lookalikes(
+    tmp_path: Path, member: str
+) -> None:
+    """Only complete extension suffixes can demonstrate an importable core."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="cp312-cp312-manylinux_2_17_x86_64",
+        wheel_tags=("cp312-cp312-manylinux_2_17_x86_64",),
+        native_members=(member,),
+    )
+
+    with pytest.raises(EvidenceError, match="no native fast_fsm.core"):
+        release_evidence.inspect_wheel(wheel)
+
+
+def test_wheel_archive_preflight_bounds_metadata_and_normalized_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct wheel inspection rejects zip-bomb and duplicate-path fixtures first."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=("py3-none-any",),
+    )
+    with ZipFile(wheel, "a", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("fast_fsm/core.py", b"duplicate")
+    with pytest.raises(EvidenceError, match="duplicate normalized"):
+        release_evidence.inspect_wheel(wheel)
+
+    compressed = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=("py3-none-any",),
+    )
+    with ZipFile(compressed, "a", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("fast_fsm/repeated-data", b"x" * 16_384)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_WHEEL_COMPRESSION_RATIO", 2)
+        with pytest.raises(EvidenceError, match="compression-ratio"):
+            release_evidence.inspect_wheel(compressed)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_WHEEL_MEMBERS", 1)
+        with pytest.raises(EvidenceError, match="member-count"):
+            release_evidence.inspect_wheel(compressed)
+
+
+def test_private_artifact_snapshot_survives_caller_path_replacement(
+    tmp_path: Path,
+) -> None:
+    """The install candidate is a private descriptor-derived copy, never the source path."""
+    original = tmp_path / "fast_fsm-0.3.0-py3-none-any.whl"
+    original.write_bytes(b"reviewed-bytes")
+
+    snapshot, digest = release_evidence._snapshot_artifact(
+        original, tmp_path / "private-artifact"
+    )
+    original.write_bytes(b"replacement-bytes")
+
+    assert snapshot != original
+    assert snapshot.read_bytes() == b"reviewed-bytes"
+    assert digest == hashlib.sha256(b"reviewed-bytes").hexdigest()
+
+
+def test_installed_command_enforces_timeout_and_incremental_output_caps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hanging or flooding artifact child fails before it consumes unbounded resources."""
+    environment = dict(os.environ)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_INSTALLED_COMMAND_TIMEOUT_SECONDS", 0.05)
+        with pytest.raises(EvidenceError, match="timed out"):
+            release_evidence._run_installed_command(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                cwd=tmp_path,
+                environment=environment,
+                stage="timeout fixture",
+            )
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_CHILD_OUTPUT_BYTES", 64)
+        with pytest.raises(EvidenceError, match="exceeded the output limit"):
+            release_evidence._run_installed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys, time; sys.stdout.buffer.write(b'x' * 4096); "
+                    "sys.stdout.flush(); time.sleep(5)",
+                ],
+                cwd=tmp_path,
+                environment=environment,
+                stage="flood fixture",
+            )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
+def test_installed_command_timeout_kills_pipe_holding_descendants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child cannot evade the deadline by exiting behind an inherited pipe."""
+    environment = dict(os.environ)
+    descendant = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
+        "print('parent-exits', flush=True)"
+    )
+    started = time.monotonic()
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_INSTALLED_COMMAND_TIMEOUT_SECONDS", 0.1)
+        with pytest.raises(EvidenceError, match="timed out"):
+            release_evidence._run_installed_command(
+                [sys.executable, "-c", descendant],
+                cwd=tmp_path,
+                environment=environment,
+                stage="descendant pipe fixture",
+            )
+    assert time.monotonic() - started < 0.75
+
+
+CANONICAL_V023_CORRECTION = (
+    "Version 0.2.3 was shipped with defective 0.2.2 package metadata. "
+    "It remains a shipped release: the existing v0.2.3 tag and published "
+    "artifacts are immutable and unchanged. Corrected metadata will be "
+    "published in v0.3.0."
+)
+
+
+def _run_git(repository: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    """Run a local fixture Git command without touching repository refs."""
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=repository,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+
+def _write_history_fixture(
+    tmp_path: Path,
+    *,
+    changelog: str | None = None,
+    correction: str = CANONICAL_V023_CORRECTION,
+) -> tuple[Path, Path]:
+    """Create an isolated immutable-tag fixture and its correction record."""
+    repository = tmp_path / "history"
+    repository.mkdir()
+    _run_git(repository, "init", "--quiet")
+    _run_git(repository, "config", "user.email", "release-evidence@example.test")
+    _run_git(repository, "config", "user.name", "Release Evidence")
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "fast_fsm"\nversion = "0.2.2"\n', encoding="utf-8"
+    )
+    (repository / "CHANGELOG.md").write_text(
+        changelog
+        or "\n".join(
+            [
+                "# Changelog",
+                "",
+                "## [0.2.3] — 2026-04-05",
+                "",
+                CANONICAL_V023_CORRECTION,
+                "",
+                "## [0.2.2] — 2026-04-04",
+                "",
+                "The preceding release record remains available for audit.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _run_git(repository, "add", "pyproject.toml", "CHANGELOG.md")
+    _run_git(repository, "commit", "--quiet", "-m", "fixture release")
+    _run_git(repository, "tag", "-a", "v0.2.3", "-m", "fixture v0.2.3")
+    correction_path = repository / "docs" / "release-corrections" / "v0.2.3.md"
+    correction_path.parent.mkdir(parents=True)
+    correction_path.write_text(correction + "\n", encoding="utf-8")
+    return repository, correction_path
+
+
+def test_release_history_audits_immutable_v023_metadata_and_correction(
+    tmp_path: Path,
+) -> None:
+    """A v0.2.3 tag with 0.2.2 metadata needs an additive correction, not a retag."""
+    repository, correction_path = _write_history_fixture(tmp_path)
+    tag_before = _run_git(repository, "rev-parse", "v0.2.3").stdout.strip()
+
+    evidence = release_evidence.verify_history(
+        tag="v0.2.3", correction_path=correction_path, repository_root=repository
+    )
+
+    assert evidence["tag"] == "v0.2.3"
+    assert evidence["tag_pyproject_version"] == "0.2.2"
+    assert evidence["correction_path"] == "docs/release-corrections/v0.2.3.md"
+    assert _run_git(repository, "rev-parse", "v0.2.3").stdout.strip() == tag_before
+
+
+def test_release_history_accepts_wrapped_canonical_correction(tmp_path: Path) -> None:
+    """Canonical Markdown wrapping must not change immutable-history facts."""
+    correction = CANONICAL_V023_CORRECTION.replace(
+        " It remains", "\nIt remains"
+    ).replace(" published", "\npublished")
+    repository, correction_path = _write_history_fixture(
+        tmp_path, correction=correction
+    )
+
+    evidence = release_evidence.verify_history(
+        tag="v0.2.3", correction_path=correction_path, repository_root=repository
+    )
+
+    assert evidence["tag_pyproject_version"] == "0.2.2"
+
+
+@pytest.mark.parametrize(
+    ("changelog", "correction", "expected"),
+    [
+        (
+            "# Changelog\n\n## [0.2.3] — 2026-04-05\n\n"
+            + CANONICAL_V023_CORRECTION
+            + "\n",
+            CANONICAL_V023_CORRECTION,
+            "0.2.2",
+        ),
+        (
+            None,
+            "Version 0.2.3 metadata is correct and its tag was moved.",
+            "defective 0.2.2 package metadata",
+        ),
+        (
+            "# Changelog\n\n## [0.2.3] — 2026-04-05\n\n"
+            "Version 0.2.3 was shipped with defective 0.2.2 package metadata.\n\n"
+            "## [0.2.2] — 2026-04-04\n",
+            CANONICAL_V023_CORRECTION,
+            "immutable and unchanged",
+        ),
+    ],
+)
+def test_release_history_rejects_missing_or_divergent_correction_facts(
+    tmp_path: Path, changelog: str | None, correction: str, expected: str
+) -> None:
+    """Missing dated history, changed facts, and retag wording fail audibly."""
+    repository, correction_path = _write_history_fixture(
+        tmp_path, changelog=changelog, correction=correction
+    )
+
+    with pytest.raises(EvidenceError, match=re.escape(expected)):
+        release_evidence.verify_history(
+            tag="v0.2.3", correction_path=correction_path, repository_root=repository
+        )
+
+
+def test_verify_source_reports_native_shadow_before_import_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """A native core sibling fails preflight and remains byte-for-byte intact."""
+    source_root = _copy_clean_source(tmp_path)
+    shadow = source_root / "fast_fsm" / "core.fixture.so"
+    original = b"do not delete or rewrite this fixture"
+    shadow.write_bytes(original)
+
+    completed = _run_evidence(
+        "verify-source", "--source-root", str(source_root), "--json"
+    )
+
+    assert completed.returncode != 0
+    assert str(shadow) in completed.stderr
+    assert "Remove or relocate" in completed.stderr
+    assert shadow.read_bytes() == original
+
+
+def test_verify_source_records_clean_python_origin_and_distribution_metadata(
+    tmp_path: Path,
+) -> None:
+    """A clean copied source tree imports core.py and produces normalized evidence."""
+    source_root = _copy_clean_source(tmp_path)
+
+    completed = _run_evidence(
+        "verify-source", "--source-root", str(source_root), "--json"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    evidence = json.loads(completed.stdout)
+    assert evidence["core_origin"] == "src/fast_fsm/core.py"
+    assert evidence["core_origin"].endswith(".py")
+    assert evidence["distribution_version"]
+
+
+def test_verify_wheel_classifies_universal_wheel_without_native_members(
+    tmp_path: Path,
+) -> None:
+    """Universal tags plus no native archive members are the pure-wheel identity."""
+    wheel = _write_wheel(
+        tmp_path, filename_tag="py3-none-any", wheel_tags=["py3-none-any"]
+    )
+
+    completed = _run_evidence("verify-wheel", "--wheel", str(wheel), "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    artifact = json.loads(completed.stdout)["artifacts"][0]
+    assert artifact["mode"] == "pure"
+    assert artifact["filename_tags"] == ["py3-none-any"]
+    assert artifact["wheel_tags"] == ["py3-none-any"]
+    assert artifact["native_members"] == []
+    assert artifact["metadata_version"] == "0.3.0"
+
+
+@pytest.mark.parametrize(
+    ("filename_tag", "wheel_tags", "native_members", "expected"),
+    [
+        (
+            "py3-none-any",
+            ["py3-none-any"],
+            ["fast_fsm/core.cpython-310-x86_64-linux-gnu.so"],
+            "universal pure wheel",
+        ),
+        ("py3-none-any", ["cp310-cp310-manylinux_2_17_x86_64"], [], "tag mismatch"),
+    ],
+)
+def test_verify_wheel_rejects_contradictory_pure_evidence(
+    tmp_path: Path,
+    filename_tag: str,
+    wheel_tags: list[str],
+    native_members: list[str],
+    expected: str,
+) -> None:
+    """A claimed universal pure artifact must agree across all evidence sources."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag=filename_tag,
+        wheel_tags=wheel_tags,
+        native_members=native_members,
+    )
+
+    completed = _run_evidence("verify-wheel", "--wheel", str(wheel), "--json")
+
+    assert completed.returncode != 0
+    assert expected in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"filename_name": "evil"}, "filename package name"),
+        ({"dist_info_name": "evil"}, "dist-info package name"),
+        ({"metadata_name": "evil"}, "metadata name"),
+        ({"dist_info_version": "9.9"}, "dist-info version"),
+        ({"metadata_version": "9.9"}, "metadata version"),
+        ({"version": "0.2.3"}, "version contradicts release identity"),
+    ],
+)
+def test_verify_wheel_rejects_every_contradictory_identity_surface(
+    tmp_path: Path, overrides: dict[str, str], expected: str
+) -> None:
+    """Filename, dist-info, METADATA, and release identity must agree exactly."""
+    wheel = _write_wheel(
+        tmp_path,
+        filename_tag="py3-none-any",
+        wheel_tags=["py3-none-any"],
+        **overrides,
+    )
+
+    completed = _run_evidence("verify-wheel", "--wheel", str(wheel), "--json")
+
+    assert completed.returncode != 0
+    assert expected in completed.stderr.lower()
+
+
+def test_verify_wheel_keeps_one_pure_and_multiple_compiled_records_sorted(
+    tmp_path: Path,
+) -> None:
+    """Every repeated wheel input retains independent deterministic evidence."""
+    pure = _write_wheel(
+        tmp_path, filename_tag="py3-none-any", wheel_tags=["py3-none-any"]
+    )
+    linux = _write_wheel(
+        tmp_path,
+        filename_tag="cp310-cp310-manylinux_2_17_x86_64",
+        wheel_tags=["cp310-cp310-manylinux_2_17_x86_64"],
+        native_members=["fast_fsm/core.cpython-310-x86_64-linux-gnu.so"],
+    )
+    windows = _write_wheel(
+        tmp_path,
+        filename_tag="cp310-cp310-win_amd64",
+        wheel_tags=["cp310-cp310-win_amd64"],
+        native_members=["fast_fsm/core.cp310-win_amd64.pyd"],
+    )
+
+    first = _run_evidence(
+        "verify-wheel",
+        "--wheel",
+        str(windows),
+        "--wheel",
+        str(pure),
+        "--wheel",
+        str(linux),
+        "--json",
+    )
+    second = _run_evidence(
+        "verify-wheel",
+        "--wheel",
+        str(linux),
+        "--wheel",
+        str(windows),
+        "--wheel",
+        str(pure),
+        "--json",
+    )
+
+    assert first.returncode == second.returncode == 0
+    assert json.loads(first.stdout) == json.loads(second.stdout)
+    artifacts = json.loads(first.stdout)["artifacts"]
+    assert [artifact["mode"] for artifact in artifacts] == [
+        "compiled",
+        "compiled",
+        "pure",
+    ]
+    assert all(
+        {
+            "normalized_basename",
+            "filename_tags",
+            "wheel_tags",
+            "metadata_version",
+            "native_members",
+        }
+        <= artifact.keys()
+        for artifact in artifacts
+    )
+
+
+def _historical_field_recorded(value: str) -> dict[str, str]:
+    """Build one exact original-fact fixture field."""
+    return {
+        "status": "recorded",
+        "value": value,
+        "citation": "original evidence narrative",
+    }
+
+
+def _historical_field_unavailable() -> dict[str, object]:
+    """Build one explicit no-precision fixture field."""
+    return {
+        "status": "unavailable",
+        "reason": "the original evidence did not record this exact fact",
+        "searched_sources": ["original evidence narrative"],
+    }
+
+
+def _write_historical_evidence_fixture(
+    repository: Path,
+    *,
+    unsupported_value: bool = False,
+    omit_status: bool = False,
+    retrospective_rerun: dict[str, object] | None = None,
+) -> None:
+    """Write one complete, deliberately sparse four-phase evidence inventory."""
+    for phase, relative_path in zip(
+        ("16", "17", "18", "19"), release_evidence.HISTORICAL_EVIDENCE_PATHS
+    ):
+        evidence_path = repository / relative_path
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        command = f"uv run historical-phase-{phase}"
+        fields: dict[str, dict[str, object]] = {
+            "phase": _historical_field_recorded(phase),
+            "source_path": _historical_field_recorded(relative_path),
+            "command": _historical_field_recorded(
+                "not present" if unsupported_value and phase == "16" else command
+            ),
+            "build_mode": _historical_field_unavailable(),
+            "threshold_outcome": _historical_field_unavailable(),
+            "measurement_outcome": _historical_field_unavailable(),
+            "environment": _historical_field_unavailable(),
+            "original_evidence_commit": _historical_field_unavailable(),
+        }
+        if omit_status and phase == "16":
+            del fields["command"]["status"]
+        record: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "historical_phase_performance",
+            "fields": fields,
+        }
+        if retrospective_rerun is not None and phase == "16":
+            record["retrospective_rerun"] = retrospective_rerun
+        evidence_path.write_text(
+            "\n".join(
+                (
+                    f"# Phase {phase} Performance Evidence",
+                    "",
+                    f"Original command: {command}",
+                    "",
+                    "<!-- fast-fsm-historical-evidence:start -->",
+                    "```json",
+                    json.dumps(record, indent=2, sort_keys=True),
+                    "```",
+                    "<!-- fast-fsm-historical-evidence:end -->",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+
+def test_historical_evidence_preserves_unavailable_original_precision(
+    tmp_path: Path,
+) -> None:
+    """Sparse original evidence is valid only with every categorical state explicit."""
+    _write_historical_evidence_fixture(tmp_path)
+
+    evidence = release_evidence.historical_evidence(repository_root=tmp_path)
+
+    assert evidence["schema_version"] == 1
+    assert [entry["phase"] for entry in evidence["entries"]] == [
+        "16",
+        "17",
+        "18",
+        "19",
+    ]
+    assert all(
+        entry["fields"]["environment"]["status"] == "unavailable"
+        for entry in evidence["entries"]
+    )
+    assert all("source_sha256" in entry for entry in evidence["entries"])
+    assert all(
+        not ({"artifact", "parity", "performance", "matrix"} & set(entry))
+        for entry in evidence["entries"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("unsupported_value", "omit_status", "expected"),
+    [
+        (True, False, "unsupported recorded value"),
+        (False, True, "Phase 16 field command"),
+    ],
+)
+def test_historical_evidence_rejects_unsupported_or_incomplete_provenance(
+    tmp_path: Path,
+    unsupported_value: bool,
+    omit_status: bool,
+    expected: str,
+) -> None:
+    """Invented precision and missing availability state cannot enter the manifest."""
+    _write_historical_evidence_fixture(
+        tmp_path, unsupported_value=unsupported_value, omit_status=omit_status
+    )
+
+    with pytest.raises(EvidenceError, match=expected):
+        release_evidence.historical_evidence(repository_root=tmp_path)
+
+
+def test_historical_evidence_rejects_retrospective_substitution(tmp_path: Path) -> None:
+    """A later run needs its own complete identity and cannot rewrite original facts."""
+    incomplete_rerun = {
+        "execution_commit": "a" * 40,
+        "command": "uv run later-proof",
+        "environment": {
+            "interpreter": "CPython 3.12.0",
+            "os": "macOS",
+            "architecture": "arm64",
+            "build_mode": "compiled",
+        },
+        "executed_at": "2026-09-01T00:00:00Z",
+    }
+    _write_historical_evidence_fixture(tmp_path, retrospective_rerun=incomplete_rerun)
+
+    with pytest.raises(EvidenceError, match="retrospective_rerun"):
+        release_evidence.historical_evidence(repository_root=tmp_path)
+
+    complete_rerun = {
+        **incomplete_rerun,
+        "observations": {"trigger_ops_per_sec": 250000},
+    }
+    _write_historical_evidence_fixture(tmp_path, retrospective_rerun=complete_rerun)
+    evidence = release_evidence.historical_evidence(repository_root=tmp_path)
+
+    rerun = evidence["entries"][0]["retrospective_rerun"]
+    assert rerun["execution_commit"] == "a" * 40
+    assert rerun["executed_at"] == "2026-09-01T00:00:00Z"
+
+
+def _write_nested_class(source_root: Path, name: str, base: str = "object") -> None:
+    """Add a future production class to a nested source module fixture."""
+    nested = source_root / "fast_fsm" / "nested"
+    nested.mkdir()
+    (nested / "__init__.py").write_text("", encoding="utf-8")
+    (nested / "future_policy.py").write_text(
+        f"class {name}({base}):\n    pass\n", encoding="utf-8"
+    )
+
+
+def test_slots_policy_recursively_classifies_every_production_class() -> None:
+    """All top-level production classes are either slotted or deliberately registered."""
+    completed = _run_evidence("slots-policy", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    evidence = json.loads(completed.stdout)
+    inventory = evidence["inventory"]
+    assert inventory
+    assert all(entry["classification"] for entry in inventory)
+    registered = {
+        entry["qualified_name"]: entry for entry in evidence["registered_exceptions"]
+    }
+    assert set(registered) == {
+        "fast_fsm.conditions.CompiledFuncCondition",
+        "fast_fsm.core.TransitionError",
+        "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
+    }
+    for name, entry in registered.items():
+        assert entry["has_instance_dict"] is True, name
+        assert isinstance(entry["instance_size_bytes"], int)
+        assert entry["exception_reason"]
+
+
+def test_slots_policy_authorities_name_the_same_three_exceptions() -> None:
+    """The measured registry, runtime audit, instructions, and SPR stay aligned."""
+    expected = (
+        "CompiledFuncCondition",
+        "TransitionError",
+        "DiagnosticBudgetExceeded",
+    )
+    completed = _run_evidence("slots-policy", "--json")
+
+    assert completed.returncode == 0, completed.stderr
+    evidence = json.loads(completed.stdout)
+    assert {
+        entry["qualified_name"].rsplit(".", 1)[-1]
+        for entry in evidence["registered_exceptions"]
+    } == set(expected)
+    assert {name.rsplit(".", 1)[-1] for name in REGISTERED_SLOTS_EXCEPTIONS} == set(
+        expected
+    )
+
+    policy_sentence = (
+        "CompiledFuncCondition, TransitionError, and DiagnosticBudgetExceeded"
+    )
+    instructions = (ROOT / ".github" / "copilot-instructions.md").read_text(
+        encoding="utf-8"
+    )
+    spr = (ROOT / ".specify" / "memory" / "spr-core-api.md").read_text(encoding="utf-8")
+    assert policy_sentence in instructions
+    assert policy_sentence in spr
+
+
+@pytest.mark.parametrize(
+    ("name", "base"),
+    [
+        ("FuturePolicyClass", "object"),
+        ("FuturePolicyError", "Exception"),
+    ],
+)
+def test_slots_policy_rejects_nested_unregistered_instance_dict_classes(
+    tmp_path: Path, name: str, base: str
+) -> None:
+    """A future nested class without slots cannot disappear from the policy audit."""
+    source_root = _copy_clean_source(tmp_path)
+    _write_nested_class(source_root, name, base)
+    declarations = collect_class_declarations(source_root)
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(declarations, REGISTERED_SLOTS_EXCEPTIONS)
+
+    message = str(error.value)
+    assert f"fast_fsm.nested.future_policy.{name}" in message
+    assert "src/fast_fsm/nested/future_policy.py:1" in message
+
+
+def test_slots_policy_rejects_stale_exception_registry_entries(tmp_path: Path) -> None:
+    """Renamed or removed exceptions cannot remain silently allowlisted."""
+    declarations = collect_class_declarations(_copy_clean_source(tmp_path))
+    stale_registry = {
+        **REGISTERED_SLOTS_EXCEPTIONS,
+        "fast_fsm.core.RemovedException": "stale test fixture",
+    }
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(declarations, stale_registry)
+
+    assert "fast_fsm.core.RemovedException" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "class Base:\n    __slots__ = ()\n\nclass Child(Base):\n    pass\n",
+        "class Base:\n    __slots__ = ('__dict__',)\n\nclass Child(Base):\n    __slots__ = ()\n",
+        "class Child:\n    __slots__ = ('__dict__',)\n",
+    ],
+)
+def test_slots_policy_fails_closed_for_inherited_or_declared_instance_dict(
+    tmp_path: Path, source: str
+) -> None:
+    """A local subclass cannot inherit or declare an instance dictionary."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "slot_regression.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="fast_fsm.slot_regression.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+@pytest.mark.parametrize(
+    ("source", "class_name"),
+    [
+        ("class Child(ExternalBase):\n    __slots__ = ()\n", "Child"),
+        (
+            "SLOTS = ('__dict__',)\n\nclass DynamicSlots:\n    __slots__ = SLOTS\n",
+            "DynamicSlots",
+        ),
+    ],
+)
+def test_slots_policy_rejects_unresolved_bases_and_dynamic_slot_aliases(
+    tmp_path: Path, source: str, class_name: str
+) -> None:
+    """Unprovable inheritance and slots declarations cannot be certified."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "slot_regression.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=f"fast_fsm.slot_regression.{class_name}"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_uses_qualified_imported_base_identities(tmp_path: Path) -> None:
+    """An imported local base is not confused with a same-named reviewed class."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "safe_base.py").write_text(
+        "class Shared:\n    __slots__ = ()\n", encoding="utf-8"
+    )
+    (package_root / "reviewed_shadow.py").write_text(
+        "class Shared:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "slot_regression.py").write_text(
+        "from .safe_base import Shared\n\nclass Child(Shared):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    inventory = validate_slots_inventory(
+        collect_class_declarations(source_root),
+        {
+            **REGISTERED_SLOTS_EXCEPTIONS,
+            "fast_fsm.reviewed_shadow.Shared": "reviewed fixture exception",
+        },
+    )
+
+    child = next(
+        item
+        for item in inventory
+        if item["qualified_name"] == "fast_fsm.slot_regression.Child"
+    )
+    assert child["classification"] == "slot-protected"
+
+
+@pytest.mark.parametrize(
+    ("source", "class_names"),
+    [
+        ("if True:\n    class Conditional:\n        pass\n", ("Conditional",)),
+        (
+            "if sys.version_info >= (3, 12):\n"
+            "    class VersionConditional:\n"
+            "        pass\n"
+            "else:\n"
+            "    class PlatformConditional:\n"
+            "        pass\n",
+            ("VersionConditional", "PlatformConditional"),
+        ),
+        (
+            "try:\n"
+            "    class TryConditional:\n"
+            "        pass\n"
+            "except ImportError:\n"
+            "    class ExceptConditional:\n"
+            "        pass\n",
+            ("TryConditional", "ExceptConditional"),
+        ),
+        (
+            "with context_manager:\n"
+            "    class WithConditional:\n"
+            "        pass\n"
+            "match selector:\n"
+            "    case _:\n"
+            "        class MatchConditional:\n"
+            "            pass\n",
+            ("WithConditional", "MatchConditional"),
+        ),
+    ],
+)
+def test_slots_policy_recurses_through_module_control_flow(
+    tmp_path: Path, source: str, class_names: tuple[str, ...]
+) -> None:
+    """Runtime-relevant module branches cannot hide un-slotted classes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError) as error:
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+    message = str(error.value)
+    for class_name in class_names:
+        assert f"fast_fsm.conditional_policy.{class_name}" in message
+
+
+def test_slots_policy_rejects_ambiguous_conditional_class_definitions(
+    tmp_path: Path,
+) -> None:
+    """Mutually exclusive branches cannot silently collapse one class identity."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(
+        "if selector:\n"
+        "    class Ambiguous:\n"
+        "        __slots__ = ()\n"
+        "else:\n"
+        "    class Ambiguous:\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="Ambiguous duplicate class definition.*Ambiguous"
+    ):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_excludes_only_main_and_type_checking_bodies(
+    tmp_path: Path,
+) -> None:
+    """Demo/type-only classes stay out of the runtime inventory, not other scopes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "conditional_policy.py"
+    target.write_text(
+        "from typing import TYPE_CHECKING\n\n"
+        "if TYPE_CHECKING:\n"
+        "    class TypeOnly:\n"
+        "        pass\n\n"
+        "if __name__ == '__main__':\n"
+        "    class DemoOnly:\n"
+        "        pass\n\n"
+        "class RuntimeProtected:\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    declarations = collect_class_declarations(source_root)
+    names = {declaration.qualified_name for declaration in declarations}
+
+    assert "fast_fsm.conditional_policy.TypeOnly" not in names
+    assert "fast_fsm.conditional_policy.DemoOnly" not in names
+    assert "fast_fsm.conditional_policy.RuntimeProtected" in names
+    validate_slots_inventory(declarations, REGISTERED_SLOTS_EXCEPTIONS)
+
+
+@pytest.mark.parametrize(
+    ("source", "class_name"),
+    [
+        (
+            "for value in values:\n    class LoopConditional:\n        pass\n",
+            "LoopConditional",
+        ),
+        (
+            "while enabled:\n"
+            "    class WhileConditional:\n"
+            "        pass\n"
+            "else:\n"
+            "    class WhileElseConditional:\n"
+            "        pass\n",
+            "WhileConditional",
+        ),
+        pytest.param(
+            "try:\n"
+            "    class TryStarConditional:\n"
+            "        pass\n"
+            "except* ImportError:\n"
+            "    class ExceptStarConditional:\n"
+            "        pass\n",
+            "TryStarConditional",
+            marks=pytest.mark.skipif(
+                sys.version_info < (3, 11),
+                reason="except* requires Python 3.11",
+            ),
+            id="try-star-python-311-plus",
+        ),
+    ],
+)
+def test_slots_policy_recurses_through_module_loops_and_try_star(
+    tmp_path: Path, source: str, class_name: str
+) -> None:
+    """Loop and exception-group bodies cannot hide runtime production classes."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "loop_policy.py"
+    target.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match=f"fast_fsm.loop_policy.{class_name}"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_keeps_branch_local_imports_for_base_resolution(
+    tmp_path: Path,
+) -> None:
+    """An alternate safe alias cannot certify a runtime branch's unsafe base."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "branch_policy.py").write_text(
+        "if runtime_selector:\n"
+        "    from .unsafe_base import Ordinary as ABC\n\n"
+        "    class RuntimeChild(ABC):\n"
+        "        __slots__ = ()\n"
+        "else:\n"
+        "    from abc import ABC\n\n"
+        "    class AlternateChild(ABC):\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.branch_policy.RuntimeChild"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_rejects_ambiguous_reaching_base_bindings(tmp_path: Path) -> None:
+    """A class after divergent aliases fails unless every possible base is safe."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "branch_policy.py").write_text(
+        "if runtime_selector:\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "else:\n"
+        "    from abc import ABC as Base\n\n"
+        "class AmbiguousChild(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.branch_policy.AmbiguousChild"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from abc import ABC as Base\n"
+        "Base = type('Ordinary', (), {})\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n"
+        "del Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n\n"
+        "def Base():\n"
+        "    return object\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        "from abc import ABC as Base\n\n"
+        "for Base in values:\n"
+        "    pass\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+    ],
+)
+def test_slots_policy_invalidates_rebound_or_deleted_base_names(
+    tmp_path: Path, source: str
+) -> None:
+    """Every ordinary module binding replaces a previously safe base identity."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "binding_policy.py").write_text(
+        source, encoding="utf-8"
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.binding_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_invalidates_try_body_bindings_for_handlers(
+    tmp_path: Path,
+) -> None:
+    """A handler sees unsafe imports made before a later exception in its try body."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "handler_policy.py").write_text(
+        "from abc import ABC as Base\n\n"
+        "try:\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "    raise RuntimeError\n"
+        "except RuntimeError:\n"
+        "    class Child(Base):\n"
+        "        __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.handler_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_rejects_wildcard_imports_before_base_resolution(
+    tmp_path: Path,
+) -> None:
+    """A wildcard may overwrite a safe alias through an imported module's __all__."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "wildcard_base.py").write_text(
+        "class Ordinary:\n    pass\n\n__all__ = ['Base']\nBase = Ordinary\n",
+        encoding="utf-8",
+    )
+    (package_root / "wildcard_policy.py").write_text(
+        "from abc import ABC as Base\n"
+        "from .wildcard_base import *\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Wildcard import"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_keeps_nonmatching_match_environment(tmp_path: Path) -> None:
+    """A non-exhaustive match may leave an unsafe incoming base unchanged."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "match_policy.py"
+    target.write_text(
+        "from .unsafe_base import Ordinary as Base\n\n"
+        "match selector:\n"
+        "    case 'safe':\n"
+        "        from abc import ABC as Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    (source_root / "fast_fsm" / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.match_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+def test_slots_policy_rejects_imported_base_attribute_mutation(tmp_path: Path) -> None:
+    """Mutating a qualified imported base cannot retain its safe certificate."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "attribute_mutation_policy.py"
+    target.write_text(
+        "import abc\n\n"
+        "abc.ABC = type('Ordinary', (), {})\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_rejects_setattr_of_imported_base(tmp_path: Path) -> None:
+    """Built-in attribute mutation cannot hide behind an imported module alias."""
+    source_root = _copy_clean_source(tmp_path)
+    target = source_root / "fast_fsm" / "setattr_mutation_policy.py"
+    target.write_text(
+        "import abc\n\n"
+        "setattr(abc, 'ABC', type('Ordinary', (), {}))\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+def test_slots_policy_invalidates_loop_bindings_after_break(tmp_path: Path) -> None:
+    """An unreachable safe import after break cannot recertify an unsafe base."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    (package_root / "unsafe_base.py").write_text(
+        "class Ordinary:\n    pass\n", encoding="utf-8"
+    )
+    (package_root / "loop_break_policy.py").write_text(
+        "from abc import ABC as Base\n\n"
+        "for _ in (1,):\n"
+        "    from .unsafe_base import Ordinary as Base\n"
+        "    break\n"
+        "    from abc import ABC as Base\n\n"
+        "class Child(Base):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="fast_fsm.loop_break_policy.Child"):
+        validate_slots_inventory(collect_class_declarations(source_root), {})
+
+
+@pytest.mark.parametrize(
+    ("filename", "mutation"),
+    [
+        (
+            "qualified_mutator_policy.py",
+            "import builtins\nbuiltins.setattr(abc, 'ABC', type('Ordinary', (), {}))\n",
+        ),
+        (
+            "vars_mutator_policy.py",
+            "vars(abc)['ABC'] = type('Ordinary', (), {})\n",
+        ),
+        (
+            "aliased_mutator_policy.py",
+            "from builtins import setattr as mutate\n"
+            "mutate(abc, 'ABC', type('Ordinary', (), {}))\n",
+        ),
+        (
+            "dict_view_mutator_policy.py",
+            "abc.__dict__['ABC'] = type('Ordinary', (), {})\n",
+        ),
+    ],
+)
+def test_slots_policy_rejects_indirect_imported_base_mutators(
+    tmp_path: Path, filename: str, mutation: str
+) -> None:
+    """Qualified, mapped, and aliased standard mutators all invalidate abc."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / filename).write_text(
+        "import abc\n" + mutation + "\nclass Child(abc.ABC):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="Imported binding mutation"):
+        collect_class_declarations(source_root)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "import builtins\nbuiltins.setattr(abc, 'ABC', type('Ordinary', (), {}))\n",
+        "vars(abc)['ABC'] = type('Ordinary', (), {})\n",
+        "from builtins import setattr as mutate\n"
+        "mutate(abc, 'ABC', type('Ordinary', (), {}))\n",
+    ],
+)
+def test_runtime_slots_layout_audit_catches_indirect_mutators_without_static_help(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Actual layout detects every indirect mutation if static analysis is incomplete."""
+    source_root = _copy_clean_source(tmp_path)
+    declarations = collect_class_declarations(source_root)
+    (source_root / "fast_fsm" / "runtime_indirect_policy.py").write_text(
+        "import abc\n" + mutation + "\nclass Child(abc.ABC):\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    declarations.append(
+        release_evidence.ClassDeclaration(
+            qualified_name="fast_fsm.runtime_indirect_policy.Child",
+            source_path="src/fast_fsm/runtime_indirect_policy.py",
+            line=4,
+            base_references=("abc.ABC",),
+            has_own_slots=True,
+            slots_are_literal=True,
+            declares_instance_dict=False,
+        )
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match=(
+            "fast_fsm.runtime_indirect_policy.Child|"
+            "Runtime type has a mismatched claimed owner|"
+            "Pre-execution external class binding changed: abc.ABC"
+        ),
+    ):
+        validate_runtime_slots_layouts(declarations, source_root)
+
+
+def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
+    tmp_path: Path,
+) -> None:
+    """Runtime layout checks catch a dict-bearing base static syntax cannot resolve."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_escape_policy.py").write_text(
+        "import abc\n"
+        "exec(\"abc.ABC = type('Ordinary', (), {})\")\n\n"
+        "class Child(abc.ABC):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+    declarations = collect_class_declarations(source_root)
+    static_inventory = validate_slots_inventory(declarations)
+
+    assert any(
+        entry["qualified_name"] == "fast_fsm.runtime_escape_policy.Child"
+        and entry["classification"] == "slot-protected"
+        for entry in static_inventory
+    )
+    with pytest.raises(
+        EvidenceError,
+        match=("Runtime auditability preflight denied exec"),
+    ):
+        validate_runtime_slots_layouts(declarations, source_root)
+
+
+def test_runtime_slots_layout_audit_preserves_registered_exceptions(
+    tmp_path: Path,
+) -> None:
+    """Only the explicitly reviewed exception registry may retain dictionaries."""
+    source_root = _copy_clean_source(tmp_path)
+    declarations = collect_class_declarations(source_root)
+    layouts = validate_runtime_slots_layouts(declarations, source_root)
+    layouts_by_name = {entry["qualified_name"]: entry for entry in layouts}
+
+    assert set(REGISTERED_SLOTS_EXCEPTIONS) <= set(layouts_by_name)
+    assert all(
+        layouts_by_name[name]["has_instance_dict"]
+        for name in REGISTERED_SLOTS_EXCEPTIONS
+    )
+    assert all(
+        not entry["has_instance_dict"]
+        for name, entry in layouts_by_name.items()
+        if name not in REGISTERED_SLOTS_EXCEPTIONS
+    )
+
+
+def test_runtime_layout_inventory_uses_selected_pure_source(tmp_path: Path) -> None:
+    """The isolated layout loader reports classes from the passed source root."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_layout_policy.py").write_text(
+        "class RuntimeOnly:\n    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    layouts = collect_runtime_class_layouts(source_root)
+
+    assert any(
+        entry["qualified_name"] == "fast_fsm.runtime_layout_policy.RuntimeOnly"
+        and entry["has_instance_dict"] is False
+        for entry in layouts
+    )
+
+
+def test_runtime_layout_audit_rejects_foreign_module_spoofed_dynamic_type(
+    tmp_path: Path,
+) -> None:
+    """A selected module cannot hide a dict-bearing dynamic class as external."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_owner_spoof.py").write_text(
+        "Escaped = type('Escaped', (), {'__module__': 'external.namespace'})\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external module provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_accepts_genuine_external_reexport(
+    tmp_path: Path,
+) -> None:
+    """A re-export is skipped only after resolving its actual owner identity."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_owner_reexport.py").write_text(
+        "from abc import ABC\n\n"
+        "ReexportedABC = ABC\n\n"
+        "class SourceOnly:\n"
+        "    __slots__ = ()\n"
+        "    NestedReexportedABC = ABC\n",
+        encoding="utf-8",
+    )
+
+    declarations = collect_class_declarations(source_root)
+    layouts = validate_runtime_slots_layouts(declarations, source_root)
+    layout_names = {entry["qualified_name"] for entry in layouts}
+
+    assert "fast_fsm.runtime_owner_reexport.SourceOnly" in layout_names
+    assert "fast_fsm.runtime_owner_reexport.ReexportedABC" not in layout_names
+
+
+def test_runtime_layout_audit_rejects_nested_foreign_owner_spoof(
+    tmp_path: Path,
+) -> None:
+    """Recursive runtime inspection validates nested type-valued bindings too."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_nested_owner_spoof.py").write_text(
+        "class Container:\n"
+        "    __slots__ = ()\n"
+        "    Escaped = type('Escaped', (), {'__module__': 'external.namespace'})\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external module provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_post_snapshot_external_owner_forgery(
+    tmp_path: Path,
+) -> None:
+    """Selected source cannot create a class and install it into ``abc`` later."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_external_owner_forgery.py").write_text(
+        "import abc\n\n"
+        "Escaped = type('Escaped', (), {'__module__': 'abc'})\n"
+        "abc.Escaped = Escaped\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external class provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_selected_module_name_rebinding(
+    tmp_path: Path,
+) -> None:
+    """Selected module ownership is the immutable allowlisted import key."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_module_name_rebinding.py").write_text(
+        "Escaped = type('Escaped', (), {'__module__': __name__})\n"
+        "__name__ = 'external.alias'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match="Selected module identity changed: fast_fsm.runtime_module_name_rebinding",
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_nested_post_snapshot_owner_forgery(
+    tmp_path: Path,
+) -> None:
+    """Nested type-valued bindings use the same immutable provenance snapshot."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_nested_owner_forgery.py").write_text(
+        "import abc\n\n"
+        "class Container:\n"
+        "    __slots__ = ()\n\n"
+        "Container.Escaped = type('Escaped', (), {'__module__': 'abc'})\n"
+        "abc.Escaped = Container.Escaped\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError, match="no pre-execution external class provenance"
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+@pytest.mark.parametrize(
+    ("primitive", "replacement"),
+    [
+        ("vars", "lambda obj: {}"),
+        ("isinstance", "lambda obj, cls: False"),
+        ("getattr", "lambda obj, name, default=None: default"),
+        ("type", "lambda obj: obj.__class__"),
+    ],
+)
+def test_runtime_layout_audit_rejects_tampered_enumeration_primitives(
+    tmp_path: Path, primitive: str, replacement: str
+) -> None:
+    """Selected source cannot replace a post-import audit primitive."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_primitive_tampering.py").write_text(
+        "import builtins\n\n"
+        "Escaped = type('Escaped', (), {})\n"
+        f"builtins.{primitive} = {replacement}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match=rf"Audit primitive integrity changed: builtins\.{primitive}",
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_reads_raw_layout_beyond_lying_metaclass(
+    tmp_path: Path,
+) -> None:
+    """A metaclass cannot forge the CPython layout reported by the audit."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_lying_metaclass.py").write_text(
+        "class LyingMeta(type):\n"
+        "    def __getattribute__(cls, name):\n"
+        "        if name == '__dictoffset__':\n"
+        "            return 0\n"
+        "        return type.__getattribute__(cls, name)\n\n"
+        "class DictBase:\n"
+        "    pass\n\n"
+        "class Child(DictBase, metaclass=LyingMeta):\n"
+        "    __slots__ = ()\n",
+        encoding="utf-8",
+    )
+
+    layouts = collect_runtime_class_layouts(source_root)
+    child = next(
+        entry
+        for entry in layouts
+        if entry["qualified_name"] == "fast_fsm.runtime_lying_metaclass.Child"
+    )
+
+    assert child["has_instance_dict"] is True
+    assert child["dictoffset"] != 0
+
+
+def test_runtime_layout_audit_rejects_legacy_sourceless_project_import(
+    tmp_path: Path,
+) -> None:
+    """A selected package cannot fall through to a legacy sibling ``.pyc``."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "legacy-pyc-executed"
+    shadow_source = tmp_path / "shadow.py"
+    shadow_source.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    py_compile.compile(
+        str(shadow_source), cfile=str(package_root / "shadow.pyc"), doraise=True
+    )
+    shadow_source.unlink()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\nimportlib.import_module('fast_fsm.shadow')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="denied unselected project import"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
+def test_runtime_layout_audit_stages_py_only_source_before_finder_mutation(
+    tmp_path: Path,
+) -> None:
+    """A finder-policy mutation cannot resurrect a sibling marker ``.pyc``."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "finder-mutation-pyc-executed"
+    shadow_source = tmp_path / "shadow.py"
+    shadow_source.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    py_compile.compile(
+        str(shadow_source), cfile=str(package_root / "shadow.pyc"), doraise=True
+    )
+    shadow_source.unlink()
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\n"
+        "import sys\n\n"
+        "finder = next(\n"
+        "    item for item in sys.meta_path\n"
+        "    if item.__class__.__name__ == 'PureSourceFinder'\n"
+        ")\n"
+        "policy = finder._allowed\n"
+        "original = dict(policy)\n"
+        "try:\n"
+        "    policy['fast_fsm.shadow'] = (None, False)\n"
+        "    importlib.import_module('fast_fsm.shadow')\n"
+        "finally:\n"
+        "    policy.clear()\n"
+        "    policy.update(original)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="PureSourceFinder.*_allowed"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
+def test_runtime_layout_audit_rejects_caller_frame_audit_global_attack(
+    tmp_path: Path,
+) -> None:
+    """Frame inspection cannot replace the old ``_AUDIT_VARS`` global path."""
+    source_root = _copy_clean_source(tmp_path)
+    (source_root / "fast_fsm" / "runtime_frame_attack.py").write_text(
+        "import sys\n\n"
+        "Escaped = type('Escaped', (), {})\n"
+        "caller = sys._getframe().f_back\n"
+        "caller.f_globals['_AUDIT_VARS'] = lambda object: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        EvidenceError,
+        match="Runtime auditability preflight denied sys\\._getframe",
+    ):
+        collect_runtime_class_layouts(source_root)
+
+
+def test_runtime_layout_audit_rejects_native_only_project_import(
+    tmp_path: Path,
+) -> None:
+    """A selected package cannot fall through to a native-only sibling module."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = source_root / "fast_fsm"
+    marker = tmp_path / "native-import-executed"
+    marker_literal = json.dumps(str(marker))
+    (source_root / "shadow.c").write_text(
+        "#include <Python.h>\n"
+        "#include <stdio.h>\n"
+        "static struct PyModuleDef shadow_module = {\n"
+        '    PyModuleDef_HEAD_INIT, "shadow", NULL, -1, NULL\n'
+        "};\n"
+        "PyMODINIT_FUNC PyInit_shadow(void) {\n"
+        f'    FILE *marker = fopen({marker_literal}, "w");\n'
+        '    if (marker != NULL) { fputs("executed", marker); fclose(marker); }\n'
+        "    return PyModule_Create(&shadow_module);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (source_root / "setup.py").write_text(
+        "from setuptools import Extension, setup\n"
+        "setup(ext_modules=[Extension('fast_fsm.shadow', ['shadow.c'])])\n",
+        encoding="utf-8",
+    )
+    build = subprocess.run(
+        [sys.executable, "setup.py", "build_ext", "--inplace"],
+        cwd=source_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if build.returncode:
+        pytest.skip("A C compiler is unavailable for the native-only import fixture.")
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "trigger.py").write_text(
+        "import importlib\n"
+        "from pathlib import Path\n"
+        "importlib.import_module('fast_fsm.shadow')\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="denied unselected project import"):
+        collect_runtime_class_layouts(source_root)
+
+    assert not marker.exists()
+
+
+def _manifest_fixture() -> dict[str, object]:
+    """Return a complete minimal stable manifest for comparison coverage."""
+    return {
+        "schema_version": 1,
+        "release_identity": {"package": "fast_fsm", "version": "0.2.2"},
+        "quality_baseline": {
+            "build_mode": "pure",
+            "tests": {"collected": 722, "passed": 722, "failed": 0},
+            "coverage": {"total_percent": 90.12, "core_percent": 95.34},
+            "source": {"core_origin": "src/fast_fsm/core.py"},
+        },
+        "toolchain": {"python": "3.12.10", "uv": "0.12.6"},
+        "artifact_evidence": {"wheels": []},
+        "slots_policy": {
+            "inventory": [
+                {"qualified_name": "fast_fsm.conditions.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.core.State"},
+                {"qualified_name": "fast_fsm.core.TransitionError"},
+            ],
+            "registered_exceptions": [
+                {"qualified_name": "fast_fsm.conditions.CompiledFuncCondition"},
+                {"qualified_name": "fast_fsm.core.TransitionError"},
+            ],
+            "measurements": [],
+            "runtime_layouts": [
+                {
+                    "qualified_name": "fast_fsm.conditions.CompiledFuncCondition",
+                    "has_instance_dict": True,
+                    "dictoffset": -1,
+                },
+                {
+                    "qualified_name": "fast_fsm.core.State",
+                    "has_instance_dict": False,
+                    "dictoffset": 0,
+                },
+                {
+                    "qualified_name": "fast_fsm.core.TransitionError",
+                    "has_instance_dict": True,
+                    "dictoffset": 16,
+                },
+            ],
+        },
+        "performance_contract": {
+            "compiled_trigger_ops_per_sec_min": 200000,
+            "observation": {
+                "command": "tools/release_evidence.py evidence (fixture)",
+                "mode": "pure",
+                "metric": "StateMachine.trigger operations per second",
+                "operations": 2000,
+                "warmup_operations": 200,
+                "elapsed_seconds": 0.02,
+                "ops_per_second": 100000.0,
+                "environment": {
+                    "implementation": "cpython",
+                    "python_version": "3.12.10",
+                    "platform": "fixture-platform",
+                    "machine": "fixture-machine",
+                },
+            },
+        },
+        "measurement_environment": {"stable_fields": ["schema_version"]},
+    }
+
+
+def test_manifest_serialization_is_byte_stable_and_ends_with_one_newline() -> None:
+    """Equivalent evidence has deterministic sorted JSON representation."""
+    fixture = _manifest_fixture()
+    first = serialize_manifest(fixture)
+    second = serialize_manifest(dict(reversed(list(fixture.items()))))
+
+    assert first == second
+    assert first.endswith("\n")
+    assert not first.endswith("\n\n")
+    assert list(json.loads(first)) == sorted(fixture)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("schema_version",), 2),
+        (("quality_baseline", "tests", "passed"), 721),
+        (("toolchain", "uv"), "0.12.5"),
+        (("quality_baseline", "source", "core_origin"), "src/fast_fsm/core.so"),
+        (("slots_policy", "inventory"), []),
+    ],
+)
+def test_manifest_comparison_reports_field_level_staleness(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Stable evidence drift has an actionable JSON-path diff."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    target: dict[str, object] = observed
+    for part in path[:-1]:
+        target = target[part]  # type: ignore[assignment,index]
+    target[path[-1]] = replacement
+
+    if path == ("slots_policy", "inventory"):
+        with pytest.raises(EvidenceError, match="runtime_layouts does not reconcile"):
+            compare_manifests(expected, observed)
+    else:
+        differences = compare_manifests(expected, observed)
+
+        assert differences
+        assert ".".join(path) in "\n".join(differences)
+
+
+def test_manifest_freshness_accepts_same_minor_python_patches_without_mutation() -> (
+    None
+):
+    """Comparison treats only Python's major.minor as portable evidence."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    expected_before = serialize_manifest(expected)
+    observed_before = serialize_manifest(observed)
+
+    assert compare_manifests(expected, observed) == []
+    assert serialize_manifest(expected) == expected_before
+    assert serialize_manifest(observed) == observed_before
+    assert '"python": "3.12.10"' in expected_before
+    assert '"python": "3.12.3"' in observed_before
+
+
+@pytest.mark.parametrize("observed_python", ["3.11.9", "3.13.0"])
+def test_manifest_freshness_rejects_different_python_minors(
+    observed_python: str,
+) -> None:
+    """Python minor drift remains an actionable stable-field difference."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = observed_python
+
+    differences = compare_manifests(expected, observed)
+
+    assert differences
+    assert "toolchain.python" in "\n".join(differences)
+
+
+@pytest.mark.parametrize("observed_python", ["3", "3.12", "3.x.1", "python"])
+def test_manifest_freshness_fails_closed_for_malformed_python_identity(
+    observed_python: str,
+) -> None:
+    """Missing or nonnumeric Python minor identities cannot be normalized away."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = observed_python
+
+    with pytest.raises(EvidenceError, match="toolchain.python"):
+        compare_manifests(expected, observed)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("collected", 782),
+        ("passed", 782),
+        ("failed", 1),
+    ],
+)
+def test_manifest_freshness_keeps_exact_test_inventory_strict(
+    field: str, replacement: int
+) -> None:
+    """Test outcomes and counts stay stale even when Python patches agree."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["quality_baseline"]["tests"][field] = replacement
+
+    differences = compare_manifests(expected, observed)
+
+    assert differences
+    rendered = "\n".join(differences)
+    assert f"quality_baseline.tests.{field}" in rendered
+    assert "toolchain.python" not in rendered
+
+
+def test_manifest_freshness_keeps_non_python_toolchain_pins_strict() -> None:
+    """Exact uv pins remain stable fields while Python patch drift is portable."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["toolchain"]["uv"] = "0.12.5"
+
+    differences = compare_manifests(expected, observed)
+
+    rendered = "\n".join(differences)
+    assert "toolchain.uv" in rendered
+    assert "toolchain.python" not in rendered
+
+
+def test_manifest_coverage_regression_stays_blocking_across_python_patches() -> None:
+    """Portable Python patch comparison cannot bypass coverage regression checks."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["toolchain"]["python"] = "3.12.3"
+    observed["quality_baseline"]["coverage"]["total_percent"] = 90.11
+
+    with pytest.raises(EvidenceError, match="coverage regression"):
+        validate_manifest_regressions(expected, observed)
+
+
+@pytest.mark.parametrize(
+    ("field", "observed_value"),
+    [
+        ("total_percent", 90.11),
+        ("core_percent", 95.33),
+    ],
+)
+def test_manifest_rejects_two_decimal_source_coverage_regressions(
+    field: str, observed_value: float
+) -> None:
+    """A lower total or core source percentage cannot silently refresh a baseline."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["quality_baseline"]["coverage"][field] = observed_value
+
+    with pytest.raises(EvidenceError, match="coverage regression"):
+        validate_manifest_regressions(expected, observed)
+
+
+def test_manifest_write_then_check_is_read_only_and_renders_summary(
+    tmp_path: Path,
+) -> None:
+    """Only an explicit write updates bytes; a succeeding check leaves them alone."""
+    manifest_path = tmp_path / "release-baseline.json"
+    fixture = _manifest_fixture()
+
+    written = release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=True
+    )
+    before_check = manifest_path.read_bytes()
+    checked = release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=False
+    )
+
+    assert written == checked
+    assert before_check == manifest_path.read_bytes()
+    assert "Pure tests: 722/722 passed" in release_evidence._render_summary(fixture)
+
+
+def test_manifest_check_reports_staleness_without_rewriting(tmp_path: Path) -> None:
+    """A changed exact test count fails check mode with a field-level diff."""
+    manifest_path = tmp_path / "release-baseline.json"
+    fixture = _manifest_fixture()
+    release_evidence.write_or_check_manifest(
+        fixture, manifest_path=manifest_path, write=True
+    )
+    original = manifest_path.read_bytes()
+    observed = json.loads(serialize_manifest(fixture))
+    observed["quality_baseline"]["tests"]["passed"] = 721
+
+    with pytest.raises(EvidenceError, match="quality_baseline.tests.passed"):
+        release_evidence.write_or_check_manifest(
+            observed, manifest_path=manifest_path, write=False
+        )
+
+    assert manifest_path.read_bytes() == original
+
+
+def test_manifest_runtime_layout_freshness_normalizes_only_dictoffset() -> None:
+    """Different nonzero CPython offsets retain the stable layout verdict."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    observed["slots_policy"]["runtime_layouts"][0]["dictoffset"] = -48
+
+    assert compare_manifests(expected, observed) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (
+            lambda layouts: layouts.pop(),
+            "slots_policy.runtime_layouts does not reconcile",
+        ),
+        (
+            lambda layouts: layouts[1].update(has_instance_dict=True, dictoffset=1),
+            "registry-inconsistent.*fast_fsm.core.State",
+        ),
+    ],
+)
+def test_manifest_runtime_layout_staleness_does_not_rewrite_baseline(
+    tmp_path: Path,
+    mutation: object,
+    match: str,
+) -> None:
+    """Deleted or altered runtime evidence fails check mode without rewriting bytes."""
+    manifest_path = tmp_path / "release-baseline.json"
+    baseline = _manifest_fixture()
+    layouts = baseline["slots_policy"]["runtime_layouts"]
+    assert callable(mutation)
+    mutation(layouts)
+    manifest_path.write_text(serialize_manifest(baseline), encoding="utf-8")
+    before_check = manifest_path.read_bytes()
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.write_or_check_manifest(
+            _manifest_fixture(), manifest_path=manifest_path, write=False
+        )
+
+    assert manifest_path.read_bytes() == before_check
+
+
+def test_manifest_requires_a_valid_environment_labeled_benchmark_observation() -> None:
+    """Volatile timing may vary, but complete positive evidence cannot disappear."""
+    manifest = _manifest_fixture()
+    validate_performance_observation(manifest)
+
+    missing = json.loads(serialize_manifest(manifest))
+    del missing["performance_contract"]["observation"]
+    with pytest.raises(EvidenceError, match="performance_contract.observation"):
+        validate_performance_observation(missing)
+
+    malformed = json.loads(serialize_manifest(manifest))
+    malformed["performance_contract"]["observation"]["ops_per_second"] = 0
+    with pytest.raises(EvidenceError, match="positive measurements"):
+        validate_performance_observation(malformed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("elapsed_seconds", float("nan")),
+        ("elapsed_seconds", float("inf")),
+        ("ops_per_second", float("-inf")),
+    ],
+)
+def test_manifest_rejects_non_finite_benchmark_measurements(
+    field: str, value: float
+) -> None:
+    """Volatile measurements still have to be finite JSON-compatible numbers."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+
+    with pytest.raises(EvidenceError, match="finite positive measurements"):
+        validate_performance_observation(manifest)
+    with pytest.raises(ValueError, match="Out of range float values"):
+        serialize_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("operations", True),
+        ("warmup_operations", False),
+        ("operations", 1.5),
+        ("warmup_operations", 2.0),
+        ("operations", "2000"),
+    ],
+)
+def test_manifest_rejects_non_integer_benchmark_operation_counts(
+    field: str, value: object
+) -> None:
+    """Operation counts are integral evidence, not truthy or coercible values."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+
+    with pytest.raises(EvidenceError, match="integer operation counts"):
+        validate_performance_observation(manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("operations", 10**10000, id="huge-integer"),
+        ("elapsed_seconds", 5e-324),
+        ("operations", 10**308),
+    ],
+)
+def test_manifest_rejects_overflowing_benchmark_rate_calculations(
+    field: str, value: object
+) -> None:
+    """Extreme finite JSON values cannot crash or bypass rate consistency."""
+    manifest = _manifest_fixture()
+    observation = manifest["performance_contract"]["observation"]
+    assert isinstance(observation, dict)
+    observation[field] = value
+    observation["ops_per_second"] = 1.0
+
+    with pytest.raises(EvidenceError, match="finite positive measurements"):
+        validate_performance_observation(manifest)
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_manifest_reader_rejects_non_standard_json_numbers(
+    tmp_path: Path, token: str
+) -> None:
+    """Tracked evidence cannot use Python's permissive non-standard constants."""
+    manifest_path = tmp_path / "release-baseline.json"
+    malformed = serialize_manifest(_manifest_fixture()).replace(
+        '"elapsed_seconds": 0.02', f'"elapsed_seconds": {token}'
+    )
+    manifest_path.write_text(malformed, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="Could not read manifest"):
+        release_evidence.write_or_check_manifest(
+            _manifest_fixture(), manifest_path=manifest_path, write=False
+        )
+
+
+def test_manifest_freshness_excludes_only_volatile_benchmark_measurements() -> None:
+    """A valid benchmark measurement may change without weakening its presence contract."""
+    expected = _manifest_fixture()
+    expected["pure_source_performance"] = {
+        "scope": "environment-labeled-observation",
+        "observations": [
+            expected["performance_contract"]["observation"],
+        ],
+    }
+    observed = json.loads(serialize_manifest(expected))
+    observation = observed["performance_contract"]["observation"]
+    observation["elapsed_seconds"] = 0.04
+    observation["ops_per_second"] = 50000.0
+    observation["environment"]["machine"] = "another-machine"
+
+    pure_observation = observed["pure_source_performance"]["observations"][0]
+    pure_observation["elapsed_seconds"] = 0.05
+    pure_observation["ops_per_second"] = 40000.0
+    pure_observation["environment"]["machine"] = "another-machine"
+
+    validate_performance_observation(observed)
+    assert compare_manifests(expected, observed) == []
+
+
+def test_trigger_benchmark_collects_structured_environment_labeled_evidence() -> None:
+    """The manifest collector runs a concrete benchmark rather than recording prose."""
+    observation = release_evidence._collect_trigger_benchmark(
+        iterations=100, warmup_iterations=10
+    )
+
+    assert observation["operations"] == 200
+    assert observation["mode"] == "pure"
+    assert "release_evidence.py evidence" in observation["command"]
+    validate_performance_observation(
+        {"performance_contract": {"observation": observation}}
+    )
+
+
+def test_collect_manifest_preflights_before_any_test_or_coverage_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed native-origin preflight prevents test and coverage collection."""
+    calls: list[str] = []
+
+    def fail_preflight(**_kwargs: object) -> dict[str, str]:
+        calls.append("preflight")
+        raise EvidenceError("native shadow")
+
+    def collect_after_preflight(
+        **_kwargs: object,
+    ) -> tuple[dict[str, int], dict[str, float]]:
+        calls.append("test-and-coverage")
+        return (
+            {"collected": 1, "passed": 1},
+            {"total_percent": 100, "core_percent": 100},
+        )
+
+    monkeypatch.setattr(release_evidence, "_source_preflight", fail_preflight)
+    monkeypatch.setattr(
+        release_evidence, "_collect_test_and_coverage", collect_after_preflight
+    )
+
+    with pytest.raises(EvidenceError, match="native shadow"):
+        release_evidence.collect_manifest()
+
+    assert calls == ["preflight"]
+
+
+def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical wheel path is Python-managed and cannot leak a Taskfile temp dir."""
+    calls: list[str] = []
+    observed_wheel: list[Path] = []
+
+    def preflight(**_kwargs: object) -> dict[str, str]:
+        calls.append("preflight")
+        return {
+            "core_origin": "src/fast_fsm/core.py",
+            "distribution_version": "0.2.2",
+        }
+
+    def build(arguments: Iterable[str], **_kwargs: object) -> str:
+        calls.append("build")
+        arguments = list(arguments)
+        assert arguments[:3] == ["uv", "build", "--wheel"]
+        _write_wheel(
+            Path(arguments[-1]),
+            filename_tag="py3-none-any",
+            wheel_tags=["py3-none-any"],
+        )
+        return ""
+
+    def collect(**kwargs: object) -> dict[str, object]:
+        calls.append("collect")
+        wheel_paths = tuple(kwargs["wheel_paths"])
+        assert len(wheel_paths) == 1
+        observed_wheel.extend(wheel_paths)
+        assert wheel_paths[0].is_file()
+        return {"status": "collected"}
+
+    monkeypatch.setattr(release_evidence, "_source_preflight", preflight)
+    monkeypatch.setattr(release_evidence, "_run_checked", build)
+    monkeypatch.setattr(release_evidence, "_collect_manifest_after_preflight", collect)
+
+    assert release_evidence.collect_manifest(build_wheel=True) == {
+        "status": "collected"
+    }
+    assert calls == ["preflight", "build", "collect"]
+    assert observed_wheel and not observed_wheel[0].parent.exists()
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_temporary_wheel_selection_requires_exactly_one_archive(
+    tmp_path: Path, count: int
+) -> None:
+    """Canonical evidence has the same one-wheel semantics on every platform."""
+    for index in range(count):
+        _write_wheel(
+            tmp_path,
+            filename_tag=f"py3-none-any.{index}",
+            wheel_tags=["py3-none-any"],
+        )
+
+    with pytest.raises(EvidenceError, match="exactly one temporary wheel"):
+        release_evidence._exactly_one_wheel(tmp_path)
+
+
+def test_resolved_uv_must_match_the_phase_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ambient uv executable cannot silently change release evidence."""
+    monkeypatch.setattr(
+        release_evidence,
+        "_run_checked",
+        lambda *_args, **_kwargs: "uv 0.12.5 (unexpected)\n",
+    )
+
+    with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
+        release_evidence._resolved_uv_version(environment={})
+
+
+def test_build_tool_versions_are_read_from_the_reviewed_lock_not_runtime_imports(
+    tmp_path: Path,
+) -> None:
+    """A PEP 517-only build input remains evidence without becoming a project dependency."""
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                "",
+                "[[package]]",
+                'name = "wheel"',
+                'version = "0.45.1"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert release_evidence._locked_package_version("wheel", lock_path) == "0.45.1"
+
+
+def test_repository_lock_records_each_exact_release_build_tool() -> None:
+    """The manifest can audit all exact PEP 517 inputs from uv.lock."""
+    assert release_evidence._locked_package_version("setuptools") == "80.9.0"
+    assert release_evidence._locked_package_version("wheel") == "0.45.1"
+    assert release_evidence._locked_package_version("mypy") == "1.17.1"
+
+
+def _workflow_text(path: Path) -> str:
+    """Read a repository-owned GitHub workflow for contract assertions."""
+    return path.read_text(encoding="utf-8")
+
+
+def _taskfile_data() -> dict[str, object]:
+    """Load the task contract so ordering checks do not rely on prose layout."""
+    data = yaml.safe_load(_workflow_text(TASKFILE))
+    assert isinstance(data, dict)
+    assert isinstance(data.get("tasks"), dict)
+    return data
+
+
+def _task_definitions(taskfile: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return validated Taskfile task mappings."""
+    tasks = taskfile["tasks"]
+    assert isinstance(tasks, dict)
+    assert all(
+        isinstance(name, str) and isinstance(task, dict) for name, task in tasks.items()
+    )
+    return tasks
+
+
+PURE_IMPORT_TASKS = frozenset(
+    {
+        "test",
+        "test-verbose",
+        "test-fast",
+        "test-coverage",
+        "docs",
+        "docs-check",
+        "docs-test",
+    }
+)
+
+
+def _validate_taskfile_pure_source_order(taskfile: dict[str, object]) -> None:
+    """Require source preflight before every independently runnable pure import task."""
+    tasks = _task_definitions(taskfile)
+    for task_name in PURE_IMPORT_TASKS:
+        task = tasks[task_name]
+        assert task.get("env", {}).get("FAST_FSM_BUILD_MODE") == "pure", task_name
+        dependencies = task.get("deps", [])
+        assert {"task": "pure-source-check"} in dependencies, (
+            f"{task_name}: pure-source-check must run before package import"
+        )
+    release_commands = tasks["release-gate"].get("cmds", [])
+    assert release_commands and release_commands[0] == {"task": "pure-source-check"}, (
+        "release-gate must run pure-source-check before every aggregate component"
+    )
+
+
+def test_taskfile_pure_source_preflight_precedes_local_test_and_docs_tasks() -> None:
+    """Taskfile gates cannot label native imports as pure-mode proof."""
+    _validate_taskfile_pure_source_order(_taskfile_data())
+
+    mutated = deepcopy(_taskfile_data())
+    tasks = _task_definitions(mutated)
+    tasks["docs-check"].pop("deps")
+    with pytest.raises(AssertionError, match="docs-check: pure-source-check"):
+        _validate_taskfile_pure_source_order(mutated)
+
+
+def test_taskfile_baseline_tasks_delegate_temp_wheel_lifecycle_to_python() -> None:
+    """Windows and POSIX use one Python cleanup path instead of shell utilities."""
+    taskfile = _taskfile_data()
+    tasks = _task_definitions(taskfile)
+    for task_name, mode in (
+        ("release-baseline-write", "--write"),
+        ("release-baseline-check", "--check"),
+    ):
+        commands = tasks[task_name]["cmds"]
+        assert isinstance(commands, list)
+        rendered = "\n".join(str(command) for command in commands)
+        assert "mktemp" not in rendered
+        assert "find " not in rendered
+        assert f"evidence {mode}" in rendered
+        assert "--build-wheel" in rendered
+
+
+PHASE20_LOCAL_TASKS = (
+    "release-identity-check",
+    "release-installed-artifacts-check",
+    "release-sdist-check",
+    "release-evidence-local-check",
+    "release-installed-performance-check",
+    "release-slots-check",
+)
+
+
+def _task_commands(task: Mapping[str, object]) -> list[object]:
+    """Return one Taskfile command sequence without accepting a scalar shortcut."""
+    commands = task.get("cmds")
+    assert isinstance(commands, list) and commands
+    return commands
+
+
+def _task_command_text(task: Mapping[str, object]) -> str:
+    """Render a task's executable command forms for semantic contract checks."""
+    return "\n".join(
+        command.get("task", "") if isinstance(command, dict) else str(command)
+        for command in _task_commands(task)
+    )
+
+
+def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
+    """Keep local proof non-authorizing and hosted inspection explicitly separate."""
+    tasks = _task_definitions(taskfile)
+    assert set(PHASE20_LOCAL_TASKS).issubset(tasks)
+    for name in PHASE20_LOCAL_TASKS:
+        rendered = _task_command_text(tasks[name])
+        assert "uv run" in rendered, name
+        assert "profile=release" not in rendered, name
+        assert "--profile release" not in rendered, name
+        assert "release-evidence-complete" not in rendered, name
+        assert "gh run" not in rendered, name
+        assert "gh release" not in rendered, name
+
+    readiness = _task_commands(tasks["release-readiness-check"])
+    ordered_blocking_tasks = [
+        command["task"]
+        for command in readiness
+        if isinstance(command, dict) and isinstance(command.get("task"), str)
+    ]
+    assert ordered_blocking_tasks == [
+        "format-check",
+        "lint",
+        "typecheck-mypy",
+        "test",
+        "docs-check",
+        "docs-test",
+        "pure-source-check",
+        "release-baseline-check",
+        *PHASE20_LOCAL_TASKS,
+    ]
+    readiness_text = _task_command_text(tasks["release-readiness-check"])
+    assert "task typecheck-ty" in readiness_text
+    assert "ty_status=$?" in readiness_text
+    assert "ADVISORY task typecheck-ty exit status" in readiness_text
+    assert "profile=release" not in readiness_text
+    assert "--profile release" not in readiness_text
+    assert "gh run" not in readiness_text
+    assert "gh release" not in readiness_text
+
+    local_evidence_text = _task_command_text(tasks["release-evidence-local-check"])
+    assert "matrix_artifact_evidence(artifact)" in local_evidence_text
+    assert "matrix_runtime_evidence(runtime_record)" in local_evidence_text
+    assert 'proof["performance"] if cell.requires_performance else None' in (
+        local_evidence_text
+    )
+
+    hosted = _task_command_text(tasks["release-hosted-prerelease-check"])
+    for required in (
+        "FAST_FSM_HOSTED_RUN_ID",
+        "FAST_FSM_EXPECTED_SHA",
+        "gh run view",
+        "gh run download",
+        "aggregate-matrix --profile release",
+        "aggregate_release_evidence",
+        "Release Evidence",
+        "child.json",
+        "archive.json",
+        "matrix-records.txt",
+    ):
+        assert required in hosted
+    assert "-name evidence.json" in hosted
+    assert "while IFS= read -r record" in hosted
+    assert "gh workflow run" not in hosted
+    assert "gh release" not in hosted
+    assert "git push" not in hosted
+
+
+def test_phase20_taskfile_keeps_local_readiness_non_authorizing() -> None:
+    """The exact local chain cannot silently become hosted release authorization."""
+    taskfile = _taskfile_data()
+    _validate_phase20_release_taskfile(taskfile)
+
+    missing = deepcopy(taskfile)
+    _task_definitions(missing).pop("release-slots-check")
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(missing)
+
+    reordered = deepcopy(taskfile)
+    commands = _task_commands(_task_definitions(reordered)["release-readiness-check"])
+    commands[0], commands[1] = commands[1], commands[0]
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(reordered)
+
+    release_profile = deepcopy(taskfile)
+    local_commands = _task_commands(
+        _task_definitions(release_profile)["release-evidence-local-check"]
+    )
+    local_commands.append(
+        "uv run python tools/release_evidence.py aggregate-matrix --profile release"
+    )
+    with pytest.raises(AssertionError):
+        _validate_phase20_release_taskfile(release_profile)
+
+
+def test_hosted_record_discovery_preserves_every_artifact_subdirectory(
+    tmp_path: Path,
+) -> None:
+    """The Taskfile's portable ``find`` path retains colliding record basenames."""
+    artifacts = tmp_path / "artifacts"
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "linux",
+        "machine": "x86_64",
+    }
+    cells = release_evidence.expected_matrix("release", runtime).cells
+    for cell in cells:
+        if cell.identifier == "sdist-archive":
+            record_name = "archive.json"
+        elif cell.sdist_parent is not None:
+            record_name = "child.json"
+        else:
+            record_name = "evidence.json"
+        destination = artifacts / cell.identifier / record_name
+        destination.parent.mkdir(parents=True)
+        destination.write_text(
+            json.dumps({"matrix": {"cell": cell.identifier}}), encoding="utf-8"
+        )
+
+    completed = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            'find "$1" -type f \\( -name evidence.json -o -name child.json -o '
+            "-name archive.json \\) -print | LC_ALL=C sort",
+            "hosted-record-discovery",
+            str(artifacts),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    paths = [Path(line) for line in completed.stdout.splitlines()]
+    assert len(paths) == len(cells)
+    assert {
+        json.loads(path.read_text(encoding="utf-8"))["matrix"]["cell"] for path in paths
+    } == {cell.identifier for cell in cells}
+
+
+def _validate_hosted_evidence_run_metadata(
+    payload: Mapping[str, object], *, expected_sha: str
+) -> None:
+    """Fail closed on a nonterminal, non-evidence, or wrong-SHA hosted run."""
+    assert re.fullmatch(r"[0-9a-f]{40}", expected_sha)
+    assert payload.get("workflowName") == "Release Evidence"
+    assert payload.get("event") == "workflow_dispatch"
+    assert payload.get("status") == "completed"
+    assert payload.get("conclusion") == "success"
+    assert payload.get("headSha") == expected_sha
+    jobs = payload.get("jobs")
+    assert isinstance(jobs, list)
+    terminal = [
+        job
+        for job in jobs
+        if isinstance(job, Mapping)
+        and job.get("name") == "Aggregate exact hosted release evidence"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0].get("status") == "completed"
+    assert terminal[0].get("conclusion") == "success"
+
+
+def test_hosted_evidence_metadata_fixture_rejects_wrong_run_before_download() -> None:
+    """Read-only hosted inspection accepts only a completed exact-SHA evidence run."""
+    sha = "a" * 40
+    fixture: dict[str, object] = {
+        "workflowName": "Release Evidence",
+        "event": "workflow_dispatch",
+        "status": "completed",
+        "conclusion": "success",
+        "headSha": sha,
+        "jobs": [
+            {
+                "name": "Aggregate exact hosted release evidence",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
+    }
+    _validate_hosted_evidence_run_metadata(fixture, expected_sha=sha)
+
+    wrong_sha = deepcopy(fixture)
+    wrong_sha["headSha"] = "b" * 40
+    with pytest.raises(AssertionError):
+        _validate_hosted_evidence_run_metadata(wrong_sha, expected_sha=sha)
+
+    missing_terminal = deepcopy(fixture)
+    missing_terminal["jobs"] = []
+    with pytest.raises(AssertionError):
+        _validate_hosted_evidence_run_metadata(missing_terminal, expected_sha=sha)
+
+
+def _workflow_data(path: Path = CI_WORKFLOW) -> dict[str, object]:
+    """Load a workflow as YAML so step discovery cannot be fooled by prose."""
+    data = yaml.safe_load(_workflow_text(path))
+    assert isinstance(data, dict), path
+    assert isinstance(data.get("jobs"), dict), path
+    return data
+
+
+def _workflow_jobs(workflow: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return verified job mappings from a parsed workflow."""
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    assert all(
+        isinstance(job_id, str) and isinstance(job, dict)
+        for job_id, job in jobs.items()
+    )
+    return jobs
+
+
+def _task_invocation_steps(job: dict[str, object]) -> list[int]:
+    """Find every shell step that executes Task, including multiline forms."""
+    steps = job.get("steps")
+    assert isinstance(steps, list)
+    return [
+        index
+        for index, step in enumerate(steps)
+        if isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and _TASK_COMMAND.search(step["run"])
+    ]
+
+
+def _task_consuming_jobs(workflow: dict[str, object]) -> dict[str, list[int]]:
+    """Return each Taskfile-consuming job and all of its invocation indices."""
+    return {
+        job_id: invocation_indices
+        for job_id, job in _workflow_jobs(workflow).items()
+        if (invocation_indices := _task_invocation_steps(job))
+    }
+
+
+def _validate_task_runner_steps(workflow: dict[str, object]) -> None:
+    """Require one exact, earlier Task setup in every consuming CI job."""
+    consumers = _task_consuming_jobs(workflow)
+    assert set(consumers) == TASK_CONSUMING_CI_JOBS, (
+        "Taskfile-consuming job set changed: "
+        f"expected {sorted(TASK_CONSUMING_CI_JOBS)}, got {sorted(consumers)}"
+    )
+
+    for job_id, invocation_indices in consumers.items():
+        job = _workflow_jobs(workflow)[job_id]
+        steps = job["steps"]
+        assert isinstance(steps, list)
+        setup_steps = [
+            (index, step)
+            for index, step in enumerate(steps)
+            if isinstance(step, dict)
+            and isinstance(step.get("uses"), str)
+            and step["uses"].startswith("arduino/setup-task@")
+        ]
+        assert setup_steps, f"{job_id}: missing pinned Task setup"
+        assert len(setup_steps) == 1, f"{job_id}: expected exactly one Task setup"
+        setup_index, setup_step = setup_steps[0]
+        uv_indices = [
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+        ]
+        assert len(uv_indices) == 1, f"{job_id}: expected exactly one uv setup"
+        assert setup_index == uv_indices[0] + 1, (
+            f"{job_id}: Task setup must immediately follow uv setup"
+        )
+        assert setup_step["uses"] == TASK_SETUP_ACTION, (
+            f"{job_id}: Task setup must use the full verified action SHA"
+        )
+        inputs = setup_step.get("with")
+        assert isinstance(inputs, dict), f"{job_id}: Task setup must provide inputs"
+        assert inputs.get("version") == TASK_VERSION, (
+            f"{job_id}: Task setup must pin version {TASK_VERSION}"
+        )
+        assert all(setup_index < index for index in invocation_indices), (
+            f"{job_id}: Task setup must precede every Taskfile invocation"
+        )
+
+
+def _validate_task_runner_comments(workflow_text: str) -> None:
+    """Keep the human-readable v3.0.0 provenance beside every exact SHA pin."""
+    pinned_uses = re.findall(
+        rf"(?m)^\s*uses: {re.escape(TASK_SETUP_ACTION)} # v3\.0\.0$",
+        workflow_text,
+    )
+    assert len(pinned_uses) == len(TASK_CONSUMING_CI_JOBS), (
+        "Every exact Task action pin must retain its adjacent # v3.0.0 comment"
+    )
+
+
+def _workflow_with_pinned_task_setup(workflow: dict[str, object]) -> dict[str, object]:
+    """Create a valid parsed-workflow fixture for negative mutation tests."""
+    fixture = deepcopy(workflow)
+    for job_id in TASK_CONSUMING_CI_JOBS:
+        job = _workflow_jobs(fixture)[job_id]
+        steps = job["steps"]
+        assert isinstance(steps, list)
+        steps[:] = [
+            step
+            for step in steps
+            if not (
+                isinstance(step, dict)
+                and isinstance(step.get("uses"), str)
+                and step["uses"].startswith("arduino/setup-task@")
+            )
+        ]
+        uv_index = next(
+            index
+            for index, step in enumerate(steps)
+            if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+        )
+        steps.insert(
+            uv_index + 1,
+            {
+                "name": "Install pinned Task runner",
+                "uses": TASK_SETUP_ACTION,
+                "with": {"version": TASK_VERSION},
+            },
+        )
+    return fixture
+
+
+def test_task_runner_contract_covers_every_taskfile_consuming_ci_job() -> None:
+    """All current Taskfile jobs need an exact, earlier cross-platform setup."""
+    _validate_task_runner_steps(_workflow_data())
+    _validate_task_runner_comments(_workflow_text(CI_WORKFLOW))
+
+
+def test_task_runner_contract_rejects_missing_late_or_mispinned_setup() -> None:
+    """A sibling setup, late setup, action tag, or version drift cannot satisfy CI."""
+    fixture = _workflow_with_pinned_task_setup(_workflow_data())
+
+    missing = deepcopy(fixture)
+    missing_steps = _workflow_jobs(missing)["format"]["steps"]
+    assert isinstance(missing_steps, list)
+    missing_steps[:] = [
+        step
+        for step in missing_steps
+        if not isinstance(step, dict) or step.get("uses") != TASK_SETUP_ACTION
+    ]
+    with pytest.raises(AssertionError, match="format: missing pinned Task setup"):
+        _validate_task_runner_steps(missing)
+
+    late = deepcopy(fixture)
+    late_steps = _workflow_jobs(late)["lint"]["steps"]
+    assert isinstance(late_steps, list)
+    setup = next(
+        step
+        for step in late_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )
+    late_steps.remove(setup)
+    late_steps.append(setup)
+    with pytest.raises(
+        AssertionError, match="lint: Task setup must immediately follow"
+    ):
+        _validate_task_runner_steps(late)
+
+    wrong_sha = deepcopy(fixture)
+    wrong_sha_steps = _workflow_jobs(wrong_sha)["typecheck_mypy"]["steps"]
+    assert isinstance(wrong_sha_steps, list)
+    next(
+        step
+        for step in wrong_sha_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )["uses"] = "arduino/setup-task@v3"
+    with pytest.raises(AssertionError, match="typecheck_mypy: Task setup must use"):
+        _validate_task_runner_steps(wrong_sha)
+
+    wrong_version = deepcopy(fixture)
+    wrong_version_steps = _workflow_jobs(wrong_version)["typecheck_ty"]["steps"]
+    assert isinstance(wrong_version_steps, list)
+    next(
+        step
+        for step in wrong_version_steps
+        if isinstance(step, dict) and step.get("uses") == TASK_SETUP_ACTION
+    )["with"]["version"] = "3.53.2"
+    with pytest.raises(AssertionError, match="typecheck_ty: Task setup must pin"):
+        _validate_task_runner_steps(wrong_version)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        "task format-check",
+        "task first\ntask second",
+        "echo ready && task lint",
+        "FAST_FSM_BUILD_MODE=pure task test",
+    ],
+)
+def test_task_runner_contract_detects_all_shell_invocation_forms(run: str) -> None:
+    """Plain, block, multiline, and environment-prefixed Task runs cannot evade setup."""
+    fixture = _workflow_with_pinned_task_setup(_workflow_data())
+    job = _workflow_jobs(fixture)["build_check"]
+    steps = job["steps"]
+    assert isinstance(steps, list)
+    steps.append({"name": "Unprovisioned Task variant", "run": run})
+
+    with pytest.raises(AssertionError, match="Taskfile-consuming job set changed"):
+        _validate_task_runner_steps(fixture)
+
+
+def test_task_runner_detector_ignores_nonexecuting_prose() -> None:
+    """A mention of Task in an echo command is not a Taskfile invocation."""
+    assert not _TASK_COMMAND.search("echo task format-check")
+
+
+def _setup_uv_blocks(workflow: str) -> list[str]:
+    """Return each pinned setup-uv step through its following configuration boundary."""
+    return re.findall(
+        rf"- uses: {re.escape(SETUP_UV_ACTION)} # v5(?P<block>.*?)(?=\n\s*- uses:|\n\s*- name:|\Z)",
+        workflow,
+        flags=re.DOTALL,
+    )
+
+
+def test_setup_uv_actions_pin_the_exact_release_version() -> None:
+    """Every repository-owned setup-uv use shares the manifest's exact version."""
+    for workflow_path in (
+        CI_WORKFLOW,
+        DOCS_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_EVIDENCE_WORKFLOW,
+    ):
+        blocks = _setup_uv_blocks(_workflow_text(workflow_path))
+        assert blocks, workflow_path
+        assert all('version: "0.12.6"' in block for block in blocks), workflow_path
+
+
+def _third_party_action_uses(workflow: dict[str, object]) -> set[str]:
+    """Return executable non-local actions from parsed workflow job steps."""
+    actions: set[str] = set()
+    for job in _workflow_jobs(workflow).values():
+        steps = job.get("steps", [])
+        assert isinstance(steps, list)
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            action = step.get("uses")
+            if isinstance(action, str) and not action.startswith("./"):
+                actions.add(action)
+    return actions
+
+
+def _validate_action_pins(workflow_path: Path) -> None:
+    """Require every executable third-party action to be pinned and documented."""
+    parsed_uses = _third_party_action_uses(_workflow_data(workflow_path))
+    expected_uses = {
+        f"{repository}@{sha}"
+        for repository, (sha, _version) in THIRD_PARTY_ACTION_PINS.items()
+    }
+    assert parsed_uses <= expected_uses, (
+        f"{workflow_path}: unpinned or unknown executable action(s): "
+        f"{sorted(parsed_uses - expected_uses)}"
+    )
+    text = _workflow_text(workflow_path)
+    for action in parsed_uses:
+        repository, sha = action.split("@", 1)
+        assert re.fullmatch(r"[0-9a-f]{40}", sha), action
+        expected_sha, version = THIRD_PARTY_ACTION_PINS[repository]
+        assert sha == expected_sha
+        assert f"uses: {action} # {version}" in text
+
+
+def test_workflow_actions_use_reviewed_immutable_pins() -> None:
+    """Tags cannot regain execution authority through a future workflow edit."""
+    for workflow_path in (
+        CI_WORKFLOW,
+        DOCS_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_EVIDENCE_WORKFLOW,
+    ):
+        _validate_action_pins(workflow_path)
+        for action in re.findall(
+            r"(?m)^\s*(?:#\s*)?(?:-\s*)?uses:\s+([^\s#]+)",
+            _workflow_text(workflow_path),
+        ):
+            if action.startswith("./"):
+                continue
+            repository, sha = action.split("@", 1)
+            assert re.fullmatch(r"[0-9a-f]{40}", sha), action
+            expected_sha, version = THIRD_PARTY_ACTION_PINS[repository]
+            assert sha == expected_sha
+            assert f"uses: {action} # {version}" in _workflow_text(workflow_path)
+
+    mutated = _workflow_data(CI_WORKFLOW)
+    steps = _workflow_jobs(mutated)["format"]["steps"]
+    assert isinstance(steps, list)
+    next(
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+    )["uses"] = "astral-sh/setup-uv@v5"
+    with pytest.raises(AssertionError, match="unpinned or unknown"):
+        parsed_uses = _third_party_action_uses(mutated)
+        expected_uses = {
+            f"{repository}@{sha}"
+            for repository, (sha, _version) in THIRD_PARTY_ACTION_PINS.items()
+        }
+        assert parsed_uses <= expected_uses, (
+            "unpinned or unknown executable action(s): "
+            f"{sorted(parsed_uses - expected_uses)}"
+        )
+
+
+def test_workflow_permissions_follow_least_privilege_boundaries() -> None:
+    """Only the two publication jobs receive their distinct write privileges."""
+    ci = _workflow_data(CI_WORKFLOW)
+    docs = _workflow_data(DOCS_WORKFLOW)
+    release = _workflow_data(RELEASE_WORKFLOW)
+
+    assert ci.get("permissions") == {"contents": "read"}
+    assert docs.get("permissions") == {"contents": "read"}
+    assert release.get("permissions") == {"contents": "read"}
+    assert "permissions" not in _workflow_jobs(docs)["build_docs"]
+    assert _workflow_jobs(docs)["deploy_docs"]["permissions"] == {
+        "pages": "write",
+        "id-token": "write",
+    }
+    assert _workflow_jobs(release)["github_release"]["permissions"] == {
+        "contents": "write"
+    }
+    for job_id, job in _workflow_jobs(release).items():
+        if job_id != "github_release":
+            assert "permissions" not in job, job_id
+
+
+def test_workflow_contract_has_dispatch_reusable_and_independent_gate_jobs() -> None:
+    """Pull requests and releases expose every quality verdict independently."""
+    workflow = _workflow_text(CI_WORKFLOW)
+    for trigger in ("push:", "pull_request:", "workflow_dispatch:", "workflow_call:"):
+        assert trigger in workflow
+    for job in (
+        "format",
+        "lint",
+        "typecheck_mypy",
+        "typecheck_ty",
+        "test",
+        "supported_python_build",
+        "evidence",
+        "docs_html",
+        "docs_doctest",
+        "build_check",
+        "benchmark",
+    ):
+        assert re.search(rf"^  {job}:$", workflow, flags=re.MULTILINE), job
+    assert re.search(
+        r"^  typecheck_ty:.*?^    continue-on-error: true$",
+        workflow,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert "fail-fast: false" in workflow
+    for version in ('"3.10"', '"3.11"', '"3.12"', '"3.13"', '"3.14"'):
+        assert version in workflow
+
+
+def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> None:
+    """No test, coverage, documentation, or build collection precedes source proof."""
+    required = {
+        CI_WORKFLOW: (
+            "test",
+            "supported_python_build",
+            "evidence",
+            "docs_html",
+            "docs_doctest",
+        ),
+        DOCS_WORKFLOW: ("build_docs",),
+        RELEASE_EVIDENCE_WORKFLOW: ("build_sdist",),
+    }
+    preflight = "uv run python tools/release_evidence.py verify-source --json"
+    for workflow_path, jobs in required.items():
+        workflow = _workflow_text(workflow_path)
+        for job in jobs:
+            job_match = re.search(
+                rf"^  {job}:$(.*?)(?=^  [A-Za-z_][A-Za-z0-9_]*:$|\Z)",
+                workflow,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            assert job_match, f"Missing {job} in {workflow_path}"
+            body = job_match.group(1)
+            assert "FAST_FSM_BUILD_MODE: pure" in body
+            sync_index = body.index("uv sync --locked")
+            preflight_index = body.index(preflight)
+            assert sync_index < preflight_index
+            between = body[sync_index:preflight_index]
+            assert "uv run " not in between
+            assert "uv build" not in between
+            assert "pytest" not in between
+
+
+def test_release_workflow_is_tag_only_evidence_caller() -> None:
+    """The write-capable caller builds nothing and delegates all proof read-only."""
+    workflow = _workflow_text(RELEASE_WORKFLOW)
+    assert 'tags:\n      - "v0.3.0"' in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "workflow_call:" not in workflow
+    assert "uses: ./.github/workflows/release-evidence.yml" in workflow
+    assert "build_wheels:" not in workflow
+    assert "build_sdist:" not in workflow
+    assert "quality_gate:" not in workflow
+
+
+def _workflow_needs(job: dict[str, object]) -> set[str]:
+    """Normalize a GitHub Actions needs edge without accepting malformed values."""
+    value = job.get("needs", [])
+    if isinstance(value, str):
+        return {value}
+    assert isinstance(value, list)
+    assert all(isinstance(item, str) for item in value)
+    return set(value)
+
+
+def _checkout_refs(job: dict[str, object]) -> list[str]:
+    """Return every explicit checkout ref in one workflow job."""
+    steps = job.get("steps", [])
+    assert isinstance(steps, list)
+    refs: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if step.get("uses") != THIRD_PARTY_ACTION_PINS["actions/checkout"][0].join(
+            ("actions/checkout@", "")
+        ):
+            continue
+        inputs = step.get("with")
+        assert isinstance(inputs, dict)
+        ref = inputs.get("ref")
+        assert isinstance(ref, str)
+        refs.append(ref)
+    return refs
+
+
+def _release_matrix_cell_identifiers() -> set[str]:
+    """Use the Python authority to enumerate all hosted evidence cells."""
+    return {
+        cell.identifier
+        for cell in release_evidence.expected_matrix(
+            "release",
+            {
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "linux",
+                "machine": "x86_64",
+            },
+        ).cells
+    }
+
+
+def _workflow_matrix_cells(job: dict[str, object]) -> set[str]:
+    """Read explicit per-cell workflow routing rather than counting artifacts."""
+    strategy = job.get("strategy")
+    assert isinstance(strategy, dict)
+    matrix = strategy.get("matrix")
+    assert isinstance(matrix, dict)
+    include = matrix.get("include")
+    assert isinstance(include, list)
+    cells = {
+        item["cell"]
+        for item in include
+        if isinstance(item, dict) and isinstance(item.get("cell"), str)
+    }
+    assert len(cells) == len(include)
+    return cells
+
+
+def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
+    """Enforce the exact-SHA, read-only hosted evidence graph."""
+    jobs = _workflow_jobs(workflow)
+    text = _workflow_text(RELEASE_EVIDENCE_WORKFLOW)
+    assert "workflow_dispatch:" in text
+    assert "workflow_call:" in text
+    assert re.search(r"workflow_dispatch:.*?ref:.*?required: true", text, re.DOTALL)
+    assert re.search(r"workflow_call:.*?ref:.*?required: true", text, re.DOTALL)
+    assert "EVIDENCE_TAG: ${{ inputs.tag }}" in text
+    assert '"tag": os.environ["EVIDENCE_TAG"]' in text
+    assert workflow.get("permissions") == {"contents": "read"}
+    assert "github_release" not in jobs
+    assert "contents: write" not in text
+    assert "softprops/action-gh-release" not in text
+    assert "gh release" not in text
+
+    reusable_outputs = (
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    )
+    callable_section = re.search(
+        r"workflow_call:(?P<body>.*?)(?=\n\n# This workflow)", text, re.DOTALL
+    )
+    assert callable_section
+    for output in reusable_outputs:
+        assert re.search(
+            rf"^      {output}:\n.*?^        value: \$\{{\{{ jobs\.aggregate_release_evidence\.outputs\.{output} \}}\}}$",
+            callable_section.group("body"),
+            flags=re.MULTILINE | re.DOTALL,
+        ), output
+
+    resolver = jobs["resolve_ref"]
+    assert (
+        resolver.get("outputs", {}).get("head_sha")
+        == "${{ steps.resolve.outputs.head_sha }}"
+    )
+    assert _checkout_refs(resolver) == ["${{ inputs.ref }}"]
+    resolver_steps = resolver.get("steps")
+    assert isinstance(resolver_steps, list)
+    assert any(
+        isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and "git rev-parse HEAD" in step["run"]
+        and "^[0-9a-f]{40}$" in step["run"]
+        for step in resolver_steps
+    )
+
+    expected_jobs = {
+        "static_identity",
+        "quality",
+        "build_pure",
+        "build_sdist",
+        "build_compiled",
+        "verify_pure",
+        "verify_native",
+        "verify_sdist",
+        "aggregate_release_evidence",
+    }
+    assert expected_jobs.issubset(jobs)
+    for job_id in expected_jobs:
+        job = jobs[job_id]
+        assert "resolve_ref" in _workflow_needs(job), job_id
+        assert _checkout_refs(job) == ["${{ needs.resolve_ref.outputs.head_sha }}"], (
+            job_id
+        )
+        assert "always()" not in str(job.get("if", "")), job_id
+        assert job.get("continue-on-error") is not True, job_id
+
+    native_cells = _workflow_matrix_cells(jobs["verify_native"])
+    sdist_cells = _workflow_matrix_cells(jobs["verify_sdist"])
+    pure_cells = _workflow_matrix_cells(jobs["verify_pure"])
+    expected_cells = _release_matrix_cell_identifiers()
+    assert native_cells | sdist_cells | pure_cells | {"sdist-archive"} == expected_cells
+    assert {
+        "compiled-wheel-cp310-linux-aarch64",
+        "compiled-wheel-cp310-macos-x86_64",
+        "compiled-wheel-cp310-macos-universal2-arm64",
+        "compiled-wheel-cp310-macos-universal2-x86_64",
+    }.issubset(native_cells)
+    assert all("musllinux" not in cell for cell in expected_cells)
+
+    compiled = jobs["build_compiled"]
+    compiled_text = json.dumps(compiled, sort_keys=True)
+    assert 'CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"' in text
+    assert 'CIBW_SKIP: "*musllinux*"' in text
+    assert '"FAST_FSM_BUILD_MODE": "compiled"' in compiled_text
+    assert '"FAST_FSM_BUILD_MODE": "auto"' not in compiled_text
+    assert "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074" in text
+    assert "# v4.2.0" in text
+    native_steps = jobs["verify_native"].get("steps")
+    assert isinstance(native_steps, list)
+    native_runs = "\n".join(
+        step["run"]
+        for step in native_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "mapfile" not in native_runs
+    assert 'Path("artifact").rglob' in native_runs
+    assert "expected exactly one" in native_runs
+    assert '"performance": raw["performance"]' in native_runs
+    assert "matrix_artifact_evidence(artifact)" in native_runs
+    assert "matrix_runtime_evidence(runtime)" in native_runs
+
+    pure_steps = jobs["verify_pure"].get("steps")
+    assert isinstance(pure_steps, list)
+    pure_runs = "\n".join(
+        step["run"]
+        for step in pure_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    # The producer itself, rather than a synthetic matrix fixture, must emit
+    # the exact strict runtime shape accepted by aggregate-matrix.
+    assert "matrix_artifact_evidence(artifact)" in pure_runs
+    assert "matrix_runtime_evidence(runtime)" in pure_runs
+
+    aggregate = jobs["aggregate_release_evidence"]
+    assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
+        _workflow_needs(aggregate)
+    )
+    aggregate_outputs = aggregate.get("outputs")
+    assert isinstance(aggregate_outputs, dict)
+    for output in (
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    ):
+        assert output in aggregate_outputs
+    aggregate_steps = aggregate.get("steps")
+    assert isinstance(aggregate_steps, list)
+    aggregate_runs = "\n".join(
+        step["run"]
+        for step in aggregate_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "aggregate-matrix --profile release" in aggregate_runs
+    assert "release-evidence-complete" not in aggregate_runs
+    evidence_download = next(
+        step
+        for step in aggregate_steps
+        if isinstance(step, dict)
+        and isinstance(step.get("with"), dict)
+        and step["with"].get("pattern")
+        == "evidence-*-${{ needs.resolve_ref.outputs.head_sha }}"
+    )
+    assert "merge-multiple" not in evidence_download["with"]
+
+
+def test_release_evidence_workflow_is_exact_sha_native_and_evidence_only() -> None:
+    """Manual/reusable native evidence cannot become a release-capable graph."""
+    _validate_evidence_only_workflow(_workflow_data(RELEASE_EVIDENCE_WORKFLOW))
+
+
+def test_release_evidence_workflow_contract_rejects_bypass_mutations() -> None:
+    """A moving ref, missing native cell, write grant, or optional edge fails closed."""
+    workflow = _workflow_data(RELEASE_EVIDENCE_WORKFLOW)
+
+    moving_ref = deepcopy(workflow)
+    checkout = _workflow_jobs(moving_ref)["verify_native"]["steps"][0]
+    assert isinstance(checkout, dict)
+    checkout["with"]["ref"] = "${{ inputs.ref }}"
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(moving_ref)
+
+    missing_cell = deepcopy(workflow)
+    include = _workflow_jobs(missing_cell)["verify_native"]["strategy"]["matrix"][
+        "include"
+    ]
+    assert isinstance(include, list)
+    include.pop()
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(missing_cell)
+
+    write_permission = deepcopy(workflow)
+    write_permission["permissions"] = {"contents": "write"}
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(write_permission)
+
+    bypass = deepcopy(workflow)
+    _workflow_jobs(bypass)["aggregate_release_evidence"]["if"] = "always()"
+    with pytest.raises(AssertionError):
+        _validate_evidence_only_workflow(bypass)
+
+
+def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
+    """Require the one write-capable job to follow evidence and exact tag identity."""
+    jobs = _workflow_jobs(workflow)
+    text = _workflow_text(RELEASE_WORKFLOW)
+    assert "workflow_dispatch:" not in text
+    assert "workflow_call:" not in text
+    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\.3\.0\"", text)
+    assert workflow.get("permissions") == {"contents": "read"}
+    assert set(jobs) == {"release_evidence", "tag_identity", "github_release"}
+
+    evidence = jobs["release_evidence"]
+    assert evidence.get("uses") == "./.github/workflows/release-evidence.yml"
+    inputs = evidence.get("with")
+    assert isinstance(inputs, dict)
+    assert inputs.get("ref") == "${{ github.ref }}"
+    assert inputs.get("tag") == "v0.3.0"
+    assert "permissions" not in evidence
+
+    tag_identity = jobs["tag_identity"]
+    assert _workflow_needs(tag_identity) == {"release_evidence"}
+    assert _checkout_refs(tag_identity) == [
+        "${{ needs.release_evidence.outputs.head_sha }}"
+    ]
+    tag_steps = tag_identity.get("steps")
+    assert isinstance(tag_steps, list)
+    tag_runs = "\n".join(
+        step["run"]
+        for step in tag_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "verify-release-identity" in tag_runs
+    assert "--tag-ref v0.3.0" in tag_runs
+    assert "aggregate_conclusion" in tag_runs
+    assert "git rev-parse v0.3.0^{}" in tag_runs
+
+    release = jobs["github_release"]
+    assert _workflow_needs(release) == {"release_evidence", "tag_identity"}
+    assert release.get("permissions") == {"contents": "write"}
+    assert "if" not in release
+    assert release.get("continue-on-error") is not True
+    assert _checkout_refs(release) == ["${{ needs.release_evidence.outputs.head_sha }}"]
+    release_steps = release.get("steps")
+    assert isinstance(release_steps, list)
+    release_runs = "\n".join(
+        step["run"]
+        for step in release_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "hashlib.sha256" in release_runs
+    assert "release-manifest" in release_runs
+    assert "stage_release_assets" in release_runs
+    assert "release-artifacts" in release_runs
+    assert "local" not in release_runs
+    assert "softprops/action-gh-release" in text
+    assert "release-staging" in release_runs
+    assert "files: release-staging/*" in text
+    assert "files: release-artifacts/*" not in text
+
+    setup_index = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict) and step.get("uses") == SETUP_UV_ACTION
+    )
+    sync_index = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict) and step.get("run") == "uv sync --locked --all-groups"
+    )
+    first_uv_run = next(
+        index
+        for index, step in enumerate(release_steps)
+        if isinstance(step, dict)
+        and isinstance(step.get("run"), str)
+        and "uv run" in step["run"]
+    )
+    assert setup_index < sync_index < first_uv_run
+
+    evidence_text = _workflow_text(RELEASE_EVIDENCE_WORKFLOW)
+    reusable_outputs = {
+        "head_sha",
+        "aggregate_job",
+        "aggregate_conclusion",
+        "matrix_digest",
+        "manifest_artifact",
+        "summary_artifact",
+        "evidence_artifacts",
+    }
+    caller_references = set(
+        re.findall(r"needs\.release_evidence\.outputs\.([A-Za-z_]+)", text)
+    )
+    assert caller_references <= reusable_outputs
+    for output in caller_references:
+        assert f"jobs.aggregate_release_evidence.outputs.{output}" in evidence_text
+
+    for job_id, job in jobs.items():
+        if job_id != "github_release":
+            assert "permissions" not in job, job_id
+        assert "always()" not in str(job.get("if", "")), job_id
+        assert job.get("continue-on-error") is not True, job_id
+
+
+def _release_asset_aggregate(payloads: Mapping[str, bytes]) -> dict[str, object]:
+    """Build a minimal aggregate fixture with direct, archive, and derived records."""
+    direct_name = "fast_fsm-0.3.0-py3-none-any.whl"
+    archive_name = "fast_fsm-0.3.0.tar.gz"
+    child_name = "fast_fsm-0.3.0-derived.whl"
+    return {
+        "profile": "release",
+        "authorizes_release": True,
+        "artifact_records": [
+            {
+                "matrix": {"cell": "pure-wheel-cp312-linux-x86_64"},
+                "artifact": {
+                    "filename": direct_name,
+                    "sha256": hashlib.sha256(payloads[direct_name]).hexdigest(),
+                },
+            },
+            {
+                "matrix": {"cell": "sdist-archive"},
+                "artifact": {
+                    "filename": archive_name,
+                    "sha256": hashlib.sha256(payloads[archive_name]).hexdigest(),
+                },
+            },
+            {
+                "matrix": {"cell": "sdist-wheel-cp312-linux-x86_64"},
+                "artifact": {
+                    "filename": child_name,
+                    "sha256": hashlib.sha256(payloads[child_name]).hexdigest(),
+                },
+            },
+        ],
+    }
+
+
+def test_stage_release_assets_publishes_only_direct_and_sdist_archive(
+    tmp_path: Path,
+) -> None:
+    """The allowlist includes the source archive but excludes derived sdist children."""
+    payloads = {
+        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.3.0.tar.gz": b"source-archive",
+        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+    }
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for filename in (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    ):
+        (downloaded / filename).write_bytes(payloads[filename])
+
+    staged = release_evidence.stage_release_assets(
+        _release_asset_aggregate(payloads),
+        downloaded=downloaded,
+        staging=tmp_path / "staging",
+    )
+
+    assert staged == (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    )
+    assert sorted(path.name for path in (tmp_path / "staging").iterdir()) == list(
+        staged
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("extra", "allowlist"),
+        ("altered-sdist", "SHA differs"),
+        ("symlink", "non-regular"),
+        ("derived-child", "allowlist"),
+    ),
+)
+def test_stage_release_assets_rejects_unapproved_or_substituted_downloads(
+    tmp_path: Path, mutation: str, expected: str
+) -> None:
+    """Extra, altered, linked, or derived bytes never reach the publish staging dir."""
+    payloads = {
+        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.3.0.tar.gz": b"source-archive",
+        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+    }
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for filename in (
+        "fast_fsm-0.3.0-py3-none-any.whl",
+        "fast_fsm-0.3.0.tar.gz",
+    ):
+        (downloaded / filename).write_bytes(payloads[filename])
+    if mutation == "extra":
+        (downloaded / "unexpected.bin").write_bytes(b"extra")
+    elif mutation == "altered-sdist":
+        (downloaded / "fast_fsm-0.3.0.tar.gz").write_bytes(b"substituted")
+    elif mutation == "symlink":
+        target = downloaded / "target.whl"
+        target.write_bytes(payloads["fast_fsm-0.3.0-py3-none-any.whl"])
+        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").unlink()
+        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").symlink_to(target.name)
+    else:
+        (downloaded / "fast_fsm-0.3.0-derived.whl").write_bytes(
+            payloads["fast_fsm-0.3.0-derived.whl"]
+        )
+
+    with pytest.raises(EvidenceError, match=expected):
+        release_evidence.stage_release_assets(
+            _release_asset_aggregate(payloads),
+            downloaded=downloaded,
+            staging=tmp_path / "staging",
+        )
+
+
+def test_tag_release_workflow_has_one_complete_non_advisory_path() -> None:
+    """Only tag evidence plus peeled tag identity can reach release creation."""
+    _validate_tag_release_workflow(_workflow_data(RELEASE_WORKFLOW))
+    _validate_evidence_only_workflow(_workflow_data(RELEASE_EVIDENCE_WORKFLOW))
+
+
+def test_tag_release_workflow_rejects_needs_permission_and_condition_bypasses() -> None:
+    """Graph mutations cannot make a local or partial result publishable."""
+    workflow = _workflow_data(RELEASE_WORKFLOW)
+
+    missing_identity = deepcopy(workflow)
+    _workflow_jobs(missing_identity)["github_release"]["needs"] = ["release_evidence"]
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(missing_identity)
+
+    write_early = deepcopy(workflow)
+    _workflow_jobs(write_early)["tag_identity"]["permissions"] = {"contents": "write"}
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(write_early)
+
+    bypass = deepcopy(workflow)
+    _workflow_jobs(bypass)["github_release"]["if"] = "always()"
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(bypass)
+
+    local_input = deepcopy(workflow)
+    _workflow_jobs(local_input)["release_evidence"]["with"]["tag"] = "local"
+    with pytest.raises(AssertionError):
+        _validate_tag_release_workflow(local_input)
+
+
+def test_ci_keeps_static_v030_identity_as_an_ordinary_non_tag_gate() -> None:
+    """Pull-request CI validates release identity without needing a tag or release call."""
+    ci = _workflow_data(CI_WORKFLOW)
+    jobs = _workflow_jobs(ci)
+    assert "static_release_identity" in jobs
+    identity = jobs["static_release_identity"]
+    assert "needs" not in identity
+    assert _checkout_refs(identity) == ["${{ github.sha }}"]
+    steps = identity.get("steps")
+    assert isinstance(steps, list)
+    runs = "\n".join(
+        step["run"]
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "verify-release-identity" in runs
+    assert "--tag-ref" not in runs
+
+
+def _phase19_planned_paths() -> frozenset[str]:
+    """Return the complete inventory union declared by Phase 19 plans."""
+    phase_dir = ROOT / ".planning" / "phases" / "19-bounded-diagnostics-safe-output"
+    paths: set[str] = set()
+    for plan_path in sorted(phase_dir.glob("19-*-PLAN.md")):
+        frontmatter = plan_path.read_text(encoding="utf-8").split("---", 2)[1]
+        plan = yaml.safe_load(frontmatter)
+        paths.update(plan["files_modified"])
+    return frozenset(paths)
+
+
+def _phase19_args(*, suite: str = "phase19") -> argparse.Namespace:
+    """Build the suite-only namespace used by the isolated verifier."""
+    return argparse.Namespace(
+        suite=suite,
+        manifest_output=None,
+        coverage_floor_migration=None,
+    )
+
+
+def test_phase19_parser_accepts_new_suite_without_removing_existing_choices() -> None:
+    """Phase 19 is an additive suite choice with all prior suites preserved."""
+    parser = isolated_verify._parser()
+    suite_action = next(action for action in parser._actions if action.dest == "suite")
+
+    assert parser.parse_args(("--suite", "phase19")).suite == "phase19"
+    assert set(suite_action.choices) >= {
+        "graph",
+        "baseline-write",
+        "baseline-check",
+        "phase16",
+        "phase17",
+        "phase18",
+        "phase19",
+    }
+
+
+def test_phase19_inventory_covers_every_planned_candidate_and_verifier_input() -> None:
+    """The exact overlay cannot silently omit a Phase 19 delivery artifact."""
+    required = _phase19_planned_paths() | {
+        "tools/phase16_isolated_verify.py",
+        "tools/release_evidence.py",
+        "tests/test_graph_invariants.py",
+    }
+
+    missing = required - set(isolated_verify.PHASE19_INVENTORY)
+    assert not missing, f"PHASE19_INVENTORY omits: {sorted(missing)}"
+
+
+def test_phase19_baseline_write_uses_phase19_inventory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A regenerated baseline overlays the candidate, not the prior phase."""
+    calls: dict[str, object] = {}
+    source_tree = tmp_path / "source-tree"
+    source_tree.mkdir()
+
+    def prepare_tree(
+        **kwargs: object,
+    ) -> tuple[object, Path, dict[str, str], tuple[str, ...]]:
+        includes = tuple(kwargs["includes"])
+        calls["includes"] = includes
+        return SimpleNamespace(cleanup=lambda: None), source_tree, {}, includes
+
+    monkeypatch.setattr(isolated_verify, "_prepare_tree", prepare_tree)
+    monkeypatch.setattr(
+        isolated_verify,
+        "_run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(
+        isolated_verify,
+        "_export_manifest_atomically",
+        lambda _generated, _destination, _migration: calls.setdefault("exported", True),
+    )
+
+    args = _phase19_args(suite="baseline-write")
+    args.manifest_output = "evidence/release-baseline.json"
+    assert isolated_verify._suite_mode(args) == 0
+    assert calls["exported"] is True
+    assert (
+        "tools/phase16_isolated_verify.py",
+        *isolated_verify.PHASE19_INVENTORY,
+    ) == tuple(calls.get("includes", ()))
+
+
+@pytest.mark.parametrize("build_mode", ("pure", "compiled"))
+def test_phase19_origin_assertion_precedes_semantic_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, build_mode: str
+) -> None:
+    """Each isolated semantic run proves its selected origin before pytest starts."""
+    events: list[str] = []
+    semantic = ("trusted-semantic", "check")
+
+    class TemporaryDirectory:
+        """Keep the fake export available for the ordering assertion."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / f"{build_mode}-tree"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            events.append("cleanup")
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        (destination / "src" / "fast_fsm").mkdir(parents=True)
+        events.append("export")
+
+    def run(command: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
+        events.append("semantic" if command == semantic else "setup")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(
+        isolated_verify, "_assert_origin", lambda *_args: events.append("origin")
+    )
+    monkeypatch.setattr(isolated_verify, "_run", run)
+
+    assert (
+        isolated_verify._run_suite_command(
+            build_mode=build_mode,
+            includes=("tools/phase16_isolated_verify.py",),
+            command=semantic,
+        )
+        == 0
+    )
+    assert events.index("origin") < events.index("semantic")
+
+
+def test_phase19_prepare_tree_strips_inherited_coverage_autostart_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A coverage-instrumented parent cannot start a child collector."""
+    captured: list[dict[str, str]] = []
+
+    class TemporaryDirectory:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / "isolated"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            return None
+
+    inherited_autostart = {
+        "COV_CORE_SOURCE": str(PACKAGE_SOURCE),
+        "COV_CORE_CONFIG": str(ROOT / "pyproject.toml"),
+        "COV_CORE_DATAFILE": str(tmp_path / ".coverage"),
+        "COV_CORE_BRANCH": "enabled",
+        "COVERAGE_PROCESS_START": str(ROOT / "pyproject.toml"),
+        "FAST_FSM_REQUIRE_UNINSTRUMENTED": "1",
+    }
+    for key, value in inherited_autostart.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        (destination / "src" / "fast_fsm").mkdir(parents=True)
+
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(isolated_verify, "_assert_origin", lambda *_args: None)
+
+    def run(_command: tuple[str, ...], **kwargs: object) -> SimpleNamespace:
+        captured.append(dict(kwargs["env"]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(isolated_verify, "_run", run)
+
+    tempdir, _source_tree, env, _overlaid = isolated_verify._prepare_tree(
+        build_mode="pure", includes=()
+    )
+    try:
+        assert not set(inherited_autostart) & set(env)
+        assert captured
+        assert not set(inherited_autostart) & set(captured[0])
+    finally:
+        tempdir.cleanup()
+
+
+def test_phase19_pure_preflight_refuses_native_shadow_without_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A native shadow in an export stops before setup and is never deleted."""
+    commands: list[tuple[str, ...]] = []
+    shadow = tmp_path / "isolated" / "repo" / "src" / "fast_fsm" / "core.stale.so"
+
+    class TemporaryDirectory:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.path = tmp_path / "isolated"
+            self.path.mkdir()
+            self.name = str(self.path)
+
+        def cleanup(self) -> None:
+            return None
+
+    def export_head(destination: Path, _env: dict[str, str]) -> None:
+        shadow.parent.mkdir(parents=True)
+        shadow.write_bytes(b"checkout-native-shadow-must-remain")
+
+    monkeypatch.setattr(
+        isolated_verify.tempfile, "TemporaryDirectory", TemporaryDirectory
+    )
+    monkeypatch.setattr(isolated_verify, "_export_head", export_head)
+    monkeypatch.setattr(
+        isolated_verify, "_overlay", lambda includes, _tree: tuple(includes)
+    )
+    monkeypatch.setattr(
+        isolated_verify,
+        "_run",
+        lambda command, **_kwargs: commands.append(command),
+    )
+
+    with pytest.raises(
+        isolated_verify.VerificationError, match="refuses native artifacts"
+    ):
+        isolated_verify._prepare_tree(build_mode="pure", includes=())
+
+    assert shadow.read_bytes() == b"checkout-native-shadow-must-remain"
+    assert not commands
+
+
+def test_phase19_command_composition_covers_semantics_and_quality_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 19 selects distinct origins plus every mandatory final local gate."""
+    calls: list[tuple[str, tuple[str, ...], tuple[str, ...], bool]] = []
+
+    def run_suite_command(
+        *,
+        build_mode: str,
+        includes: tuple[str, ...],
+        command: tuple[str, ...],
+        require_uninstrumented: bool = False,
+    ) -> int:
+        calls.append((build_mode, includes, command, require_uninstrumented))
+        return 0
+
+    monkeypatch.setattr(isolated_verify, "_run_suite_command", run_suite_command)
+
+    assert isolated_verify._suite_mode(_phase19_args()) == 0
+    expected_includes = (
+        "tools/phase16_isolated_verify.py",
+        *isolated_verify.PHASE19_INVENTORY,
+    )
+    semantic_calls = [
+        call
+        for call in calls
+        if call[2][:3] == ("uv", "run", "pytest")
+        and "tests/test_diagnostic_contracts.py" in call[2]
+    ]
+    assert [call[0] for call in semantic_calls] == ["pure", "compiled"]
+    assert all(call[1] == expected_includes for call in calls)
+    assert all(
+        path in semantic_calls[0][2]
+        for path in (
+            "tests/test_output_safety.py",
+            "tests/test_logging_config.py",
+            "tests/test_validation.py",
+            "tests/test_visualization.py",
+            "tests/test_mypyc_guard.py",
+            "tests/test_release_evidence.py",
+        )
+    )
+    assert any(
+        build_mode == "compiled"
+        and "tests/test_performance_benchmarks.py" in command
+        and "trigger_min_throughput" in command[-1]
+        and require_uninstrumented
+        for build_mode, _includes, command, require_uninstrumented in calls
+    )
+    assert all(
+        require_uninstrumented
+        == (
+            build_mode == "compiled"
+            and "tests/test_performance_benchmarks.py" in command
+            and "trigger_min_throughput" in command[-1]
+        )
+        for build_mode, _includes, command, require_uninstrumented in calls
+    )
+    commands = {command for _build_mode, _includes, command, _strict in calls}
+    assert ("task", "typecheck-mypy") in commands
+    assert ("task", "typecheck-ty") in commands
+    assert ("task", "release-gate") in commands
+    assert ("task", "release-baseline-check") in commands
+    assert any("slots-policy" in command for command in commands)
+    assert any(command[:4] == ("uv", "run", "ruff", "format") for command in commands)
+    assert any(command[:4] == ("uv", "run", "ruff", "check") for command in commands)
+    assert any("sphinx-build" in command and "html" in command for command in commands)
+    assert any(
+        "sphinx-build" in command and "doctest" in command for command in commands
+    )
+    assert ("uv", "run", "pytest", "tests/", "-x", "-q") in commands
+
+
+def test_phase19_stops_on_nonzero_semantic_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing fresh-origin command cannot be hidden by later gates."""
+    calls: list[str] = []
+
+    def fail_first(*, build_mode: str, **_kwargs: object) -> int:
+        calls.append(build_mode)
+        return 73
+
+    monkeypatch.setattr(isolated_verify, "_run_suite_command", fail_first)
+
+    assert isolated_verify._suite_mode(_phase19_args()) == 73
+    assert calls == ["pure"]
+
+
+def test_expected_matrix_derives_local_proof_from_the_release_contract() -> None:
+    """The local evidence profile is a non-authorizing release-matrix projection."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+
+    release = release_evidence.expected_matrix("release", runtime)
+    local = release_evidence.expected_matrix("local", runtime)
+
+    assert release.profile == "release"
+    assert local.profile == "local"
+    assert local.authorizes_release is False
+    assert set(local.cells).issubset(set(release.cells))
+    assert {cell.asserted_mode for cell in local.cells} == {"pure", "compiled", "sdist"}
+    assert any(cell.sdist_parent is not None for cell in local.cells)
+    assert any(cell.requires_parity for cell in local.cells)
+    assert any(cell.requires_origin for cell in local.cells)
+    assert any(cell.requires_performance for cell in local.cells)
+
+    with pytest.raises(EvidenceError, match="release profile"):
+        release_evidence.build_release_authorization({"profile": "local"})
+
+
+def _matrix_artifact_name(cell: object) -> str:
+    """Return a stable filename fixture while sharing universal artifact identities."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.identifier == "sdist-archive":
+        return "fast_fsm-0.3.0.tar.gz"
+    if cell.identifier.startswith("sdist-pure-"):
+        build = f"1sdist{cell.cpython_minor.replace('.', '')}{cell.os}{cell.machine}"
+        return f"fast_fsm-0.3.0-{build}-py3-none-any.whl"
+    if cell.identifier.startswith("pure-wheel-"):
+        return "fast_fsm-0.3.0-py3-none-any.whl"
+    if "universal2" in cell.identifier:
+        minor = cell.cpython_minor.replace(".", "")
+        return f"fast_fsm-0.3.0-cp{minor}-cp{minor}-macosx_10_15_universal2.whl"
+    minor = cell.cpython_minor.replace(".", "")
+    platform_tag = {
+        ("linux", "x86_64"): "manylinux_2_17_x86_64",
+        ("linux", "aarch64"): "manylinux_2_17_aarch64",
+        ("macos", "x86_64"): "macosx_10_15_x86_64",
+        ("macos", "arm64"): "macosx_11_0_arm64",
+        ("windows", "amd64"): "win_amd64",
+    }[(cell.os, cell.machine)]
+    build_tag = "-1sdist" if cell.identifier.startswith("sdist-") else ""
+    return f"fast_fsm-0.3.0{build_tag}-cp{minor}-cp{minor}-{platform_tag}.whl"
+
+
+def _matrix_core_origin(cell: object) -> str:
+    """Return a target-appropriate core origin fixture for each matrix cell."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.asserted_mode != "compiled":
+        return "/isolated/environment/site-packages/fast_fsm/core.py"
+    if cell.os == "windows":
+        minor = cell.cpython_minor.replace(".", "")
+        return rf"C:\isolated\site-packages\fast_fsm\core.cp{minor}-win_amd64.pyd"
+    return "/isolated/environment/site-packages/fast_fsm/core.abi3.so"
+
+
+def _matrix_package_origin(cell: object) -> str:
+    """Return a platform-shaped package origin fixture for matrix proofs."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    if cell.os == "windows":
+        return r"C:\\isolated\\site-packages\\fast_fsm\\__init__.py"
+    return "/isolated/environment/site-packages/fast_fsm/__init__.py"
+
+
+def _matrix_wheel_tags(filename: str) -> list[str]:
+    """Derive oracle fixture tags exactly as inspected wheel evidence does."""
+    _name, _version, _build, tags = release_evidence.parse_wheel_filename(filename)
+    return sorted(str(tag) for tag in tags)
+
+
+def _matrix_record(
+    cell: object,
+    *,
+    conformance: dict[str, object],
+    record_suffix: str = "",
+) -> dict[str, object]:
+    """Build one complete opaque input record for matrix aggregation tests."""
+    assert isinstance(cell, release_evidence.MatrixCell)
+    filename = _matrix_artifact_name(cell)
+    digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()
+    runtime_platform = "macos" if cell.os == "universal" else cell.os
+    runtime_machine = "arm64" if cell.machine == "universal" else cell.machine
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "record_id": f"{cell.identifier}{record_suffix}",
+        "matrix": {
+            "cell": cell.identifier,
+            "cpython_minor": cell.cpython_minor,
+            "os": cell.os,
+            "machine": cell.machine,
+            "asserted_mode": cell.asserted_mode,
+            "sdist_parent": cell.sdist_parent,
+            "artifact_filename": filename,
+            "artifact_sha256": digest,
+        },
+        "artifact": {
+            "filename": filename,
+            "sha256": digest,
+            "wheel_tags": []
+            if cell.identifier == "sdist-archive"
+            else _matrix_wheel_tags(filename),
+            "classified_mode": cell.asserted_mode,
+            "build_intent": cell.asserted_mode,
+        },
+        "runtime": None
+        if cell.identifier == "sdist-archive"
+        else {
+            "python_implementation": "cpython",
+            "python_version": f"{cell.cpython_minor}.1",
+            "platform": runtime_platform,
+            "machine": runtime_machine,
+            "distribution_version": "0.3.0",
+            "package_version": "0.3.0",
+            "package_origin": _matrix_package_origin(cell),
+            "core_origin": _matrix_core_origin(cell),
+            "core_loader": (
+                "ExtensionFileLoader"
+                if cell.asserted_mode == "compiled"
+                else "SourceFileLoader"
+            ),
+        },
+        "conformance": None
+        if cell.identifier == "sdist-archive"
+        else deepcopy(conformance),
+        "provenance": {
+            "release_version": "0.3.0",
+            "commit": "a" * 40,
+            "tag": "unreleased",
+        },
+        "origin_verified": cell.requires_origin,
+        "performance": (
+            {
+                "evidence_kind": "installed_compiled_performance",
+                "artifact_sha256": digest,
+                "asserted_mode": "compiled",
+                "build_intent": "compiled",
+                "core_origin": _matrix_core_origin(cell),
+                "core_loader": "ExtensionFileLoader",
+                "exact_command": "installed_benchmark_probe.py --exact",
+                "execution_commit": "a" * 40,
+                "executed_at": "2026-09-05T02:36:33Z",
+                "warmup_operations": 2_000,
+                "iterations": 20_000,
+                "samples_ops_per_second": [275_000.0, 250_000.0, 225_000.0],
+                "statistic": "median",
+                "median_ops_per_second": 250_000.0,
+                "python_implementation": "cpython",
+                "python_version": f"{cell.cpython_minor}.1",
+                "platform": runtime_platform,
+                "machine": runtime_machine,
+                "environment_label": "installed-compiled-native",
+            }
+            if cell.requires_performance
+            else None
+        ),
+        "parent_sdist": None
+        if cell.sdist_parent is None
+        else {
+            "filename": "fast_fsm-0.3.0.tar.gz",
+            "sha256": hashlib.sha256(b"fast_fsm-0.3.0.tar.gz").hexdigest(),
+        },
+    }
+    return record
+
+
+def _complete_matrix_records(profile: str = "local") -> list[dict[str, object]]:
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+    conformance = artifact_conformance.collect_conformance()
+    return [
+        _matrix_record(cell, conformance=conformance)
+        for cell in release_evidence.expected_matrix(profile, runtime).cells
+    ]
+
+
+def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministically() -> (
+    None
+):
+    """A complete local projection is stable evidence but cannot publish a release."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+    records = _complete_matrix_records()
+
+    first = release_evidence.aggregate_matrix_records(
+        records, profile="local", runtime=runtime
+    )
+    second = release_evidence.aggregate_matrix_records(
+        list(reversed(records)), profile="local", runtime=runtime
+    )
+
+    assert first == second
+    assert first["scope"] == "local-non-authorizing"
+    assert first["authorizes_release"] is False
+    assert release_evidence.serialize_manifest(
+        first
+    ) == release_evidence.serialize_manifest(second)
+    assert release_evidence.render_aggregate_summary(first).endswith("\n")
+    with pytest.raises(EvidenceError, match="release profile"):
+        release_evidence.build_release_authorization(first)
+
+
+def test_matrix_evidence_normalizes_fresh_environment_provenance() -> None:
+    """Fresh install roots do not leak into deterministic matrix evidence."""
+    first_runtime = {
+        "python_implementation": "cpython",
+        "python_version": "3.12.1",
+        "platform": "macos",
+        "machine": "arm64",
+        "distribution_version": "0.3.0",
+        "package_version": "0.3.0",
+        "package_origin": "/private/tmp/one/site-packages/fast_fsm/__init__.py",
+        "core_origin": "/private/tmp/one/site-packages/fast_fsm/core.abi3.so",
+        "core_loader": "ExtensionFileLoader",
+    }
+    second_runtime = {
+        **first_runtime,
+        "package_origin": r"C:\\temporary\\two\\site-packages\\fast_fsm\\__init__.py",
+        "core_origin": r"C:\\temporary\\two\\site-packages\\fast_fsm\\core.abi3.so",
+    }
+
+    assert (
+        release_evidence.matrix_runtime_evidence(first_runtime)
+        == release_evidence.matrix_runtime_evidence(second_runtime)
+        == {
+            **first_runtime,
+            "package_origin": "site-packages/fast_fsm/__init__.py",
+            "core_origin": "site-packages/fast_fsm/core.abi3.so",
+        }
+    )
+
+    aggregate = release_evidence.aggregate_matrix_records(
+        _complete_matrix_records(),
+        profile="local",
+        runtime={
+            "implementation": "cpython",
+            "python_minor": "3.12",
+            "platform": "macos",
+            "machine": "arm64",
+        },
+    )
+    serialized = release_evidence.serialize_manifest(aggregate)
+    assert "/isolated/environment/" not in serialized
+    assert r"C:\\isolated" not in serialized
+    assert '"wheel_tags"' in serialized
+    for record in aggregate["artifact_records"]:
+        runtime = record["runtime"]
+        if runtime is None:
+            continue
+        assert runtime["package_origin"] == "site-packages/fast_fsm/__init__.py"
+        assert runtime["core_origin"].startswith("site-packages/fast_fsm/")
+
+
+def test_aggregate_matrix_records_accepts_complete_release_performance_proof() -> None:
+    """The authorizing profile consumes full, artifact-bound native records."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+
+    aggregate = release_evidence.aggregate_matrix_records(
+        _complete_matrix_records("release"), profile="release", runtime=runtime
+    )
+
+    assert aggregate["authorizes_release"] is True
+    assert aggregate["installed_performance"]
+    assert all(
+        record["median_ops_per_second"] >= 200_000
+        for record in aggregate["installed_performance"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "match"),
+    [
+        ("artifact_sha256", "b" * 64, "artifact"),
+        ("execution_commit", "b" * 40, "commit"),
+        ("asserted_mode", "pure", "mode"),
+        (
+            "core_origin",
+            "/isolated/environment/site-packages/fast_fsm/core.py",
+            "native",
+        ),
+        ("core_loader", "SourceFileLoader", "native"),
+        ("python_version", "3.9.1", "runtime"),
+        ("platform", "windows", "runtime"),
+        ("machine", "amd64", "runtime"),
+    ],
+)
+def test_aggregate_matrix_records_rejects_detached_performance_bindings(
+    field: str, replacement: object, match: str
+) -> None:
+    """No bare success flag can substitute for per-artifact native proof."""
+    records = _complete_matrix_records("release")
+    compiled = next(record for record in records if record["performance"] is not None)
+    performance = compiled["performance"]
+    assert isinstance(performance, dict)
+    performance[field] = replacement
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.aggregate_matrix_records(
+            records,
+            profile="release",
+            runtime={
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "macos",
+                "machine": "arm64",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (lambda records: records.pop(), "missing"),
+        (lambda records: records.append(deepcopy(records[0])), "duplicate"),
+        (
+            lambda records: records[0]["matrix"].update(cell="unexpected-cell"),
+            "unexpected",
+        ),
+        (
+            lambda records: records[0]["artifact"].update(sha256="b" * 64),
+            "detached",
+        ),
+        (
+            lambda records: records[1]["provenance"].update(commit="b" * 40),
+            "commit",
+        ),
+        (
+            lambda records: records[1]["runtime"].update(package_version="0.2.2"),
+            "runtime.package_version",
+        ),
+        (
+            lambda records: records[1]["conformance"].update(suite_sha256="b" * 64),
+            "suite_sha256",
+        ),
+        (
+            lambda records: records[1]["artifact"].update(classified_mode="pure"),
+            "mode",
+        ),
+    ],
+)
+def test_aggregate_matrix_records_rejects_substituted_or_mixed_evidence(
+    mutation: object, match: str
+) -> None:
+    """Exact matrix reconciliation rejects each incomplete or contradictory input."""
+    records = _complete_matrix_records()
+    assert callable(mutation)
+    mutation(records)
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.aggregate_matrix_records(
+            records,
+            profile="local",
+            runtime={
+                "implementation": "cpython",
+                "python_minor": "3.12",
+                "platform": "macos",
+                "machine": "arm64",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        '{"record_id": "one", "record_id": "two"}',
+        '{"record_id": NaN}',
+        "[]",
+    ],
+)
+def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
+    tmp_path: Path, contents: str
+) -> None:
+    """Untrusted uploaded evidence is strict JSON before aggregation starts."""
+    path = tmp_path / "record.json"
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="matrix evidence"):
+        release_evidence.read_matrix_record(path)
+
+
+def _phase20_baseline_static_fixture() -> dict[str, object]:
+    """Return the generator's static v0.3.0 baseline envelope without measurements."""
+    return {
+        "schema_version": 2,
+        "release_identity": {
+            "package": "fast_fsm",
+            "distribution_version": "0.3.0",
+        },
+        "matrix_profile": {
+            "profile": "local",
+            "scope": "local-non-authorizing",
+            "status": "not-collected",
+        },
+        "expected_matrix": [{"cell": "fixture"}],
+        "artifact_records": [],
+        "historical_phase_performance": {
+            "scope": "historical-non-gating",
+            "entries": [],
+        },
+        "pure_source_performance": {"scope": "environment-labeled-observation"},
+        "installed_compiled_performance": [],
+        "diagnostic_complexity": {
+            "scope": "deterministic-non-timing",
+            "dimensions": ["work", "results", "dense_cells", "path_expansions"],
+            "evidence": "tests/test_diagnostic_contracts.py",
+        },
+        "quality_baseline": {},
+        "toolchain": {},
+        "artifact_evidence": {},
+        "slots_policy": {},
+        "performance_contract": {},
+        "measurement_environment": {},
+    }
+
+
+def _write_release_identity_fixture(
+    root: Path, *, changelog_date: str = "UNRELEASED"
+) -> None:
+    """Create complete v0.3.0 static surfaces without creating a Git tag."""
+    (root / "docs").mkdir()
+    (root / "evidence").mkdir()
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "fast_fsm"\nversion = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    (root / "docs" / "conf.py").write_text(
+        'project = "Fast FSM"\nversion = "0.3"\nrelease = "0.3.0"\n',
+        encoding="utf-8",
+    )
+    (root / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## [0.3.0] — {changelog_date}\n\nRelease proof.\n",
+        encoding="utf-8",
+    )
+    (root / "README.md").write_text(
+        "Fast FSM v0.3.0 provides installed-artifact release proof. "
+        "SHA-256 binds exact bytes, not publisher authenticity.\n",
+        encoding="utf-8",
+    )
+    (root / "evidence" / "release-baseline.json").write_text(
+        json.dumps(_phase20_baseline_static_fixture()),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    (
+        (
+            lambda baseline: baseline["release_identity"].update(
+                {"distribution_version": "0.2.2"}
+            ),
+            "distribution identity",
+        ),
+        (
+            lambda baseline: baseline.__setitem__("expected_matrix", []),
+            "expected_matrix",
+        ),
+        (
+            lambda baseline: baseline.__setitem__(
+                "historical_phase_performance_observations", []
+            ),
+            "top-level schema",
+        ),
+        (
+            lambda baseline: baseline.__setitem__("installed_compiled_performance", {}),
+            "installed performance schema",
+        ),
+    ),
+)
+def test_phase20_baseline_static_contract_rejects_stale_identity_and_schema(
+    mutation: object, match: str
+) -> None:
+    """Legacy baseline bytes fail statically; this test never writes a baseline."""
+    baseline = deepcopy(_phase20_baseline_static_fixture())
+    assert callable(mutation)
+    mutation(baseline)
+
+    with pytest.raises(EvidenceError, match=match):
+        release_evidence.validate_release_baseline_static_contract(baseline)
+
+
+def _identity_inputs() -> tuple[dict[str, str], dict[str, str]]:
+    """Return installed and aggregate values that bind one static identity."""
+    return (
+        {"distribution_version": "0.3.0", "package_version": "0.3.0"},
+        {
+            "package": "fast_fsm",
+            "distribution_version": "0.3.0",
+            "commit": "a" * 40,
+            "tag": "unreleased",
+            "suite_sha256": "b" * 64,
+        },
+    )
+
+
+def test_static_release_identity_requires_every_v030_surface(tmp_path: Path) -> None:
+    """PR-time validation accepts v0.3.0 without assuming its public tag exists."""
+    _write_release_identity_fixture(tmp_path)
+    installed, aggregate = _identity_inputs()
+
+    identity = release_evidence.validate_release_identity(
+        repository_root=tmp_path,
+        installed_identity=installed,
+        aggregate_identity=aggregate,
+        checked_out_commit="a" * 40,
+    )
+
+    assert identity["version"] == "0.3.0"
+    assert identity["tag_status"] == "not-required"
+    assert identity["changelog_status"] == "unreleased"
+
+    installed["package_version"] = "unknown"
+    with pytest.raises(EvidenceError, match="installed.package_version"):
+        release_evidence.validate_release_identity(
+            repository_root=tmp_path,
+            installed_identity=installed,
+            aggregate_identity=aggregate,
+            checked_out_commit="a" * 40,
+        )
+
+
+def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tag mode compares an already-created tag; it never creates or moves one."""
+    _write_release_identity_fixture(tmp_path, changelog_date="2026-09-05")
+    installed, aggregate = _identity_inputs()
+    aggregate["tag"] = "v0.3.0"
+    monkeypatch.setattr(
+        release_evidence,
+        "_peeled_release_tag_commit",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+
+    identity = release_evidence.validate_release_identity(
+        repository_root=tmp_path,
+        installed_identity=installed,
+        aggregate_identity=aggregate,
+        checked_out_commit="a" * 40,
+        tag_ref="v0.3.0",
+    )
+
+    assert identity["tag_status"] == "verified"
+
+    monkeypatch.setattr(
+        release_evidence,
+        "_peeled_release_tag_commit",
+        lambda *_args, **_kwargs: "b" * 40,
+    )
+    with pytest.raises(EvidenceError, match="peeled tag commit"):
+        release_evidence.validate_release_identity(
+            repository_root=tmp_path,
+            installed_identity=installed,
+            aggregate_identity=aggregate,
+            checked_out_commit="a" * 40,
+            tag_ref="v0.3.0",
+        )

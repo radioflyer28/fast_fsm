@@ -1,0 +1,980 @@
+{
+  "artifact_evidence": {
+    "source": {
+      "core_origin": "src/fast_fsm/core.py"
+    },
+    "wheels": [
+      {
+        "archive_tags": [
+          "py3-none-any"
+        ],
+        "classified_mode": "pure",
+        "dist_info_directory": "fast_fsm-0.3.0.dist-info",
+        "dist_info_package": "fast-fsm",
+        "dist_info_version": "0.3.0",
+        "filename": "fast_fsm-0.3.0-py3-none-any.whl",
+        "filename_package": "fast-fsm",
+        "filename_tags": [
+          "py3-none-any"
+        ],
+        "filename_version": "0.3.0",
+        "metadata_name": "fast-fsm",
+        "metadata_version": "0.3.0",
+        "mode": "pure",
+        "native_core_members": [],
+        "native_members": [],
+        "normalized_basename": "fast_fsm-0.3.0-py3-none-any.whl",
+        "wheel_tags": [
+          "py3-none-any"
+        ]
+      }
+    ]
+  },
+  "artifact_records": [],
+  "diagnostic_complexity": {
+    "dimensions": [
+      "work",
+      "results",
+      "dense_cells",
+      "path_expansions"
+    ],
+    "evidence": "tests/test_diagnostic_contracts.py",
+    "scope": "deterministic-non-timing"
+  },
+  "expected_matrix": [
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "compiled-wheel-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "compiled-wheel-cp312-macos-universal2-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "pure",
+      "cpython_minor": "3.12",
+      "identifier": "pure-wheel-cp312",
+      "machine": "universal",
+      "os": "universal",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": false,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "sdist",
+      "cpython_minor": "archive",
+      "identifier": "sdist-archive",
+      "machine": "archive",
+      "os": "archive",
+      "requires_origin": false,
+      "requires_parity": false,
+      "requires_performance": false,
+      "sdist_parent": null
+    },
+    {
+      "asserted_mode": "compiled",
+      "cpython_minor": "3.12",
+      "identifier": "sdist-compiled-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": true,
+      "sdist_parent": "sdist-archive"
+    },
+    {
+      "asserted_mode": "pure",
+      "cpython_minor": "3.12",
+      "identifier": "sdist-pure-cp312-macos-arm64",
+      "machine": "arm64",
+      "os": "macos",
+      "requires_origin": true,
+      "requires_parity": true,
+      "requires_performance": false,
+      "sdist_parent": "sdist-archive"
+    }
+  ],
+  "historical_phase_performance": {
+    "entries": [
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains distinct pure and compiled runs rather than one phase-wide build mode.",
+            "searched_sources": [
+              "original Phase 16 evidence narrative",
+              "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate, Blocking Commands",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --suite phase16"
+          },
+          "environment": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate environment",
+            "status": "recorded",
+            "value": "CPython 3.12.10; arm64; macOS 26.5 arm64; `uv` 0.12.6."
+          },
+          "measurement_outcome": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+            "status": "recorded",
+            "value": "958,497.84 ops/s"
+          },
+          "original_evidence_commit": {
+            "reason": "The record identifies source-tree commits, not the commit that originally captured this evidence file.",
+            "searched_sources": [
+              "original Phase 16 evidence narrative",
+              "git log --follow -- .planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "16"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final Pure/Compiled Parity and Freeze Gate results table",
+            "status": "recorded",
+            "value": "semantic/performance suite passed; \u2265200,000 floor"
+          }
+        },
+        "phase": "16",
+        "source_path": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "6d69ac9a130d745e3fea8ecd09dc854f8a2c89dd1fadee623a5325d8c39c1c16"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record aggregates separate pure and freshly compiled checks.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Before Wave 0 tracer Commands",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --mode task --build-mode compiled --include src/fast_fsm/core.py --include tests/test_performance_benchmarks.py --include tools/phase16_isolated_verify.py -- uv run pytest tests/test_performance_benchmarks.py -x -q -k test_trigger_min_throughput"
+          },
+          "environment": {
+            "reason": "The original record asserts fresh temporary exports but does not identify an exact interpreter, operating system, and architecture tuple.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "measurement_outcome": {
+            "citation": "Final Plan 05 isolated proof results table",
+            "status": "recorded",
+            "value": "2 passed; the fixed 200,000 ops/sec floor held."
+          },
+          "original_evidence_commit": {
+            "reason": "The original record does not name the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 17 evidence narrative",
+              "git log --follow -- .planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "17"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final Plan 05 isolated proof results table",
+            "status": "recorded",
+            "value": "the fixed 200,000 ops/sec floor held."
+          }
+        },
+        "phase": "17",
+        "source_path": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "8db9a3ee557a7618db83f987b7b7595c6acf9a82450514f24bd702b3e23eec47"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains separate asserted-pure and freshly compiled observations.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "reason": "The original evidence records a <mode> command template, not an exact executed command line and arguments.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "environment": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "CPython 3.12.10 / macOS arm64"
+          },
+          "measurement_outcome": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "686,116.94 sync ops/sec; 346,573.40 async ops/sec"
+          },
+          "original_evidence_commit": {
+            "reason": "The original record does not name the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 18 evidence narrative",
+              "git log --follow -- .planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "18"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Final ownership release observations results table",
+            "status": "recorded",
+            "value": "compiled sync result is above the 200,000 ops/sec floor"
+          }
+        },
+        "phase": "18",
+        "source_path": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "4174b1ffb592d9914dce3bf15d7f740ddfcd3c1d048d732d8300452ec1f97656"
+      },
+      {
+        "fields": {
+          "build_mode": {
+            "reason": "The record contains distinct isolated pure and freshly compiled gates rather than one phase-wide mode.",
+            "searched_sources": [
+              "original Phase 19 evidence narrative",
+              "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "command": {
+            "citation": "Commands table, order 16",
+            "status": "recorded",
+            "value": "uv run python tools/phase16_isolated_verify.py --suite phase19"
+          },
+          "environment": {
+            "citation": "Environment table, Python executable and version",
+            "status": "recorded",
+            "value": ".venv/bin/python3`; CPython `3.12.10` (Clang `20.1.0`)"
+          },
+          "measurement_outcome": {
+            "citation": "Performance Observations, Repository benchmark",
+            "status": "recorded",
+            "value": "455324.16"
+          },
+          "original_evidence_commit": {
+            "reason": "The original record proves an inventory skeleton at HEAD but does not identify the commit that captured this evidence file.",
+            "searched_sources": [
+              "original Phase 19 evidence narrative",
+              "git log --follow -- .planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+            ],
+            "status": "unavailable"
+          },
+          "phase": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": "19"
+          },
+          "source_path": {
+            "citation": "Phase 20 fixed historical allowlist",
+            "status": "recorded",
+            "value": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md"
+          },
+          "threshold_outcome": {
+            "citation": "Performance Observations, Compiled trigger floor",
+            "status": "recorded",
+            "value": "`trigger_min_throughput` passed with its fixed minimum of `200000` operations/second"
+          }
+        },
+        "phase": "19",
+        "source_path": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+        "source_sha256": "7d4912a71182084deadbacd851acffae9918b25d34d719245fe7f271e883bd1c"
+      }
+    ],
+    "scope": "historical-non-gating"
+  },
+  "installed_compiled_performance": [],
+  "matrix_profile": {
+    "profile": "local",
+    "scope": "local-non-authorizing",
+    "status": "not-collected"
+  },
+  "measurement_environment": {
+    "comparison": "stable fields exclude this environment observation",
+    "implementation": "cpython",
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "python_version": "3.12.10"
+  },
+  "performance_contract": {
+    "compiled_trigger_ops_per_sec_min": 200000,
+    "measurement": "environment-labeled; exact timing is not a freshness field",
+    "observation": {
+      "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
+      "elapsed_seconds": 0.086768,
+      "environment": {
+        "implementation": "cpython",
+        "machine": "arm64",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "python_version": "3.12.10"
+      },
+      "metric": "StateMachine.trigger operations per second",
+      "mode": "pure",
+      "operations": 40000,
+      "ops_per_second": 460997.45,
+      "warmup_operations": 2000
+    }
+  },
+  "pure_source_performance": {
+    "observations": [
+      {
+        "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
+        "elapsed_seconds": 0.086768,
+        "environment": {
+          "implementation": "cpython",
+          "machine": "arm64",
+          "platform": "macOS-26.6.2-arm64-arm-64bit",
+          "python_version": "3.12.10"
+        },
+        "metric": "StateMachine.trigger operations per second",
+        "mode": "pure",
+        "operations": 40000,
+        "ops_per_second": 460997.45,
+        "warmup_operations": 2000
+      }
+    ],
+    "scope": "environment-labeled-observation"
+  },
+  "quality_baseline": {
+    "build_mode": "pure",
+    "coverage": {
+      "core_percent": 97.52,
+      "total_percent": 98.11
+    },
+    "source": {
+      "core_origin": "src/fast_fsm/core.py"
+    },
+    "tests": {
+      "collected": 1626,
+      "errors": 0,
+      "failed": 0,
+      "passed": 1626,
+      "skipped": 0
+    }
+  },
+  "release_identity": {
+    "distribution_version": "0.3.0",
+    "package": "fast_fsm"
+  },
+  "schema_version": 2,
+  "slots_policy": {
+    "inventory": [
+      {
+        "classification": "registered-exception",
+        "exception_reason": "ADR-006 accepts this interpreted bounded-diagnostic exception boundary because public failures carry a scalar DiagnosticStatus.",
+        "line": 70,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 32,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticLimits",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 58,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticStatus",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 104,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 81,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticEdge",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 91,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph",
+        "source_path": "src/fast_fsm/_diagnostics.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 18,
+        "qualified_name": "fast_fsm.condition_templates.AlwaysCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 123,
+        "qualified_name": "fast_fsm.condition_templates.AndCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 89,
+        "qualified_name": "fast_fsm.condition_templates.ComparisonCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 195,
+        "qualified_name": "fast_fsm.condition_templates.CooldownCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 216,
+        "qualified_name": "fast_fsm.condition_templates.ElapsedCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 42,
+        "qualified_name": "fast_fsm.condition_templates.KeyExistsCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 30,
+        "qualified_name": "fast_fsm.condition_templates.NeverCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 165,
+        "qualified_name": "fast_fsm.condition_templates.NotCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 144,
+        "qualified_name": "fast_fsm.condition_templates.OrCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 73,
+        "qualified_name": "fast_fsm.condition_templates.RegexCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 178,
+        "qualified_name": "fast_fsm.condition_templates.TimeoutCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 58,
+        "qualified_name": "fast_fsm.condition_templates.ValueInSetCondition",
+        "source_path": "src/fast_fsm/condition_templates.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 366,
+        "qualified_name": "fast_fsm.conditions.AsyncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "registered-exception",
+        "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
+        "line": 298,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 205,
+        "qualified_name": "fast_fsm.conditions.Condition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 261,
+        "qualified_name": "fast_fsm.conditions.FuncCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 337,
+        "qualified_name": "fast_fsm.conditions.NegatedCondition",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 115,
+        "qualified_name": "fast_fsm.conditions._DeferredCompoundCheck",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 61,
+        "qualified_name": "fast_fsm.conditions._DeferredGuardResult",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 186,
+        "qualified_name": "fast_fsm.conditions._DeferredNegatedGuardResult",
+        "source_path": "src/fast_fsm/conditions.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 4382,
+        "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 3275,
+        "qualified_name": "fast_fsm.core.AsyncStateMachine",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 721,
+        "qualified_name": "fast_fsm.core.CallbackState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 4244,
+        "qualified_name": "fast_fsm.core.DeclarativeState",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 4462,
+        "qualified_name": "fast_fsm.core.FSMBuilder",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 4958,
+        "qualified_name": "fast_fsm.core.FSMLoggingHandle",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 124,
+        "qualified_name": "fast_fsm.core.FSMTraceEvent",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 650,
+        "qualified_name": "fast_fsm.core.State",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 751,
+        "qualified_name": "fast_fsm.core.StateMachine",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 579,
+        "qualified_name": "fast_fsm.core.TransitionEntry",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "registered-exception",
+        "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
+        "line": 500,
+        "qualified_name": "fast_fsm.core.TransitionError",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 555,
+        "qualified_name": "fast_fsm.core.TransitionRecord",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 519,
+        "qualified_name": "fast_fsm.core.TransitionResult",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 4950,
+        "qualified_name": "fast_fsm.core._FSMStreamHandler",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 609,
+        "qualified_name": "fast_fsm.core._GraphSnapshot",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 596,
+        "qualified_name": "fast_fsm.core._GraphTransition",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 638,
+        "qualified_name": "fast_fsm.core._PreparedDispatch",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 628,
+        "qualified_name": "fast_fsm.core._PreparedTransition",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 541,
+        "qualified_name": "fast_fsm.validation.EnhancedFSMValidator",
+        "source_path": "src/fast_fsm/validation.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 99,
+        "qualified_name": "fast_fsm.validation.FSMValidator",
+        "source_path": "src/fast_fsm/validation.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 503,
+        "qualified_name": "fast_fsm.validation.ValidationIssue",
+        "source_path": "src/fast_fsm/validation.py"
+      }
+    ],
+    "measurements": [
+      {
+        "has_instance_dict": false,
+        "instance_size_bytes": 40,
+        "qualified_name": "fast_fsm.core.State"
+      },
+      {
+        "has_instance_dict": false,
+        "instance_size_bytes": 96,
+        "qualified_name": "fast_fsm.core.TransitionResult"
+      }
+    ],
+    "registered_exceptions": [
+      {
+        "exception_reason": "ADR-006 accepts this interpreted bounded-diagnostic exception boundary because public failures carry a scalar DiagnosticStatus.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 96,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded"
+      },
+      {
+        "exception_reason": "The interpreted public subclass boundary delegates evaluation to a compiled core helper.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 72,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition"
+      },
+      {
+        "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
+        "has_instance_dict": true,
+        "instance_size_bytes": 104,
+        "qualified_name": "fast_fsm.core.TransitionError"
+      }
+    ],
+    "runtime_layouts": [
+      {
+        "dictoffset": 16,
+        "has_instance_dict": true,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticBudgetExceeded"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticLimits"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics.DiagnosticStatus"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticEdge"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.AlwaysCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.AndCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.ComparisonCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.CooldownCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.ElapsedCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.KeyExistsCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.NeverCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.NotCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.OrCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.RegexCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.TimeoutCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.condition_templates.ValueInSetCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions.AsyncCondition"
+      },
+      {
+        "dictoffset": -1,
+        "has_instance_dict": true,
+        "qualified_name": "fast_fsm.conditions.CompiledFuncCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions.Condition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions.FuncCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions.NegatedCondition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions._DeferredCompoundCheck"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions._DeferredGuardResult"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.conditions._DeferredNegatedGuardResult"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.AsyncDeclarativeState"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.AsyncStateMachine"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.CallbackState"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.DeclarativeState"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.FSMBuilder"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.FSMLoggingHandle"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.FSMTraceEvent"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.State"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.StateMachine"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.TransitionEntry"
+      },
+      {
+        "dictoffset": 16,
+        "has_instance_dict": true,
+        "qualified_name": "fast_fsm.core.TransitionError"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.TransitionRecord"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core.TransitionResult"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._FSMStreamHandler"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._GraphSnapshot"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._GraphTransition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._PreparedDispatch"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._PreparedTransition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.validation.EnhancedFSMValidator"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.validation.FSMValidator"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.validation.ValidationIssue"
+      }
+    ]
+  },
+  "toolchain": {
+    "mypy": "1.17.1",
+    "mypyc": "1.17.1",
+    "pytest": "8.4.1",
+    "pytest_cov": "6.2.1",
+    "python": "3.12.10",
+    "ruff": "0.12.11",
+    "setuptools": "80.9.0",
+    "sphinx": "9.1.0",
+    "ty": "0.0.1a19",
+    "uv": "0.12.6",
+    "wheel": "0.45.1"
+  }
+}

@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 project = "Fast FSM"
 copyright = "2026, Fast FSM Contributors"
 author = "Fast FSM Contributors"
-release = "0.1.0"
+version = "0.3"
+release = "0.3.0"
 
 # -- General configuration ---------------------------------------------
 extensions = [

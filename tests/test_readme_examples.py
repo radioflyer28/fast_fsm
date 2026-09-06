@@ -7,7 +7,7 @@ of fast_fsm, using composition instead of inheritance where needed.
 
 import pytest
 
-from fast_fsm.core import StateMachine, State
+from fast_fsm.core import StateMachine, State, TransitionError
 from fast_fsm.conditions import Condition, FuncCondition
 
 
@@ -40,6 +40,31 @@ class TestReadmeExamples:
         result = fsm.trigger("complete")
         assert result.success
         assert fsm.current_state.name == "idle"
+
+    def test_error_handling_example_runs_as_one_sequence(self):
+        """Execute README's structured-result and chaining example in order."""
+        idle = State("idle")
+        processing = State("processing")
+        fsm = StateMachine(idle, name="readme_error_handling")
+        fsm.add_state(processing)
+        fsm.add_transition("start", "idle", "processing")
+
+        result = fsm.trigger("start")
+        if not result.success:
+            assert result.stage is not None
+            assert result.cause is None or isinstance(result.cause, BaseException)
+            if result.committed:
+                assert fsm.current_state.name == result.to_state
+
+        try:
+            result.raise_if_failed()
+        except TransitionError as exc:
+            assert exc.result is result
+
+        target = result.raise_if_failed().to_state
+
+        assert target == "processing"
+        assert fsm.current_state is processing
 
     def test_conditional_transitions_example(self):
         """Test conditional transitions example"""

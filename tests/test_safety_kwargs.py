@@ -8,7 +8,15 @@ problematic context data passed through **kwargs in trigger() calls.
 import pytest
 import logging
 from unittest.mock import Mock
-from fast_fsm.core import StateMachine, State, CompiledFuncCondition
+from fast_fsm.core import (
+    AsyncDeclarativeState,
+    AsyncStateMachine,
+    CompiledFuncCondition,
+    DeclarativeState,
+    State,
+    StateMachine,
+    transition,
+)
 from fast_fsm.conditions import AsyncCondition, Condition, FuncCondition
 
 
@@ -34,6 +42,32 @@ class ExceptionCondition(Condition):
 
     def check(self, **kwargs):
         raise self.exception
+
+
+class RecordingCondition(Condition):
+    """Capture the exact guard context supplied by each synchronous path."""
+
+    def __init__(self, result=True):
+        super().__init__("recording", "Records guard context")
+        self.result = result
+        self.calls = []
+
+    def check(self, *args, **kwargs):
+        self.calls.append((args, kwargs, id(kwargs)))
+        return self.result
+
+
+class RecordingAsyncCondition(AsyncCondition):
+    """Capture the exact guard context supplied by each asynchronous path."""
+
+    def __init__(self, result=True):
+        super().__init__("recording_async", "Records async guard context")
+        self.result = result
+        self.calls = []
+
+    async def check_async(self, *args, **kwargs):
+        self.calls.append((args, kwargs, id(kwargs)))
+        return self.result
 
 
 @pytest.fixture
@@ -149,11 +183,298 @@ class TestKwargsSanitization:
         assert condition.received_kwargs == {}
 
 
+class TestGuardContextParity:
+    """D-12/D-13 guard preparation is identical across all dispatch paths."""
+
+    @staticmethod
+    def _context_kwargs():
+        invalid = {f"_private_{index}": index for index in range(55)}
+        invalid["x" * 101] = "too-long"
+        invalid.update({f"safe_{index}": object() for index in range(55)})
+        return invalid
+
+    @staticmethod
+    def _sync_machine(condition):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="guard_context_sync")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+        return machine
+
+    @staticmethod
+    def _async_machine(condition):
+        initial = State("initial")
+        target = State("target")
+        machine = AsyncStateMachine(initial, name="guard_context_async")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target, condition)
+        return machine
+
+    def test_sanitize_filters_before_capping_and_preserves_value_identity(self):
+        machine = self._sync_machine(RecordingCondition())
+        raw_kwargs = self._context_kwargs()
+
+        sanitized = machine._sanitize_condition_kwargs(raw_kwargs)
+
+        assert list(sanitized) == [f"safe_{index}" for index in range(50)]
+        assert len(sanitized) == 50
+        assert sanitized["safe_0"] is raw_kwargs["safe_0"]
+        assert raw_kwargs["_private_0"] == 0
+        assert "x" * 101 in raw_kwargs
+
+    def test_sync_can_and_trigger_receive_equivalent_fresh_context(self):
+        condition = RecordingCondition()
+        machine = self._sync_machine(condition)
+        first = object()
+        second = object()
+        raw_kwargs = self._context_kwargs()
+        original_keys = list(raw_kwargs)
+
+        assert machine.can_trigger("go", first, second, **raw_kwargs)
+        assert machine.trigger("go", first, second, **raw_kwargs).success
+
+        assert len(condition.calls) == 2
+        first_call, second_call = condition.calls
+        assert first_call[0][0] is first
+        assert first_call[0][1] is second
+        assert second_call[0][0] is first
+        assert second_call[0][1] is second
+        assert first_call[1] == second_call[1]
+        assert first_call[2] != second_call[2]
+        assert list(first_call[1]) == [f"safe_{index}" for index in range(50)]
+        assert list(raw_kwargs) == original_keys
+
+    @pytest.mark.asyncio
+    async def test_async_can_and_trigger_receive_equivalent_fresh_context(self):
+        condition = RecordingAsyncCondition()
+        machine = self._async_machine(condition)
+        first = object()
+        second = object()
+        raw_kwargs = self._context_kwargs()
+        original_keys = list(raw_kwargs)
+
+        assert await machine.can_trigger_async("go", first, second, **raw_kwargs)
+        assert (await machine.trigger_async("go", first, second, **raw_kwargs)).success
+
+        assert len(condition.calls) == 2
+        first_call, second_call = condition.calls
+        assert first_call[0][0] is first
+        assert first_call[0][1] is second
+        assert second_call[0][0] is first
+        assert second_call[0][1] is second
+        assert first_call[1] == second_call[1]
+        assert first_call[2] != second_call[2]
+        assert list(first_call[1]) == [f"safe_{index}" for index in range(50)]
+        assert list(raw_kwargs) == original_keys
+
+    def test_missing_or_unconditional_transition_does_not_prepare_context(
+        self, monkeypatch
+    ):
+        initial = State("initial")
+        target = State("target")
+        machine = StateMachine(initial, name="no_guard_context")
+        machine.add_state(target)
+        machine.add_transition("go", initial, target)
+
+        calls = []
+        original = StateMachine._sanitize_condition_kwargs
+
+        def record_sanitization(instance, kwargs):
+            calls.append(kwargs)
+            return original(instance, kwargs)
+
+        monkeypatch.setattr(
+            StateMachine, "_sanitize_condition_kwargs", record_sanitization
+        )
+        assert not machine.can_trigger("missing", payload="value")
+        assert machine.trigger("go", payload="value").success
+        assert calls == []
+
+
+class TestDeclarativeGuardContextParity:
+    """Decorator guards share preparation while handlers retain raw payloads."""
+
+    @staticmethod
+    def _raw_kwargs():
+        raw = {"_secret": object(), "x" * 101: object()}
+        raw.update({f"safe_{index}": object() for index in range(55)})
+        return raw
+
+    @staticmethod
+    def _assert_sanitized_calls(calls, marker, raw):
+        assert len(calls) == 2
+        first, second = calls
+        assert first[0] == (marker,)
+        assert second[0] == (marker,)
+        assert first[1] == second[1]
+        assert first[2] != second[2]
+        assert list(first[1]) == [f"safe_{index}" for index in range(50)]
+        assert "_secret" not in first[1]
+        assert "x" * 101 not in first[1]
+        assert list(raw) == [
+            "_secret",
+            "x" * 101,
+            *[f"safe_{index}" for index in range(55)],
+        ]
+
+    def test_sync_decorator_guard_sanitizes_can_and_trigger_only(self):
+        condition = RecordingCondition()
+
+        class Source(DeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.handler_kwargs = None
+
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            def handle_advance(self, *args, **kwargs):
+                self.handler_kwargs = kwargs
+                return True
+
+        marker = object()
+        raw = self._raw_kwargs()
+        source = Source("source")
+        target = State("target")
+        machine = StateMachine(source, name="sync_declarative_context")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+        assert machine.can_trigger("advance", marker, **raw)
+        assert machine.trigger("advance", marker, **raw).success
+        self._assert_sanitized_calls(condition.calls, marker, raw)
+        assert source.handler_kwargs == raw
+
+    @pytest.mark.asyncio
+    async def test_async_decorator_guard_sanitizes_can_and_trigger_only(self):
+        condition = RecordingAsyncCondition()
+
+        class Source(AsyncDeclarativeState):
+            def __init__(self, name):
+                super().__init__(name)
+                self.handler_kwargs = None
+
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            async def handle_advance(self, *args, **kwargs):
+                self.handler_kwargs = kwargs
+                return True
+
+        marker = object()
+        raw = self._raw_kwargs()
+        source = Source("source")
+        target = State("target")
+        machine = AsyncStateMachine(source, name="async_declarative_context")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+
+        assert await machine.can_trigger_async("advance", marker, **raw)
+        assert (await machine.trigger_async("advance", marker, **raw)).success
+        self._assert_sanitized_calls(condition.calls, marker, raw)
+        assert source.handler_kwargs == raw
+
+
+class TestDeclarativeGuardEdgeCases:
+    """The shared declarative seam handles every supported guard shape."""
+
+    @staticmethod
+    def _sync_machine(condition):
+        class Source(DeclarativeState):
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            def handle_advance(self, *args, **kwargs):
+                return True
+
+        source = Source("source")
+        target = State("target")
+        machine = StateMachine(source, name="sync_declarative_guard_edge")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+        return machine
+
+    @staticmethod
+    def _async_machine(condition):
+        class Source(AsyncDeclarativeState):
+            @transition(
+                "advance",
+                from_state="source",
+                to_state="target",
+                condition=condition,
+            )
+            async def handle_advance(self, *args, **kwargs):
+                return True
+
+        source = Source("source")
+        target = State("target")
+        machine = AsyncStateMachine(source, name="async_declarative_guard_edge")
+        machine.add_state(target)
+        machine.add_transition("advance", source, target)
+        return machine
+
+    @pytest.mark.parametrize(
+        "condition",
+        (
+            lambda *args, **kwargs: kwargs == {"allowed": "yes"},
+            object(),
+        ),
+    )
+    def test_sync_declarative_callable_and_truthy_guard_shapes(self, condition):
+        machine = self._sync_machine(condition)
+
+        assert machine.can_trigger("advance", allowed="yes")
+        assert machine.trigger("advance", allowed="yes").success
+
+    def test_sync_declarative_guard_exception_is_a_failed_transition(self):
+        def exploding_guard(*args, **kwargs):
+            raise ValueError("guard failed")
+
+        machine = self._sync_machine(exploding_guard)
+
+        assert not machine.can_trigger("advance")
+        assert not machine.trigger("advance").success
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "condition",
+        (
+            lambda *args, **kwargs: kwargs == {"allowed": "yes"},
+            object(),
+        ),
+    )
+    async def test_async_declarative_callable_and_truthy_guard_shapes(self, condition):
+        machine = self._async_machine(condition)
+
+        assert await machine.can_trigger_async("advance", allowed="yes")
+        assert (await machine.trigger_async("advance", allowed="yes")).success
+
+    @pytest.mark.asyncio
+    async def test_async_declarative_guard_exception_is_a_failed_transition(self):
+        def exploding_guard(*args, **kwargs):
+            raise ValueError("guard failed")
+
+        machine = self._async_machine(exploding_guard)
+
+        assert not await machine.can_trigger_async("advance")
+        assert not (await machine.trigger_async("advance")).success
+
+
 class TestConditionExceptionHandling:
     """Test exception handling in conditions"""
 
     def test_condition_exception_caught(self, basic_fsm, caplog):
-        """Test that condition exceptions are caught and logged"""
+        """Guard failures retain their cause without disclosing its text."""
         fsm, initial_state, target_state = basic_fsm
         condition = ExceptionCondition(ValueError("test error"))
 
@@ -163,13 +484,12 @@ class TestConditionExceptionHandling:
             result = fsm.trigger("test_trigger", test_arg="value")
 
         assert not result.success
-        assert (
-            result.error
-            == "Condition 'exception_condition' raised exception: test error"
-        )
-        assert (
-            "FAILED - Condition 'exception_condition' raised exception" in caplog.text
-        )
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert result.cause is condition.exception
+        assert "test error" not in result.error
+        assert "test error" not in caplog.text
+        assert "FAILED guard type=ValueError" in caplog.text
 
         # FSM state should not have changed
         assert fsm.current_state.name == "initial"
@@ -184,7 +504,8 @@ class TestConditionExceptionHandling:
 
         result = fsm.trigger("runtime_trigger")
         assert not result.success
-        assert "runtime error" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.cause is condition.exception
 
         # Test AttributeError
         condition2 = ExceptionCondition(AttributeError("attribute error"))
@@ -192,7 +513,8 @@ class TestConditionExceptionHandling:
 
         result = fsm.trigger("attr_trigger")
         assert not result.success
-        assert "attribute error" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.cause is condition2.exception
 
     def test_condition_exception_with_kwargs(self, basic_fsm):
         """Test exception handling preserves original kwargs context"""

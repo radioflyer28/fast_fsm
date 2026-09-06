@@ -6,37 +6,12 @@ All tests verify the generated Mermaid/Markdown string structure without
 rendering it.
 """
 
+import copy
+
 import pytest
 
 from fast_fsm import StateMachine, State, FuncCondition, to_mermaid
 from fast_fsm import to_mermaid_fenced, to_mermaid_document, to_plantuml, to_json
-from fast_fsm.visualization import _mermaid_id
-
-
-# ---------------------------------------------------------------------------
-# _mermaid_id helper
-# ---------------------------------------------------------------------------
-
-
-class TestMermaidId:
-    def test_plain_name_unchanged(self):
-        assert _mermaid_id("idle") == "idle"
-
-    def test_snake_case_unchanged(self):
-        assert _mermaid_id("my_state") == "my_state"
-
-    def test_spaces_replaced(self):
-        assert _mermaid_id("my state") == "my_state"
-
-    def test_hyphens_replaced(self):
-        assert _mermaid_id("my-state") == "my_state"
-
-    def test_dots_replaced(self):
-        assert _mermaid_id("state.1") == "state_1"
-
-    def test_mixed_special_chars(self):
-        result = _mermaid_id("a b-c.d")
-        assert result == "a_b_c_d"
 
 
 # ---------------------------------------------------------------------------
@@ -91,19 +66,19 @@ class TestToMermaidBasic:
 
     def test_initial_state_arrow_present(self, simple_fsm):
         out = to_mermaid(simple_fsm)
-        assert "[*] --> idle" in out
+        assert "[*] --> s1" in out
 
     def test_all_transitions_present(self, simple_fsm):
         out = to_mermaid(simple_fsm)
-        assert "idle --> running : start" in out
-        assert "running --> done : finish" in out
+        assert "s1 --> s2 : start" in out
+        assert "s2 --> s0 : finish" in out
 
     def test_cyclic_transitions(self, cyclic_fsm):
         out = to_mermaid(cyclic_fsm)
-        assert "[*] --> red" in out
-        assert "red --> green : timer" in out
-        assert "green --> yellow : timer" in out
-        assert "yellow --> red : timer" in out
+        assert "[*] --> s1" in out
+        assert "s1 --> s0 : timer" in out
+        assert "s0 --> s2 : timer" in out
+        assert "s2 --> s1 : timer" in out
 
     def test_returns_string(self, simple_fsm):
         assert isinstance(to_mermaid(simple_fsm), str)
@@ -112,6 +87,34 @@ class TestToMermaidBasic:
         """No blank lines should appear in the output."""
         for line in to_mermaid(simple_fsm).splitlines():
             assert line.strip() != "" or line == ""
+
+    def test_renderer_docstrings_snapshot_opaque_id_output(self):
+        """Public examples stay synchronized with the rendered ID-based format."""
+        mermaid_snapshot = """stateDiagram-v2
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop"""
+        plantuml_snapshot = """@startuml
+        state "idle" as s0
+        state "running" as s1
+        [*] --> s0
+        s0 --> s1 : start
+        s1 --> s0 : stop
+        @enduml"""
+        fenced_snapshot = """        ```mermaid
+        stateDiagram-v2
+            state "idle" as s0
+            state "running" as s1
+            [*] --> s0
+            s0 --> s1 : start
+            s1 --> s0 : stop
+        ```"""
+
+        assert mermaid_snapshot in to_mermaid.__doc__
+        assert plantuml_snapshot in to_plantuml.__doc__
+        assert fenced_snapshot in to_mermaid_fenced.__doc__
 
 
 # ---------------------------------------------------------------------------
@@ -148,11 +151,11 @@ class TestToMermaidConditions:
     def test_condition_omitted_when_disabled(self, conditional_fsm):
         out = to_mermaid(conditional_fsm, show_conditions=False)
         assert "[positive]" not in out
-        assert "waiting --> active : go" in out
+        assert "s1 --> s0 : go" in out
 
     def test_unconditional_transition_unaffected(self, conditional_fsm):
         out = to_mermaid(conditional_fsm)
-        assert "active --> waiting : reset" in out
+        assert "s0 --> s1 : reset" in out
 
     def test_no_brackets_on_transitions_without_conditions(self, simple_fsm):
         out = to_mermaid(simple_fsm)
@@ -167,28 +170,30 @@ class TestToMermaidConditions:
 # ---------------------------------------------------------------------------
 
 
-class TestToMermaidSanitization:
+class TestToMermaidOpaqueIdentity:
     def test_hyphenated_state_name_aliased(self):
         fsm = StateMachine(State("on-hold"), name="Dash")
         fsm.add_state(State("active"))
         fsm.add_transition("resume", "on-hold", "active")
         out = to_mermaid(fsm)
-        # Alias declaration should appear
-        assert 'state "on-hold" as on_hold' in out
-        # Transitions should use the safe ID
-        assert "on_hold --> active : resume" in out
+        assert 'state "on-hold" as s1' in out
+        assert 'state "active" as s0' in out
+        assert "s1 --> s0 : resume" in out
 
     def test_spaced_state_name_aliased(self):
         fsm = StateMachine(State("on hold"), name="Space")
         fsm.add_state(State("active"))
         fsm.add_transition("resume", "on hold", "active")
         out = to_mermaid(fsm)
-        assert 'state "on hold" as on_hold' in out
-        assert "on_hold --> active : resume" in out
+        assert 'state "on hold" as s1' in out
+        assert 'state "active" as s0' in out
+        assert "s1 --> s0 : resume" in out
 
-    def test_plain_names_no_alias(self, simple_fsm):
+    def test_plain_names_still_receive_opaque_aliases(self, simple_fsm):
         out = to_mermaid(simple_fsm)
-        assert "state " not in out  # no alias declarations needed
+        assert 'state "done" as s0' in out
+        assert 'state "idle" as s1' in out
+        assert 'state "running" as s2' in out
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +205,7 @@ class TestToMermaidEdgeCases:
     def test_single_state_no_transitions(self):
         fsm = StateMachine(State("lonely"), name="Solo")
         out = to_mermaid(fsm)
-        assert "[*] --> lonely" in out
+        assert "[*] --> s0" in out
         assert "stateDiagram-v2" in out
 
     def test_works_with_async_state_machine(self):
@@ -210,8 +215,8 @@ class TestToMermaidEdgeCases:
         fsm.add_state(State("done"))
         fsm.add_transition("go", "wait", "done")
         out = to_mermaid(fsm)
-        assert "[*] --> wait" in out
-        assert "wait --> done : go" in out
+        assert "[*] --> s1" in out
+        assert "s1 --> s0 : go" in out
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +233,8 @@ class TestToMermaidFenced:
     def test_diagram_content_preserved(self, simple_fsm):
         out = to_mermaid_fenced(simple_fsm)
         assert "stateDiagram-v2" in out
-        assert "[*] --> idle" in out
-        assert "idle --> running : start" in out
+        assert "[*] --> s1" in out
+        assert "s1 --> s2 : start" in out
 
     def test_title_forwarded(self, simple_fsm):
         out = to_mermaid_fenced(simple_fsm, title="My Title")
@@ -320,11 +325,60 @@ class TestToMermaidDocumentWithMatrix:
         doc = to_mermaid_document(fsm, adjacency_matrix=adj)
         assert "stateDiagram-v2" in doc
 
-    def test_empty_adjacency_dict_does_not_crash(self, simple_fsm):
-        """Passing an empty dict should not raise."""
-        doc = to_mermaid_document(simple_fsm, adjacency_matrix={})
-        assert isinstance(doc, str)
-        assert "## State Diagram" in doc
+    def test_empty_adjacency_dict_is_rejected(self, simple_fsm):
+        """A supplied matrix must represent this exact captured snapshot."""
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(simple_fsm, adjacency_matrix={})
+
+    def test_opt_in_adjacency_is_derived_from_the_captured_snapshot(self, simple_fsm):
+        document = to_mermaid_document(simple_fsm, include_adjacency=True)
+
+        assert "## State Adjacency Matrix" in document
+        assert "## Transitions" in document
+
+    def test_malformed_adjacency_inputs_fail_with_the_fixed_contract(
+        self, fsm_and_matrix
+    ):
+        """Each stale or malformed dense shape is rejected without rendering it."""
+        fsm, adjacency = fsm_and_matrix
+
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=[])
+
+        wrong_shape = copy.deepcopy(adjacency)
+        wrong_shape["matrix"] = []
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_shape)
+
+        wrong_transition = copy.deepcopy(adjacency)
+        wrong_transition["transitions"][0] = {}
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_transition)
+
+        extra_transition = copy.deepcopy(adjacency)
+        extra_transition["transitions"].append({})
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=extra_transition)
+
+        wrong_cell = copy.deepcopy(adjacency)
+        for row in wrong_cell["matrix"]:
+            for cell in row:
+                if cell:
+                    cell.clear()
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(fsm, adjacency_matrix=wrong_cell)
 
 
 # ---------------------------------------------------------------------------
@@ -341,16 +395,16 @@ class TestToPlantUMLBasic:
 
     def test_initial_state_marker(self, simple_fsm):
         out = to_plantuml(simple_fsm)
-        assert "[*] --> idle" in out
+        assert "[*] --> s1" in out
 
     def test_all_transitions_present(self, simple_fsm):
         out = to_plantuml(simple_fsm)
-        assert "idle --> running : start" in out
-        assert "running --> done : finish" in out
+        assert "s1 --> s2 : start" in out
+        assert "s2 --> s0 : finish" in out
 
     def test_terminal_state_marked(self, simple_fsm):
         out = to_plantuml(simple_fsm)
-        assert "done --> [*]" in out
+        assert "s0 --> [*]" in out
 
     def test_cyclic_no_terminal_states(self, cyclic_fsm):
         out = to_plantuml(cyclic_fsm)
@@ -379,15 +433,15 @@ class TestToPlantUMLConditions:
     def test_condition_hidden_when_disabled(self, conditional_fsm):
         out = to_plantuml(conditional_fsm, show_conditions=False)
         assert "[positive]" not in out
-        assert "waiting --> active : go" in out
+        assert "s1 --> s0 : go" in out
 
 
 class TestToPlantUMLEdgeCases:
     def test_single_state_no_transitions(self):
         fsm = StateMachine(State("lonely"), name="Solo")
         out = to_plantuml(fsm)
-        assert "[*] --> lonely" in out
-        assert "lonely --> [*]" in out
+        assert "[*] --> s0" in out
+        assert "s0 --> [*]" in out
 
     def test_works_with_async_state_machine(self):
         from fast_fsm import AsyncStateMachine
@@ -396,9 +450,9 @@ class TestToPlantUMLEdgeCases:
         fsm.add_state(State("done"))
         fsm.add_transition("go", "wait", "done")
         out = to_plantuml(fsm)
-        assert "[*] --> wait" in out
-        assert "wait --> done : go" in out
-        assert "done --> [*]" in out
+        assert "[*] --> s1" in out
+        assert "s1 --> s0 : go" in out
+        assert "s0 --> [*]" in out
 
 
 # ---------------------------------------------------------------------------

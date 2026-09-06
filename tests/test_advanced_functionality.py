@@ -246,13 +246,17 @@ class TestStateTriggerMethods:
         # Regular trigger should handle the exception gracefully
         result = fsm.trigger("test")
         assert not result.success
-        assert result.error and "raised exception" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert isinstance(result.cause, ValueError)
         assert fsm.current_state.name == "state1"
 
         # safe_trigger should also handle the exception gracefully
         result = fsm.safe_trigger("test")
         assert not result.success
-        assert result.error and "raised exception" in result.error
+        assert result.error == "Transition guard raised an exception"
+        assert result.stage == "guard"
+        assert isinstance(result.cause, ValueError)
         assert fsm.current_state.name == "state1"
 
         # Test with non-exception condition
@@ -318,7 +322,7 @@ class TestStateCallbacks:
         assert execution_log == ["exit_state2", "enter_state3"]
 
     def test_callback_exception_handling(self):
-        """Test that exceptions in callbacks don't break transitions"""
+        """Callback failures report their commit boundary without rollback."""
 
         def failing_exit(*args, **kwargs):
             raise RuntimeError("Exit callback failed")
@@ -334,19 +338,23 @@ class TestStateCallbacks:
         fsm.add_state(state2)
         fsm.add_transition("go", "state1", "state2")
 
-        # Transition should succeed even with exit callback exception
         result = fsm.trigger("go")
-        assert result.success  # Transition still completes
-        assert fsm.current_state.name == "state2"
+        assert not result.success
+        assert not result.committed
+        assert result.stage == "source-exit"
+        assert fsm.current_state.name == "state1"
 
         # Test enter callback exception
+        state2 = State("state2")
         state3 = State.create("state3", on_enter=failing_enter)
+        fsm = StateMachine(initial_state=state2, name="enter_callback_exception_test")
         fsm.add_state(state3)
         fsm.add_transition("go_again", "state2", "state3")
 
-        # Transition should succeed even with enter callback exception
         result = fsm.trigger("go_again")
-        assert result.success  # Transition still completes
+        assert not result.success
+        assert result.committed
+        assert result.stage == "destination-enter"
         assert fsm.current_state.name == "state3"
 
     def test_callback_with_args_and_kwargs(self):
@@ -764,6 +772,34 @@ class TestForceStateAndReset:
             "listener.after",
         ]
 
+    def test_force_state_keeps_direct_control_callbacks_best_effort(self):
+        """Synthetic control keeps its legacy callback-completion contract."""
+        from fast_fsm import CallbackState
+
+        events = []
+
+        def broken_exit(*_args, **_kwargs):
+            events.append("source-exit")
+            raise RuntimeError("force-state callback failure")
+
+        source = CallbackState("source", on_exit=broken_exit)
+        destination = CallbackState(
+            "destination", on_enter=lambda *_args, **_kwargs: events.append("enter")
+        )
+        fsm = StateMachine(source, name="force-state-compatibility")
+        fsm.add_state(destination)
+
+        class Listener:
+            def after_transition(self, *_args, **_kwargs):
+                events.append("after")
+
+        fsm.add_listener(Listener())
+
+        fsm.force_state("destination")
+
+        assert fsm.current_state is destination
+        assert events == ["source-exit", "enter", "after"]
+
     # ------------------------------------------------------------------
     # reset()
     # ------------------------------------------------------------------
@@ -1009,6 +1045,19 @@ class TestClone:
         clone.trigger("finish")
         assert fsm.current_state_name == "running"
 
+    def test_clone_has_independent_sync_ownership_primitives(self):
+        """Cloning never transfers an active lock or owner marker to a peer."""
+        fsm = self._make_fsm()
+        original_owner = fsm._acquire_sync_ownership("trigger")
+        try:
+            clone = fsm.clone()
+            assert clone._sync_ownership_lock is not fsm._sync_ownership_lock
+            assert clone._sync_owner_thread_id is None
+            clone.force_state("running")
+            assert clone.current_state_name == "running"
+        finally:
+            fsm._release_sync_ownership(original_owner)
+
     def test_clone_adding_transition_does_not_affect_original(self):
         """Adding a transition to the clone doesn't appear in the original."""
         fsm = self._make_fsm()
@@ -1230,8 +1279,8 @@ class TestMachineCallbacks:
     # Exception safety
     # ------------------------------------------------------------------
 
-    def test_on_enter_exception_does_not_abort_transition(self):
-        """A raising on_enter callback must not stop the transition."""
+    def test_on_enter_exception_returns_postcommit_failure(self):
+        """A raising destination callback leaves the committed destination truthful."""
         fsm = self._make_fsm()
 
         def boom(*a, **kw):
@@ -1240,11 +1289,13 @@ class TestMachineCallbacks:
         fsm.on_enter("running", boom)
 
         result = fsm.trigger("start")
-        assert result.success
+        assert not result.success
+        assert result.committed
+        assert result.stage == "destination-enter-callback"
         assert fsm.current_state_name == "running"
 
-    def test_on_exit_exception_does_not_abort_transition(self):
-        """A raising on_exit callback must not stop the transition."""
+    def test_on_exit_exception_returns_precommit_failure(self):
+        """A raising source callback preserves the source state."""
         fsm = self._make_fsm()
 
         def boom(*a, **kw):
@@ -1253,8 +1304,10 @@ class TestMachineCallbacks:
         fsm.on_exit("idle", boom)
 
         result = fsm.trigger("start")
-        assert result.success
-        assert fsm.current_state_name == "running"
+        assert not result.success
+        assert not result.committed
+        assert result.stage == "source-exit-callback"
+        assert fsm.current_state_name == "idle"
 
     # ------------------------------------------------------------------
     # clone() copies callbacks
@@ -1485,10 +1538,6 @@ class TestToDict:
         """Guards are callable and therefore NOT in to_dict() output."""
         from fast_fsm import FuncCondition
 
-        fsm = StateMachine.quick_build(
-            "off",
-            [("turn_on", "off", "on")],
-        )
         fsm2 = StateMachine.from_dict(
             {
                 "initial": "off",
@@ -1615,6 +1664,87 @@ class TestTransitionHistory:
         fsm.trigger("go")
         assert len(fsm.history) == 1
         fsm.enable_history(max_entries=10)  # replaces
+        assert fsm.history == []
+        assert fsm._history.maxlen == 10
+
+    @pytest.mark.parametrize("capacity", [0, -1, -100])
+    def test_history_rejects_non_positive_capacity_without_mutation(self, capacity):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=3)
+        fsm.trigger("go")
+        previous_buffer = fsm._history
+        previous_records = fsm.history
+        previous_max_entries = fsm._history_max
+
+        with pytest.raises(ValueError):
+            fsm.enable_history(capacity)
+
+        assert fsm._history is previous_buffer
+        assert fsm.history == previous_records
+        assert fsm._history_max == previous_max_entries
+
+    @pytest.mark.parametrize("capacity", [True, None, 1.0, "1", object()])
+    def test_history_rejects_non_integer_capacity_without_mutation(self, capacity):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=3)
+        fsm.trigger("go")
+        previous_buffer = fsm._history
+        previous_records = fsm.history
+        previous_max_entries = fsm._history_max
+
+        with pytest.raises(TypeError):
+            fsm.enable_history(capacity)
+
+        assert fsm._history is previous_buffer
+        assert fsm.history == previous_records
+        assert fsm._history_max == previous_max_entries
+
+    def test_history_capacity_one_evicts_oldest_record_in_fifo_order(self):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=1)
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+
+        records = fsm.history
+        assert len(records) == 1
+        assert (records[0].from_state, records[0].to_state) == ("b", "c")
+
+    def test_history_fifo_overflow_preserves_chronological_timestamps(self):
+        fsm = self._make_fsm()
+        fsm.enable_history(max_entries=2)
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+        fsm.trigger("back")
+
+        records = fsm.history
+        assert [(record.from_state, record.to_state) for record in records] == [
+            ("b", "c"),
+            ("c", "a"),
+        ]
+        assert records[0].timestamp <= records[1].timestamp
+
+    def test_history_read_returns_a_distinct_defensive_list_each_time(self):
+        fsm = self._make_fsm()
+        fsm.enable_history()
+        fsm.trigger("go")
+
+        first = fsm.history
+        second = fsm.history
+        first.clear()
+
+        assert first is not second
+        assert len(second) == 1
+        assert len(fsm.history) == 1
+
+    def test_disabled_history_keeps_no_internal_buffer_after_transitions(self):
+        fsm = self._make_fsm()
+
+        fsm.trigger("go")
+        fsm.trigger("go")
+
+        assert fsm._history is None
         assert fsm.history == []
 
     def test_clone_does_not_inherit_history(self):

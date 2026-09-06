@@ -4,16 +4,241 @@ Tests for configure_fsm_logging and set_fsm_logging_level.
 All tests use real logging infrastructure — no mocking.
 """
 
+import ast
+import asyncio
 import logging
+import threading
+from pathlib import Path
+import uuid
+from typing import Any
 
 import pytest
 
 from fast_fsm.core import (
+    AsyncStateMachine,
+    DeclarativeState,
+    FSMTraceEvent,
     State,
     StateMachine,
     configure_fsm_logging,
     set_fsm_logging_level,
+    transition,
 )
+from fast_fsm.conditions import FuncCondition
+
+
+TRACE_LEVEL = logging.DEBUG - 5
+TRIGGER_SENTINEL = "trigger-secret-19"
+SOURCE_SENTINEL = "source-secret-19"
+DESTINATION_SENTINEL = "destination-secret-19"
+POSITIONAL_SENTINEL = "positional-secret-19"
+KEYWORD_SENTINEL = "keyword-secret-19"
+EXCEPTION_SENTINEL = "exception-secret-19"
+REPR_SENTINEL = "repr-secret-19"
+MACHINE_SENTINEL = "machine-secret-19"
+PRIVATE_KEY_SENTINEL = "_private-key-secret-19"
+INVALID_KEY_SENTINEL = "invalid-key-secret-19-" + "x" * 101
+RAW_SENTINELS = (
+    TRIGGER_SENTINEL,
+    SOURCE_SENTINEL,
+    DESTINATION_SENTINEL,
+    POSITIONAL_SENTINEL,
+    KEYWORD_SENTINEL,
+    EXCEPTION_SENTINEL,
+    REPR_SENTINEL,
+    MACHINE_SENTINEL,
+    PRIVATE_KEY_SENTINEL,
+    INVALID_KEY_SENTINEL,
+)
+
+
+class HostileRepr:
+    """Payload whose representation is both observable and sensitive."""
+
+    def __init__(self) -> None:
+        self.repr_calls = 0
+
+    def __repr__(self) -> str:
+        self.repr_calls += 1
+        return REPR_SENTINEL
+
+
+class CaptureHandler(logging.Handler):
+    """Capture every observable record and formatter surface without mocks."""
+
+    def __init__(self) -> None:
+        super().__init__(TRACE_LEVEL)
+        self.records: list[tuple[Any, Any, dict[str, Any], str]] = []
+        self.setFormatter(logging.Formatter("%(levelname)s:%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(
+            (record.msg, record.args, record.__dict__.copy(), self.format(record))
+        )
+
+
+class ApplicationFilter(logging.Filter):
+    """Identity-bearing filter used to prove library configuration does not mutate it."""
+
+
+class CloseTrackingHandler(CaptureHandler):
+    """Application handler that records whether library configuration closes it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+
+
+def _logger_name(label: str) -> str:
+    return f"fast_fsm.phase19.{label}.{uuid.uuid4().hex}"
+
+
+def _core_function_ast(function_name: str) -> ast.FunctionDef:
+    """Return a public logging function definition from its source contract."""
+
+    source_path = (
+        Path(__file__).resolve().parent.parent / "src" / "fast_fsm" / "core.py"
+    )
+    module = ast.parse(
+        source_path.read_text(encoding="utf-8"), filename=str(source_path)
+    )
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return node
+    raise AssertionError(f"{function_name} is missing from {source_path}")
+
+
+def _contains_raw_secret(value: object, secret: str) -> bool:
+    """Inspect record data without coercing arbitrary caller objects to text."""
+
+    if isinstance(value, str):
+        return secret in value
+    if isinstance(value, dict):
+        return any(
+            _contains_raw_secret(item, secret)
+            for pair in value.items()
+            for item in pair
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_raw_secret(item, secret) for item in value)
+    return False
+
+
+def _assert_no_raw_payload(
+    handler: CaptureHandler,
+    hostile_payload: HostileRepr,
+    stderr: str,
+    *,
+    require_records: bool = True,
+) -> None:
+    """Scan the complete record and formatter surface for every raw secret."""
+
+    if require_records:
+        assert handler.records, "trace configuration must emit at least one fixed event"
+    assert hostile_payload.repr_calls == 0
+    assert all(secret not in stderr for secret in RAW_SENTINELS)
+
+    for message, args, record_dict, formatted in handler.records:
+        assert hostile_payload not in args
+        assert hostile_payload not in record_dict.values()
+        for secret in RAW_SENTINELS:
+            assert secret not in formatted
+            assert not _contains_raw_secret(message, secret)
+            assert not _contains_raw_secret(args, secret)
+            assert not _contains_raw_secret(record_dict, secret)
+
+
+def _sync_trace_machine(
+    logger_name: str, hostile_payload: HostileRepr
+) -> tuple[StateMachine, StateMachine]:
+    source = State(SOURCE_SENTINEL)
+    destination = State(DESTINATION_SENTINEL)
+    success_machine = StateMachine(source, name="sync-trace", logger_name=logger_name)
+    success_machine.add_state(destination)
+    success_machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    failure_machine = StateMachine(
+        State(f"failure-{SOURCE_SENTINEL}"),
+        name="sync-trace-failure",
+        logger_name=logger_name,
+    )
+    failure_target = State(f"failure-{DESTINATION_SENTINEL}")
+    failure_machine.add_state(failure_target)
+    failure_machine.add_transition(
+        f"failure-{TRIGGER_SENTINEL}",
+        failure_machine.current_state,
+        failure_target,
+        FuncCondition(raise_guard, "raising-guard"),
+    )
+
+    assert success_machine.trigger(
+        TRIGGER_SENTINEL,
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        sensitive=KEYWORD_SENTINEL,
+    ).success
+    assert not failure_machine.trigger(
+        f"failure-{TRIGGER_SENTINEL}",
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        sensitive=KEYWORD_SENTINEL,
+    ).success
+    return success_machine, failure_machine
+
+
+def _exercise_standard_trace_confidentiality(
+    logger_name: str, hostile_payload: HostileRepr
+) -> None:
+    """Exercise success and guard failure without relying on library configuration."""
+
+    source = State(SOURCE_SENTINEL)
+    destination = State(DESTINATION_SENTINEL)
+    success_machine = StateMachine(
+        source, name=MACHINE_SENTINEL, logger_name=logger_name
+    )
+    success_machine.add_state(destination)
+    success_machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    failure_source = State(f"failure-{SOURCE_SENTINEL}")
+    failure_destination = State(f"failure-{DESTINATION_SENTINEL}")
+    failure_machine = StateMachine(
+        failure_source, name=MACHINE_SENTINEL, logger_name=logger_name
+    )
+    failure_machine.add_state(failure_destination)
+    failure_machine.add_transition(
+        f"failure-{TRIGGER_SENTINEL}",
+        failure_source,
+        failure_destination,
+        FuncCondition(raise_guard, "raising-guard"),
+    )
+    keyword_args = {
+        "safe": KEYWORD_SENTINEL,
+        PRIVATE_KEY_SENTINEL: KEYWORD_SENTINEL,
+        INVALID_KEY_SENTINEL: KEYWORD_SENTINEL,
+    }
+
+    assert success_machine.trigger(
+        TRIGGER_SENTINEL,
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        **keyword_args,
+    ).success
+    assert not failure_machine.trigger(
+        f"failure-{TRIGGER_SENTINEL}",
+        POSITIONAL_SENTINEL,
+        hostile_payload,
+        **keyword_args,
+    ).success
 
 
 # ---------------------------------------------------------------------------
@@ -32,13 +257,20 @@ class TestConfigureFsmLogging:
         logger = logging.getLogger("fast_fsm.test_cfg_2")
         assert len(logger.handlers) >= 1
 
-    def test_warning_level_removes_handler(self):
-        # First add a handler
-        configure_fsm_logging(logging.INFO, "fast_fsm.test_cfg_3")
-        # Now switch to WARNING — should clear handlers
-        configure_fsm_logging(logging.WARNING, "fast_fsm.test_cfg_3")
-        logger = logging.getLogger("fast_fsm.test_cfg_3")
-        assert logger.handlers == []
+    def test_warning_level_removes_only_library_owned_handlers(self):
+        """Warning configuration must not clear application-owned handlers."""
+
+        logger_name = _logger_name("warning")
+        logger = logging.getLogger(logger_name)
+        application_handler = CaptureHandler()
+        logger.addHandler(application_handler)
+        try:
+            configure_fsm_logging(logging.INFO, logger_name)
+            configure_fsm_logging(logging.WARNING, logger_name)
+            assert logger.handlers == [application_handler]
+        finally:
+            logger.removeHandler(application_handler)
+            application_handler.close()
 
     def test_duplicate_calls_dont_stack_handlers(self):
         for _ in range(5):
@@ -57,6 +289,987 @@ class TestConfigureFsmLogging:
             fsm.trigger("go")
 
         assert any("go" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 strict-RED trace redaction and ownership contracts
+# ---------------------------------------------------------------------------
+
+
+def test_application_only_exact_trace_configuration_is_confidential(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An application handler at TRACE cannot receive raw legacy diagnostics."""
+
+    logger_name = _logger_name("application-exact-trace")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    logger.addHandler(application_handler)
+    logger.setLevel(TRACE_LEVEL)
+    logger.propagate = False
+    try:
+        hostile_payload = HostileRepr()
+        _exercise_standard_trace_confidentiality(logger_name, hostile_payload)
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+    finally:
+        logger.setLevel(prior_level)
+        logger.propagate = prior_propagate
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_application_only_parent_trace_configuration_is_confidential(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A child inheriting application-only TRACE has the same confidentiality guard."""
+
+    parent_name = _logger_name("application-parent-trace")
+    child_name = f"{parent_name}.machine"
+    parent = logging.getLogger(parent_name)
+    child = logging.getLogger(child_name)
+    application_handler = CaptureHandler()
+    prior_parent_level = parent.level
+    prior_parent_propagate = parent.propagate
+    prior_child_level = child.level
+    prior_child_propagate = child.propagate
+    parent.addHandler(application_handler)
+    parent.setLevel(TRACE_LEVEL)
+    parent.propagate = False
+    child.setLevel(logging.NOTSET)
+    child.propagate = True
+    try:
+        hostile_payload = HostileRepr()
+        _exercise_standard_trace_confidentiality(child_name, hostile_payload)
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+    finally:
+        child.setLevel(prior_child_level)
+        child.propagate = prior_child_propagate
+        parent.setLevel(prior_parent_level)
+        parent.propagate = prior_parent_propagate
+        parent.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_default_trace_records_are_metadata_only_for_sync_results(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Default trace output never stores raw data in any handler-visible record."""
+
+    logger_name = _logger_name("sync-default")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=None,
+        )
+        hostile_payload = HostileRepr()
+        _sync_trace_machine(logger_name, hostile_payload)
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_default_trace_records_are_metadata_only_for_async_results(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Async trace stages have the same no-payload record contract as sync ones."""
+
+    logger_name = _logger_name("async-default")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=None,
+        )
+        hostile_payload = HostileRepr()
+        source = State(f"async-{SOURCE_SENTINEL}")
+        destination = State(f"async-{DESTINATION_SENTINEL}")
+        machine = AsyncStateMachine(source, name="async-trace", logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition(f"async-{TRIGGER_SENTINEL}", source, destination)
+
+        result = await machine.trigger_async(
+            f"async-{TRIGGER_SENTINEL}",
+            POSITIONAL_SENTINEL,
+            hostile_payload,
+            sensitive=KEYWORD_SENTINEL,
+        )
+        assert result.success
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_trace_suppresses_legacy_failure_warnings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed async guard cannot leak caller data through any warning record."""
+
+    logger_name = _logger_name("async-failure")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    def raise_failure_observer(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(EXCEPTION_SENTINEL)
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=None,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = AsyncStateMachine(
+            source,
+            name=MACHINE_SENTINEL,
+            logger_name=logger_name,
+        )
+        machine.add_state(destination)
+        machine.add_transition(
+            TRIGGER_SENTINEL,
+            source,
+            destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        machine.on_failed(raise_failure_observer)
+
+        result = await machine.trigger_async(
+            TRIGGER_SENTINEL,
+            hostile_payload,
+            sensitive=KEYWORD_SENTINEL,
+        )
+
+        assert not result.success
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_exact_trace_suppresses_trigger_and_declarative_legacy_diagnostics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Every trigger-adjacent legacy diagnostic remains outside TRACE records."""
+
+    logger_name = _logger_name("trigger-diagnostics")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    class GuardedState(DeclarativeState):
+        @transition(
+            TRIGGER_SENTINEL,
+            from_state=SOURCE_SENTINEL,
+            to_state=DESTINATION_SENTINEL,
+            condition=lambda *_args, **_kwargs: True,
+        )
+        def guarded(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    class AsyncHandlerState(DeclarativeState):
+        @transition(TRIGGER_SENTINEL)
+        async def guarded(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False, redactor=None
+        )
+        hostile_payload = HostileRepr()
+        source = GuardedState(SOURCE_SENTINEL, logger_name=logger_name)
+        destination = State(DESTINATION_SENTINEL)
+        machine = StateMachine(source, name=MACHINE_SENTINEL, logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+        kwargs = {
+            **{f"field_{index}": KEYWORD_SENTINEL for index in range(51)},
+            INVALID_KEY_SENTINEL: KEYWORD_SENTINEL,
+            PRIVATE_KEY_SENTINEL: KEYWORD_SENTINEL,
+        }
+
+        assert machine.trigger(
+            TRIGGER_SENTINEL, POSITIONAL_SENTINEL, hostile_payload, **kwargs
+        ).success
+
+        async_source = AsyncHandlerState(SOURCE_SENTINEL, logger_name=logger_name)
+        async_destination = State(DESTINATION_SENTINEL)
+        sync_machine = StateMachine(
+            async_source, name=MACHINE_SENTINEL, logger_name=logger_name
+        )
+        sync_machine.add_state(async_destination)
+        sync_machine.add_transition(TRIGGER_SENTINEL, async_source, async_destination)
+        assert not sync_machine.trigger(TRIGGER_SENTINEL).success
+
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_trace_suppresses_legacy_warnings_from_explicit_child(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A parent TRACE handler suppresses raw child warnings before propagation."""
+
+    parent_name = _logger_name("parent-trace")
+    child_name = f"{parent_name}.machine"
+    parent = logging.getLogger(parent_name)
+    child = logging.getLogger(child_name)
+    parent_handler = CaptureHandler()
+    child_handler = CaptureHandler()
+    parent.addHandler(parent_handler)
+    child.addHandler(child_handler)
+    prior_child_level = child.level
+    prior_child_propagate = child.propagate
+
+    def raise_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError(EXCEPTION_SENTINEL)
+
+    def raise_failure_observer(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(EXCEPTION_SENTINEL)
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, parent_name, propagate=False, redactor=None
+        )
+        child.setLevel(logging.WARNING)
+        child.propagate = True
+        hostile_payload = HostileRepr()
+
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        sync_machine = StateMachine(
+            source, name=MACHINE_SENTINEL, logger_name=child_name
+        )
+        sync_machine.add_state(destination)
+        sync_machine.add_transition(
+            TRIGGER_SENTINEL,
+            source,
+            destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        sync_machine.on_failed(raise_failure_observer)
+        assert not sync_machine.trigger(
+            TRIGGER_SENTINEL, hostile_payload, sensitive=KEYWORD_SENTINEL
+        ).success
+
+        async_source = State(SOURCE_SENTINEL)
+        async_destination = State(DESTINATION_SENTINEL)
+        async_machine = AsyncStateMachine(
+            async_source, name=MACHINE_SENTINEL, logger_name=child_name
+        )
+        async_machine.add_state(async_destination)
+        async_machine.add_transition(
+            TRIGGER_SENTINEL,
+            async_source,
+            async_destination,
+            FuncCondition(raise_guard, "raising-guard"),
+        )
+        async_machine.on_failed(raise_failure_observer)
+        assert not (
+            await async_machine.trigger_async(
+                TRIGGER_SENTINEL, hostile_payload, sensitive=KEYWORD_SENTINEL
+            )
+        ).success
+
+        stderr = capsys.readouterr().err
+        _assert_no_raw_payload(
+            parent_handler, hostile_payload, stderr, require_records=False
+        )
+        _assert_no_raw_payload(
+            child_handler, hostile_payload, stderr, require_records=False
+        )
+        handle.restore()
+    finally:
+        child.setLevel(prior_child_level)
+        child.propagate = prior_child_propagate
+        child.removeHandler(child_handler)
+        child_handler.close()
+        parent.removeHandler(parent_handler)
+        parent_handler.close()
+
+
+def test_custom_redactor_receives_only_minimum_event_and_safe_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The explicit redactor is the only payload boundary and output is allowlisted."""
+
+    logger_name = _logger_name("redactor")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    redactor_events: list[FSMTraceEvent] = []
+
+    def redactor(event: FSMTraceEvent) -> dict[str, str]:
+        redactor_events.append(event)
+        assert tuple(event.__dataclass_fields__) == (
+            "operation",
+            "stage",
+            "result",
+            "trigger",
+            "source_state",
+            "destination_state",
+            "positional_args",
+            "keyword_args",
+            "error",
+        )
+        return {"operation": "trusted-redaction", "detail": "allowed"}
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        _sync_trace_machine(logger_name, hostile_payload)
+        assert redactor_events
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        assert any(
+            record_dict.get("trace_operation") == "trusted-redaction"
+            for _message, _args, record_dict, _formatted in application_handler.records
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_trace_redactor_follows_reachable_parent_handler() -> None:
+    """A child logger inherits its parent redactor but respects propagation stops."""
+
+    parent_name = _logger_name("redactor-parent")
+    child_name = f"{parent_name}.machine"
+    blocked_name = f"{parent_name}.blocked"
+    parent = logging.getLogger(parent_name)
+    application_handler = CaptureHandler()
+    parent.addHandler(application_handler)
+    redactor_calls = 0
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        nonlocal redactor_calls
+        redactor_calls += 1
+        return {"detail": "parent-redactor"}
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            parent_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        machine = StateMachine(State("source"), logger_name=child_name)
+        machine.add_state(State("destination"))
+        machine.add_transition("advance", "source", "destination")
+
+        assert machine.trigger("advance").success
+        assert redactor_calls == 1
+        assert any(
+            record[2].get("trace_detail") == "parent-redactor"
+            for record in application_handler.records
+        )
+
+        blocked = logging.getLogger(blocked_name)
+        blocked.setLevel(TRACE_LEVEL)
+        blocked.propagate = False
+        blocked_machine = StateMachine(
+            State("blocked-source"), logger_name=f"{blocked_name}.machine"
+        )
+        blocked_machine.add_state(State("blocked-destination"))
+        blocked_machine.add_transition(
+            "advance", "blocked-source", "blocked-destination"
+        )
+
+        assert blocked_machine.trigger("advance").success
+        assert redactor_calls == 1
+    finally:
+        logging.getLogger(blocked_name).setLevel(logging.NOTSET)
+        logging.getLogger(blocked_name).propagate = True
+        handle.restore()
+        parent.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.parametrize(
+    "redactor",
+    (
+        lambda _event: (_ for _ in ()).throw(ValueError(EXCEPTION_SENTINEL)),
+        lambda _event: {"unsafe": POSITIONAL_SENTINEL, "nested": object()},
+        lambda _event: [],
+        lambda _event: {"detail": object()},
+        lambda _event: {"detail": "x" * 201},
+    ),
+    ids=("raising", "unknown-key", "non-mapping", "nested-value", "long-string"),
+)
+def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
+    capsys: pytest.CaptureFixture[str], redactor: object
+) -> None:
+    """A broken redactor never causes raw values to re-enter records or handlers."""
+
+    logger_name = _logger_name("redactor-failure")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        _sync_trace_machine(logger_name, hostile_payload)
+        assert hostile_payload.repr_calls == 0
+        stderr = capsys.readouterr().err
+        assert all(secret not in stderr for secret in RAW_SENTINELS)
+        for message, args, record_dict, formatted in application_handler.records:
+            assert hostile_payload not in args
+            assert hostile_payload not in record_dict.values()
+            assert (
+                record_dict.get("trace_operation") == "redaction_failure"
+                or not application_handler.records
+            )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.parametrize(
+    "exception_type",
+    (KeyboardInterrupt, SystemExit),
+    ids=("keyboard-interrupt", "system-exit"),
+)
+def test_trace_redactor_propagates_process_control_exceptions_without_record(
+    capsys: pytest.CaptureFixture[str], exception_type: type[BaseException]
+) -> None:
+    """Interrupt-like redactor failures must escape before a trace record exists."""
+
+    logger_name = _logger_name("redactor-process-control")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        raise exception_type("stop")
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = StateMachine(source, name=MACHINE_SENTINEL, logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+        with pytest.raises(exception_type):
+            machine.trigger(
+                TRIGGER_SENTINEL,
+                POSITIONAL_SENTINEL,
+                hostile_payload,
+                sensitive=KEYWORD_SENTINEL,
+            )
+
+        assert application_handler.records == []
+        _assert_no_raw_payload(
+            application_handler,
+            hostile_payload,
+            capsys.readouterr().err,
+            require_records=False,
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_trace_redactor_propagates_async_cancellation_without_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cancellation from the synchronous redactor must not become trace metadata."""
+
+    logger_name = _logger_name("redactor-cancellation")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+
+    def redactor(_event: FSMTraceEvent) -> dict[str, str]:
+        raise asyncio.CancelledError()
+
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL,
+            logger_name,
+            propagate=False,
+            redactor=redactor,
+        )
+        hostile_payload = HostileRepr()
+        source = State(SOURCE_SENTINEL)
+        destination = State(DESTINATION_SENTINEL)
+        machine = AsyncStateMachine(
+            source, name=MACHINE_SENTINEL, logger_name=logger_name
+        )
+        machine.add_state(destination)
+        machine.add_transition(TRIGGER_SENTINEL, source, destination)
+
+        with pytest.raises(asyncio.CancelledError):
+            await machine.trigger_async(
+                TRIGGER_SENTINEL,
+                POSITIONAL_SENTINEL,
+                hostile_payload,
+                sensitive=KEYWORD_SENTINEL,
+            )
+
+        assert application_handler.records == []
+        _assert_no_raw_payload(
+            application_handler,
+            hostile_payload,
+            capsys.readouterr().err,
+            require_records=False,
+        )
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_trace_keyword_names_are_bounded_before_records_are_emitted() -> None:
+    """Trace records retain at most fifty safe keyword labels, never their values."""
+    logger_name = _logger_name("keyword-bound")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False, redactor=None
+        )
+        machine = StateMachine(State("source"), logger_name=logger_name)
+        machine.add_state(State("destination"))
+        machine.add_transition("go", "source", "destination")
+        keyword_args = {f"field_{index}": index for index in range(51)}
+        keyword_args["_private"] = "ignored"
+        keyword_args["x" * 101] = "ignored"
+
+        assert machine.trigger("go", **keyword_args).success
+        names = [
+            record[2]["trace_keyword_names"]
+            for record in application_handler.records
+            if "trace_keyword_names" in record[2]
+        ]
+        assert any(len(entry) == 50 for entry in names)
+        assert all("_private" not in entry for entry in names)
+        assert all("x" * 101 not in entry for entry in names)
+        handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_application_handlers_survive_configuration_and_generation_safe_restore() -> (
+    None
+):
+    """Only a marked library handler may change; old restores cannot win races."""
+
+    logger_name = _logger_name("ownership")
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.ERROR)
+    logger.propagate = True
+    first_handler = CloseTrackingHandler()
+    second_handler = CloseTrackingHandler()
+    first_filter = ApplicationFilter()
+    first_handler.setLevel(logging.CRITICAL)
+    first_handler.addFilter(first_filter)
+    first_handler.setFormatter(logging.Formatter("application:%(message)s"))
+    logger.addHandler(first_handler)
+    logger.addHandler(second_handler)
+    original_handlers = (first_handler, second_handler)
+    original_level = logger.level
+    original_propagation = logger.propagate
+    try:
+        first = configure_fsm_logging(logging.INFO, logger_name)
+        assert tuple(logger.handlers[:2]) == original_handlers
+        assert first_handler.level == logging.CRITICAL
+        assert first_handler.filters == [first_filter]
+        assert first_handler.formatter._fmt == "application:%(message)s"
+        assert first_handler.close_calls == 0
+        assert logger.propagate is original_propagation
+
+        second = configure_fsm_logging(logging.DEBUG, logger_name, propagate=False)
+        assert tuple(logger.handlers[:2]) == original_handlers
+        assert len(logger.handlers) == len(original_handlers) + 1
+        assert first_handler.close_calls == 0
+        assert second_handler.close_calls == 0
+        assert logger.propagate is False
+
+        first.restore()
+        assert logger.level == logging.DEBUG
+        assert logger.propagate is False
+
+        second.restore()
+        assert tuple(logger.handlers) == original_handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagation
+        second.restore()
+        assert tuple(logger.handlers) == original_handlers
+        assert first_handler.close_calls == 0
+        assert second_handler.close_calls == 0
+    finally:
+        logger.removeHandler(first_handler)
+        logger.removeHandler(second_handler)
+        first_handler.close()
+        second_handler.close()
+
+
+def test_level_setter_delegates_to_the_reversible_ownership_seam() -> None:
+    """The shorthand setter must return the same restore-capable configuration handle."""
+
+    logger_name = _logger_name("setter")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    try:
+        handle = set_fsm_logging_level("trace", logger_name)
+        assert logger.level == TRACE_LEVEL
+        assert logger.handlers[0] is application_handler
+        handle.restore()
+        assert logger.handlers == [application_handler]
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_restore_does_not_overwrite_application_changes_after_configuration() -> None:
+    """Compare-before-restore leaves application changes authoritative."""
+
+    logger_name = _logger_name("application-change")
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.ERROR)
+    logger.propagate = True
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    try:
+        logger.setLevel(logging.CRITICAL)
+        logger.propagate = True
+        handle.restore()
+        assert logger.level == logging.CRITICAL
+        assert logger.propagate is True
+        assert not logger.handlers
+    finally:
+        handle.restore()
+
+
+def test_rejected_configuration_preserves_prior_handle_and_logger_state() -> None:
+    """Invalid caller input must not disturb a reversible owned configuration."""
+
+    logger_name = _logger_name("failure-atomic")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    owned_handler = handle._handler
+    assert owned_handler is not None
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    expected_handlers = tuple(logger.handlers)
+    expected_metadata = {name: getattr(logger, name) for name in metadata_names}
+
+    try:
+        with pytest.raises((TypeError, ValueError)):
+            configure_fsm_logging("not-a-level", logger_name)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            configure_fsm_logging(logging.INFO, logger_name, "%( ")
+
+        assert tuple(logger.handlers) == expected_handlers
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+        assert owned_handler._closed is False
+        assert {
+            name: getattr(logger, name) for name in metadata_names
+        } == expected_metadata
+
+        handle.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        handle.restore()
+
+
+def test_failed_commit_closes_candidate_and_restores_logger_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing handler installation must roll back its complete transaction."""
+
+    logger_name = _logger_name("commit-failure")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    candidates: list[logging.StreamHandler] = []
+    original_stream_handler = logging.StreamHandler
+
+    def track_candidate(*args: Any, **kwargs: Any) -> logging.StreamHandler:
+        candidate = original_stream_handler(*args, **kwargs)
+        candidates.append(candidate)
+        return candidate
+
+    def reject_candidate(_handler: logging.Handler) -> None:
+        raise RuntimeError("handler installation failed")
+
+    monkeypatch.setattr(logging, "StreamHandler", track_candidate)
+    monkeypatch.setattr(logger, "addHandler", reject_candidate)
+
+    with pytest.raises(RuntimeError, match="handler installation failed"):
+        configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+
+    assert len(candidates) == 1
+    assert candidates[0]._closed is True
+    assert not logger.handlers
+    assert logger.level == original_level
+    assert logger.propagate is original_propagate
+    for name in (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    ):
+        assert not hasattr(logger, name)
+
+
+def test_failed_commit_preserves_existing_owned_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed replacement must leave the current owned handle usable."""
+
+    logger_name = _logger_name("commit-failure-existing")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    handle = configure_fsm_logging(logging.INFO, logger_name, propagate=False)
+    owned_handler = handle._handler
+    assert owned_handler is not None
+    metadata_names = (
+        "_fast_fsm_generation",
+        "_fast_fsm_prior_level",
+        "_fast_fsm_prior_propagate",
+        "_fast_fsm_configured_level",
+        "_fast_fsm_configured_propagate",
+    )
+    expected_metadata = {name: getattr(logger, name) for name in metadata_names}
+
+    def reject_candidate(_handler: logging.Handler) -> None:
+        raise RuntimeError("handler installation failed")
+
+    monkeypatch.setattr(logger, "addHandler", reject_candidate)
+    try:
+        with pytest.raises(RuntimeError, match="handler installation failed"):
+            configure_fsm_logging(logging.DEBUG, logger_name, propagate=True)
+
+        assert logger.handlers == [owned_handler]
+        assert owned_handler._closed is False
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+        assert {
+            name: getattr(logger, name) for name in metadata_names
+        } == expected_metadata
+
+        handle.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        handle.restore()
+
+
+def test_concurrent_configurations_publish_one_coherent_owned_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent calls must serialize handler replacement and generation state."""
+
+    logger_name = _logger_name("concurrent-configuration")
+    logger = logging.getLogger(logger_name)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    original_get_logger = logging.getLogger
+    arrivals = threading.Barrier(2)
+    result_lock = threading.Lock()
+    handles: list[Any] = []
+    errors: list[BaseException] = []
+
+    def synchronized_get_logger(name: str | None = None) -> logging.Logger:
+        if name == logger_name:
+            arrivals.wait(timeout=5)
+        return original_get_logger(name)
+
+    def configure(level: int, propagate: bool) -> None:
+        try:
+            handle = configure_fsm_logging(level, logger_name, propagate=propagate)
+        except BaseException as error:
+            with result_lock:
+                errors.append(error)
+        else:
+            with result_lock:
+                handles.append(handle)
+
+    monkeypatch.setattr(logging, "getLogger", synchronized_get_logger)
+    threads = (
+        threading.Thread(target=configure, args=(logging.INFO, False)),
+        threading.Thread(target=configure, args=(logging.DEBUG, True)),
+    )
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        assert not any(thread.is_alive() for thread in threads)
+        assert not errors
+        assert len(handles) == 2
+        owned_handlers = [
+            handler
+            for handler in logger.handlers
+            if hasattr(handler, "_fast_fsm_marker")
+        ]
+        assert len(owned_handlers) == 1
+        marker = owned_handlers[0]._fast_fsm_marker
+        current = max(handles, key=lambda handle: handle._generation)
+        assert marker.generation == current._generation
+        assert logger._fast_fsm_generation == current._generation
+        assert logger._fast_fsm_configured_level == marker.configured_level
+        assert logger.level == marker.configured_level
+
+        current.restore()
+        assert not logger.handlers
+        assert logger.level == original_level
+        assert logger.propagate is original_propagate
+    finally:
+        for handle in handles:
+            handle.restore()
+        for handler in tuple(logger.handlers):
+            if hasattr(handler, "_fast_fsm_marker"):
+                logger.removeHandler(handler)
+                handler.close()
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
+def test_public_redactor_docs_distinguish_exception_control_flow() -> None:
+    """Public redactor docs must preserve the fail-closed control-flow boundary."""
+
+    root = Path(__file__).resolve().parent.parent
+    documented_files = (
+        root / "docs" / "api" / "core.md",
+        root / "README.md",
+        root / ".specify" / "memory" / "spr-core-api.md",
+        root / ".specify" / "decisions" / "ADR-006-bounded-diagnostics-safe-output.md",
+    )
+    for path in documented_files:
+        document = " ".join(path.read_text(encoding="utf-8").lower().split())
+        assert "ordinary `exception`" in document
+        assert "non-`exception` `baseexception` subclasses" in document
+        assert "emit no trace record and are re-raised" in document
+
+
+def test_core_spr_documents_trace_handler_marker_schema() -> None:
+    """The living API memory must preserve the private TRACE marker contract."""
+
+    root = Path(__file__).resolve().parent.parent
+    document = " ".join(
+        (root / ".specify" / "memory" / "spr-core-api.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "_FSMStreamHandler(generation, redactor, configured_level)" in document
+    assert "reachable library TRACE configuration from DEBUG/INFO handlers" in document
+    assert "legacy payload-bearing records must be suppressed" in document
+
+
+def test_logging_configuration_docstrings_match_public_contracts() -> None:
+    """Autodoc source must expose both entry points' safe TRACE contracts."""
+
+    contracts = (
+        ("configure_fsm_logging", ["level", "logger_name", "format_string"]),
+        ("set_fsm_logging_level", ["verbosity", "logger_name"]),
+    )
+    for function_name, positional_arguments in contracts:
+        function = _core_function_ast(function_name)
+        assert [argument.arg for argument in function.args.posonlyargs] == []
+        assert [argument.arg for argument in function.args.args] == positional_arguments
+        assert [argument.arg for argument in function.args.kwonlyargs] == [
+            "propagate",
+            "redactor",
+        ]
+
+        documentation = ast.get_docstring(function)
+        assert documentation is not None
+        normalized_documentation = " ".join(documentation.split())
+        for field in (
+            "propagate:",
+            "redactor:",
+            "Returns:",
+            "FSMLoggingHandle:",
+            "trace_operation",
+            "trace_stage",
+            "trace_result",
+            "trace_arg_count",
+            "trace_keyword_names",
+            "redaction_failure",
+            "BaseException",
+            "Non-``Exception`` ``BaseException`` subclasses",
+            "they emit no trace record and are re-raised",
+        ):
+            assert field in normalized_documentation
 
 
 # ---------------------------------------------------------------------------

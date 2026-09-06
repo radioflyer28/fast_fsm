@@ -5,7 +5,12 @@ Collection of common TransitionCondition patterns for real-world usage
 
 import time
 
-from .conditions import Condition
+from .conditions import (
+    Condition,
+    GuardResult,
+    _check_compound_conditions,
+    _negate_guard_result,
+)
 from typing import Any, Set
 import re
 
@@ -18,7 +23,7 @@ class AlwaysCondition(Condition):
     def __init__(self):
         super().__init__("always", "Always allows transition")
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return True
 
 
@@ -30,7 +35,7 @@ class NeverCondition(Condition):
     def __init__(self):
         super().__init__("never", "Never allows transition")
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return False
 
 
@@ -46,7 +51,7 @@ class KeyExistsCondition(Condition):
         )
         self.required_keys = set(required_keys)
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return self.required_keys.issubset(kwargs.keys())
 
 
@@ -61,7 +66,7 @@ class ValueInSetCondition(Condition):
         self.key = key
         self.valid_values = valid_values
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return kwargs.get(self.key) in self.valid_values
 
 
@@ -76,7 +81,7 @@ class RegexCondition(Condition):
         self.pattern = pattern
         self._compiled_regex = re.compile(pattern)
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         value = kwargs.get(self.key, "")
         return bool(self._compiled_regex.match(str(value)))
 
@@ -94,7 +99,7 @@ class ComparisonCondition(Condition):
         self.operator = operator
         self.target_value = target_value
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         value = kwargs.get(self.key)
         if value is None:
             return False
@@ -127,8 +132,13 @@ class AndCondition(Condition):
         )
         self.conditions = conditions
 
-    def check(self, **kwargs) -> bool:
-        return all(condition.check(**kwargs) for condition in self.conditions)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions,
+            args,
+            kwargs,
+            short_circuit_result=False,
+        )
 
 
 class OrCondition(Condition):
@@ -143,8 +153,13 @@ class OrCondition(Condition):
         )
         self.conditions = conditions
 
-    def check(self, **kwargs) -> bool:
-        return any(condition.check(**kwargs) for condition in self.conditions)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions,
+            args,
+            kwargs,
+            short_circuit_result=True,
+        )
 
 
 class NotCondition(Condition):
@@ -156,8 +171,8 @@ class NotCondition(Condition):
         super().__init__(f"not_{condition.name}", f"NOT {condition.description}")
         self.condition = condition
 
-    def check(self, **kwargs) -> bool:
-        return not self.condition.check(**kwargs)
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _negate_guard_result(self.condition.check(*args, **kwargs))
 
 
 class TimeoutCondition(Condition):
@@ -170,7 +185,7 @@ class TimeoutCondition(Condition):
         self.seconds = seconds
         self._ref = time.monotonic()
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return (time.monotonic() - self._ref) < self.seconds
 
     def reset(self) -> None:
@@ -187,7 +202,7 @@ class CooldownCondition(Condition):
         self.seconds = seconds
         self._last_success: float = 0.0
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         now = time.monotonic()
         if (now - self._last_success) >= self.seconds:
             self._last_success = now
@@ -208,7 +223,7 @@ class ElapsedCondition(Condition):
         self.seconds = seconds
         self._ref = time.monotonic()
 
-    def check(self, **kwargs) -> bool:
+    def check(self, *args, **kwargs) -> bool:
         return (time.monotonic() - self._ref) >= self.seconds
 
     def reset(self) -> None:

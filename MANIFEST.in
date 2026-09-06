@@ -1,0 +1,3 @@
+include tools/__init__.py
+include tools/artifact_conformance.py
+include tools/build_modes.py
