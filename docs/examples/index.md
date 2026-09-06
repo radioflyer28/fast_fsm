@@ -57,9 +57,15 @@ A deterministic, non-hardware simulation of drone decision logic. It blocks
 arming until battery, GPS, home-position, propeller-clearance, and geofence
 checks pass; then it demonstrates return-to-home and emergency-landing paths.
 It is a training example, not flight-control or safety-certified software.
+Its `update_from_telemetry()` function shows the loop boundary: normalize one
+reading, prioritize critical-fault/link/battery failsafes, then process an
+operator command only when no safety action is needed. Each successfully
+entered command state calls a concrete method on `SimulatedAircraft` after
+the transition commits—for example, `failsafe_low_battery` enters
+`ReturnHome`, which calls `aircraft.command_return_to_home()`.
 
 **Concepts:** `FuncCondition`, guarded transitions, explicit failsafe events,
-and `TransitionResult` handling.
+`TransitionResult` handling, and a simulated live-telemetry loop.
 
 ---
 
