@@ -493,6 +493,8 @@ def _matrix_artifact_group(cell: MatrixCell) -> str:
     """Return the only cell families allowed to share one artifact digest."""
     if cell.identifier.startswith("pure-wheel-"):
         return "pure-wheel"
+    if cell.identifier.startswith("sdist-pure-"):
+        return "sdist-pure"
     if "universal2" in cell.identifier:
         return f"universal2-cp{cell.cpython_minor}"
     return cell.identifier

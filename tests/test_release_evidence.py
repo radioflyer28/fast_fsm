@@ -3247,6 +3247,15 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     # immutable cell record, so the binder must be idempotent.
     assert 'Path("evidence").mkdir(exist_ok=True)' in sdist_runs
     assert 'verify-sdist --sdist "$sdist" --skip-performance' in sdist_runs
+    sdist_upload_paths = [
+        step.get("with", {}).get("path")
+        for step in sdist_steps
+        if isinstance(step, dict)
+        and step.get("uses")
+        == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        and isinstance(step.get("with"), dict)
+    ]
+    assert sdist_upload_paths == ["evidence/child.json\nevidence/archive.json\n"]
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
@@ -4192,6 +4201,35 @@ def test_aggregate_matrix_records_accepts_complete_release_performance_proof() -
         record["median_ops_per_second"] >= 200_000
         for record in aggregate["installed_performance"]
     )
+
+
+def test_aggregate_matrix_accepts_reproducible_sdist_pure_wheel_reuse() -> None:
+    """Equivalent pure wheels from one sdist may share bytes across derivations."""
+    records = _complete_matrix_records("release")
+    filename = "fast_fsm-0.3.0-py3-none-any.whl"
+    digest = hashlib.sha256(b"reproducible-sdist-pure-wheel").hexdigest()
+    tags = _matrix_wheel_tags(filename)
+    for record in records:
+        matrix = record["matrix"]
+        artifact = record["artifact"]
+        assert isinstance(matrix, dict)
+        assert isinstance(artifact, dict)
+        if str(matrix["cell"]).startswith("sdist-pure-"):
+            matrix.update(artifact_filename=filename, artifact_sha256=digest)
+            artifact.update(filename=filename, sha256=digest, wheel_tags=tags)
+
+    aggregate = release_evidence.aggregate_matrix_records(
+        records,
+        profile="release",
+        runtime={
+            "implementation": "cpython",
+            "python_minor": "3.12",
+            "platform": "macos",
+            "machine": "arm64",
+        },
+    )
+
+    assert aggregate["authorizes_release"] is True
 
 
 @pytest.mark.parametrize(

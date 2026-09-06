@@ -637,7 +637,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: evidence-${{ matrix.cell }}-${{ needs.resolve_ref.outputs.head_sha }}
-          path: evidence/child.json
+          path: |
+            evidence/child.json
+            evidence/archive.json
           if-no-files-found: error
 
   aggregate_release_evidence:
