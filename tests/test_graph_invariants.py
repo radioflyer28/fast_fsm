@@ -389,3 +389,59 @@ def test_repeated_raw_callable_and_unless_values_conflict_by_condition_identity(
     machine.add_transition("back", idle, running, unless=permitted, priority=2)
     with pytest.raises(ValueError, match="priority"):
         machine.add_transition("back", idle, running, unless=permitted, priority=2)
+
+
+def test_priority_helpers_transport_atomic_fanout_without_interpreting_winners() -> (
+    None
+):
+    """Every priority helper stages a complete topology plan before publication."""
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+
+    before_batch = machine._graph_version
+    machine.add_transitions(
+        [
+            ("go", idle, running, None, 7),
+            ("go", idle, complete, None, -3),
+            ("advance", [idle, running], complete, None, 2),
+        ]
+    )
+
+    go_slot = machine._transitions["idle"]["go"]
+    assert isinstance(go_slot, _TransitionGroup)
+    assert tuple(entry.priority for entry in go_slot.entries) == (-3, 7)
+    assert machine._transitions["idle"]["advance"].priority == 2
+    assert machine._transitions["running"]["advance"].priority == 2
+    assert machine._graph_version == before_batch + 1
+
+    before_conflict = graph_fingerprint(machine)
+    with pytest.raises(ValueError, match="priority"):
+        machine.add_transitions(
+            [
+                ("go", idle, complete, None, -9),
+                ("go", idle, running, None, -3),
+            ]
+        )
+    assert graph_fingerprint(machine) == before_conflict
+
+    before_bidirectional = machine._graph_version
+    machine.add_bidirectional_transition(
+        "forward",
+        "reverse",
+        idle,
+        running,
+        priority1=-11,
+        priority2=13,
+    )
+    assert machine._transitions["idle"]["forward"].priority == -11
+    assert machine._transitions["running"]["reverse"].priority == 13
+    assert machine._graph_version == before_bidirectional + 1
+
+    before_emergency = machine._graph_version
+    machine.add_emergency_transition("abort", complete, priority=-20)
+    assert {
+        machine._transitions[state.name]["abort"].priority
+        for state in (idle, running, complete)
+    } == {-20}
+    assert machine._graph_version == before_emergency + 1

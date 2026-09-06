@@ -30,6 +30,7 @@ from fast_fsm.core import (
     simple_fsm,
     transition,
 )
+from fast_fsm.core import _TransitionGroup
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +126,18 @@ def _machine_topology_fingerprint(machine):
         machine._graph_version,
         tuple((name, id(state)) for name, state in machine._states.items()),
         tuple(
-            (source, trigger, id(entry.to_state), id(entry.condition))
+            (
+                source,
+                trigger,
+                tuple(
+                    (id(entry.to_state), id(entry.condition), entry.priority)
+                    for entry in (
+                        slot.entries if isinstance(slot, _TransitionGroup) else (slot,)
+                    )
+                ),
+            )
             for source, entries in machine._transitions.items()
-            for trigger, entry in entries.items()
+            for trigger, slot in entries.items()
         ),
     )
 
@@ -143,8 +153,9 @@ def builder_staging_fingerprint(builder):
                 tuple(from_state) if isinstance(from_state, list) else from_state,
                 to_state,
                 id(condition),
+                priority[0] if priority else 0,
             )
-            for trigger, from_state, to_state, condition in builder._transitions
+            for trigger, from_state, to_state, condition, *priority in builder._transitions
         ),
         tuple(
             (state_name, id(callback))
@@ -167,6 +178,51 @@ def builder_staging_fingerprint(builder):
         id(machine) if machine is not None else None,
         _machine_topology_fingerprint(machine) if machine is not None else None,
     )
+
+
+def test_builder_priority_staging_materializes_one_atomic_transition_batch():
+    """Builder priority rows retain every candidate and publish them together."""
+    builder = FSMBuilder(State("idle"))
+    builder.add_state(State("running"))
+    builder.add_state(State("complete"))
+    builder.add_transition("go", "idle", "running", priority=7)
+    builder.add_transition("go", "idle", "complete", priority=-3)
+    builder.add_transition("advance", ["idle", "running"], "complete", priority=2)
+
+    machine = builder.build()
+
+    group = machine._transitions["idle"]["go"]
+    assert isinstance(group, _TransitionGroup)
+    assert tuple(entry.priority for entry in group.entries) == (-3, 7)
+    assert machine._transitions["running"]["advance"].priority == 2
+    assert machine._graph_version == 3
+
+
+def test_builder_rejects_bad_priority_before_staging_or_auto_mode_mutation():
+    """The object-to-exact-int boundary happens before the builder changes state."""
+    builder = FSMBuilder(State("idle"))
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(TypeError, match="exact built-in int"):
+        builder.add_transition("go", "idle", "missing", priority=True)
+
+    assert builder_staging_fingerprint(builder) == before
+
+
+def test_builder_priority_failure_stays_repairable_until_candidate_publication():
+    """A failed priority build leaves the staged rows repairable and unpublished."""
+    builder = FSMBuilder(State("idle"))
+    builder.add_transition("go", "idle", "missing", priority=-3)
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(ValueError, match="not registered"):
+        builder.build()
+
+    assert builder._machine is None
+    assert builder_staging_fingerprint(builder) == before
+    builder.add_state(State("missing"))
+    machine = builder.build()
+    assert machine._transitions["idle"]["go"].priority == -3
 
 
 def _make_supported_wrapper_cycle(shape):

@@ -264,6 +264,43 @@ def test_topology_and_history_public_writer_entries_are_owned(method: str) -> No
     assert "_release_sync_ownership" in body
 
 
+def test_clone_capture_waits_for_a_topology_owner_and_copies_mutable_tables() -> None:
+    """Clone sees one published graph and shares only immutable slot values."""
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source)
+    machine.add_state(destination)
+    machine.add_transition("go", source, destination)
+
+    started = threading.Event()
+    completed = threading.Event()
+    clones: list[StateMachine] = []
+
+    def capture() -> None:
+        started.set()
+        clones.append(machine.clone())
+        completed.set()
+
+    owner_thread_id = machine._acquire_sync_ownership("test-clone-capture")
+    worker = threading.Thread(target=capture)
+    worker.start()
+    assert started.wait(timeout=1)
+    assert not completed.wait(timeout=0.1)
+    machine._release_sync_ownership(owner_thread_id)
+    worker.join(timeout=1)
+    assert completed.is_set()
+
+    clone = clones[0]
+    assert clone._states is not machine._states
+    assert clone._transitions is not machine._transitions
+    assert clone._transitions["source"] is not machine._transitions["source"]
+    assert clone._transitions["source"]["go"] is machine._transitions["source"]["go"]
+    assert clone._sync_ownership_lock is not machine._sync_ownership_lock
+
+    clone.add_transition("back", destination, source)
+    assert "back" not in machine._transitions["destination"]
+
+
 @pytest.mark.parametrize(
     ("operation", "reenter"),
     (
