@@ -20,7 +20,7 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 14/14 requirements satisfied. See `.planning/milestones/v0.2.1-ROADMAP.md` for full details.
 
-## Current Milestone: v0.3.0 Reliability & Runtime Hardening
+## Completed: v0.3.0 Reliability & Runtime Hardening (2026-09-06)
 
 **Goal:** Make Fast FSM release-auditable, internally consistent, and safe by default before expanding its API.
 
@@ -71,11 +71,12 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ Callback failures, reentrant transitions, and concurrent access use safe default behavior — Phases 17–18
 - ✓ Validation, comparison, visualization, and diagnostic APIs produce correct bounded results — Phase 19
 - ✓ Logging and trace output avoid leaking payloads or disrupting application-owned handlers — Phase 19
+- ✓ Release metadata, changelog, documentation, and quality gates agree on one auditable v0.3.0 baseline — Phases 15 and 20
+- ✓ Installed compiled and pure-Python artifacts pass the same hardened-behavior oracle while preserving the throughput contract — Phase 20
 
 ### Active
 
-- [ ] Release metadata, changelog, documentation, and quality gates agree on one auditable version and test baseline
-- [ ] Compiled and pure-Python execution paths pass equivalent tests while preserving the throughput contract
+No active milestone requirements.
 
 ### Out of Scope
 
@@ -89,7 +90,8 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 ## Context
 
-- **Current version:** v0.2.3 (shipped 2026-04-05)
+- **Current published version:** v0.2.3 (shipped 2026-04-05)
+- **Internal milestone state:** v0.3.0 is verified and archived, but remains untagged and unreleased by design
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` and `condition_templates.py` stay interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
@@ -119,6 +121,7 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 | Use immutable graph snapshots plus explicit deterministic budgets for diagnostics | Diagnostics must remain truthful under concurrent mutation and bounded on adversarial graphs | ✓ Implemented in Phase 19; incomplete work is explicit |
 | Keep default trace metadata-only and fail closed on redactor errors | Diagnostic convenience must not expose application payloads | ✓ Implemented and accepted in Phase 19 |
 | Treat logging handlers as application-owned unless the library created them | Configuration must be reversible and non-invasive | ✓ Implemented and accepted in Phase 19 |
+| Require exact-SHA hosted evidence and independently recomputed downloads before a v0.3.0 tag | Release authorization needs both host execution and local evidence verification; the tag workflow retains a separate identity gate | ✓ Verified in Phase 20; no tag or release created |
 
 ## Evolution
 
@@ -138,4 +141,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-04 after completing Phase 19*
+*Last updated: 2026-09-06 after completing and archiving v0.3.0 (untagged and unreleased)*

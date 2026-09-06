@@ -2,38 +2,36 @@
 gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Reliability & Runtime Hardening
-current_phase: 20
-status: completed
+status: Awaiting next milestone
 stopped_at: Phase 20 complete — all phases complete
-last_updated: "2026-09-06T04:43:14.147Z"
+last_updated: "2026-09-06T04:52:28.022Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 20 complete
-state_head: 84d86cd2b91f8042f0a6a15945f4be10035e1329
+last_activity_desc: Milestone v0.3.0 completed and archived
+state_head: d7cae706482c634bc7b5794d72cb46a76a8de7a0
 progress:
   total_phases: 6
   completed_phases: 6
   total_plans: 41
   completed_plans: 41
   percent: 100
+current_phase: 20
 ---
 
 # State: Fast FSM
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-04)
+See: .planning/PROJECT.md (updated 2026-09-06)
 
 **Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec and all core runtime operations O(1).
-**Current focus:** Phase 20 — Installed Artifact Parity & Release Proof
+**Current focus:** Planning the next milestone
 
 ## Current Position
 
-Phase: 20
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-06 — Phase 20 complete
-
-Progress: [████████░░] 83%
+Phase: Milestone v0.3.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-06 — Milestone v0.3.0 completed and archived
 
 ## Performance Metrics
 
@@ -54,7 +52,7 @@ Progress: [████████░░] 83%
 | 19 | 8 | - | - |
 | 20 | 6 | - | - |
 
-**Recent Trend:** Phases 15 through 19 complete; Phase 20 is ready for discussion and planning.
+**Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -144,8 +142,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 20 must prove installed pure-wheel, compiled-wheel, and sdist behavior across the supported Python matrix without checkout import shadows.
-- Release identity, artifact architecture, semantic parity, and the compiled throughput floor must be asserted from installed artifacts before v0.3.0 can close.
+None. v0.3.0 is internally closed; it intentionally has no Git tag, GitHub Release, or package publication.
 
 ## Deferred Items
 
@@ -158,8 +155,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-05T19:50:36.364Z
-Stopped at: Phase 20 complete — all phases complete
+Last session: 2026-09-06T04:52:28.022Z
+Stopped at: Milestone v0.3.0 completed and archived
 Resume file: None
 
 ## Rebuild Log
@@ -170,3 +167,7 @@ Resume file: None
   before: | Phase | Plans | Total | Avg/Plan | \n |-------|-------|-------|----------| \n | 15–20 | 0 | TBD | — | \n | 15 | 9 | - | - | \n | 16 | 5 | - | - | \n | 17 | 5 | - | - | \n | 18 | 8 | - | - | \n | 19 | 8 | - | - |
   after: | Phase | Plans | Total | Avg/Plan | \n |-------|-------|-------|----------| \n | 15 | 9 | - | - | \n | 16 | 5 | - | - | \n | 17 | 5 | - | - | \n | 18 | 8 | - | - | \n | 19 | 8 | - | - | \n | 20 | 6 | - | - |
   reason: phase dirs on disk are canonical; rows for missing phases dropped, missing phases added
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

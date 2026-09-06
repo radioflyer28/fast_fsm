@@ -44,6 +44,43 @@
 
 ---
 
+## Milestone: v0.3.0 — Reliability & Runtime Hardening
+
+**Completed:** 2026-09-06
+**Phases:** 6 (15–20) | **Requirements:** 50/50 | **Plans:** 41
+
+### What Was Built
+
+- A release-evidence harness with deterministic pure/compiled builds, pinned provenance, and exact artifact identity.
+- Canonical graph, lifecycle, ownership, concurrency, diagnostics, and output contracts that are consistent across sync and async paths.
+- An installed-artifact oracle proving source, pure-wheel, compiled-wheel, and bounded sdist-derived behavior without checkout import shadows.
+- Exact-SHA hosted evidence and a tag-only identity gate; the final 101-job evidence run passed and its downloaded records were recomputed independently.
+
+### What Worked
+
+- Treating Phase 20 as an evidence-integration phase exposed workflow-level gaps that unit tests alone could not see.
+- Exact-SHA host runs coupled with local aggregate recomputation provided a strong, auditable release-proofs chain.
+- The pre-production posture allowed safe defaults for callback failure, reentry, ownership, and output redaction without preserving unsafe legacy behavior.
+
+### What Was Inefficient
+
+- The first complete hosted run exposed two aggregate-contract defects: pure sdist-derived wheels needed an intentional shared group, and the designated sdist archive record needed to be uploaded explicitly.
+- The Beads Dolt service was unavailable during closeout, so its automatic export could only warn; Git commits and pushes remained successful.
+
+### Patterns Established
+
+- Keep release evidence records narrowly scoped and make every exceptional shared artifact family explicit in the aggregator.
+- Verify release topology at both the workflow-structure level and from the actual exact-SHA hosted run.
+- Keep an evidence-only pre-tag inspection read-only; tag-time authorization must independently rerun its identity checks.
+
+### Key Lessons
+
+1. A passing matrix is insufficient unless the aggregate accepts only the artifact reuse patterns the build design explicitly allows.
+2. Installing artifacts in neutral environments is the only reliable way to detect checkout import shadows and packaging drift.
+3. Milestone completion and public release are separate operations: v0.3.0 is internally complete but intentionally untagged and unreleased.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
