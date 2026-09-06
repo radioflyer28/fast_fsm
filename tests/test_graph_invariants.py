@@ -8,11 +8,13 @@ tool snapshot without turning any of those details into public API.
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any
 
 import pytest
 
-from fast_fsm import State, StateMachine
+from fast_fsm import State, StateMachine, TransitionEntry
+from fast_fsm.core import _TransitionGroup
 
 
 def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
@@ -210,3 +212,80 @@ def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> 
         idle,
         running,
     }
+
+
+class _PriorityIntEnum(IntEnum):
+    """An integer-like value which the priority boundary must reject."""
+
+    VALUE = 1
+
+
+class _PriorityIntSubclass(int):
+    """An exact-int boundary regression input."""
+
+
+class _PriorityCoercible:
+    """An object whose ``__int__`` must never run during registration."""
+
+    def __int__(self) -> int:
+        return 1
+
+
+def test_priority_registration_keeps_singletons_direct_and_groups_immutable() -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+
+    machine.add_transition("go", idle, running)
+    singleton = machine._transitions[idle.name]["go"]
+
+    assert isinstance(singleton, TransitionEntry)
+    assert singleton.priority == 0
+
+    machine.add_transition("go", idle, complete, priority=-4)
+    group = machine._transitions[idle.name]["go"]
+
+    assert isinstance(group, _TransitionGroup)
+    assert tuple(entry.priority for entry in group.entries) == (-4, 0)
+    assert tuple(entry.to_state for entry in group.entries) == (complete, running)
+    with pytest.raises((AttributeError, TypeError)):
+        group.entries += (singleton,)  # type: ignore[misc]
+    with pytest.raises((AttributeError, TypeError)):
+        group.entries[0] = singleton  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "priority",
+    [True, _PriorityIntEnum.VALUE, _PriorityIntSubclass(1), 1.0, "1", _PriorityCoercible()],
+)
+def test_priority_rejection_happens_before_topology_or_version_mutation(
+    priority: object,
+) -> None:
+    machine, idle, running = make_machine()
+    machine.add_transition("go", idle, running)
+    before_slot = machine._transitions[idle.name]["go"]
+    before_version = machine._graph_version
+
+    with pytest.raises(TypeError, match="priority"):
+        machine.add_transition("go", idle, running, priority=priority)
+
+    assert machine._transitions[idle.name]["go"] is before_slot
+    assert machine._graph_version == before_version
+
+
+def test_grouped_consumers_fail_closed_without_selecting_or_projecting() -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+    machine.add_transition("go", idle, running, priority=1)
+    machine.add_transition("go", idle, complete, priority=0)
+
+    assert not machine.can_trigger("go")
+    result = machine.trigger("go")
+    assert not result.success
+    assert result.stage == "resolution"
+    assert result.error == "Priority candidate resolution is not available"
+    with pytest.raises(
+        RuntimeError, match="Priority candidate groups are not supported by this projection"
+    ):
+        machine.to_dict()
