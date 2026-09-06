@@ -1447,24 +1447,26 @@ class StateMachine:
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
         """Commit a complete validated topology plan and advance once if changed."""
         replacements: Dict[Tuple[str, str], _TransitionSlot] = {}
+        original_slots: Dict[Tuple[str, str], Optional[_TransitionSlot]] = {}
         for plan in plans:
             for source in plan.sources:
                 key = (source.name, plan.trigger)
-                existing = (
-                    replacements[key]
-                    if key in replacements
-                    else self._transitions[source.name].get(plan.trigger)
-                )
+                existing: Optional[_TransitionSlot]
+                if key in replacements:
+                    existing = replacements[key]
+                else:
+                    existing = self._transitions[source.name].get(plan.trigger)
+                    original_slots[key] = existing
                 replacements[key] = self._merge_transition_slot(existing, plan)
-        changed = any(
-            self._transitions[source_name].get(trigger) is not replacement
+        changed_replacements = tuple(
+            (source_name, trigger, replacement)
             for (source_name, trigger), replacement in replacements.items()
+            if original_slots[(source_name, trigger)] is not replacement
         )
-        if not changed:
+        if not changed_replacements:
             return
-        for (source_name, trigger), replacement in replacements.items():
-            if self._transitions[source_name].get(trigger) is not replacement:
-                self._transitions[source_name][trigger] = replacement
+        for source_name, trigger, replacement in changed_replacements:
+            self._transitions[source_name][trigger] = replacement
         self._graph_version += 1
 
     @staticmethod
