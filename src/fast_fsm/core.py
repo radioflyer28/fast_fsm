@@ -1548,6 +1548,13 @@ class StateMachine:
                     Union[str, State],
                     Optional[Union[Condition, GuardCallable]],
                 ],
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, GuardCallable]],
+                    object,
+                ],
             ]
         ],
     ) -> None:
@@ -1555,14 +1562,15 @@ class StateMachine:
         Add multiple transitions at once.
 
         Each entry is either a 3-tuple ``(trigger, from_state, to_state)`` or a
-        4-tuple ``(trigger, from_state, to_state, condition)`` where *condition*
-        follows the same rules as :meth:`add_transition` — a
+        4-tuple ``(trigger, from_state, to_state, condition)`` or 5-tuple
+        ``(trigger, from_state, to_state, condition, priority)`` where
+        *condition* follows the same rules as :meth:`add_transition` — a
         :class:`~fast_fsm.Condition` instance, a plain
         ``(**kwargs) -> GuardResult`` callable, or ``None`` / omitted for an
-        unconditional transition.
+        unconditional transition. ``priority`` must be an exact built-in int.
 
         Args:
-            transitions: List of 3- or 4-tuples describing each transition.
+            transitions: List of 3-, 4-, or 5-tuples describing each transition.
 
         Example::
 
@@ -1592,21 +1600,29 @@ class StateMachine:
                     Union[str, State],
                     Optional[Union[Condition, GuardCallable]],
                 ],
+                Tuple[
+                    str,
+                    Union[str, State, List[Union[str, State]]],
+                    Union[str, State],
+                    Optional[Union[Condition, GuardCallable]],
+                    object,
+                ],
             ]
         ],
     ) -> None:
         """Validate and commit a complete batch while the caller owns it."""
         prepared: List[_PreparedTransition] = []
         for entry in transitions:
-            if len(entry) not in (3, 4):
-                raise ValueError("each transition entry must contain 3 or 4 items")
+            if len(entry) not in (3, 4, 5):
+                raise ValueError("each transition entry must contain 3, 4, or 5 items")
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
             condition: Optional[Union[Condition, GuardCallable]] = (
                 rest[0] if rest else None
             )
+            priority: object = rest[1] if len(rest) == 2 else 0
             prepared.append(
                 self._normalize_transition_request(
-                    trigger, from_state, to_state, condition
+                    trigger, from_state, to_state, condition, priority=priority
                 )
             )
         self._commit_transition_plan(tuple(prepared))
@@ -1622,6 +1638,8 @@ class StateMachine:
         *,
         unless1: Optional[Union[Condition, GuardCallable]] = None,
         unless2: Optional[Union[Condition, GuardCallable]] = None,
+        priority1: object = 0,
+        priority2: object = 0,
     ) -> None:
         """
         Add transitions in both directions between two states.
@@ -1657,6 +1675,8 @@ class StateMachine:
                 condition2,
                 unless1=unless1,
                 unless2=unless2,
+                priority1=priority1,
+                priority2=priority2,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1672,13 +1692,15 @@ class StateMachine:
         *,
         unless1: Optional[Union[Condition, GuardCallable]] = None,
         unless2: Optional[Union[Condition, GuardCallable]] = None,
+        priority1: object = 0,
+        priority2: object = 0,
     ) -> None:
         """Validate and commit both directions while the caller owns it."""
         first = self._normalize_transition_request(
-            trigger1, state1, state2, condition1, unless=unless1
+            trigger1, state1, state2, condition1, unless=unless1, priority=priority1
         )
         second = self._normalize_transition_request(
-            trigger2, state2, state1, condition2, unless=unless2
+            trigger2, state2, state1, condition2, unless=unless2, priority=priority2
         )
         self._commit_transition_plan((first, second))
 
@@ -1689,6 +1711,7 @@ class StateMachine:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> None:
         """
         Add an emergency transition from all states to a specific state.
@@ -1712,7 +1735,7 @@ class StateMachine:
         owner_thread_id = self._acquire_sync_ownership("add_emergency_transition")
         try:
             self._add_emergency_transition_owned(
-                trigger, to_state, condition, unless=unless
+                trigger, to_state, condition, unless=unless, priority=priority
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1724,6 +1747,7 @@ class StateMachine:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> None:
         """Validate and commit an all-state transition while the caller owns it."""
         prepared = self._normalize_transition_request(
@@ -1732,6 +1756,7 @@ class StateMachine:
             to_state,
             condition,
             unless=unless,
+            priority=priority,
         )
         self._commit_transition_plan((prepared,))
 
@@ -2578,6 +2603,16 @@ class StateMachine:
             (shallow copy), which is correct since they are typically pure
             functions or methods.
         """
+        if self._sync_owner_thread_id == threading.get_ident():
+            return self._clone_owned()
+        self._sync_ownership_lock.acquire()
+        try:
+            return self._clone_owned()
+        finally:
+            self._sync_ownership_lock.release()
+
+    def _clone_owned(self) -> "StateMachine":
+        """Copy one coherent topology while the caller owns its read boundary."""
         new_fsm: "StateMachine" = self.__class__(self._initial_state, name=self._name)
         # Replace the minimal state/transition tables __init__ created with
         # full shallow copies of our own tables (same State objects, independent
@@ -4747,6 +4782,7 @@ class FSMBuilder:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> "FSMBuilder":
         """Add a transition to the builder with async detection.
 
@@ -4759,6 +4795,7 @@ class FSMBuilder:
                     Mutually exclusive with ``condition``.
         """
         self._ensure_mutable()
+        normalized_priority = _normalize_priority(priority)
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
@@ -4785,7 +4822,9 @@ class FSMBuilder:
 
         # Keep the builder staging area atomic: graph validation must succeed
         # before either the transition or the auto-detected machine type lands.
-        self._transitions.append((trigger, from_state, to_state, condition))
+        self._transitions.append(
+            (trigger, from_state, to_state, condition, normalized_priority)
+        )
         if required_type != self._machine_type:
             self._machine_type = required_type
             _emit_legacy_debug(
@@ -4925,7 +4964,7 @@ class FSMBuilder:
                                 f"declarative condition for trigger '{trigger}'"
                             )
 
-        for trigger, _, _, condition in self._transitions:
+        for trigger, _, _, condition, _ in self._transitions:
             if isinstance(
                 condition, Condition
             ) and StateMachine._contains_async_requirement(condition):
@@ -4975,8 +5014,10 @@ class FSMBuilder:
             if state is not self._initial_state:  # Initial state already added
                 candidate.add_state(state)
 
-        # Add all transitions
-        for trigger, from_state, to_state, condition in self._transitions:
+        # Normalize every staged row before one batch registration call. The
+        # candidate remains private until this complete topology commit succeeds.
+        transition_rows = []
+        for trigger, from_state, to_state, condition, priority in self._transitions:
             to_state_obj = (
                 self._states[to_state] if to_state in self._states else to_state
             )
@@ -4987,8 +5028,8 @@ class FSMBuilder:
                     self._states[name] if name in self._states else name
                     for name in from_state
                 ]
-                candidate.add_transition(
-                    trigger, from_state_list, to_state_obj, condition
+                transition_rows.append(
+                    (trigger, from_state_list, to_state_obj, condition, priority)
                 )
             else:
                 from_state_single = (
@@ -4996,9 +5037,10 @@ class FSMBuilder:
                     if from_state in self._states
                     else from_state
                 )
-                candidate.add_transition(
-                    trigger, from_state_single, to_state_obj, condition
+                transition_rows.append(
+                    (trigger, from_state_single, to_state_obj, condition, priority)
                 )
+        candidate.add_transitions(transition_rows)
 
         # Wire per-state sync callbacks
         for state_name, cb in self._enter_callbacks:

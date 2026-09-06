@@ -415,7 +415,12 @@ def test_priority_helpers_transport_atomic_fanout_without_interpreting_winners()
     assert machine._transitions["running"]["advance"].priority == 2
     assert machine._graph_version == before_batch + 1
 
-    before_conflict = graph_fingerprint(machine)
+    before_conflict = {
+        (source_name, trigger): slot
+        for source_name, entries in machine._transitions.items()
+        for trigger, slot in entries.items()
+    }
+    before_conflict_version = machine._graph_version
     with pytest.raises(ValueError, match="priority"):
         machine.add_transitions(
             [
@@ -423,7 +428,12 @@ def test_priority_helpers_transport_atomic_fanout_without_interpreting_winners()
                 ("go", idle, running, None, -3),
             ]
         )
-    assert graph_fingerprint(machine) == before_conflict
+    assert {
+        (source_name, trigger): slot
+        for source_name, entries in machine._transitions.items()
+        for trigger, slot in entries.items()
+    } == before_conflict
+    assert machine._graph_version == before_conflict_version
 
     before_bidirectional = machine._graph_version
     machine.add_bidirectional_transition(
