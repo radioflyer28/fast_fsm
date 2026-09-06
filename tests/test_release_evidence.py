@@ -3218,6 +3218,17 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert "matrix_artifact_evidence(artifact)" in pure_runs
     assert "matrix_runtime_evidence(runtime)" in pure_runs
 
+    sdist_steps = jobs["verify_sdist"].get("steps")
+    assert isinstance(sdist_steps, list)
+    sdist_runs = "\n".join(
+        step["run"]
+        for step in sdist_steps
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    # The verifier creates this directory before the workflow binds its
+    # immutable cell record, so the binder must be idempotent.
+    assert 'Path("evidence").mkdir(exist_ok=True)' in sdist_runs
+
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
         _workflow_needs(aggregate)
