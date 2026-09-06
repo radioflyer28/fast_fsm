@@ -2,9 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
+current_phase: 21
+current_phase_name: Priority Contract & Atomic Registration
 status: planning
-last_updated: "2026-09-06T19:16:07Z"
+stopped_at: Phase 21 context gathered
+last_updated: "2026-09-06T19:30:01.153Z"
 last_activity: 2026-09-06
+last_activity_desc: v0.4.0 roadmap created with 15/15 requirements mapped
+state_head: 9a347d6d66957524c31a9779f8b53b11eaed85a9
 progress:
   total_phases: 5
   completed_phases: 0
@@ -156,9 +161,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T19:16:07Z
-Stopped at: v0.4.0 roadmap created; Phase 21 ready for discussion
-Resume file: None
+Last session: 2026-09-06T19:30:01.136Z
+Stopped at: Phase 21 context gathered
+Resume file: .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md
 
 ## Rebuild Log
 
