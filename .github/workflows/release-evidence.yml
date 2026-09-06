@@ -601,7 +601,7 @@ jobs:
               "performance": child["performance"] if mode == "compiled" else None,
               "parent_sdist": {"filename": archive["filename"], "sha256": archive["sha256"]},
           }
-          Path("evidence").mkdir()
+          Path("evidence").mkdir(exist_ok=True)
           with open("evidence/child.json", "w", encoding="utf-8") as output:
               json.dump(common, output, sort_keys=True)
           if os.environ["EMIT_ARCHIVE"] == "true":
