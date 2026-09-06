@@ -109,9 +109,84 @@ def battery_critical(**telemetry) -> bool:
     return telemetry.get("battery_pct", 100) < 25
 
 
+def link_lost(**telemetry) -> bool:
+    """Report that the independently monitored command link is unavailable."""
+    return not telemetry.get("link_ok", True)
+
+
 def critical_fault_present(**telemetry) -> bool:
     """Model a flight controller reporting an unrecoverable vehicle fault."""
     return telemetry.get("critical_fault", False)
+
+
+def home_reached(**telemetry) -> bool:
+    """Report that the aircraft has reached its stored home position."""
+    return telemetry.get("home_reached", False)
+
+
+def touchdown_detected(**telemetry) -> bool:
+    """Report that the aircraft is on the ground."""
+    return telemetry.get("on_ground", False)
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryRule:
+    """One ordered raw-telemetry rule that emits a discrete FSM event."""
+
+    event: str
+    predicate: Callable[..., bool]
+
+
+class TelemetryPolicy:
+    """Rank telemetry into FSM event candidates with an explicit priority table.
+
+    This policy deliberately has no knowledge of flight states.  It determines
+    which observed condition wins when a packet contains several signals; the
+    drone FSM determines whether that selected event is legal in its current
+    state.
+    """
+
+    __slots__ = ("_rules", "_operator_events")
+
+    def __init__(
+        self,
+        rules: tuple[TelemetryRule, ...],
+        operator_events: dict[str, str],
+    ) -> None:
+        self._rules = rules
+        self._operator_events = operator_events
+
+    def events_for(self, **telemetry) -> tuple[str, ...]:
+        """Return observed events in descending priority order.
+
+        A rule may match while its event is illegal from the FSM's current
+        state. The caller submits candidates in order and lets the FSM accept
+        the first legal one, without this policy learning about flight states.
+        """
+        events = [rule.event for rule in self._rules if rule.predicate(**telemetry)]
+        operator_event = self._operator_events.get(telemetry.get("operator_command"))
+        if operator_event is not None:
+            events.append(operator_event)
+        return tuple(events)
+
+
+# Rules rank all observations. The flight FSM—not this policy—decides which
+# source states accept each event; the loop uses the first one it accepts.
+TELEMETRY_POLICY = TelemetryPolicy(
+    rules=(
+        TelemetryRule("failsafe_critical_fault", critical_fault_present),
+        TelemetryRule("failsafe_link_lost", link_lost),
+        TelemetryRule("failsafe_low_battery", battery_critical),
+        TelemetryRule("home_reached", home_reached),
+        TelemetryRule("touchdown", touchdown_detected),
+    ),
+    operator_events={
+        "arm": "arm",
+        "takeoff": "takeoff",
+        "begin_mission": "begin_mission",
+        "prepare_next_flight": "prepare_next_flight",
+    },
+)
 
 
 def create_drone_fsm():
@@ -150,10 +225,14 @@ def create_drone_fsm():
             condition=FuncCondition(launch_clear, name="launch_clear"),
         )
         .add_transition("begin_mission", "Takeoff", "Mission")
-        # In-flight failsafes: the monitoring layer emits these events from
-        # current telemetry.  Link loss returns home immediately; battery and
-        # hardware-fault events retain an explicit threshold/fault guard.
-        .add_transition("failsafe_link_lost", ["Takeoff", "Mission"], "ReturnHome")
+        # The telemetry policy selects one event from its ordered rule table.
+        # These transitions alone determine which flight states accept it.
+        .add_transition(
+            "failsafe_link_lost",
+            ["Takeoff", "Mission"],
+            "ReturnHome",
+            condition=FuncCondition(link_lost, name="link_lost"),
+        )
         .add_transition(
             "failsafe_low_battery",
             ["Takeoff", "Mission"],
@@ -168,14 +247,24 @@ def create_drone_fsm():
                 critical_fault_present, name="critical_fault_present"
             ),
         )
-        .add_transition("home_reached", "ReturnHome", "Landing")
-        .add_transition("touchdown", ["Landing", "EmergencyLanding"], "Landed")
+        .add_transition(
+            "home_reached",
+            "ReturnHome",
+            "Landing",
+            condition=FuncCondition(home_reached, name="home_reached"),
+        )
+        .add_transition(
+            "touchdown",
+            ["Landing", "EmergencyLanding"],
+            "Landed",
+            condition=FuncCondition(touchdown_detected, name="touchdown_detected"),
+        )
         .add_transition("prepare_next_flight", "Landed", "PreArm")
         .build()
     )
 
 
-def dispatch(drone, aircraft: SimulatedAircraft, event: str, **telemetry) -> None:
+def dispatch(drone, aircraft: SimulatedAircraft, event: str, **telemetry):
     """Send one modeled event and expose accepted or blocked results."""
     telemetry["aircraft"] = aircraft
     result = drone.trigger(event, **telemetry)
@@ -183,54 +272,33 @@ def dispatch(drone, aircraft: SimulatedAircraft, event: str, **telemetry) -> Non
         print(f"✓ {event}: {result.from_state} -> {result.to_state}")
     else:
         print(f"✗ {event}: blocked ({result.error})")
+    return result
 
 
 def update_from_telemetry(
     drone, aircraft: SimulatedAircraft, sample: TelemetrySample
 ) -> None:
-    """Apply one telemetry reading, prioritizing failsafes over operator commands.
+    """Apply one telemetry reading through the state-independent policy.
 
     In a real integration, construct ``TelemetrySample`` from a normalized,
     independently validated telemetry packet, then call this function once per
-    packet. Safety events are intentionally evaluated before commands such as
-    arming or takeoff.
+    packet. The policy ranks all observed event candidates; the flight FSM
+    accepts the first legal one based on its current state and its guards.
     """
     telemetry = asdict(sample)
-    state = drone.current_state_name
     print(
         f"\nTelemetry: battery={sample.battery_pct}% link={'ok' if sample.link_ok else 'lost'} "
-        f"state={state} command={sample.operator_command or '-'}"
+        f"state={drone.current_state_name} command={sample.operator_command or '-'}"
     )
 
-    # Failsafes always outrank normal progress. A flight controller would
-    # normally emit these values from independently monitored subsystems.
-    if state in {"Takeoff", "Mission", "ReturnHome"} and sample.critical_fault:
-        dispatch(drone, aircraft, "failsafe_critical_fault", **telemetry)
-        return
-    if state in {"Takeoff", "Mission"} and not sample.link_ok:
-        dispatch(drone, aircraft, "failsafe_link_lost", **telemetry)
-        return
-    if state in {"Takeoff", "Mission"} and sample.battery_pct < 25:
-        dispatch(drone, aircraft, "failsafe_low_battery", **telemetry)
-        return
-    if state == "ReturnHome" and sample.home_reached:
-        dispatch(drone, aircraft, "home_reached", **telemetry)
-        return
-    if state in {"Landing", "EmergencyLanding"} and sample.on_ground:
-        dispatch(drone, aircraft, "touchdown", **telemetry)
+    events = TELEMETRY_POLICY.events_for(**telemetry)
+    if not events:
+        print("• no state transition")
         return
 
-    command_events = {
-        ("PreArm", "arm"): "arm",
-        ("Armed", "takeoff"): "takeoff",
-        ("Takeoff", "begin_mission"): "begin_mission",
-        ("Landed", "prepare_next_flight"): "prepare_next_flight",
-    }
-    event = command_events.get((state, sample.operator_command))
-    if event is not None:
-        dispatch(drone, aircraft, event, **telemetry)
-    else:
-        print("• no state transition")
+    for event in events:
+        if dispatch(drone, aircraft, event, **telemetry).success:
+            return
 
 
 def simulated_telemetry() -> list[TelemetrySample]:
