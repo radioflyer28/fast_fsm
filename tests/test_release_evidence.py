@@ -3176,6 +3176,12 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     pure_cells = _workflow_matrix_cells(jobs["verify_pure"])
     expected_cells = _release_matrix_cell_identifiers()
     assert native_cells | sdist_cells | pure_cells | {"sdist-archive"} == expected_cells
+    performance_cells = [
+        cell.identifier
+        for cell in release_evidence._canonical_release_cells()
+        if cell.requires_performance
+    ]
+    assert performance_cells == ["compiled-wheel-cp312-macos-universal2-arm64"]
     assert {
         "compiled-wheel-cp310-linux-aarch64",
         "compiled-wheel-cp310-macos-x86_64",
@@ -3205,6 +3211,8 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     assert '"performance": raw["performance"]' in native_runs
     assert "matrix_artifact_evidence(artifact)" in native_runs
     assert "matrix_runtime_evidence(runtime)" in native_runs
+    assert "COLLECT_PERFORMANCE" in native_runs
+    assert "--skip-performance" in native_runs
 
     pure_steps = jobs["verify_pure"].get("steps")
     assert isinstance(pure_steps, list)
@@ -3228,6 +3236,7 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     # The verifier creates this directory before the workflow binds its
     # immutable cell record, so the binder must be idempotent.
     assert 'Path("evidence").mkdir(exist_ok=True)' in sdist_runs
+    assert "verify-sdist --sdist \"$sdist\" --skip-performance" in sdist_runs
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(

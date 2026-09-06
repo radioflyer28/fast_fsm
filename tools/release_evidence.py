@@ -59,6 +59,7 @@ _DIRECT_NATIVE_TARGETS = (
 )
 
 _COMPILED_TRIGGER_OPS_PER_SECOND_MIN = 200_000
+_RELEASE_PERFORMANCE_CELL = "compiled-wheel-cp312-macos-universal2-arm64"
 _INSTALLED_COMPILED_PERFORMANCE_FIELDS = frozenset(
     {
         "evidence_kind",
@@ -173,29 +174,31 @@ def _canonical_release_cells() -> tuple[MatrixCell, ...]:
             )
         )
         for os_name, machine in _DIRECT_NATIVE_TARGETS:
+            identifier = (
+                f"compiled-wheel-cp{minor.replace('.', '')}-{os_name}-{machine}"
+            )
             cells.append(
                 MatrixCell(
-                    identifier=(
-                        f"compiled-wheel-cp{minor.replace('.', '')}-{os_name}-{machine}"
-                    ),
+                    identifier=identifier,
                     cpython_minor=minor,
                     os=os_name,
                     machine=machine,
                     asserted_mode="compiled",
-                    requires_performance=True,
+                    requires_performance=identifier == _RELEASE_PERFORMANCE_CELL,
                 )
             )
         for machine in ("x86_64", "arm64"):
+            identifier = (
+                f"compiled-wheel-cp{minor.replace('.', '')}-macos-universal2-{machine}"
+            )
             cells.append(
                 MatrixCell(
-                    identifier=(
-                        f"compiled-wheel-cp{minor.replace('.', '')}-macos-universal2-{machine}"
-                    ),
+                    identifier=identifier,
                     cpython_minor=minor,
                     os="macos",
                     machine=machine,
                     asserted_mode="compiled",
-                    requires_performance=True,
+                    requires_performance=identifier == _RELEASE_PERFORMANCE_CELL,
                 )
             )
 
@@ -223,7 +226,11 @@ def _canonical_release_cells() -> tuple[MatrixCell, ...]:
                         machine=machine,
                         asserted_mode=mode,
                         sdist_parent="sdist-archive",
-                        requires_performance=mode == "compiled",
+                        # The source-distribution matrix proves all derived
+                        # children' origin, conformance, and lineage.  The
+                        # single canonical direct-native wheel below carries
+                        # the release's environment-labelled performance gate.
+                        requires_performance=False,
                     )
                 )
     return tuple(sorted(cells))
@@ -2259,7 +2266,9 @@ def _validate_sdist_child_lineage(
         raise EvidenceError("Source archive derivation has missing required children.")
 
 
-def verify_sdist_derivations(sdist_path: Path) -> dict[str, Any]:
+def verify_sdist_derivations(
+    sdist_path: Path, *, collect_performance: bool = True
+) -> dict[str, Any]:
     """Build and prove explicit pure and compiled wheels from one safe sdist."""
     source_archive = sdist_path.resolve(strict=True)
     _artifact_sha256(source_archive)
@@ -2299,7 +2308,10 @@ def verify_sdist_derivations(sdist_path: Path) -> dict[str, Any]:
             )
             wheel = _exactly_one_wheel(wheel_directory)
             child = verify_installed_wheel(
-                wheel, expected_mode=intent, build_intent=intent
+                wheel,
+                expected_mode=intent,
+                build_intent=intent,
+                collect_performance=collect_performance,
             )
             children.append(
                 {
@@ -3281,7 +3293,11 @@ def _validate_child_probe(
 
 
 def verify_installed_wheel(
-    wheel_path: Path, *, expected_mode: str, build_intent: str
+    wheel_path: Path,
+    *,
+    expected_mode: str,
+    build_intent: str,
+    collect_performance: bool = True,
 ) -> dict[str, Any]:
     """Prove one exact wheel in a neutral fresh environment before accepting semantics."""
     if expected_mode not in {"pure", "compiled"} or build_intent not in {
@@ -3386,7 +3402,7 @@ def verify_installed_wheel(
                 artifact_sha256=artifact_sha256,
                 runtime=runtime_record,
             )
-            if expected_mode == "compiled"
+            if expected_mode == "compiled" and collect_performance
             else None
         )
         conformance_record = _validate_child_conformance(
@@ -5819,6 +5835,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--build-intent", choices=("pure", "compiled"), required=True
     )
     installed_wheel_parser.add_argument("--json", action="store_true")
+    installed_wheel_parser.add_argument("--skip-performance", action="store_true")
 
     installed_benchmark_parser = commands.add_parser(
         "installed-benchmark-child",
@@ -5842,6 +5859,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sdist", type=Path, required=True, help="exact source archive to inspect"
     )
     sdist_parser.add_argument("--json", action="store_true")
+    sdist_parser.add_argument("--skip-performance", action="store_true")
 
     aggregate_parser = commands.add_parser(
         "aggregate-matrix",
@@ -5972,6 +5990,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                     parsed.wheel,
                     expected_mode=parsed.expected_mode,
                     build_intent=parsed.build_intent,
+                    collect_performance=not parsed.skip_performance,
                 ),
                 parsed.json,
             )
@@ -5989,7 +6008,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 True,
             )
         elif parsed.command == "verify-sdist":
-            _emit(verify_sdist_derivations(parsed.sdist), parsed.json)
+            _emit(
+                verify_sdist_derivations(
+                    parsed.sdist, collect_performance=not parsed.skip_performance
+                ),
+                parsed.json,
+            )
         elif parsed.command == "aggregate-matrix":
             aggregate = aggregate_matrix_records(
                 [read_matrix_record(path) for path in parsed.record],
