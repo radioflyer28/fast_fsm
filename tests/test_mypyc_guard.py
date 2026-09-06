@@ -405,7 +405,14 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "current_state_name",
             "state_names",
         },
-        "_PreparedTransition": {"trigger", "sources", "target", "condition"},
+        "_PreparedTransition": {
+            "trigger",
+            "sources",
+            "target",
+            "condition",
+            "priority",
+        },
+        "_TransitionGroup": {"entries"},
     }.items():
         node = classes.get(name)
         assert node is not None, f"{name} must remain in the compiled core unit"
@@ -432,6 +439,49 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             for item in node.body
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
         } == fields
+
+    entry = classes.get("TransitionEntry")
+    assert entry is not None
+    entry_slots = next(
+        node.value
+        for node in entry.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(entry_slots, ast.Tuple)
+    assert {
+        item.value for item in entry_slots.elts if isinstance(item, ast.Constant)
+    } == {
+        "to_state",
+        "condition",
+        "priority",
+    }
+
+
+def test_priority_normalization_keeps_an_object_typed_compiled_boundary() -> None:
+    """Exact priority validation must run before mypyc can coerce a value."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    normalizer = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_normalize_priority"
+    )
+    priority = normalizer.args.args[0]
+    assert priority.arg == "priority"
+    assert isinstance(priority.annotation, ast.Name)
+    assert priority.annotation.id == "object"
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "type"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "priority"
+        for node in ast.walk(normalizer)
+    )
 
 
 def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:
@@ -1318,7 +1368,15 @@ def test_private_graph_records_are_not_public_exports() -> None:
     )
     assert isinstance(exported, ast.List)
     names = {item.value for item in exported.elts if isinstance(item, ast.Constant)}
-    assert not {"_GraphTransition", "_GraphSnapshot", "_PreparedTransition"} & names
+    assert (
+        not {
+            "_GraphTransition",
+            "_GraphSnapshot",
+            "_PreparedTransition",
+            "_TransitionGroup",
+        }
+        & names
+    )
 
 
 def test_setup_keeps_core_as_the_only_mypyc_source() -> None:

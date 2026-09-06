@@ -621,7 +621,7 @@ def _normalize_priority(priority: object) -> int:
     """Accept only an exact built-in integer before compiled narrowing occurs."""
     if type(priority) is not int:
         raise TypeError("priority must be an exact built-in int")
-    return cast(int, priority)
+    return priority
 
 
 @dataclass(frozen=True, slots=True)
