@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 status: planning
-last_updated: "2026-09-06T17:42:31.796Z"
+last_updated: "2026-09-06T19:16:07Z"
 last_activity: 2026-09-06
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -19,15 +19,15 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-09-06)
 
-**Core value:** Blazing-fast, zero-overhead FSM transitions — `trigger()` ≥200,000 ops/sec and all core runtime operations O(1).
-**Current focus:** Planning the next milestone
+**Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
+**Current focus:** Phase 21 — Priority Contract & Atomic Registration
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 21 of 25 (Priority Contract & Atomic Registration)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-09-06 — Milestone v0.4.0 started
+Status: Ready for phase discussion
+Last activity: 2026-09-06 — v0.4.0 roadmap created with 15/15 requirements mapped
 
 ## Performance Metrics
 
@@ -48,7 +48,7 @@ Last activity: 2026-09-06 — Milestone v0.4.0 started
 | 19 | 8 | - | - |
 | 20 | 6 | - | - |
 
-**Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof.
+**Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof; v0.4.0 now has five dependency-ordered phases with full requirement coverage.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -85,6 +85,10 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - Existing public symbols remain available; `core.py` remains one mypyc compilation unit with one runtime dependency.
 - Runtime hardening must preserve ≥200,000 compiled `trigger()` operations/sec and O(1) core operations.
 - Installed pure and compiled artifacts must prove equivalent hardened behavior before release.
+- [v0.4.0 roadmap]: Evolve the existing `add_transition(..., priority=...)` API; do not create a second candidate-registration API.
+- [v0.4.0 roadmap]: Lower exact non-boolean integer priorities win; distinct equal-priority candidates fail atomically and exact duplicates are idempotent.
+- [v0.4.0 roadmap]: Preserve O(1) source/trigger lookup and singleton dispatch; document and measure finite candidate selection and local group mutation as O(k).
+- [v0.4.0 roadmap]: Complete candidate selection before lifecycle callbacks and prove the same sequential semantics in synchronous and asynchronous machines.
 - [Phase 15]: Centralized build intent in FAST_FSM_BUILD_MODE while preserving FAST_FSM_PURE_PYTHON=1 as the pure alias.
 - [Phase 15]: Made release evidence fail closed and non-destructive; only CompiledFuncCondition and TransitionError are registered slots exceptions.
 - [Phase 15]: Use evidence --write only for intentional regeneration; CI evidence --check remains read-only.
@@ -138,7 +142,8 @@ None yet.
 
 ### Blockers/Concerns
 
-None. v0.3.0 is internally closed; it intentionally has no Git tag, GitHub Release, or package publication.
+- Phase 21 must amend the blanket O(1)/single-transition project contract before candidate iteration is implemented; this is a planned prerequisite, not an external blocker.
+- v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
 
 ## Deferred Items
 
@@ -151,8 +156,8 @@ None. v0.3.0 is internally closed; it intentionally has no Git tag, GitHub Relea
 
 ## Session Continuity
 
-Last session: 2026-09-06T04:52:28.022Z
-Stopped at: Milestone v0.3.0 completed and archived
+Last session: 2026-09-06T19:16:07Z
+Stopped at: v0.4.0 roadmap created; Phase 21 ready for discussion
 Resume file: None
 
 ## Rebuild Log
@@ -166,4 +171,5 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Discuss Phase 21 with `/gsd-discuss-phase 21`.
+- Then plan Phase 21 with `/gsd-plan-phase 21`.

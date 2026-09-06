@@ -108,28 +108,29 @@ research synthesis.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRIO-01 | TBD | Pending |
-| PRIO-02 | TBD | Pending |
-| PRIO-03 | TBD | Pending |
-| SEL-01 | TBD | Pending |
-| SEL-02 | TBD | Pending |
-| SEL-03 | TBD | Pending |
-| SEL-04 | TBD | Pending |
-| PAR-01 | TBD | Pending |
-| PAR-02 | TBD | Pending |
-| PAR-03 | TBD | Pending |
-| DIAG-01 | TBD | Pending |
-| DIAG-02 | TBD | Pending |
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| DOC-01 | TBD | Pending |
+| PRIO-01 | Phase 21 | Pending |
+| PRIO-02 | Phase 21 | Pending |
+| PRIO-03 | Phase 21 | Pending |
+| SEL-01 | Phase 22 | Pending |
+| SEL-02 | Phase 22 | Pending |
+| SEL-03 | Phase 22 | Pending |
+| SEL-04 | Phase 22 | Pending |
+| PAR-01 | Phase 23 | Pending |
+| PAR-02 | Phase 23 | Pending |
+| PAR-03 | Phase 23 | Pending |
+| DIAG-01 | Phase 24 | Pending |
+| DIAG-02 | Phase 24 | Pending |
+| PERF-01 | Phase 25 | Pending |
+| PERF-02 | Phase 25 | Pending |
+| DOC-01 | Phase 25 | Pending |
 
 **Coverage:**
 
 - v0.4.0 requirements: 15 total
-- Mapped to phases: 0
-- Unmapped: 15 ⚠️
+- Mapped to phases: 15
+- Unmapped: 0
+- Coverage: 100% ✓
 
 ---
 *Requirements defined: 2026-09-06*
-*Last updated: 2026-09-06 after v0.4.0 research synthesis*
+*Last updated: 2026-09-06 after v0.4.0 roadmap creation*
