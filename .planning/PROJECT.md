@@ -74,9 +74,24 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 - ✓ Release metadata, changelog, documentation, and quality gates agree on one auditable v0.3.0 baseline — Phases 15 and 20
 - ✓ Installed compiled and pure-Python artifacts pass the same hardened-behavior oracle while preserving the throughput contract — Phase 20
 
+## Current Milestone: v0.4.0 Priority-Aware Guarded Transitions
+
+**Goal:** Add deterministic, priority-aware guarded transition resolution so one
+`(state, trigger)` selects among finite ordered candidates without external
+dispatch.
+
+**Target features:**
+- Evolve `add_transition(..., priority=...)` to register competing guarded
+  candidates for one source state and trigger.
+- Resolve candidates deterministically across synchronous and asynchronous
+  machines, builders, and declarative states.
+- Keep topology exports, validation, visualizations, diagnostics, benchmarks,
+  and examples truthful about priority-aware transition groups.
+
 ### Active
 
-No active milestone requirements.
+- [ ] Deterministic, priority-aware guarded transition resolution for one
+  `(state, trigger)` candidate group
 
 ### Out of Scope
 
@@ -86,7 +101,7 @@ No active milestone requirements.
 | Benchmark comparison vs competitors in CI | Too slow for CI; manual only |
 | Auto-fire/scheduler timers | Conditions are passive guards; scheduling belongs one layer up (user's event loop) |
 | `snapshot()` v2 including topology | `to_dict()` + `snapshot()` solve this composably without a format change |
-| Breaking API changes | Backward compatibility contract upheld |
+| Transition API evolution | Duplicate `(state, trigger)` registrations become explicit priority-aware candidates; pre-production scope permits this semantic change |
 
 ## Context
 
@@ -122,6 +137,7 @@ No active milestone requirements.
 | Keep default trace metadata-only and fail closed on redactor errors | Diagnostic convenience must not expose application payloads | ✓ Implemented and accepted in Phase 19 |
 | Treat logging handlers as application-owned unless the library created them | Configuration must be reversible and non-invasive | ✓ Implemented and accepted in Phase 19 |
 | Require exact-SHA hosted evidence and independently recomputed downloads before a v0.3.0 tag | Release authorization needs both host execution and local evidence verification; the tag workflow retains a separate identity gate | ✓ Verified in Phase 20; no tag or release created |
+| Evolve `add_transition()` rather than add a second candidate-registration API | Priority is an attribute of an ordinary transition; one coherent API avoids redundant abstractions | — Pending v0.4.0 |
 
 ## Evolution
 
@@ -141,4 +157,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-06 after completing and archiving v0.3.0 (untagged and unreleased)*
+*Last updated: 2026-09-06 after starting v0.4.0 Priority-Aware Guarded Transitions*

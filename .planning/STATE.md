@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.3.0
-milestone_name: Reliability & Runtime Hardening
-status: Awaiting next milestone
-stopped_at: Phase 20 complete — all phases complete
-last_updated: "2026-09-06T04:52:28.022Z"
+milestone: v0.4.0
+milestone_name: Priority-Aware Guarded Transitions
+status: planning
+last_updated: "2026-09-06T17:42:31.796Z"
 last_activity: 2026-09-06
-last_activity_desc: Milestone v0.3.0 completed and archived
-state_head: d7cae706482c634bc7b5794d72cb46a76a8de7a0
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 41
-  completed_plans: 41
-  percent: 100
-current_phase: 20
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: Fast FSM
@@ -28,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 ## Current Position
 
-Phase: Milestone v0.3.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-06 — Milestone v0.3.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-09-06 — Milestone v0.4.0 started
 
 ## Performance Metrics
 
