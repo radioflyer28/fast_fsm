@@ -23,6 +23,7 @@ for full rationale.
 """
 
 import ast
+from enum import IntEnum
 import importlib.util
 import json
 import os
@@ -482,6 +483,94 @@ def test_priority_normalization_keeps_an_object_typed_compiled_boundary() -> Non
         and node.args[0].id == "priority"
         for node in ast.walk(normalizer)
     )
+
+
+def test_priority_storage_union_stays_explicit_and_private() -> None:
+    """Compiled core must not hide singleton-or-group topology behind Any."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    alias = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_TransitionSlot"
+            for target in node.targets
+        )
+    )
+    assert isinstance(alias.value, ast.Subscript)
+    assert isinstance(alias.value.value, ast.Name)
+    assert alias.value.value.id == "Union"
+    members = {item.id for item in alias.value.slice.elts if isinstance(item, ast.Name)}
+    assert members == {"TransitionEntry", "_TransitionGroup"}
+
+    state_machine = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
+    )
+    transitions = next(
+        node
+        for node in ast.walk(state_machine)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Attribute)
+        and node.target.attr == "_transitions"
+    )
+    assert "_TransitionSlot" in ast.unparse(transitions.annotation)
+    assert "Any" not in ast.unparse(transitions.annotation)
+
+
+class _NativePriorityIntEnum(IntEnum):
+    """Integer-like inputs compiled mypyc code must still reject."""
+
+    VALUE = 1
+
+
+class _NativePriorityIntSubclass(int):
+    """A subclass is not an exact built-in integer priority."""
+
+
+class _NativePriorityCoercible:
+    """Registration must not invoke caller-controlled numeric coercion."""
+
+    def __int__(self) -> int:
+        return 1
+
+
+@pytest.mark.parametrize(
+    "priority",
+    (
+        True,
+        _NativePriorityIntEnum.VALUE,
+        _NativePriorityIntSubclass(1),
+        1.0,
+        "1",
+        _NativePriorityCoercible(),
+    ),
+)
+def test_compiled_core_rejects_non_exact_priority_before_topology_mutation(
+    priority: object,
+) -> None:
+    """The freshly built native module preserves the pure exact-int boundary."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if not spec.origin.endswith((".so", ".pyd")):
+        pytest.skip("requires the plan's freshly built compiled core")
+
+    from fast_fsm.core import State, StateMachine
+
+    source = State("source")
+    target = State("target")
+    machine = StateMachine(source)
+    machine.add_state(target)
+    machine.add_transition("go", source, target)
+    before_slot = machine._transitions["source"]["go"]
+    before_version = machine._graph_version
+
+    with pytest.raises(TypeError, match="exact built-in int"):
+        machine.add_transition("go", source, target, priority=priority)
+
+    assert machine._transitions["source"]["go"] is before_slot
+    assert machine._graph_version == before_version
 
 
 def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:

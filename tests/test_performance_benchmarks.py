@@ -24,6 +24,7 @@ from fast_fsm.core import (
     AsyncStateMachine,
     State,
     StateMachine,
+    TransitionEntry,
     configure_fsm_logging,
 )
 from fast_fsm.conditions import Condition
@@ -125,6 +126,20 @@ def test_trigger_constant_lookup_invariant_across_topology_sizes() -> None:
         assert machine.trigger("activate").success
         observed[size] = sum(counts.values())
     _assert_constant_count(observed, upper_bound=2, operation="trigger")
+
+
+def test_priority_singleton_trigger_keeps_direct_constant_lookup() -> None:
+    """A priority-0 singleton stays direct and never needs group traversal."""
+    observed: dict[int, int] = {}
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        machine = _constant_topology_machine(size)
+        assert isinstance(machine._transitions["idle"]["activate"], TransitionEntry)
+        counts = _count_topology_operations(machine)
+        assert machine.trigger("activate").success
+        observed[size] = sum(counts.values())
+    _assert_constant_count(
+        observed, upper_bound=2, operation="priority singleton trigger"
+    )
 
 
 def test_can_trigger_constant_lookup_and_guard_invariant_across_topology_sizes() -> (
