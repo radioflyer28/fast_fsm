@@ -256,7 +256,14 @@ def test_priority_registration_keeps_singletons_direct_and_groups_immutable() ->
 
 @pytest.mark.parametrize(
     "priority",
-    [True, _PriorityIntEnum.VALUE, _PriorityIntSubclass(1), 1.0, "1", _PriorityCoercible()],
+    [
+        True,
+        _PriorityIntEnum.VALUE,
+        _PriorityIntSubclass(1),
+        1.0,
+        "1",
+        _PriorityCoercible(),
+    ],
 )
 def test_priority_rejection_happens_before_topology_or_version_mutation(
     priority: object,
@@ -286,6 +293,7 @@ def test_grouped_consumers_fail_closed_without_selecting_or_projecting() -> None
     assert result.stage == "resolution"
     assert result.error == "Priority candidate resolution is not available"
     with pytest.raises(
-        RuntimeError, match="Priority candidate groups are not supported by this projection"
+        RuntimeError,
+        match="Priority candidate groups are not supported by this projection",
     ):
         machine.to_dict()

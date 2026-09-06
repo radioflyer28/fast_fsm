@@ -38,9 +38,11 @@ general-purpose FSM libraries are too slow or too heavy.
 
 ### I. Performance Is Non-Negotiable
 
-Every public API path MUST maintain O(1) time complexity for core
-operations (`trigger()`, `can_trigger()`, `add_state()`,
-`add_transition()`). All classes that participate in the hot path
+Source/trigger slot lookup, singleton `trigger()` / `can_trigger()` dispatch,
+and state registration MUST remain O(1). Finite candidate-group construction
+during registration and ordered candidate selection are explicitly local O(k)
+work: they MUST NOT scan unrelated graph topology or sort during dispatch. All
+classes that participate in the hot path
 MUST use `__slots__` to eliminate `__dict__` overhead. New features
 MUST NOT degrade existing throughput below ~250,000 transitions/sec
 on commodity hardware. Performance claims MUST be verifiable via the
@@ -114,7 +116,7 @@ FSM library development. Contributors MUST understand them.
 | Anti-Pattern | Why It's Harmful | Fast FSM Risk |
 |---|---|---|
 | **Adding `__dict__` to hot-path classes** | Eliminates the ~1000× memory advantage that justifies this library's existence. A single class without `__slots__` on the dispatch path invalidates every benchmark claim. | Core classes (`State`, `StateMachine`, `TransitionResult`, `Condition`) are the most common edit targets — vigilance is required. |
-| **Python-level iteration where dict lookup suffices** | Replacing O(1) dictionary lookup with a linear scan over states or transitions degrades the core performance guarantee. | Transition dispatch MUST remain a single dict lookup, not a loop over candidates. |
+| **Python-level iteration where dict lookup suffices** | Replacing O(1) dictionary lookup with a linear scan over states or unrelated transitions degrades the core performance guarantee. | Source/trigger lookup and singleton dispatch MUST remain direct; finite candidate groups may use pre-sorted local O(k) construction/selection, never an unrelated-graph scan or dispatch-time sort. |
 | **Breaking `*args, **kwargs` signatures** | Removing variadic arguments from conditions or callbacks silently breaks every downstream caller that passes extra context. The failure is a `TypeError` at runtime, not a lint error. | All public callback/condition signatures are contractual interfaces. |
 | **Logic-mocking in tests** | Mocking the computation under test (e.g., patching `trigger()` internals then asserting the mock value) produces a test that cannot fail regardless of implementation bugs. It tests Python's mock library, not the FSM. | FSM dispatch, condition evaluation, and state callbacks are the critical paths. Mock the *environment* (clock, RNG), never the *logic*. |
 | **Circular imports between modules** | `core.py` ↔ `validation.py` or `core.py` ↔ `conditions.py` cycles break `import fast_fsm` for all users. | Keep the import DAG strict: `conditions` → `core` → `validation`. Validation imports core, never the reverse. |

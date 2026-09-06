@@ -577,19 +577,51 @@ class TransitionRecord:
 
 
 class TransitionEntry:
-    """Internal typed container for a single transition's target and guard.
+    """Internal typed container for one singleton transition candidate.
 
     Uses ``__slots__`` for the same memory/speed profile as the raw ``dict``
     it replaces, while giving attribute access and type safety.
     """
 
-    __slots__ = ("to_state", "condition")
+    __slots__ = ("to_state", "condition", "priority")
 
     def __init__(
-        self, to_state: "State", condition: Optional[Condition] = None
+        self,
+        to_state: "State",
+        condition: Optional[Condition] = None,
+        priority: int = 0,
     ) -> None:
         self.to_state: "State" = to_state
         self.condition: Optional[Condition] = condition
+        self.priority: int = priority
+
+
+@dataclass(frozen=True, slots=True)
+class _TransitionGroup:
+    """Private immutable, ascending-priority candidates for one slot."""
+
+    entries: Tuple[TransitionEntry, ...]
+
+
+_TransitionSlot = Union[TransitionEntry, _TransitionGroup]
+_PRIORITY_GROUP_RUNTIME_ERROR = "Priority candidate resolution is not available"
+_PRIORITY_GROUP_PROJECTION_ERROR = (
+    "Priority candidate groups are not supported by this projection"
+)
+
+
+def _require_singleton_entry(slot: _TransitionSlot) -> TransitionEntry:
+    """Return a singleton entry or fail closed before priority selection exists."""
+    if isinstance(slot, _TransitionGroup):
+        raise RuntimeError(_PRIORITY_GROUP_PROJECTION_ERROR)
+    return slot
+
+
+def _normalize_priority(priority: object) -> int:
+    """Accept only an exact built-in integer before compiled narrowing occurs."""
+    if type(priority) is not int:
+        raise TypeError("priority must be an exact built-in int")
+    return cast(int, priority)
 
 
 @dataclass(frozen=True, slots=True)
@@ -632,6 +664,7 @@ class _PreparedTransition:
     sources: Tuple["State", ...]
     target: "State"
     condition: Optional[Condition]
+    priority: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,7 +836,7 @@ class StateMachine:
         self._initial_state = initial_state
         self._current_state = initial_state
         self._states: Dict[str, State] = {}
-        self._transitions: Dict[str, Dict[str, TransitionEntry]] = {}
+        self._transitions: Dict[str, Dict[str, _TransitionSlot]] = {}
         self._graph_version = 0
 
         # Use name-based logger if not specified
@@ -1143,7 +1176,8 @@ class StateMachine:
         """
         transitions: List[Dict[str, str]] = []
         for from_name, triggers in self._transitions.items():
-            for trigger_name, entry in triggers.items():
+            for trigger_name, slot in triggers.items():
+                entry = _require_singleton_entry(slot)
                 transitions.append(
                     {
                         "trigger": trigger_name,
@@ -1278,25 +1312,27 @@ class StateMachine:
         """Capture canonical topology while a caller holds the read boundary."""
         states = tuple(state for _, state in sorted(self._states.items()))
         state_names = tuple(state.name for state in states)
-        transitions = tuple(
-            _GraphTransition(
-                self._states[from_name],
-                trigger,
-                entry.to_state,
-                entry.condition,
-                self._states[from_name].name,
-                entry.to_state.name,
-                entry.condition.name if entry.condition is not None else None,
-            )
-            for from_name, entries in sorted(self._transitions.items())
-            for trigger, entry in sorted(entries.items())
-        )
+        transitions: List[_GraphTransition] = []
+        for from_name, entries in sorted(self._transitions.items()):
+            for trigger, slot in sorted(entries.items()):
+                entry = _require_singleton_entry(slot)
+                transitions.append(
+                    _GraphTransition(
+                        self._states[from_name],
+                        trigger,
+                        entry.to_state,
+                        entry.condition,
+                        self._states[from_name].name,
+                        entry.to_state.name,
+                        entry.condition.name if entry.condition is not None else None,
+                    )
+                )
         return _GraphSnapshot(
             self._name,
             self._initial_state,
             self._graph_version,
             states,
-            transitions,
+            tuple(transitions),
             self._initial_state.name,
             self._current_state.name,
             state_names,
@@ -1334,8 +1370,10 @@ class StateMachine:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
+        normalized_priority = _normalize_priority(priority)
         raw_sources: List[Any]
         if isinstance(from_state, list):
             raw_sources = list(from_state)
@@ -1403,29 +1441,57 @@ class StateMachine:
                     "AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
                 )
         return _PreparedTransition(
-            trigger, tuple(sources), target, normalized_condition
+            trigger, tuple(sources), target, normalized_condition, normalized_priority
         )
 
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
         """Commit a complete validated topology plan and advance once if changed."""
-        final_entries: Dict[Tuple[str, str], Tuple[State, Optional[Condition]]] = {}
+        replacements: Dict[Tuple[str, str], _TransitionSlot] = {}
         for plan in plans:
             for source in plan.sources:
-                final_entries[(source.name, plan.trigger)] = (
-                    plan.target,
-                    plan.condition,
+                key = (source.name, plan.trigger)
+                existing = (
+                    replacements[key]
+                    if key in replacements
+                    else self._transitions[source.name].get(plan.trigger)
                 )
+                replacements[key] = self._merge_transition_slot(existing, plan)
         changed = any(
-            (existing := self._transitions[source_name].get(trigger)) is None
-            or existing.to_state is not target
-            or existing.condition is not guard
-            for (source_name, trigger), (target, guard) in final_entries.items()
+            self._transitions[source_name].get(trigger) is not replacement
+            for (source_name, trigger), replacement in replacements.items()
         )
         if not changed:
             return
-        for (source_name, trigger), (target, guard) in final_entries.items():
-            self._transitions[source_name][trigger] = TransitionEntry(target, guard)
+        for (source_name, trigger), replacement in replacements.items():
+            if self._transitions[source_name].get(trigger) is not replacement:
+                self._transitions[source_name][trigger] = replacement
         self._graph_version += 1
+
+    @staticmethod
+    def _merge_transition_slot(
+        existing: Optional[_TransitionSlot], plan: _PreparedTransition
+    ) -> _TransitionSlot:
+        """Build one replacement slot without mutating a published value."""
+        candidate = TransitionEntry(plan.target, plan.condition, plan.priority)
+        if existing is None:
+            return candidate
+
+        entries = (
+            existing.entries if isinstance(existing, _TransitionGroup) else (existing,)
+        )
+        for entry in entries:
+            if entry.priority != candidate.priority:
+                continue
+            if (
+                entry.to_state is candidate.to_state
+                and entry.condition is candidate.condition
+            ):
+                return existing
+            raise ValueError("transition priority is already registered for this slot")
+
+        return _TransitionGroup(
+            tuple(sorted((*entries, candidate), key=lambda entry: entry.priority))
+        )
 
     def add_transition(
         self,
@@ -1435,12 +1501,18 @@ class StateMachine:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
         owner_thread_id = self._acquire_sync_ownership("add_transition")
         try:
             self._add_transition_owned(
-                trigger, from_state, to_state, condition, unless=unless
+                trigger,
+                from_state,
+                to_state,
+                condition,
+                unless=unless,
+                priority=priority,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1453,10 +1525,11 @@ class StateMachine:
         condition: Optional[Union[Condition, GuardCallable]] = None,
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
     ) -> None:
         """Validate and commit one transition while the caller owns this machine."""
         prepared = self._normalize_transition_request(
-            trigger, from_state, to_state, condition, unless=unless
+            trigger, from_state, to_state, condition, unless=unless, priority=priority
         )
         self._commit_transition_plan((prepared,))
 
@@ -1917,7 +1990,8 @@ class StateMachine:
         state_name = from_state or self.current_state_name
         reachable = set()
 
-        for entry in self._transitions.get(state_name, {}).values():
+        for slot in self._transitions.get(state_name, {}).values():
+            entry = _require_singleton_entry(slot)
             reachable.add(entry.to_state.name)
 
         return list(reachable)
@@ -1948,7 +2022,7 @@ class StateMachine:
             return False
 
         if to_state is not None:
-            entry = self._transitions[state_name][trigger]
+            entry = _require_singleton_entry(self._transitions[state_name][trigger])
             return entry.to_state.name == to_state
 
         return True
@@ -2004,8 +2078,8 @@ class StateMachine:
         """
         current_name = self._current_state.name
         entries = self._transitions.get(current_name)
-        entry = entries.get(trigger) if entries is not None else None
-        if entry is None:
+        slot = entries.get(trigger) if entries is not None else None
+        if slot is None:
             error_msg = (
                 f"No transition for trigger '{trigger}' from state '{current_name}'"
             )
@@ -2016,6 +2090,20 @@ class StateMachine:
                 error_msg,
                 stage=_LIFECYCLE_STAGE_RESOLUTION,
             )
+        if isinstance(slot, _TransitionGroup):
+            _emit_legacy_debug(
+                self._logger,
+                "%s: FAILED - %s",
+                self._name,
+                _PRIORITY_GROUP_RUNTIME_ERROR,
+            )
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                _PRIORITY_GROUP_RUNTIME_ERROR,
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
+            )
+        entry = slot
         declarative_handler = _resolve_declarative_handler(
             self._current_state, trigger, entry.to_state
         )
@@ -3276,7 +3364,8 @@ class StateMachine:
         # Find unreachable states (simple version)
         reachable = {self.current_state_name}
         for state_name in self.states:
-            for entry in self._transitions.get(state_name, {}).values():
+            for slot in self._transitions.get(state_name, {}).values():
+                entry = _require_singleton_entry(slot)
                 reachable.add(entry.to_state.name)
 
         for state_name in self.states:
