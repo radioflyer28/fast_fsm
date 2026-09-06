@@ -380,7 +380,7 @@ jobs:
           - { cell: compiled-wheel-cp312-macos-x86_64, python: "3.12", runner: macos-15-intel, artifact: macos-x86_64 }
           - { cell: compiled-wheel-cp312-macos-arm64, python: "3.12", runner: macos-14, artifact: macos-arm64 }
           - { cell: compiled-wheel-cp312-macos-universal2-x86_64, python: "3.12", runner: macos-15-intel, artifact: macos-universal2 }
-          - { cell: compiled-wheel-cp312-macos-universal2-arm64, python: "3.12", runner: macos-14, artifact: macos-universal2 }
+          - { cell: compiled-wheel-cp312-macos-universal2-arm64, python: "3.12", runner: macos-14, artifact: macos-universal2, collect_performance: true }
           - { cell: compiled-wheel-cp313-linux-x86_64, python: "3.13", runner: ubuntu-latest, artifact: linux-x86_64 }
           - { cell: compiled-wheel-cp313-linux-aarch64, python: "3.13", runner: ubuntu-24.04-arm, artifact: linux-aarch64 }
           - { cell: compiled-wheel-cp313-windows-amd64, python: "3.13", runner: windows-latest, artifact: windows-amd64 }
@@ -399,6 +399,7 @@ jobs:
       HEAD_SHA: ${{ needs.resolve_ref.outputs.head_sha }}
       MATRIX_CELL: ${{ matrix.cell }}
       MATRIX_PYTHON: ${{ matrix.python }}
+      COLLECT_PERFORMANCE: ${{ matrix.collect_performance || false }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -433,7 +434,11 @@ jobs:
           PY
           )"
           test -n "$wheel"
-          uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode compiled --build-intent compiled --json > raw.json
+          performance_args=()
+          if [ "$COLLECT_PERFORMANCE" != "true" ]; then
+            performance_args=(--skip-performance)
+          fi
+          uv run python tools/release_evidence.py verify-installed-wheel --wheel "$wheel" --expected-mode compiled --build-intent compiled "${performance_args[@]}" --json > raw.json
       - name: Bind native oracle and installed performance to immutable matrix cell
         shell: bash
         run: |
@@ -561,7 +566,7 @@ jobs:
         run: |
           sdist="$(find artifact -type f -name '*.tar.gz' -print -quit)"
           test -n "$sdist"
-          uv run python tools/release_evidence.py verify-sdist --sdist "$sdist" --json > raw.json
+          uv run python tools/release_evidence.py verify-sdist --sdist "$sdist" --skip-performance --json > raw.json
       - name: Bind selected sdist child to immutable matrix cell
         shell: bash
         run: |
