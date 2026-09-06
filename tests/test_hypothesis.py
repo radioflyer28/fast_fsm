@@ -13,7 +13,7 @@ import string
 from hypothesis import given, settings, assume, HealthCheck
 from hypothesis import strategies as st
 
-from fast_fsm.core import State, StateMachine, TransitionResult
+from fast_fsm.core import State, StateMachine, TransitionResult, _TransitionGroup
 
 
 # ---------------------------------------------------------------------------
@@ -42,18 +42,53 @@ def build_fsm(names: list[str], transitions: list[tuple[str, str, str]]):
 
 
 @st.composite
+def distinct_priority_registration_order(draw):
+    """Return one permutation of distinct integer priorities."""
+    priorities = draw(
+        st.lists(
+            st.integers(min_value=-100, max_value=100),
+            min_size=2,
+            max_size=6,
+            unique=True,
+        )
+    )
+    return draw(st.permutations(priorities))
+
+
+def priority_topology(order: tuple[int, ...]) -> tuple[tuple[int, str], ...]:
+    """Build a registration-only topology and return its candidate order."""
+    source = State("source")
+    machine = StateMachine(source, name="priority-permutation")
+    targets = {priority: State(f"target-{priority}") for priority in order}
+    for target in targets.values():
+        machine.add_state(target)
+    for priority in order:
+        machine.add_transition("go", source, targets[priority], priority=priority)
+
+    group = machine._transitions[source.name]["go"]
+    assert isinstance(group, _TransitionGroup)
+    return tuple((entry.priority, entry.to_state.name) for entry in group.entries)
+
+
+@st.composite
 def fsm_with_transitions(draw):
     """Strategy that produces (fsm, list_of_transitions)."""
     names = draw(state_names)
-    # Generate some random transitions between existing states
-    n_trans = draw(st.integers(min_value=1, max_value=len(names) * 2))
+    # Keep runtime-state properties singleton-only until Phase 22 specifies
+    # grouped dispatch. Candidate-order registration has its own strategy below.
     trigger_name = st.text(alphabet=string.ascii_lowercase, min_size=1, max_size=6)
-    transitions = []
-    for _ in range(n_trans):
-        t = draw(trigger_name)
-        src = draw(st.sampled_from(names))
-        dst = draw(st.sampled_from(names))
-        transitions.append((t, src, dst))
+    transitions = draw(
+        st.lists(
+            st.tuples(
+                trigger_name,
+                st.sampled_from(names),
+                st.sampled_from(names),
+            ),
+            min_size=1,
+            max_size=len(names) * 2,
+            unique_by=lambda transition: (transition[0], transition[1]),
+        )
+    )
     fsm = build_fsm(names, transitions)
     return fsm, transitions
 
@@ -146,6 +181,18 @@ class TestDeterministicTransition:
             after2 = fsm.current_state.name
             assert r1.success == r2.success
             assert after1 == after2
+
+
+class TestPriorityRegistrationOrder:
+    """Priority registration topology cannot depend on setup order."""
+
+    @given(order=distinct_priority_registration_order())
+    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    def test_priority_candidate_permutations_have_one_ascending_topology(self, order):
+        shuffled = priority_topology(order)
+        sorted_registration = priority_topology(tuple(sorted(order)))
+
+        assert shuffled == sorted_registration
 
 
 class TestFromStatesRoundTrip:

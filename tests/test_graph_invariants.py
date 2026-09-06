@@ -24,11 +24,27 @@ def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
             (
                 source_name,
                 trigger,
-                id(entry.to_state),
-                id(entry.condition) if entry.condition is not None else None,
+                (
+                    "group" if isinstance(slot, _TransitionGroup) else "singleton",
+                    tuple(
+                        (
+                            id(entry),
+                            entry.priority,
+                            id(entry.to_state),
+                            id(entry.condition)
+                            if entry.condition is not None
+                            else None,
+                        )
+                        for entry in (
+                            slot.entries
+                            if isinstance(slot, _TransitionGroup)
+                            else (slot,)
+                        )
+                    ),
+                ),
             )
             for source_name, entries in machine._transitions.items()
-            for trigger, entry in entries.items()
+            for trigger, slot in entries.items()
         )
     )
     snapshot = machine._graph_snapshot()
@@ -297,3 +313,79 @@ def test_grouped_consumers_fail_closed_without_selecting_or_projecting() -> None
         match="Priority candidate groups are not supported by this projection",
     ):
         machine.to_dict()
+
+
+def test_exact_duplicate_is_version_neutral_and_preserves_slot_identity() -> None:
+    machine, idle, running = make_machine()
+    machine.add_transition("go", idle, running, priority=-2)
+    first = machine._transitions[idle.name]["go"]
+    before_version = machine._graph_version
+
+    machine.add_transition("go", idle, running, priority=-2)
+
+    assert machine._transitions[idle.name]["go"] is first
+    assert machine._graph_version == before_version
+
+
+def test_equal_priority_conflict_rolls_back_all_staged_replacements() -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    failed = State("failed")
+    machine.add_state(complete)
+    machine.add_state(failed)
+    machine.add_transition("go", idle, running, priority=0)
+    before = graph_fingerprint(machine)
+
+    new_candidate = machine._normalize_transition_request(
+        "go", idle, complete, priority=-1
+    )
+    late_conflict = machine._normalize_transition_request(
+        "go", idle, failed, priority=0
+    )
+    with pytest.raises(ValueError, match="priority"):
+        machine._commit_transition_plan((new_candidate, late_conflict))
+
+    assert graph_fingerprint(machine) == before
+
+
+def test_staged_same_slot_merges_once_and_sorts_all_candidates() -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    failed = State("failed")
+    machine.add_state(complete)
+    machine.add_state(failed)
+    before_version = machine._graph_version
+
+    plans = (
+        machine._normalize_transition_request("go", idle, running, priority=7),
+        machine._normalize_transition_request("go", idle, complete, priority=-3),
+        machine._normalize_transition_request("go", idle, failed, priority=2),
+    )
+    machine._commit_transition_plan(plans)
+    group = machine._transitions[idle.name]["go"]
+
+    assert isinstance(group, _TransitionGroup)
+    assert tuple(entry.priority for entry in group.entries) == (-3, 2, 7)
+    assert tuple(entry.to_state for entry in group.entries) == (
+        complete,
+        failed,
+        running,
+    )
+    assert machine._graph_version == before_version + 1
+
+
+def test_repeated_raw_callable_and_unless_values_conflict_by_condition_identity() -> (
+    None
+):
+    machine, idle, running = make_machine()
+
+    def permitted(**_: object) -> bool:
+        return True
+
+    machine.add_transition("go", idle, running, condition=permitted, priority=1)
+    with pytest.raises(ValueError, match="priority"):
+        machine.add_transition("go", idle, running, condition=permitted, priority=1)
+
+    machine.add_transition("back", idle, running, unless=permitted, priority=2)
+    with pytest.raises(ValueError, match="priority"):
+        machine.add_transition("back", idle, running, unless=permitted, priority=2)
