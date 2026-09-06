@@ -4,17 +4,17 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 current_phase: 21
 current_phase_name: Priority Contract & Atomic Registration
-status: planning
-stopped_at: Phase 21 context gathered
-last_updated: "2026-09-06T19:30:01.153Z"
+status: executing
+stopped_at: Completed 21-01-PLAN.md
+last_updated: "2026-09-06T21:46:31.640Z"
 last_activity: 2026-09-06
-last_activity_desc: v0.4.0 roadmap created with 15/15 requirements mapped
-state_head: 9a347d6d66957524c31a9779f8b53b11eaed85a9
+last_activity_desc: Phase 21 execution started
+state_head: e3925535587d08f7774c6fb1dd4f1b4e50648ed3
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 2
+  completed_plans: 1
   percent: 0
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 ## Current Position
 
-Phase: 21 of 25 (Priority Contract & Atomic Registration)
-Plan: —
-Status: Ready for phase discussion
-Last activity: 2026-09-06 — v0.4.0 roadmap created with 15/15 requirements mapped
+Phase: 21 (Priority Contract & Atomic Registration) — EXECUTING
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-09-06 — Phase 21 execution started
 
 ## Performance Metrics
 
@@ -79,6 +79,7 @@ Last activity: 2026-09-06 — v0.4.0 roadmap created with 15/15 requirements map
 | Phase 20 P02 | 20m | 2 tasks | 5 files |
 | Phase 20 P05 | 21m | 2 tasks | 5 files |
 | Phase 20 P06 | 1004m | 3 tasks | 7 files |
+| Phase 21 P01 | 21m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 20]: Preserve the reviewed uv 0.12.6 pin fail-closed; do not substitute host uv 0.12.9 for release readiness.
 - [Phase 20]: Scope contents: write exclusively to the final v0.3.0 tag-only release job after exact aggregate and peeled-tag identity.
 - [Phase 20]: Local profile evidence is non-authorizing; an explicitly authorized read-only hosted evidence inspection remains required before tagging.
+- [Phase 21]: Priority stays object-typed until exact built-in-int validation passes at the mypyc boundary.
+- [Phase 21]: One candidate is direct; competing priorities are private frozen sorted tuple groups published atomically.
+- [Phase 21]: Singleton lookup/dispatch remains O(1); finite candidate construction and selection are local O(k).
 
 ### Pending Todos
 
@@ -161,9 +165,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T19:30:01.136Z
-Stopped at: Phase 21 context gathered
-Resume file: .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md
+Last session: 2026-09-06T21:46:31.630Z
+Stopped at: Completed 21-01-PLAN.md
+Resume file: None
 
 ## Rebuild Log
 

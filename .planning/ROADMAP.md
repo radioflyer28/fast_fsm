@@ -61,12 +61,17 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 **Requirements**: PRIO-01, PRIO-02, PRIO-03
 **Success Criteria** (what must be TRUE):
 
-  1. A consumer can use `add_transition(..., priority=...)` repeatedly for one source/trigger and inspect every registered candidate, while a slot with one candidate retains the direct singleton representation.
+  1. A consumer can use `add_transition(..., priority=...)` repeatedly for one source/trigger, while internal immutable-topology inspection verifies every registered candidate and a one-candidate slot retains the direct singleton representation; supported public candidate inspection is explicitly deferred to Phase 23 and this phase adds no public inspection API.
   2. Priority accepts exact non-boolean integers, lower values win independent of registration order, conflicting equal priorities reject the whole operation, and exact duplicate registration is an idempotent no-op.
   3. Batch, multi-source, bidirectional, emergency, and builder-backed registration either publish every affected candidate group or leave topology and graph version unchanged.
   4. Candidate groups are immutable after publication, remain isolated across clones, and `core.py` continues to pass the native compilation/type boundary.
 
-**Plans**: TBD
+**Plans:** 1/2 plans executed
+
+Plans:
+
+- [x] 21-01-PLAN.md — Establish the priority topology contract and atomic same-slot registration.
+- [ ] 21-02-PLAN.md — Complete helper/builder transport, clone isolation, and compiled singleton proof.
 
 ### Phase 22: Ordered Runtime Selection & Lifecycle Integration
 
@@ -150,7 +155,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 21. Priority Contract & Atomic Registration | v0.4.0 | 0/TBD | Not started | — |
+| 21. Priority Contract & Atomic Registration | v0.4.0 | 1/2 | In Progress|  |
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 0/TBD | Not started | — |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
