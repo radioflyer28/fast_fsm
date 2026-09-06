@@ -19,7 +19,7 @@ research synthesis.
   priorities are exact non-boolean integers, lower values win, conflicting ties
   fail atomically, and exact duplicate registrations remain idempotent.
 
-- [ ] **PRIO-03**: Batch, multi-source, bidirectional, emergency, and builder
+- [x] **PRIO-03**: Batch, multi-source, bidirectional, emergency, and builder
   registration preserve complete candidate groups, graph-version correctness,
   and clone isolation.
 
@@ -126,7 +126,7 @@ research synthesis.
 |-------------|-------|--------|
 | PRIO-01 | Phase 21 | Complete |
 | PRIO-02 | Phase 21 | Complete |
-| PRIO-03 | Phase 21 | Pending |
+| PRIO-03 | Phase 21 | Complete |
 | SEL-01 | Phase 22 | Pending |
 | SEL-02 | Phase 22 | Pending |
 | SEL-03 | Phase 22 | Pending |

@@ -4,17 +4,17 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 current_phase: 21
 current_phase_name: Priority Contract & Atomic Registration
-status: executing
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-09-06T21:46:31.640Z"
+status: verifying
+stopped_at: Completed 21-02-PLAN.md
+last_updated: "2026-09-06T22:42:02.112Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 21 execution started
-state_head: e3925535587d08f7774c6fb1dd4f1b4e50648ed3
+state_head: 776a6bb9077688776416ee43f425f4de8690a1e8
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 Phase: 21 (Priority Contract & Atomic Registration) — EXECUTING
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-06 — Phase 21 execution started
 
 ## Performance Metrics
@@ -80,6 +80,7 @@ Last activity: 2026-09-06 — Phase 21 execution started
 | Phase 20 P05 | 21m | 2 tasks | 5 files |
 | Phase 20 P06 | 1004m | 3 tasks | 7 files |
 | Phase 21 P01 | 21m | 2 tasks | 7 files |
+| Phase 21-priority-contract-atomic-registration P02 | 48m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 21]: Priority stays object-typed until exact built-in-int validation passes at the mypyc boundary.
 - [Phase 21]: One candidate is direct; competing priorities are private frozen sorted tuple groups published atomically.
 - [Phase 21]: Singleton lookup/dispatch remains O(1); finite candidate construction and selection are local O(k).
+- [Phase 21]: Builder materializes all staged priority rows through one existing add_transitions batch.
+- [Phase 21]: Clone captures topology through the owner-aware read boundary while sharing only immutable slots.
 
 ### Pending Todos
 
@@ -165,8 +168,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T21:46:31.630Z
-Stopped at: Completed 21-01-PLAN.md
+Last session: 2026-09-06T22:42:02.101Z
+Stopped at: Completed 21-02-PLAN.md
 Resume file: None
 
 ## Rebuild Log

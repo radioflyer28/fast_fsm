@@ -66,12 +66,12 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
   3. Batch, multi-source, bidirectional, emergency, and builder-backed registration either publish every affected candidate group or leave topology and graph version unchanged.
   4. Candidate groups are immutable after publication, remain isolated across clones, and `core.py` continues to pass the native compilation/type boundary.
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans executed
 
 Plans:
 
 - [x] 21-01-PLAN.md — Establish the priority topology contract and atomic same-slot registration.
-- [ ] 21-02-PLAN.md — Complete helper/builder transport, clone isolation, and compiled singleton proof.
+- [x] 21-02-PLAN.md — Complete helper/builder transport, clone isolation, and compiled singleton proof.
 
 ### Phase 22: Ordered Runtime Selection & Lifecycle Integration
 
@@ -155,7 +155,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 21. Priority Contract & Atomic Registration | v0.4.0 | 1/2 | In Progress|  |
+| 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | In Progress|  |
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 0/TBD | Not started | — |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
