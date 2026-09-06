@@ -6,7 +6,8 @@ It models the decision layer that would receive already-validated telemetry from
 flight controller; it does not communicate with, command, or certify real hardware.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from time import monotonic
 from typing import Callable, Protocol
 
 from fast_fsm import FSMBuilder, FuncCondition, State
@@ -102,107 +103,94 @@ class TelemetrySample:
     operator_command: str | None = None
 
 
-def pre_arm_ready(**telemetry) -> bool:
-    """Require every ground-safety interlock before arming."""
-    return (
-        telemetry.get("battery_pct", 0) >= 30
-        and telemetry.get("gps_fix", False)
-        and telemetry.get("home_position_set", False)
-        and telemetry.get("propellers_clear", False)
-        and telemetry.get("geofence_loaded", False)
-    )
-
-
-def launch_clear(**telemetry) -> bool:
-    """Require a clear launch area and an acceptable battery reserve."""
-    return (
-        telemetry.get("launch_area_clear", False)
-        and telemetry.get("battery_pct", 0) >= 35
-    )
-
-
-def battery_critical(**telemetry) -> bool:
-    """Allow the low-battery failsafe only below its conservative threshold."""
-    return telemetry.get("battery_pct", 100) < 25
-
-
-def link_lost(**telemetry) -> bool:
-    """Report that the independently monitored command link is unavailable."""
-    return not telemetry.get("link_ok", True)
-
-
-def critical_fault_present(**telemetry) -> bool:
-    """Model a flight controller reporting an unrecoverable vehicle fault."""
-    return telemetry.get("critical_fault", False)
-
-
-def home_reached(**telemetry) -> bool:
-    """Report that the aircraft has reached its stored home position."""
-    return telemetry.get("home_reached", False)
-
-
-def touchdown_detected(**telemetry) -> bool:
-    """Report that the aircraft is on the ground."""
-    return telemetry.get("on_ground", False)
-
-
-@dataclass(frozen=True, slots=True)
-class TelemetryRule:
-    """One ordered raw-telemetry rule that emits a discrete FSM event."""
-
-    event: str
-    predicate: Callable[..., bool]
-
-
 class TelemetryPolicy:
-    """Rank telemetry into FSM event candidates with an explicit priority table.
+    """Retain telemetry facts and derive time-based measurements.
 
-    This policy deliberately has no knowledge of flight states.  It determines
-    which observed condition wins when a packet contains several signals; the
-    drone FSM determines whether that selected event is legal in its current
-    state.
+    This service does not select events or inspect flight states. Transition
+    guards query it for the facts they need, keeping transition logic inside
+    the FSM.
     """
 
-    __slots__ = ("_rules", "_operator_events")
+    __slots__ = ("_clock", "_last_heartbeat_at", "_sample")
 
-    def __init__(
-        self,
-        rules: tuple[TelemetryRule, ...],
-        operator_events: dict[str, str],
-    ) -> None:
-        self._rules = rules
-        self._operator_events = operator_events
+    def __init__(self, clock: Callable[[], float] = monotonic) -> None:
+        self._clock = clock
+        self._last_heartbeat_at: float | None = None
+        self._sample: TelemetrySample | None = None
 
-    def events_for(self, **telemetry) -> tuple[str, ...]:
-        """Return observed events in descending priority order.
+    def observe(self, sample: TelemetrySample) -> None:
+        """Record the latest normalized telemetry reading."""
+        self._sample = sample
+        if sample.link_ok:
+            self._last_heartbeat_at = self._clock()
 
-        A rule may match while its event is illegal from the FSM's current
-        state. The caller submits candidates in order and lets the FSM accept
-        the first legal one, without this policy learning about flight states.
-        """
-        events = [rule.event for rule in self._rules if rule.predicate(**telemetry)]
-        operator_event = self._operator_events.get(telemetry.get("operator_command"))
-        if operator_event is not None:
-            events.append(operator_event)
-        return tuple(events)
+    def heartbeat_older_than(self, seconds: float) -> bool:
+        """Return whether no healthy heartbeat has arrived within ``seconds``."""
+        if self._last_heartbeat_at is None:
+            return True
+        return self._clock() - self._last_heartbeat_at > seconds
+
+    @property
+    def sample(self) -> TelemetrySample:
+        """Return the latest observation after one has been recorded."""
+        if self._sample is None:
+            raise RuntimeError("TelemetryPolicy has not observed a sample")
+        return self._sample
 
 
-# Rules rank all observations. The flight FSM—not this policy—decides which
-# source states accept each event; the loop uses the first one it accepts.
-TELEMETRY_POLICY = TelemetryPolicy(
-    rules=(
-        TelemetryRule("failsafe_critical_fault", critical_fault_present),
-        TelemetryRule("failsafe_link_lost", link_lost),
-        TelemetryRule("failsafe_low_battery", battery_critical),
-        TelemetryRule("home_reached", home_reached),
-        TelemetryRule("touchdown", touchdown_detected),
-    ),
-    operator_events={
-        "arm": "arm",
-        "takeoff": "takeoff",
-        "begin_mission": "begin_mission",
-        "prepare_next_flight": "prepare_next_flight",
-    },
+def pre_arm_ready(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Require every ground-safety interlock before arming."""
+    sample = telemetry_policy.sample
+    return (
+        sample.battery_pct >= 30
+        and sample.gps_fix
+        and sample.home_position_set
+        and sample.propellers_clear
+        and sample.geofence_loaded
+    )
+
+
+def launch_clear(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Require a clear launch area and an acceptable battery reserve."""
+    sample = telemetry_policy.sample
+    return sample.launch_area_clear and sample.battery_pct >= 35
+
+
+def battery_critical(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Allow the low-battery failsafe only below its conservative threshold."""
+    return telemetry_policy.sample.battery_pct < 25
+
+
+def link_lost(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Report an unavailable link or a heartbeat absent for five seconds."""
+    return not telemetry_policy.sample.link_ok or telemetry_policy.heartbeat_older_than(
+        5
+    )
+
+
+def critical_fault_present(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Model a flight controller reporting an unrecoverable vehicle fault."""
+    return telemetry_policy.sample.critical_fault
+
+
+def home_reached(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Report that the aircraft has reached its stored home position."""
+    return telemetry_policy.sample.home_reached
+
+
+def touchdown_detected(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Report that the aircraft is on the ground."""
+    return telemetry_policy.sample.on_ground
+
+
+# This is an ordering declaration, not telemetry classification. Every rule
+# that makes a candidate event valid lives in its transition's FuncCondition.
+TELEMETRY_EVENT_PRIORITY = (
+    "failsafe_critical_fault",
+    "failsafe_link_lost",
+    "failsafe_low_battery",
+    "home_reached",
+    "touchdown",
 )
 
 
@@ -280,7 +268,7 @@ def create_drone_fsm(aircraft: AircraftCommands):
 
 
 class DroneController:
-    """Own the FSM and telemetry policy for one aircraft command adapter."""
+    """Own the FSM for one aircraft command adapter."""
 
     __slots__ = ("_aircraft", "_fsm", "_telemetry_policy")
 
@@ -291,7 +279,7 @@ class DroneController:
     ) -> None:
         self._aircraft = aircraft
         self._telemetry_policy = (
-            TELEMETRY_POLICY if telemetry_policy is None else telemetry_policy
+            TelemetryPolicy() if telemetry_policy is None else telemetry_policy
         )
         self._fsm = create_drone_fsm(aircraft)
 
@@ -301,14 +289,15 @@ class DroneController:
         return self._fsm.current_state_name
 
     def update_from_telemetry(self, sample: TelemetrySample) -> None:
-        """Apply one reading through the state-independent telemetry policy.
+        """Apply one reading by offering ordered triggers to the FSM.
 
         In a real integration, construct ``TelemetrySample`` from a normalized,
         independently validated telemetry packet, then call this method once per
-        packet. The policy ranks candidates; this controller lets the FSM accept
-        the first legal event based on its current state and its guards.
+        packet. The policy retains telemetry facts; transition guards are their
+        sole consumer for deciding whether an event is valid. This controller
+        only submits named triggers in priority order.
         """
-        telemetry = asdict(sample)
+        self._telemetry_policy.observe(sample)
         print(
             f"\nTelemetry: battery={sample.battery_pct}% "
             f"link={'ok' if sample.link_ok else 'lost'} "
@@ -316,22 +305,16 @@ class DroneController:
             f"command={sample.operator_command or '-'}"
         )
 
-        events = self._telemetry_policy.events_for(**telemetry)
-        if not events:
-            print("• no state transition")
-            return
-
-        for event in events:
-            if self._dispatch(event, **telemetry).success:
+        for event in (*TELEMETRY_EVENT_PRIORITY, sample.operator_command):
+            if event is not None and self._dispatch(event).success:
                 return
+        print("• no state transition")
 
-    def _dispatch(self, event: str, **telemetry):
-        """Send one event and expose whether the owned FSM accepted it."""
-        result = self._fsm.trigger(event, **telemetry)
+    def _dispatch(self, event: str):
+        """Send one candidate event and report an accepted transition."""
+        result = self._fsm.trigger(event, telemetry_policy=self._telemetry_policy)
         if result.success:
             print(f"✓ {event}: {result.from_state} -> {result.to_state}")
-        else:
-            print(f"✗ {event}: blocked ({result.error})")
         return result
 
 
