@@ -13,18 +13,26 @@ tech_stack:
 key_files:
   created: []
   modified:
+
     - src/fast_fsm/core.py
     - tests/test_listeners.py
     - tests/test_advanced_functionality.py
+
 decisions:
+
   - "_before_listeners and _on_failed_callbacks intentionally NOT copied in clone() — consistent with existing listener list behaviour"
   - "after_transition(fn) added as convenience method appending to _after_listeners (no new slot needed)"
   - "_trigger_callbacks IS copied in clone() — per-trigger watches are part of machine topology config, not per-session observation"
+
 metrics:
   duration: "~15 minutes"
   completed: "2026-04-04"
   tasks: 3
   files_changed: 3
+audit_acknowledged:
+  milestone: v0.3.0
+  at: 2026-09-06
+  status: unknown
 ---
 
 # Phase 260404-exx Plan 01: Fill Callback Hook Gaps Summary
@@ -66,12 +74,14 @@ metrics:
 ## Tests Added
 
 **test_listeners.py — TestBeforeTransitionListener (4 tests):**
+
 - `test_before_transition_fires_before_on_exit_state` — order assertion: before < exit < after
 - `test_before_transition_not_called_on_blocked_trigger` — no fire when trigger blocked
 - `test_before_transition_receives_correct_args` — source/target are State objects
 - `test_before_transition_state_values_correct` — correct state names
 
 **test_advanced_functionality.py — 4 new test classes (13 tests total):**
+
 - `TestAfterTransitionMethod` (2): fires on success, not on failure
 - `TestOnFailedMethod` (4): fires on no-match, condition fail; not on success; forwards kwargs
 - `TestOnTriggerMethod` (4): fires for matching trigger, not for different, not on fail, correct args

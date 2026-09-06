@@ -1,7 +1,7 @@
 ---
 phase: 20-installed-artifact-parity-release-proof
-verified: 2026-09-05T23:25:00Z
-status: human_needed
+verified: 2026-09-06T04:42:01Z
+status: passed
 score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -16,17 +16,14 @@ decision_coverage:
   honored: 14
   total: 14
   not_honored: []
-human_verification:
-  - test: "Dispatch Release Evidence for the exact intended commit, then run release-hosted-prerelease-check with that run ID and 40-character SHA."
-    expected: "A terminal release-profile aggregate confirms the exact SHA, complete hosted native matrix, record/artifact SHA bindings, semantic parity, and native performance before any tag."
-    why_human: "No hosted workflow was dispatched during this phase; local proof and YAML cannot establish actual runner availability or native execution on every hosted target."
+human_verification: []
 ---
 
 # Phase 20: Installed Artifact Parity & Release Proof Verification Report
 
 **Phase Goal:** Maintainers can publish v0.3.0 only when installed pure and compiled artifacts prove the same hardened behavior, identity, and performance.
 
-**Status:** human_needed
+**Status:** passed
 **Re-verification:** Yes — baseline gap closed at `457f2c3`
 
 ## Goal Achievement
@@ -51,7 +48,7 @@ human_verification:
 | `tools/release_evidence.py` | ✓ VERIFIED | Central artifact, identity, historical, matrix, performance, and slots authority used by Taskfile and workflows. |
 | `setup.py` / `MANIFEST.in` | ✓ VERIFIED | Explicit compiled intent, `core.py`-only boundary, and sdist derivation inputs are implemented. |
 | `evidence/release-baseline.json` | ✓ VERIFIED | Regenerated for v0.3.0 at `457f2c3`; pinned-toolchain freshness check passes. |
-| `release-evidence.yml` | ✓ VERIFIED | Read-only exact-SHA evidence graph with terminal release-profile aggregate and no release job. |
+| `release-evidence.yml` | ✓ VERIFIED | Read-only exact-SHA evidence graph passed the terminal release-profile aggregate on hosted runners; it has no release job. |
 | `release.yml` | ✓ VERIFIED | Tag-only route; final `github_release` is the sole `contents: write` job and has aggregate/tag-identity dependencies. |
 | `Taskfile.yml` and runbooks | ✓ VERIFIED | Local projection is explicitly non-authorizing; hosted inspection is a separate read-only pre-tag command. |
 
@@ -73,6 +70,7 @@ human_verification:
 | Full local readiness | Same PATH prefix with `task release-readiness-check` | Fresh run passed format, lint, mypy, full tests, docs, source/baseline checks, all local artifact/lineage/parity/origin/performance/slots checks; `ty` was separately advisory. | ✓ PASS |
 | Release evidence regression | Same PATH prefix with `uv run pytest tests/test_release_evidence.py -q -x` | 201 passed | ✓ PASS |
 | Historical provenance and slots | Same PATH prefix with `historical-evidence --check` and `slots-policy` | Both passed | ✓ PASS |
+| Hosted native evidence | `task release-hosted-prerelease-check` for run `34010662876` and SHA `84d86cd2b91f8042f0a6a15945f4be10035e1329` | Terminal aggregate passed and downloaded evidence recomputed identically | ✓ PASS |
 
 ### Requirements Coverage
 
@@ -96,23 +94,15 @@ human_verification:
 
 All 14 trackable CONTEXT decisions are represented in shipped artifacts (`check.decision-coverage-verify`: 14/14).
 
-## Human Verification Required
+## Hosted Evidence UAT
 
-### 1. Hosted native release-evidence checkpoint
-
-**Test:** Dispatch the read-only **Release Evidence** workflow for the intended exact SHA. Before creating a tag, run:
-
-`task release-hosted-prerelease-check FAST_FSM_HOSTED_RUN_ID=<id> FAST_FSM_EXPECTED_SHA=<40-char-sha>`
-
-**Expected:** A successful terminal aggregate for the complete authoritative `release` matrix, with the exact SHA, full native runner records, downloaded artifact/evidence SHA bindings, parity, origin, and installed-performance proof.
-
-**Why human:** Phase scope intentionally performed no remote dispatch, tag, release, or publication. The local projection and structural workflow tests cannot prove actual hosted runner availability or successful execution.
+The read-only [Release Evidence run 34010662876](https://github.com/radioflyer28/fast_fsm/actions/runs/34010662876) passed its terminal aggregate for `84d86cd2b91f8042f0a6a15945f4be10035e1329`. The required local inspection then downloaded every record and verified an identical release-profile aggregate. No tag, release, or publication was created.
 
 ## Verdict
 
-All locally executable Phase 20 proof now passes with the mandated uv 0.12.6 toolchain. The only remaining item is the intentional, pre-tag hosted evidence UAT; it is not a code gap and must not be reported as a passed hosted result.
+All Phase 20 proof now passes with the mandated uv 0.12.6 toolchain and the exact-SHA hosted native matrix. The release workflow remains tag-only; this verification created no tag, release, or publication.
 
 ---
 
-_Verified: 2026-09-05T23:25:00Z_
+_Verified: 2026-09-06T04:42:01Z_
 _Verifier: the agent (gsd-verifier)_
