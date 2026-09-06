@@ -57,17 +57,20 @@ A deterministic, non-hardware simulation of drone decision logic. It blocks
 arming until battery, GPS, home-position, propeller-clearance, and geofence
 checks pass; then it demonstrates return-to-home and emergency-landing paths.
 It is a training example, not flight-control or safety-certified software.
-Its `update_from_telemetry()` function shows the loop boundary: normalize one
-reading, then pass it to a state-independent, ordered telemetry-policy table.
-The table ranks raw signals (critical fault before link loss before low battery)
-and the loop offers matching events to the FSM in that order. The FSM alone
+`DroneController` owns the FSM and its telemetry policy, while
+`SimulatedAircraft` is a replaceable command adapter. Its
+`update_from_telemetry()` method shows the loop boundary: normalize one reading,
+then pass it to a state-independent, ordered telemetry-policy table. The table
+ranks raw signals (critical fault before link loss before low battery) and the
+controller offers matching events to the FSM in that order. The FSM alone
 decides which event is accepted from the current flight state. Each successfully
 entered command state calls a concrete method on `SimulatedAircraft` after the
 transition commits—for example,
 `failsafe_low_battery` enters
 `ReturnHome`, which calls `aircraft.command_return_to_home()`.
 
-**Concepts:** `FuncCondition`, guarded transitions, explicit failsafe events,
+**Concepts:** controller-owned FSM composition, `Protocol` command ports,
+`FuncCondition`, guarded transitions, explicit failsafe events,
 `TransitionResult` handling, and a simulated live-telemetry loop.
 
 ---

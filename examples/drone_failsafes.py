@@ -7,13 +7,31 @@ flight controller; it does not communicate with, command, or certify real hardwa
 """
 
 from dataclasses import asdict, dataclass
-from typing import Callable
+from typing import Callable, Protocol
 
 from fast_fsm import FSMBuilder, FuncCondition, State
 
 
+class AircraftCommands(Protocol):
+    """The command port that a real or simulated aircraft adapter implements."""
+
+    def command_arm_motors(self) -> None: ...
+
+    def command_takeoff(self) -> None: ...
+
+    def command_start_mission(self) -> None: ...
+
+    def command_return_to_home(self) -> None: ...
+
+    def command_begin_landing(self) -> None: ...
+
+    def command_emergency_land(self) -> None: ...
+
+    def command_disarm_motors(self) -> None: ...
+
+
 class SimulatedAircraft:
-    """Expose the command methods a real aircraft adapter would implement."""
+    """A simulated implementation of the aircraft command port."""
 
     __slots__ = ("commands",)
 
@@ -55,7 +73,7 @@ class DroneState(State):
     def __init__(
         self,
         name: str,
-        entry_action: Callable[[SimulatedAircraft], None] | None = None,
+        entry_action: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(name)
         self.entry_action = entry_action
@@ -63,9 +81,8 @@ class DroneState(State):
     def on_enter(self, from_state, trigger, **kwargs):
         source = from_state.name if from_state else "start"
         print(f"  -> {self.name} ({source} --{trigger}--> {self.name})")
-        aircraft = kwargs.get("aircraft")
-        if self.entry_action is not None and aircraft is not None:
-            self.entry_action(aircraft)
+        if self.entry_action is not None:
+            self.entry_action()
 
 
 @dataclass(frozen=True)
@@ -189,18 +206,16 @@ TELEMETRY_POLICY = TelemetryPolicy(
 )
 
 
-def create_drone_fsm():
-    """Build the drone's ground, mission, return, and emergency state model."""
+def create_drone_fsm(aircraft: AircraftCommands):
+    """Build the controller's ground, mission, return, and emergency FSM."""
     pre_arm = DroneState("PreArm")
-    armed = DroneState("Armed", SimulatedAircraft.command_arm_motors)
-    takeoff = DroneState("Takeoff", SimulatedAircraft.command_takeoff)
-    mission = DroneState("Mission", SimulatedAircraft.command_start_mission)
-    return_home = DroneState("ReturnHome", SimulatedAircraft.command_return_to_home)
-    landing = DroneState("Landing", SimulatedAircraft.command_begin_landing)
-    emergency_landing = DroneState(
-        "EmergencyLanding", SimulatedAircraft.command_emergency_land
-    )
-    landed = DroneState("Landed", SimulatedAircraft.command_disarm_motors)
+    armed = DroneState("Armed", aircraft.command_arm_motors)
+    takeoff = DroneState("Takeoff", aircraft.command_takeoff)
+    mission = DroneState("Mission", aircraft.command_start_mission)
+    return_home = DroneState("ReturnHome", aircraft.command_return_to_home)
+    landing = DroneState("Landing", aircraft.command_begin_landing)
+    emergency_landing = DroneState("EmergencyLanding", aircraft.command_emergency_land)
+    landed = DroneState("Landed", aircraft.command_disarm_motors)
 
     return (
         FSMBuilder(pre_arm, name="DroneSafety")
@@ -264,41 +279,60 @@ def create_drone_fsm():
     )
 
 
-def dispatch(drone, aircraft: SimulatedAircraft, event: str, **telemetry):
-    """Send one modeled event and expose accepted or blocked results."""
-    telemetry["aircraft"] = aircraft
-    result = drone.trigger(event, **telemetry)
-    if result.success:
-        print(f"✓ {event}: {result.from_state} -> {result.to_state}")
-    else:
-        print(f"✗ {event}: blocked ({result.error})")
-    return result
+class DroneController:
+    """Own the FSM and telemetry policy for one aircraft command adapter."""
 
+    __slots__ = ("_aircraft", "_fsm", "_telemetry_policy")
 
-def update_from_telemetry(
-    drone, aircraft: SimulatedAircraft, sample: TelemetrySample
-) -> None:
-    """Apply one telemetry reading through the state-independent policy.
+    def __init__(
+        self,
+        aircraft: AircraftCommands,
+        telemetry_policy: TelemetryPolicy | None = None,
+    ) -> None:
+        self._aircraft = aircraft
+        self._telemetry_policy = (
+            TELEMETRY_POLICY if telemetry_policy is None else telemetry_policy
+        )
+        self._fsm = create_drone_fsm(aircraft)
 
-    In a real integration, construct ``TelemetrySample`` from a normalized,
-    independently validated telemetry packet, then call this function once per
-    packet. The policy ranks all observed event candidates; the flight FSM
-    accepts the first legal one based on its current state and its guards.
-    """
-    telemetry = asdict(sample)
-    print(
-        f"\nTelemetry: battery={sample.battery_pct}% link={'ok' if sample.link_ok else 'lost'} "
-        f"state={drone.current_state_name} command={sample.operator_command or '-'}"
-    )
+    @property
+    def current_state_name(self) -> str:
+        """Return the controller's current flight state."""
+        return self._fsm.current_state_name
 
-    events = TELEMETRY_POLICY.events_for(**telemetry)
-    if not events:
-        print("• no state transition")
-        return
+    def update_from_telemetry(self, sample: TelemetrySample) -> None:
+        """Apply one reading through the state-independent telemetry policy.
 
-    for event in events:
-        if dispatch(drone, aircraft, event, **telemetry).success:
+        In a real integration, construct ``TelemetrySample`` from a normalized,
+        independently validated telemetry packet, then call this method once per
+        packet. The policy ranks candidates; this controller lets the FSM accept
+        the first legal event based on its current state and its guards.
+        """
+        telemetry = asdict(sample)
+        print(
+            f"\nTelemetry: battery={sample.battery_pct}% "
+            f"link={'ok' if sample.link_ok else 'lost'} "
+            f"state={self.current_state_name} "
+            f"command={sample.operator_command or '-'}"
+        )
+
+        events = self._telemetry_policy.events_for(**telemetry)
+        if not events:
+            print("• no state transition")
             return
+
+        for event in events:
+            if self._dispatch(event, **telemetry).success:
+                return
+
+    def _dispatch(self, event: str, **telemetry):
+        """Send one event and expose whether the owned FSM accepted it."""
+        result = self._fsm.trigger(event, **telemetry)
+        if result.success:
+            print(f"✓ {event}: {result.from_state} -> {result.to_state}")
+        else:
+            print(f"✗ {event}: blocked ({result.error})")
+        return result
 
 
 def simulated_telemetry() -> list[TelemetrySample]:
@@ -333,12 +367,12 @@ def main() -> None:
     print("Drone safety state-machine telemetry-loop simulation")
     print("This example is not flight-control software.\n")
 
-    drone = create_drone_fsm()
     aircraft = SimulatedAircraft()
+    drone = DroneController(aircraft)
 
     for index, sample in enumerate(simulated_telemetry(), start=1):
         print(f"--- Telemetry tick {index} ---")
-        update_from_telemetry(drone, aircraft, sample)
+        drone.update_from_telemetry(sample)
 
     print(f"\nFinal state: {drone.current_state_name}")
     print(f"Commands issued: {', '.join(aircraft.commands)}")
