@@ -101,7 +101,6 @@ dispatch.
 | Benchmark comparison vs competitors in CI | Too slow for CI; manual only |
 | Auto-fire/scheduler timers | Conditions are passive guards; scheduling belongs one layer up (user's event loop) |
 | `snapshot()` v2 including topology | `to_dict()` + `snapshot()` solve this composably without a format change |
-| Transition API evolution | Duplicate `(state, trigger)` registrations become explicit priority-aware candidates; pre-production scope permits this semantic change |
 
 ## Context
 

@@ -1,494 +1,521 @@
-# Pitfalls Research: v0.3.0 Reliability & Runtime Hardening
+# Domain Pitfalls: Priority-Aware Guarded Transitions
 
-**Domain:** High-performance in-process Python finite state machine library
-**Researched:** 2026-08-29
-**Confidence:** MEDIUM overall; HIGH for codebase-specific failure modes, MEDIUM for externally validated remedies
+**Domain:** High-performance Python finite state machine with ordered guarded alternatives
+**Project:** Fast FSM v0.4.0
+**Researched:** 2026-09-06
+**Overall confidence:** MEDIUM — codebase-specific risks are HIGH-confidence direct findings; external specification and runtime guidance is primary-source but MEDIUM under the research seam
 
-## Risk Classification
+## Risk Model
 
-| Class | Meaning in this milestone | Release posture |
-|-------|---------------------------|-----------------|
-| Safety-critical | Can commit the wrong state, report success after required work failed, deadlock, race, expose secrets, or ship a materially different artifact | Must be fixed before v0.3.0 release |
-| Correctness-critical | Produces a contradictory graph, false diagnostic result, or sync/async behavioral mismatch | Must be fixed before v0.3.0 release |
-| Performance debt | Preserves correctness but violates the 200,000 `trigger()` operations/second floor or becomes unbounded on realistic diagnostic graphs | Must be measured and bounded before release |
-| Tooling/release debt | Lets source, metadata, tests, and installed wheels disagree | Must gate release, though it need not precede local runtime implementation |
+| Severity | Meaning for v0.4.0 | Release posture |
+|----------|--------------------|-----------------|
+| Critical | Can choose or report the wrong transition, become nondeterministic, corrupt lifecycle state, or leave an async machine unusable | Must be prevented before priority groups are exposed publicly |
+| Moderate | Produces misleading topology, diagnostics, serialization, history, or performance claims without immediately committing the wrong state | Must be corrected before milestone verification |
+| Minor | Creates avoidable API ambiguity, documentation debt, or cold-path inefficiency | Fix during integration/documentation unless evidence raises severity |
 
-The most important distinction is between **state atomicity** and **side-effect atomicity**. Fast FSM can guarantee one coherent state commit boundary. It cannot automatically undo a database write, message send, file operation, or other side effect performed by user callbacks. v0.3.0 should report failures truthfully and document compensation, not promise rollback it cannot provide.
+The defining safety boundary is **selection before lifecycle**. Candidate guards
+and state permission determine one winner. Only after that winner is fixed may
+Fast FSM execute before/exit/commit/enter/handler/listener stages. A false guard
+is normal candidate elimination; a selected candidate's lifecycle failure is
+not permission to try another transition.
 
 ## Critical Pitfalls
 
-### Pitfall 1: Adding locks before defining the transition commit boundary
+### Pitfall 1: Equal priorities quietly fall back to registration order
 
-**Class:** Safety-critical
+**What goes wrong:** Two candidates share one `(source, trigger, priority)`, and
+the winner depends on which `add_transition()` call happened first, how a dict
+was reconstructed, method discovery order, or how serialized rows were sorted.
+The machine appears deterministic in one process while changing behavior after
+refactoring or round-trip serialization.
 
-**What goes wrong:**
-A mutex prevents two callers from interleaving, but the transition still has ambiguous semantics. A callback can fail after some lifecycle work ran, history can disagree with the active state, and the caller can receive either success or failure without knowing whether the destination was committed. Locking the current `_execute_transition()` would merely serialize the existing ambiguity.
+**Why it happens:** Python dictionaries preserve insertion order and sorting is
+stable, so registration order is an easy accidental tie-break. The W3C SCXML
+specification and other state-machine libraries use document/declaration order,
+but Fast FSM has explicitly chosen numeric priority because its graph can be
+built through several adapters with no single source-document order.
 
-**Why it happens:**
-Concurrency feels like the obvious fix for races, so implementation starts with `Lock` or `asyncio.Lock`. The current code, however, catches every callback exception around a state assignment in the middle of the callback chain and always returns success. There is no stage or committed-state field in `TransitionResult`.
+**Consequences:** Safety rules can invert silently; pure and compiled artifacts
+can expose different ordering bugs; graph version and diagrams may look valid
+while runtime precedence is ambiguous.
 
-**How to avoid:**
+**Prevention:**
 
-- Define one explicit state assignment as the commit boundary before introducing synchronization.
-- Treat guards, state permission, declarative action, before callbacks, and exit callbacks as pre-commit. Failure leaves the source active and stops the chain.
-- Treat enter, after, and trigger-specific callbacks as post-commit. Failure leaves the destination active, stops the chain, and reports `committed=True` with the failing stage and original exception available.
-- Record history immediately at commit, before any post-commit callback or `await`, so cancellation cannot produce an unrecorded committed state.
-- Invoke failure observers once after primary failure capture. Observer failures must be secondary and must not replace the original failure.
-- Never advertise automatic rollback of callback side effects. Document application-level compensation instead.
+- Define one scalar type and direction: non-boolean `int`, lower value wins.
+- Reject a conflicting equal priority within each source/trigger group before
+  any topology mutation.
+- Decide explicitly whether an exactly identical repeated registration is an
+  idempotent no-op; never let identity or insertion order decide a conflict.
+- Sort once during the atomic topology commit and preserve the numeric priority
+  in snapshots and serialized rows.
+- Generate the same candidates in many registration orders and assert identical
+  selection and export order.
 
-**Warning signs:**
+**Detection:** Reversing registration order changes the selected target;
+round-tripping through `to_dict()` changes behavior; tests use only already
+sorted registrations.
 
-- A callback exception is logged while `TransitionResult.success` remains true.
-- Tests assert only the final state, not callback order, failure stage, commit status, history, and notification count.
-- History is appended only after all callbacks complete.
-- A proposed rollback sets `_current_state` back but cannot account for already completed external side effects.
-
-**Recovery:**
-Freeze callback-order changes, add a stage-by-stage contract matrix, and reproduce failures at every callback slot. If a released implementation already reported false success, add explicit result metadata and release notes rather than silently changing failure interpretation again.
-
-**Phase to address:** Phase 2 — Atomic Transition Lifecycle, after canonical dispatch is established and before concurrency work.
-
----
-
-### Pitfall 2: Using a reentrant lock, or a primitive lock without owner detection
-
-**Class:** Safety-critical
-
-**What goes wrong:**
-An `RLock` allows the same callback to start a nested transition and recreate the current overwrite bug. A primitive `Lock` rejects nothing; the nested call blocks forever waiting for its own outer transition. The async equivalent can suspend forever on the same task. Neither outcome implements the selected safe default of immediate reentrancy rejection.
-
-**Why it happens:**
-Lock reentrancy is confused with FSM reentrancy. Python documents `RLock` specifically as allowing recursive acquisition, while primitive locks block subsequent acquisition. The FSM needs serialization between independent owners but rejection for the current owner.
-
-**How to avoid:**
-
-- Track the active owner separately from the serialization primitive: thread identity for sync execution and task identity plus event-loop identity for async execution.
-- Check same-owner reentry before blocking and raise/return a dedicated, inspectable reentrancy failure immediately.
-- Use a non-reentrant per-instance lock to serialize independent sync callers; use `asyncio.Lock` for same-loop async tasks.
-- Bind an `AsyncStateMachine` to one running event loop on first mutating use and reject cross-loop or cross-thread use explicitly. `asyncio` locks are not thread-safe.
-- Protect every state/topology mutator, not only `trigger*()`: `force_state`, `reset`, `restore`, state/transition registration, and callback registration must not mutate an in-flight machine.
-- Release owner markers and locks in `finally`. Do not catch and suppress `CancelledError`; before commit it leaves the source active, after commit it leaves the destination active and propagates after invariant cleanup.
-
-**Warning signs:**
-
-- The design says “thread-safe” but specifies only one lock and no ownership state.
-- Reentrant tests hang instead of completing with a deterministic failure.
-- Async tests use only one task and never cancel at each `await` point.
-- `trigger()` is locked but `force_state()` or `add_transition()` is not.
-- Cross-loop access produces a low-level “bound to a different event loop” error instead of a Fast FSM contract error.
-
-**Recovery:**
-Add a watchdog-backed reentrancy test first, then introduce owner detection ahead of acquisition. For stuck async machines, guarantee cleanup with structured `try/finally` and test that a normal transition succeeds after every injected cancellation.
-
-**Phase to address:** Phase 3 — Ownership, Reentrancy, and Concurrency.
+**Phase:** Phase 21 — Priority Contract and Atomic Registration.
 
 ---
 
-### Pitfall 3: Treating callback failure as transactional rollback
+### Pitfall 2: An unconditional candidate makes lower rules unreachable
 
-**Class:** Safety-critical
+**What goes wrong:** A higher-priority transition has no condition, so it always
+wins and every lower candidate is dead. A default-priority ordinary transition
+can unintentionally shadow later safety rules, particularly when an existing
+single edge is promoted into a candidate group.
 
-**What goes wrong:**
-The library resets `_current_state` after a callback fails and claims the transition was rolled back, while earlier callbacks may already have sent messages, acquired resources, or changed external storage. Retrying can duplicate those effects. Rollback callbacks can also fail, producing an even less knowable state.
+**Why it happens:** An unconditional edge was harmless when it was the only
+transition for a trigger. Once candidates are grouped, its position becomes an
+implicit `else` branch. Default priority `0` can also outrank explicitly added
+positive priorities.
 
-**Why it happens:**
-“Atomic transition” is interpreted as an ACID transaction rather than an in-memory state assignment. Mature FSM callback ordering demonstrates the realistic boundary: pre-change failures retain the source; post-change failures retain the destination; no automatic rollback occurs.
+**Consequences:** Guards are registered and rendered but never evaluated;
+telemetry failsafes or exceptional paths cannot fire; users mistake topology
+presence for reachability.
 
-**How to avoid:**
+**Prevention:**
 
-- Use the term **state-atomic** in requirements and documentation.
-- Stop the chain on first failure and expose whether the state committed.
-- Recommend idempotent callbacks and application-owned compensation for external effects.
-- Keep `safe_trigger()` as an exception-to-result barrier, not as a mechanism that converts a partially failed committed transition into success.
+- Treat an unconditional transition as a catch-all candidate, not merely an edge
+  with a missing condition.
+- Validation must flag every lower-priority candidate following an unconditional
+  candidate as unreachable.
+- Documentation should place fallback candidates last and assign them the least
+  preferred numeric priority.
+- Consider rejecting rather than merely warning when an unconditional candidate
+  is not last; resolve that policy before implementation.
+- Include a specific migration example showing why an existing unguarded default
+  must receive a lower precedence when competitors are added.
 
-**Warning signs:**
+**Detection:** A guard call counter stays at zero; changing telemetry never
+changes the target; a diagram shows multiple candidates while the validator
+reports no shadowing.
 
-- Requirements include “rollback callbacks” without defining external transaction participation.
-- A post-enter failure causes history deletion or a second state assignment back to the source.
-- Retry guidance does not discuss idempotency or duplicate side effects.
-
-**Recovery:**
-Remove the rollback promise, preserve the actual committed state, and expose the primary callback failure. Applications that consumed the ambiguous behavior need reconciliation using history and domain-specific compensation.
-
-**Phase to address:** Phase 2 — Atomic Transition Lifecycle.
-
----
-
-### Pitfall 4: Repairing graph validation without atomic construction
-
-**Class:** Correctness-critical
-
-**What goes wrong:**
-`add_transition()` can mutate some source buckets before discovering an invalid endpoint, duplicate state names can replace canonical objects while entries retain old objects, and builder changes after `build()` disappear into staging lists. Runtime state, serialization, validation, and diagrams then describe different machines.
-
-**Why it happens:**
-Current construction accepts strings and objects through several convenience paths, normalizes and mutates incrementally, and lets diagnostics infer topology directly from private dictionaries. Fan-out additions make partial mutation especially easy.
-
-**How to avoid:**
-
-- Resolve and validate all source and destination endpoints before changing any table.
-- Require every endpoint to resolve to exactly one registered `State` object. Reject an unknown state and reject a different object with an existing name; accepting the identical object idempotently is safe.
-- Apply fan-out transition additions all-or-nothing.
-- Reject every builder mutator after the first successful `build()`; keep repeated `build()` idempotent.
-- Add one immutable internal graph snapshot containing the declared initial state, canonical states, and transitions. Validation and rendering consume only this snapshot.
-- Run invariant checks under the same ownership boundary as topology mutation.
-
-**Warning signs:**
-
-- `_states[name] is not entry.to_state` for any registered endpoint.
-- `_transitions` contains a source absent from `_states`.
-- `next(iter(_states))` is used as the initial-state contract.
-- A bulk addition raises after leaving earlier transitions installed.
-- A builder mutator succeeds after `build()` but the returned machine does not change.
-
-**Recovery:**
-Fail validation on contradictory graphs instead of attempting silent repair. Reconstruct a canonical machine from an explicit topology snapshot; do not guess which duplicate object was intended.
-
-**Phase to address:** Phase 1 — Canonical Graph and Dispatch Invariants.
+**Phase:** Phase 21 for registration rules; Phase 24 for unreachable-candidate validation.
 
 ---
 
-### Pitfall 5: Fixing one dispatch path while its twins retain old semantics
+### Pitfall 3: Candidate rejection is confused with transition failure
 
-**Class:** Safety- and correctness-critical
+**What goes wrong:** Each false guard fires `on_failed`, logs a failed
+transition, or returns immediately. Lower candidates are never considered, or
+observers see several failures followed by one success from a single trigger.
 
-**What goes wrong:**
-Sync and async machines disagree about condition sanitization, positional arguments, callback order, declarative handlers, history, or failures. `can_trigger*()` approves work that `trigger*()` rejects. `unless=AsyncCondition` remains hidden inside `NegatedCondition`, so the builder selects a sync machine. Inherited sync methods on an async machine may attempt to execute async conditions incorrectly.
+**Why it happens:** Current Fast FSM has exactly one candidate, so a false guard
+is necessarily the trigger's final guard-stage failure. Reusing that helper
+inside a candidate loop preserves the wrong abstraction level.
 
-**Why it happens:**
-`core.py` contains duplicated sync/async dispatch and several construction adapters. Type checks inspect only outer wrappers. The existing test suite is feature-oriented rather than one executable parity contract.
+**Consequences:** Priority fallback does not work; observers overcount failures;
+logs and audit trails contradict the final result; callbacks can mutate the
+machine while selection is incomplete.
 
-**How to avoid:**
+**Prevention:**
 
-- Create one transition-context preparation policy for supported `*args`, sanitized `**kwargs`, and condition evaluation.
-- Define a recursive condition-capability protocol so wrappers such as negation expose nested async requirements.
-- Wire declarative handlers into normal dispatch exactly once and place their failure stage explicitly before commit.
-- Parameterize one semantic contract over sync/async, `condition=`/`unless=`, callable/object conditions, `can_trigger*()`/`trigger*()`, direct/builder construction, and declarative/ordinary states.
-- Enforce API mode: async-only components cannot run through inherited sync entry points.
-- Do not automatically move sync callbacks to worker threads. That changes thread affinity, context variables, ordering, and exception timing; instead require short non-blocking sync callbacks in async machines and provide async callbacks for I/O.
+- Split private candidate evaluation from public failure finalization.
+- A false transition/declarative guard or false `State.can_transition()` removes
+  only that candidate and continues to the next priority.
+- If all candidates reject, construct one overall guard-stage failure and notify
+  failure observers exactly once.
+- Preserve `can_trigger*()` as observer-free probing.
+- Define guard/state-permission exceptions separately: the recommended contract
+  is fail closed at the raising candidate and stop, retaining the cause; do not
+  silently reinterpret broken safety logic as false.
 
-**Warning signs:**
+**Detection:** `on_failed` receives one call per candidate; the error names only
+the first false guard; a lower passing candidate is never reached.
 
-- A fix duplicates code into `trigger()` and `trigger_async()` instead of adding a shared policy and parity tests.
-- Async tests omit private, excessive, positional, or wrapped guard context.
-- The builder uses only `isinstance(condition, AsyncCondition)`.
-- A decorated handler can be called directly but has no assertion proving normal trigger dispatch executes it once.
-
-**Recovery:**
-Stop adding path-specific patches and introduce a conformance matrix. Keep the single `core.py` compilation unit, but use small internal helpers and tables within it to make semantic drift visible.
-
-**Phase to address:** Phase 1 — Canonical Graph and Dispatch Invariants, with failure ordering completed in Phase 2.
-
----
-
-### Pitfall 6: Cancellation produces an impossible async state/history combination
-
-**Class:** Safety-critical
-
-**What goes wrong:**
-An async task is cancelled after `_current_state` changes but before history is recorded, or while owner state remains set. The destination is active with no record, and all later callers are rejected or blocked. Catching broad exceptions can also convert cancellation into an ordinary failed result unexpectedly.
-
-**Why it happens:**
-Every `await` is an interruption point. The current async path runs the synchronous transition—including state mutation and history—then awaits extra callbacks, but the hardened lifecycle will likely add awaits earlier. Python cancellation requires `try/finally` cleanup and should generally propagate after cleanup.
-
-**How to avoid:**
-
-- Mark each await as pre-commit or post-commit in the lifecycle contract.
-- Perform the state assignment and history append in one non-awaiting critical section.
-- Use `async with` plus a `finally` that clears ownership even if cancellation is raised.
-- Re-raise cancellation after invariant cleanup. Never let an `on_failed` observer suppress it.
-- Inject cancellation before and after every awaited guard/callback in deterministic tests, then assert state, history, owner, lock usability, and remaining callback order.
-
-**Warning signs:**
-
-- Cancellation tests merely assert `CancelledError` without checking machine recovery.
-- History recording occurs after an awaited enter or after callback.
-- Owner cleanup exists only on `Exception`, not `BaseException`/`finally` paths.
-
-**Recovery:**
-Reconcile history from the active state only if application evidence exists; the library cannot infer the missing trigger safely. Fix the commit section first and add a “next transition succeeds” assertion to every cancellation test.
-
-**Phase to address:** Phase 3 — Ownership, Reentrancy, and Concurrency.
+**Phase:** Phase 22 — Sync/Async Selection and Lifecycle Integration.
 
 ---
 
-### Pitfall 7: A passing source-tree suite is mistaken for compiled-wheel proof
+### Pitfall 4: Lifecycle work begins before the winning candidate is fixed
 
-**Class:** Tooling/release-critical with runtime impact
+**What goes wrong:** Before-transition listeners or source-exit callbacks run
+for a high-priority candidate, then its later eligibility check fails and the
+machine tries a lower candidate. User code observes lifecycle work for a
+transition that was never selected. Worse, a post-commit or destination callback
+failure can cause fallback into a second transition from a state that has
+already changed.
 
-**What goes wrong:**
-A release catches a mypyc or compiler failure and silently produces a pure-Python wheel, violating the performance promise. Conversely, a stale ignored `.so` shadows `core.py` while a task claims to test pure Python. Coverage reports `core.py` at 0%, and a smoke test misses compiled/interpreted differences.
+**Why it happens:** It is tempting to reuse the existing full
+`_trigger_owned()` body once per candidate instead of extracting a pre-lifecycle
+selection seam.
 
-**Why it happens:**
-`setup.py` catches every `Exception` and intentionally falls back. Python import precedence is independent of `FAST_FSM_PURE_PYTHON`; the variable prevents a build but does not hide an existing extension. mypyc also documents behavioral differences involving type enforcement, native namespaces, monkey patching, introspection, tracing, and recursion.
+**Consequences:** Duplicate external commands, impossible callback order,
+history/state disagreement, two commits for one trigger, or a callback receiving
+the wrong destination.
 
-**How to avoid:**
+**Prevention:**
 
-- Split build intent explicitly: strict compiled release mode fails closed; intentional source-only mode skips compilation.
-- Build every supported platform/Python wheel, install it into a clean temporary environment outside the source tree, and run the semantic contract suite there.
-- Assert wheel tags, distribution metadata version, `fast_fsm.__version__`, and `fast_fsm.core.__file__` suffix before tests.
-- Run a separate clean source test where no `.so`/`.pyd` can exist on the import path; assert `.py` origin before collecting coverage.
-- Run throughput against the installed compiled artifact and preserve the ≥200,000 operations/second release floor.
-- Avoid conformance tests that require monkey-patching compiled native definitions; exercise public behavior with real objects.
+- Complete every candidate's transition guard, declarative guard, and
+  target-specific state permission before entering the Phase 17 lifecycle.
+- Invoke before/exit/commit/enter/declarative-handler/trigger/after callbacks
+  exactly once for the selected candidate.
+- Once lifecycle execution starts, any callback or commit failure returns that
+  candidate's existing staged result. Never evaluate a lower candidate.
+- Add a test matrix with failures at every lifecycle stage and counters on all
+  lower candidate guards and callbacks; all must remain untouched after
+  selection.
+- Keep commit and optional history append in the existing no-user-code boundary.
 
-**Warning signs:**
+**Detection:** a rejected candidate appears in callback logs; history contains
+more than one record for one trigger; a lower guard runs after destination entry
+or callback failure.
 
-- A release job reports a compilation warning but exits successfully.
-- A platform wheel is tagged `py3-none-any` or contains no extension.
-- Tests run with the repository root or `src/` ahead of the installed wheel.
-- “Pure Python” logs never print/assert the loaded module origin.
-- Compiled CI runs only an import smoke test or benchmark subset.
-
-**Recovery:**
-Quarantine the artifact, rebuild from the tagged source in strict mode, inspect wheel contents/metadata, install into a fresh environment, and rerun the full contract and performance suites. Do not retag a different source tree under the same version.
-
-**Phase to address:** Phase 0 — Release Baseline for current drift; full installed-artifact proof in Phase 5 — Compiled/Source Parity and Release Proof.
-
----
-
-### Pitfall 8: Correct-looking diagnostics are incomplete or unbounded
-
-**Class:** Correctness-critical and performance debt
-
-**What goes wrong:**
-Cycle output omits middle members, validation starts from the current rather than declared initial state, duplicate machine names overwrite comparison entries, empty comparisons divide by zero, and large graphs allocate dense matrices or enumerate exponentially many paths. A timeout or broad catch then returns a plausible partial result without identifying incompleteness.
-
-**Why it happens:**
-Diagnostics independently traverse mutable private tables with algorithms chosen for small examples. Back-edge endpoints do not equal full cycle membership. The number of simple paths can be factorial even when traversing one path is linear.
-
-**How to avoid:**
-
-- Analyze one immutable canonical graph snapshot with an explicit declared initial state.
-- Compute complete cycle membership from strongly connected components; a component of size >1 is cyclic, and a singleton is cyclic only with a self-loop.
-- Condense SCCs to a DAG and memoize longest-path analysis, or report that a requested metric is undefined/truncated under budget.
-- Keep sparse adjacency internally. Refuse or explicitly truncate dense matrix/export requests above a documented node/cell budget.
-- Apply deterministic budgets for nodes, edges, depth, expanded work, results, and output bytes. Return `complete: false` plus the exhausted limit; never label partial output as complete.
-- Reject duplicate FSM names before analysis or preserve positional identity; define the empty aggregate with zero count/average and no best FSM.
-- Prefer iterative traversal for adversarial graphs; mypyc documentation warns uncontrolled recursion can crash compiled code.
-
-**Warning signs:**
-
-- Cycle tests assert only `has_cycles`, not exact member sets for long cycles and self-loops.
-- A diagnostic API accepts arbitrary config-derived graphs without any budget.
-- `visited.copy()` appears inside every DFS branch.
-- Output fields contain partial lists but no completeness/truncation metadata.
-- A broad `except Exception` turns a validator error into `quality=None` silently.
-
-**Recovery:**
-Mark affected reports untrusted, rebuild from a canonical snapshot, and rerun with explicit budgets. If an API previously returned silent partial data, add completeness metadata before optimizing the algorithm.
-
-**Phase to address:** Phase 4 — Bounded Diagnostics and Safe Output.
+**Phase:** Phase 22 — Sync/Async Selection and Lifecycle Integration.
 
 ---
 
-### Pitfall 9: Escaping labels without separating them from identifiers
+### Pitfall 5: Side-effecting guards make priority behavior unstable
 
-**Class:** Security- and correctness-critical
+**What goes wrong:** Guards consume queues, increment counters, update telemetry,
+perform I/O, or depend on another guard having run. The result changes between
+`can_trigger()` and `trigger()`, between candidate orders, or after adding an
+unrelated higher-priority candidate.
 
-**What goes wrong:**
-Names such as `a-b` and `a b` collapse to the same Mermaid ID. Raw PlantUML or Mermaid title, state, trigger, and condition text can terminate a line, introduce a directive/comment, or corrupt the diagram. Markdown adjacency tables have separate pipe, backtick, and newline hazards.
+**Why it happens:** `FuncCondition` deliberately accepts arbitrary user code.
+Fast FSM cannot enforce referential transparency, and ordered alternatives make
+evaluation order more visible than the current one-guard model.
 
-**Why it happens:**
-Sanitization is treated as character replacement. It is not injective and it mixes two concerns: graph identity and user-visible text. Each output grammar has different quoting rules.
+**Consequences:** A preflight check can consume the only passing signal;
+retries select another target; diagnostics or logging accidentally become
+behavioral; users assume all guards run when first-match semantics short-circuit.
 
-**How to avoid:**
+**Prevention:**
 
-- Assign deterministic opaque aliases (`s0`, `s1`, … or stable hashes) from canonical state identity; never derive identity solely by replacing user characters.
-- Emit user text only as separately escaped labels using each target format's documented alias syntax.
-- Implement distinct Mermaid, PlantUML, and Markdown escaping functions. Escape or reject newlines and grammar terminators in titles, triggers, conditions, and labels.
-- Test Unicode, quotes, backslashes, colons, brackets, pipes, backticks, comment/directive markers, embedded newlines, and pairs that collide under the old sanitizer.
-- Parse/render generated diagrams in verification when practical; substring-only tests cannot prove grammar safety.
+- Document guards as predicates that should be pure, idempotent, and cheap.
+  Derived-fact providers may maintain external state, but checking a fact should
+  not command the system or choose a transition outside the FSM.
+- Guarantee each candidate guard is evaluated at most once within one public
+  `can_trigger*()` or `trigger*()` call and only until the first eligible winner.
+- Do not cache guard results across public calls; telemetry and time-derived
+  facts may legitimately change.
+- Sanitize kwargs once per trigger attempt and provide the same mapping content
+  to every candidate so candidates do not receive order-dependent filtering.
+- Use explicit counter-based tests to prove left-to-right short-circuiting.
 
-**Warning signs:**
+**Detection:** calling `can_trigger()` changes the next `trigger()` result;
+lower-priority counters increment after a winner; a guard issues aircraft or
+network commands.
 
-- One generic `sanitize()` helper serves identifiers, labels, titles, and two diagram languages.
-- State IDs are produced by a regex replacement without collision detection.
-- Tests compare only friendly ASCII snapshots.
-
-**Recovery:**
-Regenerate diagrams with opaque aliases. Treat previously generated text from untrusted names as unsafe to render until it has passed the new grammar-specific exporter.
-
-**Phase to address:** Phase 4 — Bounded Diagnostics and Safe Output.
+**Phase:** Phase 22 for runtime guarantees; Phase 25 for public guidance and examples.
 
 ---
 
-### Pitfall 10: Redacted logging still leaks data or takes over the application logger
+### Pitfall 6: Async guards are launched concurrently or cancellation becomes fallback
 
-**Class:** Security-critical
+**What goes wrong:** Competing async guards run through `gather()`, tasks, or
+`as_completed()`. A lower-priority fast guard wins before a higher-priority slow
+guard, losing explicit precedence. Alternatively, cancellation of an awaited
+guard is caught as rejection and the next candidate runs.
 
-**What goes wrong:**
-Trace mode logs raw positional and keyword values, exposing tokens, PII, or attacker-controlled control characters. A helper clears handlers installed by the host application, changing audit routing and test behavior. Repeated helper calls can duplicate output or leave no path to restore prior configuration.
+**Why it happens:** Parallel guard evaluation looks like a latency optimization,
+and broad exception handling obscures that cancellation is control flow. Python
+documents that task cancellation injects `CancelledError` at an await point and
+cleanup belongs in `finally` before propagation.
 
-**Why it happens:**
-Debug convenience is implemented inside the library rather than at the application boundary. Python's official logging guidance assigns handler configuration to the application and strongly advises library loggers to install no handler other than `NullHandler`.
+**Consequences:** nondeterministic target selection, leaked background tasks,
+lower guards continuing after commit/cancellation, stuck ownership, or pure and
+compiled async behavior drifting.
 
-**How to avoid:**
+**Prevention:**
 
-- Never log raw trigger argument values by default, even at trace. Prefer trigger/state names, argument counts, and a deliberately limited structural summary.
-- If key names are emitted, sanitize control characters and document that names themselves can be sensitive. An application-supplied redactor must be explicit and must default to removing values.
-- Add only `NullHandler` automatically at the top-level library logger.
-- If the public configuration helper remains, mark and manage only its own handler; never clear unrelated handlers. Make configure/unconfigure idempotent and reversible, and define propagation deliberately.
-- Test with sentinel secrets in strings, nested containers, object `repr`, keys, positional data, and exception messages. Test that application handlers survive configure/unconfigure cycles.
+- Await candidates sequentially in priority order. Do not create tasks for
+  candidate guards.
+- On `CancelledError`, finalize the reached pre-commit cancellation boundary
+  once, release ownership in `finally`, and re-raise the same cancellation.
+- Never evaluate a lower candidate after cancellation or a raising guard.
+- Test cancellation while waiting for each candidate position, including guards
+  that delay or suppress cancellation; assert machine reuse afterward and no
+  leaked tasks.
+- Retain the existing event-loop/thread binding and causal reentrancy checks
+  around the whole selection plus lifecycle operation.
 
-**Warning signs:**
+**Detection:** `asyncio.all_tasks()` shows orphan candidate tasks; fastest guard
+wins rather than lowest numeric priority; cancellation yields an ordinary false
+result or leaves the machine busy.
 
-- A log call formats `args`, `kwargs`, or `repr(value)` before the level check or redactor.
-- `logger.handlers.clear()` appears in library code.
-- Tests assert handler count rather than preservation of pre-existing handler identity and routing.
+**Phase:** Phase 22 — Sync/Async Selection and Lifecycle Integration.
 
-**Recovery:**
-Disable trace logging, rotate exposed credentials if logs may have left the process, restore application handlers, and ship the redaction/configuration fix as a security-relevant change.
+---
 
-**Phase to address:** Phase 4 — Bounded Diagnostics and Safe Output.
+### Pitfall 7: The selected candidate is absent from results, history, and observers
 
-## Technical Debt Patterns
+**What goes wrong:** Two candidates can share the same source, trigger, and even
+destination while differing only in guard and priority. Existing
+`TransitionResult`, `TransitionRecord`, and listener arguments identify only
+state/trigger/target, so an audit cannot tell which rule won. A final all-rejected
+failure likewise cannot explain that resolution found a group but no candidate
+qualified.
 
-| Shortcut | Immediate benefit | Long-term cost | When acceptable |
-|----------|-------------------|----------------|-----------------|
-| Wrap the existing trigger body in one lock | Small patch | Serializes false-success semantics and can deadlock on reentry | Never |
-| Use `RLock` to avoid deadlock | Nested calls keep running | Recreates state overwrite and makes callback order recursive | Never under safe defaults |
-| Roll `_current_state` back after post-commit failure | Looks transactional | Lies about external effects and can create duplicate retries | Never |
-| Patch sync and async methods separately | Local progress | Parity drifts again at the next change | Only as a short-lived spike, never merged without shared contract tests |
-| Inspect only outer condition type | Cheap async detection | Wrapped `AsyncCondition` selects the wrong runtime | Never |
-| Keep diagnostics coupled to `_states`/`_transitions` | No snapshot abstraction | Tools disagree and race with mutations | Only until Phase 1 snapshot exists |
-| Catch all build exceptions and fall back | Installation succeeds broadly | Release silently violates compiled performance contract | Acceptable only in explicit source-only build mode |
-| Run tests from checkout after wheel build | Reuses current harness | Source can shadow installed artifact | Never for release proof |
-| Materialize dense matrices unconditionally | Simple API | O(states²) memory even for sparse graphs | Only below an enforced cell budget |
-| Enumerate all simple paths | Complete small examples | Factorial output on dense graphs | Only with explicit depth/result/work budgets |
-| Regex-replace diagram identifiers | Short implementation | Alias collisions and grammar injection | Never for user-controlled names |
-| Log raw payloads at trace | Rich debugging | Secret/PII leakage and log forging | Never as library default |
+**Why it happens:** Candidate identity did not exist in earlier milestones, and
+adding priority only to registration/storage appears sufficient for state
+movement.
 
-## Sync/Async and Compiled/Interpreted Integration Gotchas
+**Consequences:** misleading telemetry/debug output, inability to reproduce a
+safety decision, and observers attributing a command to the wrong rule.
 
-| Boundary | Common mistake | Correct approach |
-|----------|----------------|------------------|
-| Sync vs async guards | Sanitize only sync kwargs or forward different positional data | Prepare one transition context and apply the same policy in `can_trigger*()` and `trigger*()` |
-| Wrapped async conditions | Test only the outer `NegatedCondition` | Expose recursive async capability through condition wrappers |
-| Async cancellation | Catch as ordinary callback failure or leave ownership set | Stage cancellation relative to commit, clean up in `finally`, then propagate |
-| Sync callbacks in async machines | Automatically offload with `to_thread()` | Keep ordering/thread affinity explicit; require short sync callbacks and async callbacks for I/O |
-| Async locking | Share `asyncio.Lock` across threads/loops | Bind one machine to one loop and reject unsupported access |
-| Compiled native classes | Test through monkey-patching/introspection | Use real public behavior; mypyc native namespaces and tracing differ |
-| Pure-Python verification | Set an environment variable while stale extension remains | Test in a clean path and assert `core.__file__` is Python source |
-| Wheel verification | Import with repository `src/` on `sys.path` | Install and test from a temporary directory outside the checkout |
-| Release fallback | Treat mypyc absence and compilation defects identically | Separate intentional source build from strict compiled release mode |
+**Prevention:**
 
-## Performance Traps
+- Decide whether selected priority is appended to `TransitionResult` and
+  `TransitionRecord`, or exposed through another existing structured result
+  surface. Prefer a nullable scalar field over changing callback signatures.
+- Preserve the five existing positional result fields and append metadata with a
+  default if compatibility is still desired outside duplicate semantics.
+- Notify failure observers once for the overall attempt; do not expose condition
+  object representations or telemetry values in error strings.
+- Keep trace logging metadata-only. Candidate count/selected priority are safe
+  bounded scalars, but condition and payload values remain excluded.
+- Ensure listeners receive only the selected target and still run in Phase 17
+  order.
 
-| Trap | Symptoms | Prevention | When it breaks |
-|------|----------|------------|----------------|
-| Lock/owner checks added repeatedly through helpers | Unguarded trigger benchmark drops below contract | One per-instance ownership boundary; benchmark uncontended sync and async hot paths after every lifecycle change | Release-breaking below 200,000 `trigger()` ops/sec |
-| Global lock shared across machines | Independent FSMs block each other | Per-instance lock/owner state in `__slots__` | Immediately under multi-machine concurrency |
-| Front-deleting history list | Throughput degrades with capacity | `deque(maxlen=...)` or ring buffer; validate positive capacity | Every full-buffer transition; cost grows with `max_entries` |
-| Callback/log formatting on disabled paths | No-callback/no-log path slows unexpectedly | Guard before constructing messages/context; preserve zero/constant-cost disabled paths | Hot path even with no observers |
-| Dense adjacency export | Memory spikes | Sparse internal representation plus explicit dense cell budget | O(states²); 10,000 states implies 100M cells |
-| Branch-copy longest path | CPU grows explosively | SCC condensation plus DAG dynamic programming and work budget | Branching DAGs with many alternate paths |
-| Unbounded path generation | Huge output or hang | Depth, result, work, and byte limits with truncation metadata | Can reach O(n!) paths in complete graphs |
-| Recursive adversarial traversal | Recursion error or compiled crash | Iterative traversal or validated depth limit | Deep generated/config-driven graphs |
+**Detection:** two differently prioritized transitions produce identical history
+records; a guard exception result cannot identify the candidate priority; trace
+formatting logs condition repr or telemetry.
 
-## Security Mistakes
+**Phase:** Phase 21 freezes structured identity; Phase 22 implements lifecycle/observer accuracy.
 
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Raw `args`/`kwargs` trace logging | Credentials, PII, and object representations leave process boundaries | Structural metadata only; explicit redactor; secret sentinel tests |
-| Logging unsanitized exception text | Callback payload can reappear through exception messages | Document exception-text risk, sanitize control characters, and avoid echoing context |
-| Clearing application handlers | Audit logs disappear or reroute | `NullHandler` only by default; helper owns only marked handlers |
-| Diagram alias collisions | Distinct states render as one node | Opaque collision-free aliases |
-| Raw diagram titles/labels | Directive/comment injection or malformed output | Grammar-specific label escaping and newline handling |
-| Raw Markdown diagnostics | Table/fence injection | Separate Markdown escaping and output-size limits |
-| Unbounded diagnostics on config-derived graph | CPU/memory denial of service | Deterministic resource budgets and explicit incomplete results |
+## Moderate Pitfalls
 
-## User-Experience Pitfalls
+### Pitfall 8: Batch and fan-out registration silently collapse candidates
 
-| Pitfall | User impact | Better approach |
-|---------|-------------|-----------------|
-| Failure result does not say whether state changed | Caller cannot safely retry or compensate | Expose failure stage and commit status while preserving existing symbols |
-| Reentry hangs | Application appears frozen | Immediate dedicated reentrancy error/failure |
-| Concurrent calls race nondeterministically | Same input yields different state/callback order | Serialize independent callers and document ownership contract |
-| Builder accepts ignored edits | Configuration looks valid but is stale | Raise on every post-build mutator |
-| Diagnostic truncation is silent | Agents act on incomplete topology | Include `complete`, limits, counts, and truncation reason |
-| Compiled fallback is silent | Installed performance differs from advertised | Explicit artifact mode and module-origin evidence |
-| Diagram exporter corrupts names | Users cannot trust generated docs | Preserve labels exactly after safe escaping via opaque aliases |
+**What goes wrong:** `_commit_transition_plan()` continues using one
+`Dict[(source, trigger), entry]`, so multiple candidates in one
+`add_transitions()` batch overwrite each other before commit. An emergency
+fan-out may update some sources and fail on a priority conflict in a later source.
 
-## “Looks Done But Is Not” Verification Gates
+**Prevention:** Build a complete per-key candidate plan, validate all priority
+conflicts and endpoints, and publish all replacement groups plus one graph-version
+advance atomically. Cover `add_transition`, batch, bidirectional, emergency,
+builder construction, factories, and deserialization.
 
-| Area | Superficial completion | Required proof |
-|------|------------------------|----------------|
-| Callback failures | One callback exception test passes | Inject every pre/post callback stage; assert state, result, cause, callback stop, history, and one failure notification in sync and async modes |
-| Reentrancy | A lock exists | Nested trigger/state/topology calls fail promptly without deadlock; outer transition outcome follows stage policy; next transition succeeds |
-| Concurrency | One two-thread test passes | Deterministic barriers cover competing success/failure, topology mutation, force/reset, and same-loop tasks |
-| Cancellation | `CancelledError` propagates | Inject at each await; assert commit/history coherence, owner cleanup, lock release, and subsequent success |
-| Graph invariants | Unknown target is rejected | Unknown sources, object targets, duplicate names, fan-out atomicity, and all builder mutators are covered |
-| Async parity | One async condition works | Shared contract covers positional/sanitized context, `unless=`, declarative dispatch, callbacks, results, and history |
-| Diagnostics | Example graph looks right | Exact SCC membership, declared initial state, duplicate/empty comparisons, deterministic budgets, and truncation metadata pass |
-| Visualization | Friendly names render | Collision pairs, Unicode, grammar metacharacters, newlines, directives, conditions, titles, and Markdown tables are escaped and parsed/rendered |
-| Redaction | A password keyword is hidden | Secrets in positional values, nested objects, keys, exception messages, and control text never appear by default |
-| Pure Python | Environment flag is set | Module origin is asserted as `.py` in an extension-free environment and source coverage measures `core.py` |
-| Compiled wheel | Build and import succeed | Installed wheel outside checkout has platform tag/extension origin, passes full semantic suite, and meets throughput floor |
-| Release identity | Source says v0.3.0 | Tag, `pyproject.toml`, wheel metadata, installed `__version__`, changelog, docs, and test baseline agree |
+**Phase:** Phase 21 — Priority Contract and Atomic Registration.
 
-## Recovery Strategies
+---
 
-| Pitfall | Recovery cost | Recovery steps |
-|---------|---------------|----------------|
-| Ambiguous callback commit | HIGH | Freeze behavior, add stage metadata/tests, reconcile application state from domain evidence, then document compensation |
-| Reentrancy deadlock | MEDIUM | Reproduce with watchdog, add pre-acquisition owner detection, guarantee cleanup, verify next-call recovery |
-| Concurrent state corruption | HIGH | Stop sharing affected instance, reconstruct from trusted snapshot/history, serialize access, add deterministic interleaving tests |
-| Partial graph mutation | MEDIUM | Reject contradictory topology, rebuild canonical graph from explicit config, make future bulk changes atomic |
-| Async cancellation leak | HIGH | Clear owner only through invariant-safe cleanup, reconcile committed state/history, inject cancellation across all awaits |
-| Silent pure-Python release | HIGH | Quarantine artifact, rebuild strict platform wheel from tag, inspect/install/test/benchmark, publish corrected version |
-| False diagnostic report | MEDIUM | Mark report incomplete/untrusted, rerun canonical snapshot algorithms under explicit budgets |
-| Secret-bearing logs | HIGH | Disable trace, restrict/rotate logs and credentials, ship redaction fix, verify application handler routing |
-| Malformed/injectable diagram | LOW to MEDIUM | Stop rendering old output, regenerate with opaque aliases and target-specific escaping |
-| Performance regression | MEDIUM | Benchmark by feature path, profile owner/lock/history/log overhead, optimize without weakening correctness |
+### Pitfall 9: Builder and declarative adapters retain a single-transition model
 
-## Pitfall-to-Phase Mapping
+**What goes wrong:** Direct registration works, but `FSMBuilder` drops priority,
+auto-detects async from only one guard, or freezes after a partially failed build.
+`DeclarativeState._handlers[trigger]` keeps only one method, so discovery order
+overwrites candidate-specific conditions and handlers.
 
-| Pitfall | Prevention phase | Verification |
-|---------|------------------|--------------|
-| Release/version/gate drift | Phase 0 — Release Baseline and Contract Harness | Clean checkout gates pass; one version/test baseline assertion covers metadata, changelog, docs, and tag context |
-| Partial graph and stale builder | Phase 1 — Canonical Graph and Dispatch Invariants | Property tests prove endpoint identity, fan-out atomicity, duplicate rejection, and sealed builder behavior |
-| Sync/async/guard/declarative drift | Phase 1 — Canonical Graph and Dispatch Invariants | One parameterized parity suite runs across all dispatch/construction variants |
-| Ambiguous callback commit and rollback lie | Phase 2 — Atomic Transition Lifecycle | Stage-failure matrix proves state, commit flag, cause, history, ordering, and notification behavior |
-| Reentrancy deadlock/corruption | Phase 3 — Ownership, Reentrancy, and Concurrency | Watchdog tests fail promptly on nested mutation and leave the machine reusable |
-| Concurrent/cross-loop/cancellation corruption | Phase 3 — Ownership, Reentrancy, and Concurrency | Barrier/cancellation tests prove serialization, loop ownership, commit/history coherence, and cleanup |
-| False or unbounded diagnostics | Phase 4 — Bounded Diagnostics and Safe Output | SCC, empty/duplicate, large sparse/dense, budget, and explicit truncation tests pass |
-| Diagram/Markdown injection and alias collision | Phase 4 — Bounded Diagnostics and Safe Output | Hostile labels remain distinct and inert in parser/render verification |
-| Payload leakage and logger takeover | Phase 4 — Bounded Diagnostics and Safe Output | Secret sentinels absent; application handler identities/routing survive reversible helper calls |
-| Source/compiled semantic mismatch | Phase 5 — Compiled/Source Parity and Release Proof | Same conformance suite passes with asserted `.py` and extension origins |
-| Silent compilation fallback | Phase 5 — Compiled/Source Parity and Release Proof | Strict builds fail on injected compiler errors; platform wheels install and test outside checkout |
-| Hot-path performance loss | Phases 1–5 continuously; final gate in Phase 5 | Benchmark after every `core.py` phase; installed compiled `trigger()` remains ≥200,000 ops/sec |
+**Prevention:** Carry priority in every builder staging row and preflight every
+candidate before publication. Extend the existing `@transition` decorator rather
+than adding another decorator. Store a finite handler collection per trigger and
+resolve it by canonical source/target/priority; include candidate identity in the
+prepared declarative-guard marker. Test reversed method names/discovery order and
+mixed sync/async candidates.
 
-## Phase Ordering Rationale
+**Phase:** Phase 23 — Builder, Declarative, and Serialization Parity.
 
-1. **Phase 0 establishes trustworthy evidence.** Fix current format/lint/version drift and create the reusable semantic/performance harness before behavior changes.
-2. **Phase 1 establishes one canonical machine and dispatch meaning.** Callback atomicity cannot be specified reliably while endpoints and sync/async dispatch disagree.
-3. **Phase 2 establishes the commit boundary.** Synchronization must protect defined semantics, not preserve ambiguous ones.
-4. **Phase 3 adds ownership and serialization.** Reentry detection must precede blocking acquisition; cancellation tests depend on the Phase 2 stage model.
-5. **Phase 4 hardens consumers of topology.** Diagnostics, logging, and renderers can then consume the canonical snapshot and lifecycle metadata.
-6. **Phase 5 proves the shipped product.** Run the completed contract against clean source and installed compiled artifacts, then enforce the final throughput and release-identity gates.
+---
+
+### Pitfall 10: Serialization cannot reattach the right condition
+
+**What goes wrong:** `to_dict()` emits duplicate source/trigger rows without
+priority, or `from_dict(..., conditions={trigger: guard})` applies one guard to
+every candidate sharing that trigger. A round trip changes precedence or makes
+every candidate test the same predicate.
+
+**Prevention:** Serialize integer priority on every row and sort rows
+deterministically. Define an exact candidate condition key such as
+`(from_state, trigger, priority)`, with any trigger-only fallback documented as
+applying broadly. Reject ambiguous mappings rather than guessing. Test JSON
+round trips with several candidates sharing source, trigger, and target.
+
+**Phase:** Phase 23 — Builder, Declarative, and Serialization Parity.
+
+---
+
+### Pitfall 11: Snapshot and clone flatten or share candidate groups
+
+**What goes wrong:** `_graph_snapshot()` emits only a group's first candidate,
+or `clone()` shallow-copies a mutable list so later registration in the clone
+changes the original. Graph version may fail to advance when a group's order or
+membership changes.
+
+**Prevention:** Publish one immutable `_GraphTransition` row per candidate,
+including priority, in deterministic order. Store candidate sequences as
+immutable tuples or copy them on clone/mutation. Treat membership, priority,
+target, and guard identity changes as topology changes; preserve exact no-op
+behavior only for an explicitly identical registration.
+
+**Phase:** Phase 23 — Builder, Declarative, and Serialization Parity.
+
+---
+
+### Pitfall 12: Diagnostics collapse candidates or call them nondeterministic
+
+**What goes wrong:** `_DiagnosticGraph` or validators store targets in a set,
+losing two candidates that share a destination. The current determinism check
+reports multiple targets for one state/event as nondeterministic even when unique
+priorities define one deterministic first-match decision. Diagrams omit priority
+and make overlapping arrows indistinguishable.
+
+**Prevention:** Preserve candidate multiplicity and priority in diagnostic edges.
+Redefine structural determinism around unique priorities and ordered selection;
+separately report overlapping guards as runtime-dependent but priority-resolved.
+Render priority in JSON, Mermaid, PlantUML, Markdown, and reports using existing
+escaping/budgets. Add shadowing and duplicate-priority diagnostics without
+evaluating user guards during analysis.
+
+**Phase:** Phase 24 — Candidate-Aware Diagnostics and Visualization.
+
+---
+
+### Pitfall 13: The group representation violates mypyc or slots policy
+
+**What goes wrong:** A dynamic/dataclass-heavy group works in pure Python but
+becomes a slower non-native class, fails mypyc, gains an instance `__dict__`, or
+changes runtime type enforcement. A generic clever abstraction expands the
+compiled boundary or breaks interpreted `Condition` subclasses.
+
+**Prevention:** Keep hot candidate containers as explicit classes in `core.py`
+with complete `__slots__` and concrete annotations. Keep `Condition` objects in
+interpreted `conditions.py`; do not compile that module. Avoid metaclasses,
+dynamic attributes, custom descriptors, or a generalized public candidate
+protocol. Run mypy, native compilation, recursive slots audit, and identical
+semantic tests against clean pure and compiled artifacts.
+
+**Phase:** Phase 21 for a native representation probe; Phase 25 for installed-artifact proof.
+
+---
+
+### Pitfall 14: Performance claims hide local candidate complexity
+
+**What goes wrong:** Documentation continues to call all triggers and transition
+registrations O(1), benchmarks measure only a singleton whose first guard passes,
+or candidates are sorted on every trigger. A last-match group can become much
+slower while the existing throughput gate stays green.
+
+**Prevention:** Preserve the two direct dictionary lookups, preorder on mutation,
+and keep singleton storage as the fast path unless measurements justify a uniform
+group. Document `O(1)` topology lookup plus `O(k)` candidate evaluation and local
+group insertion. Benchmark first-match, last-match, and all-rejected groups at
+2/4/8 candidates in pure and compiled modes. Retain the 200,000 ops/sec compiled
+singleton floor and add environment-labelled candidate-count curves plus memory
+measurements.
+
+**Phase:** Phase 25 — Performance, Documentation, and Artifact Proof.
+
+## Minor Pitfalls
+
+### Pitfall 15: Priority accepts booleans, floats, or arbitrary comparables
+
+**What goes wrong:** `True` aliases integer `1`, NaN breaks total ordering, and
+objects serialize or compare differently across modes.
+
+**Prevention:** Validate with `type(priority) is int`; allow signed integers but
+document lower-wins semantics. Do not add enums or wrapper objects merely to
+represent precedence.
+
+**Phase:** Phase 21.
+
+### Pitfall 16: Default priority creates an undocumented migration trap
+
+**What goes wrong:** A legacy unguarded edge implicitly receives priority `0`,
+then shadows explicitly numbered positive candidates, or two unannotated
+duplicates collide unexpectedly.
+
+**Prevention:** State the default prominently. Reject equal defaults visibly and
+show how to renumber the existing edge as the fallback. Do not silently assign
+monotonic registration-order priorities.
+
+**Phase:** Phase 21 contract; Phase 25 migration documentation.
+
+### Pitfall 17: Candidate count becomes an accidental denial-of-service vector
+
+**What goes wrong:** Configuration-generated machines attach thousands of
+expensive guards to one trigger. The graph is finite, but one dispatch is
+effectively unbounded for a latency-sensitive caller.
+
+**Prevention:** Do not impose an arbitrary runtime cap in v0.4 unless requirements
+call for it, but expose group size in diagnostics and document O(k). Diagnostic
+budgets must count every candidate edge. Users with strict latency requirements
+should validate a project-specific maximum group size before deployment.
+
+**Phase:** Phase 24 diagnostics; Phase 25 performance guidance.
+
+## Phase-Specific Warnings
+
+| Proposed Phase | Primary Pitfalls | Exit Evidence |
+|----------------|------------------|---------------|
+| **21. Priority Contract and Atomic Registration** | ties, implicit order, unconditional shadowing, batch collapse, invalid types, mypyc layout | Contract tests; reversed-order property tests; atomic batch/fan-out tests; native compile probe; graph-version assertions |
+| **22. Sync/Async Selection and Lifecycle Integration** | false guards finalized too early, lifecycle-before-selection, side effects, parallel awaits, cancellation fallback, observer overcount | Sync/async conformance matrix; per-candidate counters; every-stage lifecycle fault injection; cancellation and machine-reuse tests |
+| **23. Builder, Declarative, and Serialization Parity** | dropped priority, singular handler registry, ambiguous condition reattachment, mutable clone sharing | Direct/builder/declarative parity; failed-build repair; JSON round trip; clone independence; candidate-specific handler tests |
+| **24. Candidate-Aware Diagnostics and Visualization** | edge collapse, false nondeterminism, hidden shadowing, missing diagram priority, diagnostic budget undercount | Snapshot multiplicity tests; deterministic validation; shadow warnings; escaped bounded Mermaid/PlantUML/JSON golden tests |
+| **25. Performance, Documentation, and Artifact Proof** | singleton regressions, hidden O(k), stale complexity claims, pure/native divergence | Singleton floor; candidate curves; memory/slots evidence; full suite/docs; installed pure and compiled priority oracle |
+
+## Cross-Phase Invariants
+
+- One `(source, trigger)` dictionary lookup yields a finite, statically
+  registered candidate set.
+- Numeric priority—not registration order, condition timing, hash order, or
+  target name—defines evaluation order.
+- Candidate elimination performs no transition lifecycle or failure-observer
+  work.
+- Exactly one candidate can enter lifecycle for one public trigger attempt.
+- False eligibility may continue; raised guard/state-policy errors and
+  cancellation fail closed unless the requirements explicitly choose otherwise.
+- Rejected candidates do not appear in history as transitions; the selected
+  candidate remains auditable without exposing condition/payload data.
+- Sync and async machines share topology/order semantics; async differs only by
+  awaiting supported guards/callbacks sequentially.
+- Snapshots, clones, serializers, validators, and renderers preserve every
+  candidate and its priority.
+- Singleton dispatch remains the measured fast path; priority groups are
+  `O(k)` only in local candidate count and independent of total graph size.
 
 ## Sources
 
-### Primary external sources
+### Repository evidence (HIGH confidence)
 
-- [Python 3.10 `threading` synchronization documentation](https://docs.python.org/3.10/library/threading.html) — primitive lock, reentrant lock, ownership, context-manager, and fairness caveats. **Confidence: MEDIUM** (verified websearch tier).
-- [Python 3.10 `asyncio` synchronization primitives](https://docs.python.org/3.10/library/asyncio-sync.html) — task serialization, fairness, and non-thread-safe scope. **Confidence: MEDIUM**.
-- [Python 3.10 task cancellation documentation](https://docs.python.org/3.10/library/asyncio-task.html) — cancellation propagation and `finally` cleanup. **Confidence: MEDIUM**.
-- [`transitions` callback execution order](https://github.com/pytransitions/transitions#callback-execution-order) — explicit state-change boundary, stop-on-failure behavior, post-change persistence, and no rollback. **Confidence: MEDIUM**.
-- [Python 3.10 Logging HOWTO: configuring logging for a library](https://docs.python.org/3.10/howto/logging.html#configuring-logging-for-a-library) — `NullHandler` and application ownership of handlers. **Confidence: MEDIUM**.
-- [mypyc: Differences from Python](https://mypyc.readthedocs.io/en/stable/differences_from_python.html) — compiled/interpreted semantic, introspection, monkey-patching, tracing, recursion, and concurrency caveats. **Confidence: MEDIUM**.
-- [Python Packaging User Guide: packaging flow](https://packaging.python.org/en/latest/flow/) and [package formats](https://packaging.python.org/en/latest/discussions/package-formats/) — platform wheels and extension artifact expectations. **Confidence: MEDIUM**.
-- [cibuildwheel testing options](https://cibuildwheel.pypa.io/en/stable/options/#test-command) — installed-wheel tests outside the source tree. **Confidence: MEDIUM**.
-- [Mermaid state diagram syntax](https://mermaid.js.org/syntax/stateDiagram.html) and [PlantUML state diagrams](https://plantuml.com/en/state-diagram) — state aliases separating descriptions from identifiers. **Confidence: MEDIUM**.
-- [NetworkX `all_simple_paths`](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.simple_paths.all_simple_paths.html) — factorial path counts and cutoff control. **Confidence: MEDIUM**.
-- [NetworkX strongly connected components reference](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.components.strongly_connected_components.html) — complete SCC membership for directed graphs. **Confidence: MEDIUM**.
+- `src/fast_fsm/core.py` — current single-entry storage, atomic transition-plan
+  commit, sync/async dispatch, lifecycle finalization, ownership, clone,
+  serialization, builder, and singular declarative-handler registry
+- `src/fast_fsm/_diagnostics.py`, `validation.py`, and `visualization.py` —
+  snapshot projection, target-set collapse, current determinism definition, and
+  bounded rendering
+- `tests/test_transition_lifecycle.py`, `test_ownership_concurrency.py`,
+  `test_graph_invariants.py`, `test_builder.py`, `test_async.py`, and
+  `test_performance_benchmarks.py` — existing failure, cancellation, topology,
+  parity, complexity, and throughput contracts
+- `.specify/decisions/ADR-004-atomic-transition-lifecycle.md`,
+  `ADR-005-safe-ownership-concurrency.md`, and `.specify/memory/spr-core-api.md`
+  — accepted state-commit, observer, cancellation, ownership, snapshot, and
+  compiled-boundary behavior
 
-### Project evidence
+### External primary sources (MEDIUM confidence via research seam)
 
-- `.planning/codebase/CONCERNS.md`, `src/fast_fsm/core.py`, `src/fast_fsm/validation.py`, `src/fast_fsm/visualization.py`, and `setup.py` — reproduced and directly inspected project-specific failures. **Confidence: HIGH**.
-- `.planning/research/FEATURES.md` — selected safe-default contract and milestone acceptance boundaries. **Confidence: HIGH** for project decisions.
-- `.planning/codebase/TESTING.md` — 722-test baseline, current quality failures, compiled-origin coverage artifact, and missing parity cases. The requested `QUALITY.md` does not exist; `TESTING.md` is the current codebase quality/testing map. **Confidence: HIGH**.
+- [W3C SCXML Recommendation](https://www.w3.org/TR/scxml/) — enabled-transition
+  conditions, ordered first-match selection, conflict filtering, and selection
+  before execution
+- [Python 3.10 asyncio tasks](https://docs.python.org/3.10/library/asyncio-task.html)
+  — cancellation injection, cleanup in `finally`, propagation, and concurrent
+  task behavior
+- [Python 3.10 bisect](https://docs.python.org/3.10/library/bisect.html) — ordered
+  insertion complexity and concurrent-mutation warning
+- [mypyc native classes](https://mypyc.readthedocs.io/en/stable/native_classes.html)
+  — fixed native attributes, interpreted subclass boundary, and dataclass
+  efficiency caveat
+- [mypyc differences from Python](https://mypyc.readthedocs.io/en/stable/differences_from_python.html)
+  — compile-time typing, runtime enforcement, early binding, and explicit
+  synchronization guidance
 
----
-*Pitfalls research for: Fast FSM v0.3.0 Reliability & Runtime Hardening*
-*Researched: 2026-08-29*
+## Open Decisions That Block Safe Implementation
+
+1. Is an exact repeated candidate registration idempotent, or does every equal
+   priority raise? Conflicting equal priorities must always raise.
+2. Does false `State.can_transition()` continue to the next candidate? The
+   recommended answer is yes because it is pre-lifecycle eligibility.
+3. Do guard/state-permission exceptions stop selection? The recommended answer
+   is yes, preserving Fast FSM's current fail-closed error result.
+4. Is a non-final unconditional candidate rejected or only reported by
+   validation? Rejection gives the strongest safety guarantee; validation is
+   less disruptive for programmatically assembled graphs.
+5. Where is selected priority exposed for auditability—`TransitionResult`,
+   `TransitionRecord`, both, or only snapshots/traces?
+6. How does `from_dict(..., conditions=...)` uniquely address a candidate when
+   several rows share one trigger?

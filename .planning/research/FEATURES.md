@@ -1,284 +1,446 @@
-# Feature Research: v0.3.0 Reliability & Runtime Hardening
+# Feature Landscape: Priority-Aware Guarded Transitions
 
-**Domain:** High-performance in-process Python finite state machine library
-**Researched:** 2026-08-29
-**Confidence:** MEDIUM overall; HIGH for codebase-derived scope, MEDIUM for ecosystem-derived semantics
+**Project:** Fast FSM v0.4.0
+**Domain:** High-performance Python finite-state-machine transition selection
+**Researched:** 2026-09-06
+**Overall confidence:** HIGH for the project contract; MEDIUM for ecosystem comparisons
 
-## Research Conclusion
+## Executive Recommendation
 
-v0.3.0 should harden the behavior users already invoke, not expand the library into
-a workflow engine. The central user-facing contract should be: a trigger either
-does not commit a state change, or commits exactly one coherent state change whose
-callback outcome is reported truthfully. Arbitrary callback side effects cannot be
-made transactional by an in-memory FSM, so automatic rollback would promise more
-than the library can deliver.
+Fast FSM should treat every `(source state, trigger)` as a finite candidate
+group. A group normally contains one transition and keeps the existing direct
+lookup fast path. When a group contains competing guarded transitions, the
+machine evaluates them sequentially from lowest numeric `priority` to highest
+and selects the first candidate whose complete pre-transition eligibility
+checks pass.
 
-The selected safe-default posture means reentrant firing must fail immediately
-instead of deadlocking, queueing implicitly, or overwriting an outer transition.
-Independent concurrent callers should be serialized. Synchronous machines need
-thread serialization; asynchronous machines need task serialization on one event
-loop and must reject unsupported cross-loop use. These safety mechanisms must retain
-the existing 200,000 `trigger()` operations/second floor.
+The public surface should remain one coherent API:
 
-The other concerns resolve into three contracts: construction must produce one
-canonical graph, sync and async entry points must apply the same rules, and
-design-time tooling must be correct and bounded. Release integrity is part of the
-feature, because users cannot rely on runtime guarantees that were tested against a
-different version or execution path than the artifact they installed.
+```python
+fsm.add_transition(
+    "telemetry_tick",
+    "Mission",
+    "EmergencyLanding",
+    condition=FuncCondition(critical_fault_present),
+    priority=10,
+)
+fsm.add_transition(
+    "telemetry_tick",
+    "Mission",
+    "ReturnHome",
+    condition=FuncCondition(link_lost),
+    priority=20,
+)
+fsm.add_transition(
+    "telemetry_tick",
+    "Mission",
+    "ReturnHome",
+    condition=FuncCondition(battery_critical),
+    priority=30,
+)
+```
 
-## Feature Landscape
+No external dispatcher should reproduce state eligibility, guards, or
+priority. An integration may normalize and retain raw facts—for example,
+`heartbeat_older_than(5)`—but one call to `trigger("telemetry_tick", ...)`
+must let the FSM choose the transition.
 
-### Table Stakes (Users Expect These)
+This is a deliberate evolution of the existing duplicate-registration
+semantics. Fast FSM is not yet used in production, so v0.4.0 should prefer an
+explicit, deterministic model over preserving silent replacement of an
+existing `(source, trigger)` edge.
 
-| Capability | Expected user-visible behavior | Complexity | Acceptance boundary |
-|------------|--------------------------------|------------|---------------------|
-| Canonical graph construction | Every source and destination resolves to exactly one registered `State`; unknown endpoints and a different object with a duplicate name fail during construction | HIGH | Multi-source additions are all-or-nothing; runtime, `states`, reset, validation, and rendering observe the same objects |
-| Sealed builder lifecycle | `build()` is idempotent, and every builder mutator after the first successful build raises immediately instead of being silently ignored | MEDIUM | State, transition, condition, sync callback, async callback, and mode mutators all follow the same rule |
-| Guard argument contract | Guards receive supported positional context and the same sanitized keyword context from `can_trigger*()` and `trigger*()` | HIGH | Sync/async, callable/object, `condition=`, and `unless=` paths have parity; private or excessive keyword context cannot bypass one path |
-| Correct async builder detection | A nested async component, including `unless=AsyncCondition(...)`, selects `AsyncStateMachine` in auto mode | MEDIUM | Detection recursively inspects wrappers/composites and never calls `asyncio.run()` from an already-running loop |
-| Integrated declarative dispatch | Calling normal `trigger()`/`trigger_async()` invokes the matching decorated handler exactly once, not just its metadata guard | HIGH | Handler errors are handled at a documented pre-commit stage; direct event handling and machine dispatch cannot double-invoke it |
-| Valid bounded history | `max_entries` must be a positive integer; invalid capacity fails when history is enabled, and a bounded buffer evicts oldest records in O(1) | LOW | History remains zero-cost when disabled, copy-on-read, and records every committed state change even when a later callback reports failure |
-| Stage-aware callback failure | Callback processing stops at the first exception; pre-commit failure leaves the source active, while post-commit failure leaves the destination active and is returned/re-raised as failure | HIGH | No successful result is returned when a required callback failed; failure stage and underlying exception remain inspectable; notification occurs once |
-| Explicit commit boundary | Guards, state permission, declarative action, before-transition callbacks, and exit callbacks complete before the one state assignment; entry/after callbacks run after it | HIGH | Tests assert state, result, failure notification, and history at every failure point in sync and async paths |
-| Reentrancy rejection by default | A callback invoking any state/topology mutator on the same machine fails immediately with a clear error; it cannot deadlock, queue silently, or overwrite the outer transition | HIGH | Sync and async tests cover nested trigger, `force_state`, reset/restore, and graph mutation plus state, result, callbacks, and lock release after failure |
-| Serialized concurrent access | Independent sync callers and same-loop async tasks serialize trigger, state-control, and topology-mutation entry points and evaluate against state/topology current when each acquires ownership | HIGH | Thread and task interleaving tests are deterministic; checks observe a coherent snapshot; an async machine is bound to one event loop and rejects cross-loop access |
-| Sync/async semantic parity | Equivalent machine definitions produce equivalent transition selection, sanitization, callback order, results, history, and failure semantics | HIGH | The same parameterized contract suite runs against sync and async implementations |
-| Non-blocking async contract | Async callbacks are awaited; synchronous callbacks run inline and are explicitly required to be short/non-blocking rather than being silently moved to worker threads | MEDIUM | Documentation explains event-loop blocking and directs I/O work to async callbacks; automatic thread offload is not introduced |
-| Stable graph snapshot for tools | Validation, comparison, JSON, and renderers consume one immutable internal topology snapshot including the declared initial state | HIGH | Diagnostics no longer infer the initial state from current state or dictionary insertion order and do not couple independently to private tables |
-| Correct comparison and cycle results | Empty comparisons return a documented empty aggregate; duplicate FSM names raise `ValueError` before analysis instead of overwriting results; cycle membership includes every member of each directed cycle | MEDIUM | Empty aggregate has count/average zero and no best machine; SCC-based tests cover self-loops and cycles longer than two states |
-| Bounded deterministic diagnostics | Potentially quadratic/output-exponential operations accept or apply explicit work/result budgets and report truncation rather than hanging or silently returning a partial full result | HIGH | Limits are deterministic; dense adjacency and path generation fail or truncate explicitly; ordinary sparse graphs retain complete output |
-| Safe visualization output | Mermaid and PlantUML use stable opaque aliases plus separately escaped labels and trigger text | MEDIUM | Punctuation, Unicode, quotes, line breaks, directive-like text, and colliding sanitized names render as distinct inert labels |
-| Application-owned logging | Importing the library installs at most `NullHandler`; configuration never clears unrelated handlers and any helper-owned handler is idempotent and reversible | MEDIUM | Logger name/propagation are documented; application handlers survive configure/unconfigure cycles |
-| Payload-redacted trace output | Default trace records structural facts such as trigger name and context key names, never raw positional or keyword values | MEDIUM | Tests use tokens, passwords, PII-like values, and newline/control text and assert they do not appear in logs |
-| Auditable release identity | Git tag, `pyproject.toml`, built core metadata, installed `fast_fsm.__version__`, changelog section, docs, and advertised test count agree | MEDIUM | CI fails before publish on any mismatch; v0.3.0 notes are moved out of `Unreleased` only for the matching release |
-| Strict compiled artifact release | Release builds fail if a compiled wheel was requested but mypyc compilation or extension inclusion fails | HIGH | Each supported platform/Python wheel is installed in isolation, module origin is asserted as compiled, and the semantic suite runs against it |
-| Real pure-Python verification | Source-only tests run in an environment where no stale `.so`/`.pyd` can shadow `core.py` | MEDIUM | CI asserts `core.__file__` for both modes and applies equivalent tests; source coverage measures `core.py` rather than an ignored local extension |
-| Green, stable quality baseline | Tests, formatting, lint, mypy/mypyc compatibility, docs, doctests, artifact checks, and throughput gates all pass from a clean checkout | MEDIUM | Pin the alpha `ty` tool if retained; stable mypy remains release-required; optional tools cannot redefine a green release gate unexpectedly |
-| Honest performance/memory claims | Documentation states measured scope and the deliberate `CompiledFuncCondition` storage exception instead of claiming universal slots behavior | LOW | Test counts and benchmark context are generated or release-checked; no unqualified “all core classes” claim conflicts with reality |
+## Table Stakes
 
-### Recommended Transition Failure Semantics
+Features users need for the capability to be coherent rather than merely
+syntactic.
 
-| Failure point | Current state after failure | Result | Remaining callbacks | History |
-|---------------|-----------------------------|--------|---------------------|---------|
-| Guard or state permission | Source | Failed, no commit | None | No record |
-| Declarative action / before / exit callback | Source | Failed, no commit | Stop immediately | No record |
-| State assignment | Source if assignment cannot complete | Failed, no commit | None | No record |
-| Enter / after / trigger-specific callback | Destination | Failed, committed | Stop immediately, then one failure notification | Record committed transition |
-| Reentrant call from any callback | Outer transition follows its own callback-failure rule; nested call does not commit | Nested call fails immediately | No nested callbacks | No nested record |
-| Concurrent independent call | Evaluated after prior owner releases machine | Normal success/failure | Normal order | Normal committed record |
+| Feature | Why Expected | Complexity | Committed Behavior |
+|---------|--------------|------------|--------------------|
+| Multiple candidates per `(source, trigger)` | One event must be able to route to different targets without external `if` chains | High | Ordinary transitions become members of one finite candidate group |
+| Explicit numeric priority | Registration order is too fragile for safety or business policy | Medium | Lower integer wins; gaps and negative values are allowed; `bool` and non-integers are rejected |
+| First fully eligible candidate wins | This is the established guarded-choice model in SCXML, XState, and python-statemachine | High | Evaluate in ascending priority and stop at the first candidate whose guard and state permission pass |
+| Deterministic tie handling | Equal priorities otherwise reintroduce implicit ordering | Low | Reject equal priorities within the same candidate group atomically |
+| Stable no-match outcome | A valid trigger may have no enabled candidate for the supplied facts | Medium | Return a failed, uncommitted `TransitionResult`; preserve the source state and run no transition lifecycle callbacks |
+| Sync/async parity | An async guard must not change selection semantics | High | Same order and result semantics; async guards are awaited sequentially |
+| Single-candidate fast path | Existing common use must retain Fast FSM's value proposition | High | Direct lookup remains; no per-trigger sorting or candidate allocation for a singleton |
+| Tooling truthfulness | Candidate groups are topology, not hidden dispatch detail | High | Clone, snapshots, validation, exports, diagrams, and diagnostics expose every candidate and its priority |
+| Candidate observability | Same trigger and target can have multiple guarded routes | Medium | Results, history, and trace metadata identify the selected or faulting priority without exposing payload values |
+| Construction parity | Builder and configuration APIs must not collapse candidates | High | `FSMBuilder`, batch addition, declarative integration, and `from_dict()` preserve priority and candidate identity |
 
-This is state-atomic, not side-effect-atomic. A callback that has already written to
-a database, sent a message, or mutated external state cannot be safely undone by the
-FSM. The mature `transitions` library similarly documents that pre-state-change
-callback failures leave the source active, post-state-change failures preserve the
-destination, and no automatic rollback occurs. The v0.3.0 improvement is that Fast
-FSM must never swallow such a failure and report success.
+## Detailed Behavioral Contract
 
-### Differentiators (Competitive Advantage)
+### 1. Registration Semantics
 
-| Capability | Value proposition | Complexity | Notes |
-|------------|-------------------|------------|-------|
-| Safe defaults above 200k ops/sec | Users do not have to trade basic correctness for Fast FSM's core performance claim | HIGH | Benchmark uncontended lock/owner checks, guards, failure paths, and history separately |
-| One executable parity contract | Sync, async, builder, declarative, compiled, and source modes are validated as one product rather than parallel implementations | HIGH | Parameterized conformance tests become the strongest regression defense |
-| Bounded agent-grade introspection | `to_json()` and validators remain safe and deterministic on generated or adversarial graphs | HIGH | Include limit/truncation metadata so tools can distinguish “complete” from “budget exhausted” |
-| Installed-artifact proof | CI demonstrates what users install, not merely what passes from the checkout | HIGH | Assert distribution metadata, extension origin, public imports, semantics, and throughput after wheel installation |
-| Secure diagrams and trace logs by default | User-controlled names and event context can flow through tooling without becoming executable diagram syntax or secret-bearing logs | MEDIUM | Opaque IDs plus escaped labels are simpler and safer than increasingly complex sanitizers |
-| Truthful failure observability | Integrations can distinguish not-committed failures from committed transitions with failed lifecycle work | MEDIUM | Preserve existing result/exception style while making stage and commit status inspectable |
+`StateMachine.add_transition()` and `FSMBuilder.add_transition()` gain a
+keyword-only `priority: int | None = None` parameter.
 
-### Anti-Features (Commonly Requested, Often Problematic)
+- Lower numeric values have higher precedence: `10` is evaluated before `20`.
+- Priorities need not be contiguous. Leaving gaps supports later insertion
+  without renumbering policy.
+- `bool` must be rejected even though it subclasses `int`; `True` and `False`
+  are not meaningful policy labels.
+- Priority is scoped to one `(canonical source state, trigger)` group. Reusing
+  `10` for another source or another trigger is valid.
+- A singleton transition may omit priority. As soon as a second candidate is
+  registered, every candidate in that group must have an explicit, unique
+  priority. This prevents an implicit default from accidentally outranking an
+  explicitly designed policy.
+- Re-registering the exact same target, condition identity, and priority is an
+  idempotent no-op. Registering a different candidate at an occupied priority
+  raises `ValueError`.
+- A `from_state=[...]` registration applies the same candidate and priority to
+  each source's independent group. Validation is atomic: a collision for any
+  source rejects the whole operation and leaves graph version and topology
+  unchanged.
+- Multiple candidates may lead to the same destination. Their different
+  guards can represent distinct reasons or escalation thresholds.
+- An unconditional candidate is permitted as an explicit fallback. It should
+  carry the lowest precedence in its group; lower-precedence candidates after
+  it are unreachable and must be reported by validation.
 
-| Anti-feature | Why it sounds useful | Why it is problematic here | Recommended alternative |
-|--------------|----------------------|----------------------------|-------------------------|
-| Automatic rollback of arbitrary callbacks | Appears to make transitions transactional | External side effects are neither knowable nor reversible; rollback callbacks can fail or create new side effects | Define one state commit point, fail truthfully, and let applications implement compensation |
-| Implicitly queue reentrant triggers | Avoids rejecting work fired from callbacks | Changes return timing and state assumptions, can create unbounded queues, and hides accidental recursion | Reject reentry by default; consider an explicit queue feature only in a later API milestone |
-| Reentrant lock as the only safety mechanism | Allows same-thread nested acquisition | It permits exactly the nested mutation that currently corrupts outer transitions | Track transition ownership and reject the owner before lock acquisition |
-| Automatic worker-thread execution for sync callbacks | Could keep an event loop responsive | Changes thread affinity, context, ordering, exception timing, and safety of user code | Require non-blocking sync callbacks in async machines and provide async callbacks for I/O |
-| Silent endpoint auto-registration or duplicate replacement | Makes graph construction look convenient | Hides typos and leaves diagnostics/object identity ambiguous | Require explicit canonical registration and reject inconsistent topology atomically |
-| Unbounded exhaustive diagnostics | Produces every path/cycle in one call | Output itself can be exponential even with an optimal algorithm | Provide budgets, deterministic truncation, sparse/internal algorithms, and explicit completeness metadata |
-| Raw payload trace mode | Seems helpful for debugging | Trigger context commonly carries tokens, PII, keys, and attacker-controlled control text | Log names, counts, and key sets; require application logging for values |
-| Library takeover of logging handlers | One helper makes logs appear immediately | Breaks host configuration and tests and can duplicate output | Use `NullHandler`; make explicit helper changes additive, marked, idempotent, and reversible |
-| Runtime NetworkX dependency | Offers mature graph algorithms quickly | Violates the single-runtime-dependency constraint and adds weight to optional design tooling | Implement the small SCC/budget algorithms internally and use NetworkX docs as algorithmic evidence |
-| Silent pure-Python fallback in release wheels | Lets builds finish on machines without a compiler | Publishes an artifact that violates the performance promise under the expected platform tag | Allow intentional source-only builds, but make compiled release mode strict |
-| Split `core.py` into multiple compiled modules | Reduces source-file concentration | Conflicts with the established single mypyc compilation-unit constraint and may slow cross-unit calls | Share internal helpers inside `core.py`; enforce parity through tests |
-| Broad API expansion during hardening | Could address every future policy at once | Increases review surface before core behavior is trustworthy | Keep existing public symbols; add only observability/configuration required by hardening |
+The existing `add_transitions()` API should accept a fifth tuple item for
+priority while retaining its three- and four-item forms:
+
+```python
+fsm.add_transitions([
+    ("tick", "Mission", "EmergencyLanding", critical_fault, 10),
+    ("tick", "Mission", "ReturnHome", link_lost, 20),
+    ("tick", "Mission", "ReturnHome", low_battery, 30),
+])
+```
+
+Bidirectional and emergency helpers must forward per-edge priority rather than
+silently replacing an existing candidate. Exact parameter spelling can follow
+their current per-direction convention (`priority1` / `priority2` for the
+bidirectional helper).
+
+### 2. Candidate Selection
+
+For one trigger attempt, selection follows this finite sequence:
+
+```text
+O(1) lookup of current-state + trigger group
+    → candidates already ordered by numeric priority
+        → transition condition / unless guard
+        → matching declarative guard, if any
+        → source State.can_transition(...)
+    → first candidate passing every eligibility check is selected
+    → execute exactly one existing transition lifecycle
+```
+
+Guard rejection is fallthrough, not failure of the whole group. If priority
+`10` returns false, priority `20` is evaluated. State permission rejection is
+also candidate-local and allows evaluation of the next candidate; otherwise
+the machine would select an edge that it already knows it cannot take.
+
+Once a candidate is selected, selection is finished. A later before/exit/enter
+callback failure, listener failure, declarative handler failure, or post-commit
+failure must not try a lower-priority candidate. Falling through after side
+effects begin would violate the established atomic lifecycle contract.
+
+Candidates receive the same positional arguments and one equivalently
+sanitized keyword context. Guards must be documented as side-effect-free,
+because a rejected guard may run even though another candidate ultimately
+commits.
+
+### 3. Guard Exceptions and Async Cancellation
+
+A guard exception is not equivalent to `False`.
+
+- Stop candidate selection immediately.
+- Return the existing guard-stage failure with the original `cause` and the
+  faulting candidate's priority.
+- Do not evaluate lower-priority candidates; doing so would silently mask a
+  defect in a higher-priority safety or business rule.
+- For `AsyncStateMachine`, cancellation propagates according to the existing
+  cancellation contract and never resumes selection at another candidate.
+- Async candidates are evaluated sequentially. Parallel guard execution is
+  deferred because it weakens deterministic ordering and may create observable
+  side-effect races in user guards.
+
+### 4. No Candidate Matches
+
+When a `(source, trigger)` group exists but no candidate is enabled:
+
+- `trigger()` returns `TransitionResult(success=False, committed=False)`.
+- `from_state` and `trigger` are populated; `to_state` and selected priority
+  are `None` because no edge was selected.
+- If every candidate was rejected by transition/declarative guards, `stage` is
+  `"guard"`. If at least one candidate passed its guards but every such
+  candidate was rejected by `State.can_transition`, `stage` is
+  `"state-permission"`.
+- The error message identifies the candidate group and number evaluated, but
+  does not include telemetry values, guard return values, or arbitrary object
+  representations.
+- The source state, history, entry/exit callbacks, transition callbacks, and
+  listeners remain untouched except for the existing single failure-observer
+  notification.
+- `can_trigger()` / `can_trigger_async()` return `True` iff at least one
+  candidate is fully eligible under the same selection rules.
+
+A missing `(source, trigger)` remains the distinct existing resolution-stage
+failure. This distinction matters for diagnostics: “event is unknown here” is
+different from “event is modeled here, but current facts enable no route.”
+
+### 5. Runtime Observability
+
+Priority must remain observable after registration without changing callback
+argument conventions.
+
+- Add an optional, comparison-neutral priority field to `TransitionResult` so
+  successful selection and guard faults can identify the candidate.
+- Add the selected priority to `TransitionRecord`; otherwise two candidates
+  with identical source, trigger, and destination are indistinguishable in
+  audit history.
+- Trace output may include numeric priority and candidate counts. It must
+  preserve v0.3.0's metadata-only redaction and never log raw trigger payloads.
+- Failure observers still fire once for the overall trigger attempt, not once
+  for every rejected candidate.
+- Transition callbacks and state callbacks keep their existing signatures.
+  Injecting priority into user kwargs would risk collisions with application
+  payloads and is not recommended.
+
+### 6. Introspection, Export, and Reconstruction
+
+All topology consumers must see candidates rather than a lossy synthetic edge.
+
+- The immutable graph snapshot contains one row per candidate with priority.
+- `get_reachable_states()` returns every distinct candidate destination.
+- `transition_exists(trigger, from_state, to_state)` returns true when any
+  candidate matches; it does not imply that the candidate's guard currently
+  passes.
+- `get_available_triggers()` and `triggers` continue to deduplicate trigger
+  names.
+- `clone()` copies complete candidate groups while sharing condition identities
+  according to the existing shallow-clone contract.
+- `to_dict()` writes each candidate as a separate transition entry and includes
+  priority. `from_dict()` accepts that field and reconstructs the group.
+- Because trigger-only `conditions={"tick": guard}` cannot distinguish
+  candidates, `from_dict()` needs a stable candidate-level condition key in
+  addition to its legacy trigger-key fallback. A practical Python-side key is
+  `(from_state, trigger, priority)`. Callable serialization itself remains out
+  of scope.
+- JSON analysis, Mermaid, and PlantUML label parallel edges with priority so a
+  reader can recover evaluation order from the output.
+
+### 7. Declarative-State Behavior
+
+Declarative dispatch must execute exactly one handler associated with the
+selected candidate. Discovery may no longer collapse all methods sharing a
+trigger into one `_handlers[trigger]` value.
+
+The selected candidate's canonical target and priority must be sufficient to
+resolve its handler. If the same trigger, source, and target has multiple
+candidate handlers, declarative metadata needs priority to disambiguate them.
+The implementation should not require authors to declare priority twice: one
+registration remains authoritative, and declarative metadata either matches
+that candidate or fails validation during construction.
+
+Direct `DeclarativeState.handle_event()` compatibility must be defined rather
+than allowed to depend on attribute discovery order. At minimum it must apply
+the same priority selection when enough topology metadata is present; otherwise
+it should reject an ambiguous direct call explicitly.
+
+### 8. Validation and Diagnostics
+
+Registration enforces facts that can be proven locally:
+
+- priority type is valid;
+- candidate-group priorities are explicit and unique;
+- canonical source/target invariants still hold;
+- compound/batch registration remains atomic.
+
+Design-time validation reports structural policy mistakes:
+
+- an unconditional candidate precedes another candidate;
+- exported or declarative candidate metadata is ambiguous or missing;
+- a candidate group cannot be reconstructed losslessly;
+- sync machines contain async requirements anywhere in the group.
+
+Overlapping guarded predicates are not an error. Priority exists precisely to
+make overlap deterministic. The validator should not claim to prove arbitrary
+user callables mutually exclusive.
+
+### 9. Complexity and Performance Contract
+
+Priority changes the honest complexity statement:
+
+- group lookup remains O(1);
+- a singleton transition remains O(1) and must retain the allocation-minimal
+  fast path;
+- a competing group takes O(k) guard checks in the worst case, where `k` is
+  the finite number of candidates for that `(source, trigger)`;
+- ordering is prepared at registration/build time—never sorted on each
+  trigger attempt;
+- candidate registration may be O(k) if it publishes a new immutable ordered
+  group; this bounded configuration-time cost is preferable to charging every
+  dispatch.
+
+Documentation and benchmarks must stop describing a guarded candidate group as
+strict O(1) end-to-end work. The compiled normal-transition throughput floor of
+200,000 operations/second remains mandatory, and benchmarks should report
+singleton, first-match, middle-match, last-match, and no-match groups.
+
+## Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| Explicit priority rather than declaration order | Reordering setup code cannot silently change safety policy | Medium | Ecosystem tools often use document/declaration order; Fast FSM can make precedence reviewable as data |
+| Priority-aware compiled fast path | Deterministic routing without surrendering the library's performance identity | High | Preserve a direct singleton representation and pre-order competing groups |
+| Truthful candidate topology | Diagrams, JSON, history, and validators all describe the same rules the runtime uses | High | Prevents the common split between runtime choice and rendered graph |
+| Guard-fault fail-closed behavior | A broken high-priority rule cannot be mistaken for a false predicate | Medium | Particularly important for safety-oriented examples such as drone failsafes |
+| Stable policy under incremental registration | Explicit gaps permit later insertion without setup-order coupling | Low | `10, 20, 30` is clearer and easier to evolve than implicit list position |
+
+## Anti-Features and Deferrals
+
+| Anti-Feature / Deferral | Why Avoid in v0.4.0 | What to Do Instead |
+|-------------------------|---------------------|-------------------|
+| A second `add_transition_candidate()` API | Splits one domain concept across redundant registration surfaces | Evolve `add_transition(..., priority=...)` |
+| Registration order as hidden priority | Refactors and config generation can silently alter behavior | Require explicit unique priorities for competing groups |
+| Equal-priority tie-breaking | Reintroduces ambiguity through insertion order, target name, or condition name | Reject ties atomically |
+| Dynamic/callable priorities | Makes topology and diagrams depend on runtime payload and complicates finiteness | Keep priority a static registered integer |
+| “Best score” evaluation of all guards | Guards return eligibility, not comparable scores; evaluating all increases cost and side effects | Stop at the first fully eligible candidate |
+| Fallback after lifecycle failure | May execute multiple callback chains and external commands for one event | Fall through only during eligibility checks |
+| Parallel async guard evaluation | Produces unnecessary work and weakens deterministic fault/cancellation semantics | Await candidates sequentially |
+| Automatic telemetry-to-event classification | Moves transition logic back outside the machine | Fact providers may derive measurements; guards own transition eligibility |
+| Priority mutation/removal/reordering API | Expands concurrency, graph-version, and identity semantics substantially | Rebuild topology; consider explicit mutation APIs in a later milestone |
+| Arbitrary callable serialization | Python callables cannot be safely or portably encoded in JSON | Serialize priority/topology and reattach guards by stable candidate key |
+| Hierarchical/statechart conflict rules | Descendant-vs-ancestor and parallel-region resolution are a separate model expansion | Limit v0.4.0 to flat Fast FSM source-state candidate groups |
+| Eventless/automatic transitions | Introduces scheduling and possible livelock concerns unrelated to candidate priority | Continue requiring caller-driven triggers |
 
 ## Feature Dependencies
 
 ```text
-[Release identity + green baseline]
-    └──requires before──> [Runtime behavior changes]
-                            └──validated by──> [Installed source/compiled parity]
-                                                    └──gates──> [Release publish]
+[Candidate identity + explicit priority validation]
+    └──enables──> [Ordered sync selection]
+                     └──parity──> [Ordered async selection]
+                     └──feeds──> [Transition lifecycle + observability]
 
-[Canonical graph invariants]
-    └──enables──> [Stable graph snapshot]
-                     ├──enables──> [Correct validator/comparison/cycle analysis]
-                     └──enables──> [Collision-free visualization]
+[Candidate-aware graph snapshot]
+    ├──enables──> [Clone and topology queries]
+    ├──enables──> [to_dict/from_dict reconstruction]
+    ├──enables──> [Validation and diagnostics]
+    └──enables──> [Mermaid/PlantUML/JSON truthfulness]
 
-[Explicit transition commit boundary]
-    ├──requires──> [Stage-aware callback failures]
-    ├──requires──> [Integrated declarative dispatch]
-    ├──enables──> [Reentrancy rejection]
-    └──enables──> [Serialized concurrent access]
+[Core selection semantics]
+    └──enables──> [Builder + declarative parity]
+                     └──enables──> [Drone telemetry_tick example]
 
-[Unified guard context]
-    └──enables──> [Sync/async parity]
-                     ├──enables──> [Async builder correctness]
-                     └──enables──> [Shared conformance suite]
-
-[Bounded graph snapshot algorithms]
-    └──enables──> [Deterministic diagnostic budgets]
-                     └──enables──> [Safe agent-grade JSON]
+[Correctness contract]
+    └──measured by──> [Pure/compiled benchmarks and conformance tests]
 ```
 
-### Dependency Notes
+### Recommended Phase Ordering
 
-- **Establish the release baseline first:** Correct version/changelog/test-count
-  drift and make current gates green before behavioral work, so subsequent
-  failures can be attributed to v0.3.0 changes.
-- **Canonical topology precedes diagnostics:** Validator and renderer fixes will
-  remain fragile until both consume one invariant-preserving snapshot.
-- **Commit semantics precede locking:** A lock only prevents interleaving; it does
-  not define whether state changed after a callback exception. Define and test the
-  lifecycle first, then serialize it.
-- **Reentry detection precedes lock acquisition:** Otherwise a primitive lock
-  converts a clear programming error into a deadlock.
-- **Sync/async parity precedes builder repair:** Recursive async detection is only
-  useful if the selected async machine applies the same context and failure rules.
-- **Artifact parity follows semantic tests:** One contract suite should be reused
-  for interpreted modules and installed compiled wheels rather than creating a
-  weaker compilation smoke suite.
-- **Performance gating follows correctness:** Benchmark the final owner/lock path
-  and fail the milestone if normal `trigger()` falls below 200,000 operations/sec.
+1. **Candidate model and registration contract** — establish identity,
+   priority validation, atomic mutation, graph versioning, and singleton
+   compatibility.
+2. **Sync/async selection and lifecycle integration** — implement the first
+   fully eligible rule, no-match diagnostics, fail-closed guard faults, and
+   result/history observability.
+3. **Construction and declarative parity** — update builder, batch helpers,
+   configuration reconstruction, clone, and declarative handler resolution.
+4. **Graph consumers and validation** — update snapshots, topology queries,
+   validators, JSON, Mermaid, and PlantUML from one canonical candidate model.
+5. **Performance, documentation, and example migration** — benchmark singleton
+   and candidate groups, update complexity claims, and reduce the drone loop to
+   one `telemetry_tick` trigger.
 
-## v0.3.0 Milestone Definition
+## Acceptance Scenarios
 
-### Launch With
+| Scenario | Expected Outcome |
+|----------|------------------|
+| One ordinary unguarded transition without priority | Existing successful behavior and singleton fast path |
+| Three candidates; priorities `10`, `20`, `30`; all guards true | Priority `10` commits; lower candidates are not evaluated |
+| Priority `10` false; priority `20` true | Priority `20` commits; priority `30` is not evaluated |
+| Priority `10` guard raises | Overall guard-stage failure with cause and priority `10`; no lower candidate runs |
+| All guards false | Uncommitted guard-stage failure; current state unchanged; one failure notification |
+| Guard passes but state permission rejects; lower candidate passes | Lower candidate is selected and commits |
+| Two candidates register priority `10` in same group | Atomic `ValueError`; topology and graph version unchanged |
+| Singleton without priority later receives a competitor | Registration fails until the entire group uses explicit priorities |
+| An unconditional fallback has the greatest numeric priority | It runs only when all higher-precedence guards reject |
+| Unconditional candidate precedes another | Validation reports the later candidate as unreachable |
+| Same source, trigger, and destination with two guards | Both remain distinct; selected priority appears in result/history |
+| Async guard is cancelled | Selection stops; state and history follow existing cancellation boundary |
+| Clone/export/diagram of a candidate group | Every candidate and priority remains visible and deterministic |
+| Drone telemetry contains critical fault, stale heartbeat, and low battery | One `telemetry_tick` chooses critical-fault emergency landing without controller arbitration |
 
-- Canonical graph and sealed builder invariants.
-- Unified guard context, declarative dispatch, history validation, and recursive
-  async detection.
-- Explicit state commit boundary with fail-fast, truthful callback outcomes.
-- Default reentrancy rejection and serialized thread/task access.
-- Sync/async/source/compiled conformance coverage.
-- Correct initial-state, empty/duplicate comparison, SCC cycle membership, and
-  deterministic diagnostic budgets.
-- Collision-free, escaped Mermaid and PlantUML output.
-- Application-owned logging and payload-redacted trace output.
-- One auditable version/changelog/docs/test baseline and strict installed-wheel
-  verification on supported platforms.
-- Green formatting, lint, stable type checking, docs, doctests, tests, and
-  throughput gates.
-- Documentation of the `CompiledFuncCondition` storage exception and of sync
-  callback blocking in async machines.
+## Migration Implications
 
-### Include If It Does Not Expand the Public Surface Materially
+Most users with one transition per `(source, trigger)` require no source
+changes. The intentional break affects code that relied on a later
+`add_transition()` call silently replacing an earlier edge.
 
-- An application-supplied trace redactor, provided raw values remain unavailable
-  to default formatters.
-- A sparse adjacency export if it can be additive; otherwise enforce a dense
-  matrix budget and defer the new representation.
-- A history memory estimate; otherwise document O(`max_entries`) retention and
-  validate positive capacity.
+Migration guidance should say:
 
-### Recommended Deferrals
+1. If both edges express real alternatives, retain both and assign unique
+   explicit priorities and guards.
+2. If the later edge was meant as configuration mutation, construct the
+   desired final machine directly; v0.4.0 does not add an implicit replace API.
+3. If multiple alternatives were dispatched by an application `if` chain,
+   replace that chain with one trigger and move predicates into transition
+   guards.
+4. If topology is loaded from dictionaries, include priority and use
+   candidate-level guard keys where one trigger has multiple conditions.
 
-- Opt-in queued reentrant firing and configurable queue overflow policies.
-- Automatic rollback/compensation orchestration for application side effects.
-- Cross-event-loop sharing of one `AsyncStateMachine`.
-- Automatic thread offload or parallel execution of callbacks.
-- A public generalized graph-snapshot protocol; keep the v0.3.0 snapshot internal.
-- Replacing `ty` entirely; pin it and keep stable mypy as the required gate first.
-- Redesigning `CompiledFuncCondition` solely to remove `__dict__` unless measurement
-  shows material user impact.
-- Splitting the mypyc compilation unit, scheduler/auto-fire timers, topology-rich
-  snapshot v2, and unrelated API expansion.
+The changelog should call out the duplicate-registration change prominently,
+even though the project has explicitly accepted pre-production API evolution.
 
-## Feature Prioritization Matrix
+## MVP Recommendation
 
-| Capability group | User value | Implementation cost | Priority | Rationale |
-|------------------|------------|---------------------|----------|-----------|
-| Release identity and green baseline | HIGH | MEDIUM | P1 | All later evidence depends on knowing which version/artifact was tested |
-| Graph and builder invariants | HIGH | HIGH | P1 | Prevents machines whose runtime and tools disagree |
-| Transition commit and callback failure semantics | HIGH | HIGH | P1 | Safe-default decision and primary correctness boundary |
-| Reentrancy and concurrency safety | HIGH | HIGH | P1 | Prevents silent state corruption and deadlock |
-| Guard/declarative/sync-async parity | HIGH | HIGH | P1 | Repairs reproduced public-API failures across all dispatch modes |
-| History correctness and O(1) eviction | HIGH | LOW | P1 | Small fix on an advertised capability and hot path |
-| Diagnostic correctness and budgets | HIGH | HIGH | P1 | Fixes false results and unbounded behavior on configuration-driven graphs |
-| Visualization escaping and aliasing | HIGH | MEDIUM | P1 | Prevents collisions and treats user labels as inert data |
-| Logging ownership and payload redaction | HIGH | MEDIUM | P1 | Removes secret exposure and application-wide side effects |
-| Installed source/compiled parity | HIGH | HIGH | P1 | Required for the performance and compatibility promise |
-| Custom trace redactor | MEDIUM | MEDIUM | P2 | Useful flexibility after safe no-values default exists |
-| Sparse public adjacency representation | MEDIUM | HIGH | P2 | Additive scalability improvement; budgets can provide v0.3.0 safety |
-| History memory estimator | LOW | LOW | P3 | Documentation gives adequate control after O(1) storage is fixed |
-| Queued reentrant firing mode | MEDIUM | HIGH | P3 | New semantics and API surface; reject safely in this milestone |
-| Callback compensation framework | LOW | HIGH | P3 | Belongs in an integration/workflow layer, not the core FSM |
+Prioritize:
 
-**Priority key:** P1 is required for v0.3.0; P2 is conditional on contained API
-impact; P3 is deferred.
+1. Candidate groups through the existing `add_transition()` API with explicit,
+   unique integer priorities.
+2. Identical sync/async first-eligible selection, fail-closed guard exceptions,
+   and precise no-match results.
+3. Candidate-aware graph snapshots plus builder, declarative, export,
+   validation, history, visualization, and clone parity.
+4. Performance evidence proving the singleton fast path remains viable and
+   documenting O(k) candidate selection honestly.
+5. A drone example in which the controller records telemetry facts and calls
+   `trigger("telemetry_tick")` once; the FSM owns all failsafe routing.
 
-## Ecosystem Behavior Comparison
-
-| Concern | Current Fast FSM | Relevant ecosystem behavior | Recommended v0.3.0 behavior |
-|---------|------------------|-----------------------------|-----------------------------|
-| Callback exception | Logged/swallowed; success may be returned | `transitions` stops the callback chain, propagates/handles the error, keeps source before commit and destination after commit | Stop, expose failure, preserve actual commit state, never pretend rollback |
-| Reentrant firing | Unsynchronized nested mutation | `transitions` makes queueing explicit; Python primitive locks would otherwise deadlock on same-owner reentry | Reject owner reentry immediately; do not queue by default |
-| Concurrent firing | Can interleave | Python provides separate thread and same-loop task mutexes; `asyncio.Lock` is not thread-safe | Serialize threads or same-loop tasks; reject unsupported cross-loop ownership |
-| Async blocking | Sync callbacks run on event loop | Python documents `asyncio.to_thread()` for explicitly selected blocking I/O | Keep deterministic inline contract; require async callbacks for I/O rather than silently changing thread context |
-| Library logging | Helper clears handlers and trace exposes values | Python recommends named loggers and only `NullHandler`; OWASP recommends removing/masking tokens, secrets, and PII | Preserve application handlers and omit raw values by default |
-| Diagram names | Sanitized IDs can collide; PlantUML text is raw | Mermaid and PlantUML distinguish aliases/IDs from display labels | Opaque unique IDs plus target-specific escaped labels |
-| Cycle diagnostics | DFS back-edge endpoints omit members | SCC decomposition identifies cyclic components without enumerating every cycle | SCC membership including self-loops; budget only output-expanding analyses |
-| Compiled release | Compilation failure may silently fall back | PyPA expects platform wheels for extensions and installed-artifact validation; mypyc supports selected compiled modules | Strict compiled mode, isolated wheel tests, explicit origin assertion, intentional source fallback only |
-
-## Concern Coverage Audit
-
-| `CONCERNS.md` category | Covered by |
-|------------------------|------------|
-| Core concentration | Internal shared lifecycle/guard/snapshot helpers inside the single compilation unit; parity tests; module split remains deferred constraint |
-| Builder mutability | Sealed builder lifecycle |
-| Graph registration | Canonical graph construction and atomic multi-source validation |
-| Optional compilation | Strict compiled release mode and installed-wheel proof |
-| Slots exception | Honest measured documentation; redesign deferred unless impact is material |
-| Known runtime bugs | Guard arguments, history capacity, declarative dispatch, validator initial state, duplicate/empty comparison, nested async `unless=`, SCC cycle membership |
-| Security | Redacted trace context, sync/async sanitization parity, application-owned logging, escaped diagram labels |
-| Performance | O(1) history, bounded graph diagnostics, explicit async callback contract, 200k hot-path gate |
-| Fragile runtime areas | Stage-aware callback failure, reentry/concurrency safety, stable graph snapshot |
-| Scaling limits | Positive bounded history, SCC algorithms, deterministic path/matrix budgets, optional sparse export |
-| Dependency risks | Pin alpha `ty`, retain stable mypy gate, strict mypyc wheel matrix, intentional pure/source path |
-| Missing critical contracts | Explicit state commit/failure semantics and thread/task/event-loop ownership |
-| Test gaps | Shared sync/async contract suite, graph/builder edge cases, isolated source/compiled runs, release/quality gates |
+Defer dynamic priorities, mutation/removal APIs, parallel guard evaluation,
+callable serialization, hierarchy/parallel-state conflict rules, and automatic
+event scheduling.
 
 ## Confidence Assessment
 
 | Area | Confidence | Reason |
 |------|------------|--------|
-| Existing defect scope | HIGH | Direct codebase audit includes executable reproductions and line-level evidence |
-| Callback/commit recommendation | MEDIUM | Cross-checked against official `transitions` behavior; arbitrary side-effect rollback remains application-specific |
-| Concurrency recommendation | MEDIUM | Based on official Python lock/task semantics; performance impact must be benchmarked in this codebase |
-| Logging/security recommendation | MEDIUM | Official Python library guidance and OWASP agree; custom-redactor shape remains a design choice |
-| Diagnostics recommendation | MEDIUM | Established SCC/output-sensitive algorithm behavior; exact default budgets require project benchmarks |
-| Visualization recommendation | MEDIUM | Official grammars support alias/label separation; exact escaping functions require renderer tests |
-| Release recommendation | MEDIUM | Current PyPA and mypyc guidance support the artifact workflow; platform matrix details remain repository-specific |
+| Existing Fast FSM behavior | HIGH | Direct inspection of `core.py`, current docs, examples, archived requirements, and v0.3.0 lifecycle contracts |
+| Explicit priority contract | HIGH | Directly established in milestone discussion and `PROJECT.md`; tie rejection and one-API direction were user decisions |
+| First-passing semantics | HIGH | W3C SCXML, XState, and python-statemachine independently use deterministic first-enabled selection |
+| No-match recommendation | HIGH | Extends Fast FSM's existing staged `TransitionResult` contract without exceptions or state mutation |
+| Guard-exception recommendation | HIGH | Preserves v0.3.0 truthful failure/cause behavior and avoids masking higher-priority defects |
+| Declarative/configuration API details | MEDIUM | Required for parity, but exact stable candidate-key representation needs implementation-phase design validation |
+| Performance shape | HIGH | O(k) guard evaluation is intrinsic; exact throughput and storage representation require benchmarks |
 
 ## Sources
 
-Primary and project sources, with confidence tiers produced by the research seam:
+External findings were routed through the GSD research seam and assigned
+MEDIUM confidence after cross-checking official sources:
 
-- [Python 3.10 `threading` documentation](https://docs.python.org/3.10/library/threading.html) — thread locks and reentrant locks. **MEDIUM**
-- [Python 3.10 asyncio synchronization primitives](https://docs.python.org/3.10/library/asyncio-sync.html) — task mutex fairness and non-thread-safety. **MEDIUM**
-- [Python 3.10 coroutines and tasks](https://docs.python.org/3.10/library/asyncio-task.html) — explicit `to_thread()` behavior for blocking work. **MEDIUM**
-- [Python Logging HOWTO](https://docs.python.org/3/howto/logging.html#configuring-logging-for-a-library) — library-owned logger and handler guidance. **MEDIUM**
-- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude) — sensitive-data exclusion and masking. **MEDIUM**
-- [`transitions` official project documentation](https://github.com/pytransitions/transitions#callback-execution-order) — callback order, exception behavior, and explicit queued transitions. **MEDIUM**
-- [Mermaid state diagram syntax](https://mermaid.js.org/syntax/stateDiagram.html) — state IDs and descriptions. **MEDIUM**
-- [PlantUML state diagram syntax](https://plantuml.com/en/state-diagram) — quoted names and aliases. **MEDIUM**
-- [NetworkX strongly connected components](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.components.strongly_connected_components.html) — SCC membership algorithm. **MEDIUM**
-- [NetworkX simple cycles](https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.cycles.simple_cycles.html) — output-sensitive cycle enumeration complexity. **MEDIUM**
-- [PyPA core metadata specification](https://packaging.python.org/en/latest/specifications/core-metadata/) and [version specification](https://packaging.python.org/en/latest/specifications/version-specifiers/) — required and normalized version identity. **MEDIUM**
-- [PyPA packaging flow](https://packaging.python.org/en/latest/flow/) and [tool recommendations](https://packaging.python.org/en/latest/guides/tool-recommendations/) — modern builds and platform-wheel CI. **MEDIUM**
-- [mypyc getting started](https://mypyc.readthedocs.io/en/latest/getting_started.html) — selective compilation, wheel builds, and interpreted-mode workflow. **MEDIUM**
-- [Project concerns](../codebase/CONCERNS.md), [architecture](../codebase/ARCHITECTURE.md), [project](../PROJECT.md), and repository tests/source — milestone scope and reproduced failures. **HIGH**
+- [W3C SCXML 1.0 Recommendation](https://www.w3.org/TR/scxml/) — selects the
+  first enabled transition in document order and defines deterministic conflict
+  resolution.
+- [XState guards](https://stately.ai/docs/guards) and
+  [transition selection](https://stately.ai/docs/transitions) — ordered guarded
+  alternatives, first match, optional unconditional fallback, and unchanged
+  state when no transition is enabled.
+- [python-statemachine conditions](https://python-statemachine.readthedocs.io/en/stable/guards.html)
+  — multiple transitions for one event, first passing guard, configurable
+  no-match handling, and side-effect-free condition guidance.
+- [Stateless guard clauses](https://github.com/dotnet-state-machine/stateless/blob/dev/README.md#guard-clauses)
+  — contrasting mutually-exclusive-guard model and explicit unhandled-trigger
+  behavior.
+- [Fast FSM project definition](../PROJECT.md),
+  [v0.3.0 requirements](../REQUIREMENTS.md),
+  [`core.py`](../../src/fast_fsm/core.py), and
+  [drone failsafe example](../../examples/drone_failsafes.py) — current API,
+  lifecycle, topology, diagnostics, and example constraints.
 
 ---
-*Feature research for: Fast FSM v0.3.0 Reliability & Runtime Hardening*
-*Researched: 2026-08-29*
+*Feature research for Fast FSM v0.4.0 Priority-Aware Guarded Transitions*

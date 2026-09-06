@@ -1,375 +1,470 @@
 # Project Research Summary
 
 **Project:** Fast FSM
-**Domain:** High-performance, in-process Python finite state machine library
-**Milestone:** v0.3.0 Reliability & Runtime Hardening
-**Researched:** 2026-08-29
-**Confidence:** MEDIUM overall; HIGH for repository-derived findings
+**Domain:** High-performance Python finite-state-machine transition selection
+**Milestone:** v0.4.0 Priority-Aware Guarded Transitions
+**Researched:** 2026-09-06
+**Confidence:** HIGH for codebase integration and the behavioral direction; MEDIUM for final API details and measured native performance
 
 ## Executive Summary
 
-Fast FSM is a compact Python FSM whose value is O(1) dispatch, low memory use,
-and a compiled `core.py` hot path. Experts would preserve that shape while
-making the runtime state-atomic and observable: one canonical graph, one
-transition lifecycle with an explicit commit point, immediate rejection of
-reentrant work, serialized independent callers, and equivalent sync/async and
-source/compiled behavior. The stack should remain Python 3.10–3.14 plus the
-single runtime dependency `mypy-extensions`; synchronization, bounded history,
-logging, SCC analysis, and artifact checks can all use the standard library.
+Fast FSM v0.4.0 should make a `(source state, trigger)` resolve a finite,
+statically registered group of guarded transition candidates. The machine—not
+an application-side dispatcher—will evaluate those candidates in explicit
+numeric-priority order and commit the first fully eligible transition. Lower
+integer values win; false guards and state-permission vetoes continue to the
+next candidate; exceptions and cancellation fail closed. Once a winner is
+selected, the existing atomic lifecycle runs exactly once and never falls
+through to another candidate after callbacks or side effects begin.
 
-The milestone should prioritize evidence before broad refactoring. First make
-version metadata, changelog, test counts, formatting/lint, type checks, docs,
-and build intent agree. Then stabilize graph construction and the shared
-dispatch contract, define callback failure semantics, and add safe-default
-ownership. Only after those boundaries are stable should validators,
-visualizers, logging, and release artifacts be hardened. The largest risks are
-false-success callback results, deadlock/state corruption from reentry and
-concurrency, diagnostics that are false or unbounded, payload leakage, and a
-compiled wheel that silently falls back to Python. Each must have deterministic
-tests, explicit failure metadata, and a clean installed-artifact verification
-path while preserving the >=200,000 compiled `trigger()` operations/sec floor.
+The implementation should preserve the current two-dictionary lookup and
+single-transition fast path. A source/trigger slot remains a direct slotted
+`TransitionEntry` until competition exists, then becomes a private immutable
+group whose tuple is ordered at registration time. This changes the honest
+complexity contract: lookup and singleton dispatch remain O(1), while selecting
+from `k` arbitrary guarded candidates is necessarily O(k). The milestone must
+amend the constitution and documentation before implementation rather than
+hide this local cost behind the old blanket O(1) claim.
+
+Priority is canonical topology metadata and must remain truthful through sync
+and async dispatch, builders, declarative handlers, clone, serialization,
+results/history, graph snapshots, diagnostics, validation, diagrams, and
+installed pure/compiled artifacts. The largest risks are implicit tie-breaking,
+an unconditional candidate shadowing safety rules, finalizing each false guard
+as a failed trigger, beginning lifecycle work before selection is complete,
+and adapters silently collapsing candidates back to one edge. Five ordered
+phases—contract/topology, runtime selection, construction parity, tooling
+truthfulness, then performance/docs/examples—contain those risks cleanly.
+
+## Reconciled Decisions
+
+The research documents agree on the architecture and first-enabled semantics,
+but differed on a few details. Use these decisions as the requirements baseline:
+
+| Topic | Synthesized Decision | Rationale |
+|-------|----------------------|-----------|
+| Public API | Evolve existing `add_transition(..., priority=...)`; do not add `add_transition_candidate()` | Priority is an attribute of an ordinary transition, and the user explicitly rejected a second API |
+| Priority type | Keyword-only, exact non-boolean `int`; lower value wins; signed values and gaps allowed | Simple mypyc/JSON representation and reviewable ordering |
+| Default | `priority=0` for ordinary calls | Keeps singleton use compact and gives `TransitionEntry` one concrete scalar type; competing policies should still number every candidate explicitly |
+| Ties | Distinct candidates with equal priority in one source/trigger group raise atomically | Registration order, target name, and hash order must never decide precedence |
+| Exact duplicate | Same canonical target, condition identity, and priority is an idempotent no-op | Preserves current graph-version/idempotency behavior without permitting conflicting ties |
+| Winner | First candidate passing transition guard, matching declarative guard, and target-specific state permission | A candidate is not enabled until all pre-lifecycle policy permits it |
+| False eligibility | Continue to next candidate | Rejection is candidate elimination, not failure of the overall trigger |
+| Guard/permission exception | Abort selection with cause; do not continue | A broken high-priority rule must not be silently treated as false |
+| Async behavior | Await sequentially in the same order; cancellation aborts and re-raises | Timing and concurrency must not replace explicit priority |
+| Group exhaustion | One uncommitted `TransitionResult`, one failure-observer notification, no target, and a new `selection` stage | Mixed guard/permission rejection is a group-selection outcome, not accurately attributable to the final rejected guard |
+| Unconditional candidate | Allowed as fallback; validation diagnoses any lower candidates it shadows | Registration cannot always prove a custom state/declarative permission is unconditional |
+| Observability | Add nullable selected priority to result and history; expose bounded scalar metadata in traces/exports | Same-source/trigger/target candidates otherwise cannot be audited |
+| Serialization guard key | Candidate key `(from_state, trigger, priority)` plus legacy trigger-key fallback | A trigger string alone cannot reattach distinct guards |
 
 ## Key Findings
 
 ### Recommended Stack
 
-Keep the production dependency surface unchanged and keep `core.py` as the
-single mypyc compilation unit. Pin build-producing tools so release artifacts
-are reproducible: mypy/mypyc 2.3.1, setuptools 84.0.0, wheel 0.48.0, uv 0.12.7,
-and cibuildwheel 4.2.0; pin the development lock to pytest 9.1.1,
-pytest-asyncio 1.4.0, Hypothesis 6.165.10, Ruff 0.16.5, ty 0.0.75, and mypy
-2.3.1 where adopted. Keep Python 3.10–3.14 as the support matrix.
+Keep the production stack unchanged. The feature requires no new runtime
+dependency, language-floor change, compiler upgrade, or new graph library.
+Implement the representation and dispatch logic inside the existing selectively
+compiled `core.py`; keep conditions and diagnostics interpreted.
 
 **Core technologies:**
 
-- `threading.Lock` with owner detection — fail fast for sync reentry and
-  serialize independent threads without the recursive behavior of `RLock`.
-- `asyncio` task/loop ownership — serialize same-loop async callers and reject
-  unsupported cross-loop use; do not use an async lock as thread protection.
-- `collections.deque(maxlen=N)` — make bounded history eviction O(1) and reject
-  non-positive capacities.
-- Standard `logging`, `NullHandler`, and `importlib` — preserve application
-  handlers, redact payloads, and verify installed version/module origin.
-- Iterative Tarjan SCC plus sparse adjacency and deterministic budgets — provide
-  complete cycle membership and bounded diagnostics without a runtime graph
-  dependency.
-- mypyc/setuptools/cibuildwheel — retain selective compilation while adding
-  strict compiled and intentional pure-Python artifact modes.
+- **CPython 3.10+** — use standard dictionaries, immutable tuples, integers,
+  and existing synchronization primitives.
+- **mypy/mypyc 1.17.1** — retain the reviewed compiler pin while changing the
+  native hot-path representation; do not combine this milestone with toolchain
+  churn.
+- **`mypy-extensions`** — remain the sole runtime dependency for the established
+  compilation/subclass boundary.
+- **Slotted `TransitionEntry | _TransitionGroup`** — preserve direct singleton
+  storage and promote only competing source/trigger slots to an immutable,
+  preordered tuple.
+- **pytest, pytest-asyncio, Hypothesis, Ruff, mypy, Sphinx, and uv** — reuse the
+  existing semantic, type, docs, artifact, and release-evidence harness.
 
-The essential gates are `uv sync --locked`, Ruff format/check, ty plus stable
-mypy for `core.py`, the full test suite, docs/doctests, a clean pure-source
-matrix, installed compiled-wheel tests, and the existing compiled throughput
-floor. A universal pure wheel is a deliberate fallback; a requested compiled
-release must fail closed if compilation or extension inclusion fails.
+The cold path may rebuild a local group in O(k); dispatch must never sort,
+snapshot, validate, or scan unrelated topology. Sanitize guard kwargs at most
+once per trigger attempt and reuse equivalent content across candidates.
 
 ### Expected Features
 
-**Must have (table stakes):**
+**Must have (committed v0.4 scope):**
 
-- Canonical graph registration: all endpoints resolve to registered objects,
-  duplicate names are rejected, and fan-out mutations are atomic.
-- A sealed, idempotent builder; every post-build mutator fails immediately.
-- One guard context policy preserving positional arguments and sanitizing
-  keyword arguments across sync/async, `can_trigger*()`, `trigger*()`, and
-  `condition`/`unless` paths; recursive async detection.
-- Declarative handlers integrated into normal trigger dispatch exactly once.
-- Explicit state commit boundary and stage-aware callback failures: pre-commit
-  failure keeps the source; post-commit failure keeps the destination, reports
-  `committed=True`, and never claims success. No automatic rollback of external
-  side effects.
-- Safe defaults: same-owner reentry fails immediately; independent sync
-  callers and same-loop async tasks are serialized; cancellation always cleans
-  ownership and preserves state/history coherence.
-- Sync/async semantic parity, including callback order, history, guard context,
-  errors, and failure observers. Synchronous callbacks in async machines remain
-  explicitly inline/non-blocking rather than silently moving to worker threads.
-- Correct history capacity and O(1) eviction; correct initial-state validation,
-  empty/duplicate comparisons, complete SCC cycle membership, and bounded
-  deterministic diagnostics.
-- Stable internal graph snapshots consumed by validation, comparison, JSON, and
-  renderers; collision-free opaque diagram aliases and grammar-specific escaping.
-- Application-owned logging with redacted trace output and reversible helper
-  configuration.
-- Auditable version/changelog/docs/test identity, clean source verification,
-  strict compiled wheels, and parity/performance tests on installed artifacts.
+- Multiple ordinary transitions for one `(source, trigger)`, including multiple
+  guarded candidates between the same two states.
+- Explicit, unique integer priorities with lower-first, registration-order-
+  independent selection.
+- First fully eligible sync/async selection with short-circuiting, fail-closed
+  exceptions, cancellation safety, and one lifecycle for the winner.
+- A stable no-winner result distinct from a missing trigger, with no state,
+  history, callback, or observer overcount.
+- Atomic fan-out and batch registration, graph-version correctness, exact-
+  duplicate idempotency, and clone isolation.
+- Priority support through `FSMBuilder`, `add_transitions`, bidirectional and
+  emergency helpers, quick builders/factories, and `from_dict()`.
+- Candidate-aware declarative handler storage/resolution; no `dir()`-order or
+  singular `_handlers[trigger]` overwrite.
+- Priority-preserving topology snapshots, query helpers, JSON, Mermaid,
+  PlantUML, validation, path generation, results, history, and trace metadata.
+- Singleton non-regression plus pure/compiled candidate-depth measurements and
+  installed-artifact semantic parity.
+- Drone example refactored so the controller records normalized facts and calls
+  `trigger("telemetry_tick")` once; guards and FSM topology own all routing.
 
-**Should have (competitive):**
+**Should have (contained differentiators):**
 
-- One parameterized conformance suite spanning sync, async, builder,
-  declarative, source, and compiled modes.
-- Agent-grade JSON/validation that reports completeness, budget usage, and
-  truncation/error metadata instead of silently degrading.
-- Optional application-supplied trace redaction and additive sparse adjacency
-  output if these do not materially expand the public API.
-- Secure, trustworthy Mermaid/PlantUML output for Unicode, punctuation,
-  control text, and names that collide under sanitization.
+- Validation that distinguishes valid priority-resolved overlap from malformed
+  ties and reports definite/possible unconditional shadowing conservatively.
+- Numeric priority and candidate rank/count in structured outputs, shown in
+  human diagrams only where a group competes.
+- Property tests proving the same winner and export order across arbitrary
+  registration order.
+- Candidate-count diagnostics/guidance for latency-sensitive configurations,
+  without imposing an arbitrary runtime cap.
 
-**Defer (v2+):**
+**Defer beyond v0.4:**
 
-- Implicit or opt-in queued reentrant transitions and queue overflow policy.
-- Automatic callback rollback/compensation orchestration.
-- Cross-event-loop sharing, automatic worker-thread callback offload, timers,
-  scheduler behavior, and unrelated API expansion.
-- Splitting `core.py`, adding NetworkX or other runtime dependencies, replacing
-  ty wholesale, a public topology snapshot v2, and redesigning
-  `CompiledFuncCondition` solely to remove its measured `__dict__` exception.
+- Dynamic or callable priorities, score-based “best match,” and equal-priority
+  tie-break policies.
+- Runtime priority mutation, transition removal/reordering, or an implicit
+  replacement API.
+- Parallel async guard evaluation or fallback after an exception, cancellation,
+  or lifecycle failure.
+- Automatic telemetry classification, scheduler/eventless transitions, or
+  polling/heartbeat machinery inside the FSM. Fact providers may calculate
+  `heartbeat_older_than(5)` but may not choose transitions.
+- Callable serialization, a public topology snapshot v2, hierarchical/
+  parallel-state conflict rules, or a new runtime dependency.
+- Splitting or broadening the mypyc compilation boundary.
 
 ### Architecture Approach
 
-Keep one compiled module but establish explicit internal seams: canonical graph
-ownership, immutable topology snapshots, transition admission/resolution, and a
-staged lifecycle executor. Runtime mutation methods share a per-machine control
-gate and all diagnostics consume the same snapshot rather than private tables.
-State assignment and history append occur in one non-awaiting commit section;
-post-commit callbacks can fail without pretending rollback occurred.
+The canonical runtime table becomes:
+
+```text
+dict[source_name][trigger]
+    ├── TransitionEntry                 # singleton fast path
+    │     target · condition · priority
+    └── _TransitionGroup                # only when k >= 2
+          candidates: tuple[TransitionEntry, ...]
+          ascending priority, immutable after publication
+```
 
 **Major components:**
 
-1. `_TransitionControl` — non-blocking admission, owner token, operation label,
-   reentrancy/concurrency errors, and guaranteed cleanup for all mutators.
-2. Canonical graph and `_GraphSnapshot` — identity-safe registration, graph
-   versioning, declared initial state, deterministic topology, and an immutable
-   observation boundary for tools.
-3. Shared transition pipeline — resolve, authorize, pre-commit callbacks,
-   commit/history, post-commit callbacks, and one truthful result/failure path;
-   sync and async differ only in stage execution/awaiting.
-4. Builder/condition/declarative binding — terminal builder state, recursive
-   async capability detection, one sanitized guard context, and bound handlers.
-5. Snapshot analyzer and renderers — sparse adjacency, SCC/condensation/DAG
-   calculations, explicit budgets, stable comparison identity, JSON analysis,
-   opaque aliases, and target-specific escaping.
-6. Artifact parity harness — isolated pure and compiled wheel installs with
-   module-origin, metadata, semantic, and throughput assertions.
+1. **Registration planner** — normalizes target/guard/priority, merges complete
+   affected groups, validates type/ties/idempotency, and publishes atomically
+   with one graph-version increment.
+2. **Paired sync/async candidate selectors** — consume the same stored order,
+   evaluate all pre-lifecycle eligibility, and return one selected entry or one
+   structured failure.
+3. **Existing lifecycle executor** — receives only the selected candidate and
+   preserves Phase 17 callback, commit, failure, observer, history, and
+   cancellation guarantees.
+4. **Builder/declarative/configuration adapters** — carry candidate identity
+   without overwriting handlers or applying one trigger-wide guard to distinct
+   candidates.
+5. **Immutable graph projection and interpreted consumers** — flatten one row
+   per candidate for clone, serialization, validation, diagnostics, Mermaid,
+   PlantUML, JSON, and generated paths.
+6. **Evidence harness** — proves single-entry non-regression and equivalent
+   candidate behavior in source, pure-wheel, and compiled-wheel execution.
+
+The group value must be immutable because clones shallow-share state,
+condition, and transition values. Adding a candidate publishes a replacement
+slot rather than mutating a list that another clone or snapshot may observe.
 
 ### Critical Pitfalls
 
-1. **Locking before semantics:** adding a mutex around the current body preserves
-   false-success callback behavior or deadlocks. Define the state commit point,
-   stage failures, history, and cancellation semantics first.
-2. **Reentrant lock/no owner detection:** `RLock` permits corruption and a plain
-   blocking lock deadlocks the owner. Detect same-owner reentry before acquire,
-   use non-blocking admission, and clean up in `finally`.
-3. **Rollback claims:** arbitrary callbacks may have external side effects.
-   Preserve source on pre-commit failure and destination on post-commit failure,
-   expose stage/commit status, and require application compensation.
-4. **Partial graph or dispatch fixes:** endpoint identity, builder mutability,
-   guard arguments, declarative execution, async `unless`, and sync/async paths
-   must be covered by one parity and construction-invariant suite.
-5. **Untrusted evidence:** silent mypyc fallback, stale extension shadowing,
-   unbounded diagnostics, raw logs, and raw diagram labels can ship or expose
-   materially different behavior. Assert artifact origins, use deterministic
-   budgets, redact values, and escape labels with opaque IDs.
+1. **Implicit tie order** — reject conflicting equal priorities before any
+   mutation and test reversed/randomized registration orders.
+2. **Candidate rejection finalized too early** — false guard or permission only
+   eliminates that candidate; construct and observe one failure only after the
+   group is exhausted.
+3. **Lifecycle before selection** — complete all candidate-local guards and
+   permission checks before callbacks; never try another candidate after any
+   lifecycle stage begins.
+4. **Unconditional shadowing** — treat unguarded entries as fallback branches,
+   expose priority clearly, and diagnose lower candidates conservatively.
+5. **Async timing replaces priority** — await sequentially, propagate
+   cancellation, release ownership in `finally`, and leave no candidate tasks.
+6. **Adapters collapse identity** — builder staging, declarative handler maps,
+   serialization keys, snapshots, target sets, and diagrams must preserve
+   parallel same-target candidates.
+7. **Performance claims remain stale** — amend the O(1) constitution language,
+   retain the direct singleton gate, and characterize O(k) by winner depth.
+8. **Side-effecting guards** — document guards as pure, cheap predicates and
+   prove each candidate runs at most once within one trigger attempt.
+
+## Requirements Guidance
+
+The roadmapper should derive explicit requirements in these groups.
+
+### Priority Registration
+
+- `add_transition`, builder, decorator, helpers, batch forms, factories, and
+  deserialization accept and preserve exact non-boolean integer priority.
+- Lower value wins; distinct ties are atomic errors; exact duplicates are
+  idempotent; registration order has no behavioral effect.
+- Multi-source/batch conflicts leave topology and graph version unchanged.
+- Duplicate `(source, trigger)` calls no longer silently replace an edge.
+
+### Runtime Selection
+
+- Sync and async evaluate candidates in ascending priority and stop at the first
+  candidate passing transition guard, declarative guard, and state permission.
+- False eligibility continues; exceptions and cancellation abort; lower guards
+  never run after selection or lifecycle begins.
+- Group exhaustion produces one uncommitted selection-stage failure and one
+  failure notification; missing triggers remain resolution failures.
+- `can_trigger*()` applies identical eligibility without observers or mutation.
+
+### Candidate Identity and Integration
+
+- Result/history identify selected priority while existing callback signatures
+  and application kwargs remain unchanged.
+- Declarative handlers are candidate-aware and never overwritten or selected by
+  attribute discovery order.
+- Clone, graph snapshot, topology queries, debug counts, and construction paths
+  preserve every candidate.
+- `to_dict()`/`from_dict()` round-trip priority and support candidate-specific
+  guard attachment without serializing callables.
+
+### Diagnostics and Output
+
+- Validation treats strict ordered candidate groups as deterministic, rejects or
+  defensively diagnoses malformed ties, and identifies shadowed fallbacks only
+  when provable.
+- JSON, Mermaid, PlantUML, Markdown, adjacency data, and generated test paths
+  retain candidate multiplicity and priority under existing escaping/budgets.
+- Diagnostic work/result budgets count candidates as edges and remain outside
+  the dispatch hot path.
+
+### Performance and Proof
+
+- Constitution/docs state O(1) slot lookup and singleton dispatch, O(k)
+  candidate selection, and O(k) local group insertion/materialization.
+- No sorting or group-proportional allocation occurs during a trigger beyond
+  unavoidable guard context handling.
+- Installed compiled singleton dispatch remains at least 200,000 operations/sec.
+- Tests/benchmarks cover groups of 2/4/8 with first, middle, last, and no match,
+  plus async ordering, exception, cancellation, memory, slots, and registration
+  scaling independent of unrelated graph size.
+- The same winner, result/history metadata, evaluation order, and failure stage
+  are proven in source, pure-wheel, and compiled-wheel modes.
 
 ## Implications for Roadmap
 
-Based on the combined research and the concerns audit, use six dependency-aware
-implementation phases. The ordering is deliberately concrete; each phase has a
-release-level verification boundary and must benchmark the compiled hot path
-when it touches `core.py`.
+Use five dependency-ordered phases continuing after Phase 20.
 
-### Phase 0: Release Baseline and Contract Harness
+### Phase 21: Priority Contract and Atomic Registration
 
-**Rationale:** Current package metadata/tag/changelog/test claims disagree and
-the existing Ruff gate is not green. Later behavior results are not credible
-until source-versus-artifact identity is explicit.
+**Rationale:** Every adapter and runtime path needs one frozen candidate identity
+and priority contract. The current constitution explicitly bans the candidate
+scan this feature requires.
 
-**Delivers:** One version source and v0.3.0 release section; corrected docs/test
-baseline; green formatting, lint, docs/doctests, type, and test gates; pinned
-tooling/lock behavior; strict compiled versus intentional pure build selectors;
-loader-origin and metadata probes; reusable semantic and throughput harness.
+**Delivers:** ADR/SPR and constitutional amendment; `priority=0` public contract;
+slotted `TransitionEntry | _TransitionGroup`; atomic group merge; tie/type/
+idempotency rules; immutable publication; helper/fan-out registration; graph-
+version and clone-isolation foundations; native compilation probe.
 
-**Addresses:** Release integrity, optional compilation, stale-extension coverage,
-quality-gate drift, test baseline, and the compiled-function slots exception
-documentation.
+**Addresses:** Explicit deterministic ordering, duplicate-registration migration,
+single-entry preservation, and finite candidate topology.
 
-**Avoids:** Silent fallback, testing the checkout instead of an installed wheel,
-and spending later phases diagnosing baseline drift. Do not change runtime
-semantics here beyond harness hooks.
+**Avoids:** Registration-order ties, partial batches, mutable groups shared by
+clones, invalid priority types, and an implementation that violates project
+policy before tests begin.
 
-### Phase 1: Canonical Graph, Builder, and Dispatch Invariants
+### Phase 22: Sync/Async Selection and Lifecycle Integration
 
-**Rationale:** Validators, renderers, and transition semantics cannot be trusted
-while graph identity and sync/async dispatch disagree.
+**Rationale:** With canonical groups established, freeze one eligibility and
+failure model before building higher-level adapters.
 
-**Delivers:** Atomic endpoint validation and duplicate policy; graph version and
-`_GraphSnapshot`; sealed builder; recursive async condition capability; unified
-guard argument/sanitization policy; declarative handler binding; correct history
-capacity validation; parameterized sync/async and `can_trigger`/`trigger`
-conformance tests.
+**Delivers:** Shared sync/async ordered selection; false-rejection fallthrough;
+exception/cancellation fail-closed behavior; `selection` no-match result;
+candidate priority in result/history/trace; exactly one lifecycle and one
+failure notification; candidate evaluation counters and early performance probe.
 
-**Addresses:** Core concentration through internal seams, builder mutability,
-unknown/unregistered/duplicate states, positional guards, async `unless`,
-declarative dispatch, and zero-capacity history.
+**Addresses:** First fully eligible winner, `can_trigger*()` parity, state
+permission, observability, and lifecycle correctness.
 
-**Avoids:** Partial fan-out graph mutations, stale builder caches, path-specific
-patches, wrapper-only async detection, and inconsistent object identity.
+**Avoids:** Per-candidate failure notifications, callback side effects before a
+winner, fallback after commit/failure, parallel awaits, and ownership leaks.
 
-### Phase 2: Atomic Transition Lifecycle
+### Phase 23: Builder, Declarative, Factory, and Serialization Parity
 
-**Rationale:** Synchronization is only safe after the commit semantics are
-   defined; callbacks currently mutate/report ambiguously.
+**Rationale:** Adapters currently encode singular assumptions and can silently
+erase the core feature even when direct registration works.
 
-**Delivers:** Shared staged lifecycle with explicit pre/post commit boundary,
-commit-aware `TransitionResult`/`TransitionRecord`, O(1) history storage,
-fail-fast callback handling, one failure notification, and documented
-state-atomic/no-rollback behavior for sync and async callbacks.
+**Delivers:** Priority-aware builder staging/async preflight; multi-handler
+declarative storage/resolution and decorator metadata; batch, bidirectional,
+emergency, quick-build, and factory parity; candidate-level condition keys;
+`to_dict()`/`from_dict()` round trip; clone/query/debug/path identity and
+construction conformance tests.
 
-**Addresses:** Swallowed callback exceptions, truthful results/history, callback
-ordering, cancellation boundaries, and performance impact of enabled history.
+**Addresses:** All public machine-construction modes and same-target candidate
+identity.
 
-**Avoids:** Wrapping the old body in a lock, post-commit rollback lies, history
-written after an await, and treating external side effects as ACID transactions.
+**Avoids:** Handler overwrite, trigger-wide guard reuse, partial failed builds,
+lossy round trips, and direct/builder/declarative semantic drift.
 
-### Phase 3: Ownership, Reentrancy, and Concurrency
+### Phase 24: Candidate-Aware Validation, Diagnostics, and Visualization
 
-**Rationale:** With a defined lifecycle, enforce the user-selected safe default
-without hiding races or deadlocking callbacks.
+**Rationale:** Tooling can become truthful only after the canonical snapshot and
+all constructors preserve candidate identity.
 
-**Delivers:** Per-instance non-reentrant sync control, async task/loop ownership,
-immediate reentrant/concurrent failure, serialization of independent callers,
-protected state/topology mutators, cancellation cleanup, cross-loop rejection,
-and explicit async sync-callback policy/documentation.
+**Delivers:** One graph row per candidate; candidate-aware `_DiagnosticEdge`;
+revised determinism and transition counts; conservative unconditional-shadow
+analysis; priority-aware budgets/adjacency/test paths; JSON, Mermaid, PlantUML,
+and Markdown output with stable ordering and existing safe escaping.
 
-**Addresses:** Reentrant overwrite, concurrent mutation, force/reset/restore
-interleavings, async event-loop safety, and callback failure/recovery paths.
+**Addresses:** Introspection, charting, export, generated tests, and agent-grade
+diagnostics promised by the milestone.
 
-**Avoids:** `RLock`, blocking acquisition in async code, implicit queues,
-automatic `to_thread()` semantics, global locks, and owner leaks after
-`CancelledError` or `BaseException`.
+**Avoids:** Edge-set collapse, false nondeterminism warnings, hidden evaluation
+order, budget undercounting, and renderers coupling directly to runtime storage.
 
-### Phase 4: Bounded Diagnostics, Visualization, and Logging
+### Phase 25: Documentation, Drone Example, Performance, and Artifact Proof
 
-**Rationale:** Once topology and lifecycle boundaries are stable, migrate all
-   consumers away from mutable private layout and make output safe for generated
-   or user-controlled graphs/data.
+**Rationale:** Public guidance and performance claims must describe the final
+integrated behavior, then prove what users install rather than only the checkout.
 
-**Delivers:** Snapshot-based validator/comparison/JSON/rendering; declared
-initial-state reachability; complete SCC cycle membership; memoized/bounded
-longest-path analysis; sparse adjacency and deterministic work/result budgets;
-empty/duplicate comparison behavior; collision-free Mermaid/PlantUML/Markdown
-escaping; redacted trace logs; application-handler preservation and reversible
-logging configuration.
+**Delivers:** Drone controller with one telemetry trigger and fact-only telemetry
+provider; API/migration/guard-purity docs; updated complexity claims; singleton
+and candidate-depth benchmarks; memory/slots evidence; full Ruff/mypy/tests/docs;
+installed pure/compiled conformance and throughput proof.
 
-**Addresses:** Validator drift, duplicate/empty comparisons, exponential or
-quadratic diagnostics, visualization collisions/injection, raw payload logging,
-logger takeover, and diagnostic broad-catch degradation.
+**Addresses:** The motivating use case, safe adoption, performance identity, and
+release-level confidence.
 
-**Avoids:** Dense unbounded matrices, exhaustive path enumeration, silent partial
-results, generic sanitizers, raw labels, and `logger.handlers.clear()`.
-
-### Phase 5: Compiled/Source Parity and Release Proof
-
-**Rationale:** The shipped product—not only the source checkout—must prove the
-same behavior and performance on supported targets.
-
-**Delivers:** Clean source matrix and installed pure universal wheel tests;
-strict compiled wheel builds/tests on supported platform/Python combinations;
-semantic trace comparison; extension/source loader assertions; native architecture
-coverage; full docs/type/test/quality gates; >=200,000 compiled trigger ops/sec
-and documented pure-mode floor; final tag/package/changelog/artifact identity.
-
-**Addresses:** Core-only mypyc boundary, silent compilation fallback, stale local
-extensions, platform wheel confidence, compiled slots behavior, release drift,
-and the performance contract.
-
-**Avoids:** Smoke-only compiled CI, `CIBW_TEST_SKIP`-covered publications,
-cross-compiled untested wheels, source-tree shadowing, and retagging a different
-source tree.
+**Avoids:** External transition arbitration, stale O(1) marketing, benchmark
+blind spots, pure/native divergence, and examples that teach the workaround the
+milestone removes.
 
 ### Phase Ordering Rationale
 
-- Establish evidence first so every subsequent failure is attributable to the
-  milestone, not stale metadata, tools, or import mode.
-- Canonical graph identity and a shared guard/dispatch policy precede the
-  lifecycle; otherwise callback and async behavior are being specified over
-  contradictory machines.
-- The commit boundary precedes locks: ownership protects defined semantics and
-  can put history/assignment in one non-awaiting critical section.
-- Reentry detection precedes acquisition; Phase 2's stage model supplies the
-  cancellation and callback tests needed by concurrency work.
-- Snapshot-based diagnostics follow graph invariants; logging and renderers then
-  share the same safe data/analysis boundary.
-- Artifact parity and performance are final release gates, but benchmark every
-  `core.py` phase so the 200k requirement cannot regress invisibly.
+- Amend semantics and project policy before code so later phases share one
+  priority direction, default, tie rule, identity, and complexity contract.
+- Build atomic immutable topology before runtime iteration; otherwise dispatch,
+  clone, and concurrent snapshots can observe partial or shared mutation.
+- Implement selection before adapters; builder and declarative paths should
+  replay a proven core behavior rather than invent their own.
+- Update diagnostics after graph identity is stable so all tools consume one
+  flattened snapshot instead of learning private union storage.
+- Close with examples and artifact measurements because their claims depend on
+  the complete integrated implementation, while running an early native probe
+  in every core-touching phase to catch regressions sooner.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
+Phases likely needing deeper phase research:
 
-- **Phase 0:** Exact uv/build backend/action pins, version migration, and clean
-  installed-artifact harness details should be validated against CI constraints.
-- **Phase 2:** The exact public result/exception shape and callback transaction
-  stages require a compatibility decision; rollback must remain out of scope.
-- **Phase 3:** Measure lock/owner-token cost under mypyc and pure Python; settle
-  async loop binding and the explicit synchronous-callback policy.
-- **Phase 4:** Choose public versus internal budget APIs, defaults, truncation
-  schema, and grammar-specific escaping behavior with renderer tests.
-- **Phase 5:** Verify native architecture availability, universal2 versus split
-  wheels, mypyc compatibility across Python 3.10–3.14, and release permissions.
+- **Phase 21:** Validate mypyc behavior and memory/layout cost for a slotted
+  entry/group union; freeze the constitutional amendment and public default.
+- **Phase 23:** Resolve exact declarative candidate identity and direct
+  `handle_event*()` behavior; verify candidate-key typing for `from_dict()`.
+- **Phase 24:** Confirm public schema changes for adjacency and generated path
+  records, and set conservative shadow-diagnostic severity.
+- **Phase 25:** Measure candidate-count guidance and installed native/pure
+  performance before publishing any new quantitative claim.
 
-Phases with standard patterns (skip `--research-phase` unless implementation
-uncovers a gap):
+Phases with established patterns:
 
-- **Phase 1:** Atomic validation, immutable value snapshots, builder state
-  machines, and parameterized conformance tests are local design work.
-- **Phase 4 (algorithm core):** SCC, sparse adjacency, deque history, and
-  topological DP are established algorithms; only project-specific limits need
-  validation.
+- **Phase 22:** Sequential first-enabled selection, short-circuiting, staged
+  lifecycle, failure observation, and cancellation build directly on existing
+  Phase 17–18 contracts and official state-machine/Python semantics.
+- **Phase 24 renderer plumbing:** Once the snapshot schema is frozen, carrying a
+  validated integer through existing escaping and budget seams is routine.
+
+## Committed Scope Versus Deferrals
+
+| Committed for v0.4.0 | Explicitly Deferred |
+|----------------------|---------------------|
+| Static candidate groups per source/trigger | Dynamic/callable priorities or scored selection |
+| Existing `add_transition(..., priority=...)` API | A second candidate-registration API |
+| Unique numeric precedence and exact-duplicate idempotency | Equal-priority tie-break modes or registration-order semantics |
+| Sequential sync/async first-eligible resolution | Parallel guard execution |
+| Fail-closed exceptions/cancellation and one lifecycle | Fallback after errors or lifecycle side effects |
+| Builder, declarative, factories, helpers, clone, serialization parity | Runtime transition removal/reprioritization/replacement API |
+| Candidate-aware results/history/snapshots/diagnostics/visualizations | Callable serialization or topology snapshot v2 |
+| Fact-only telemetry provider and one FSM telemetry event | Scheduler, auto-fire timers, or external transition policy |
+| Flat-machine candidate priority | Hierarchical and parallel-state conflict resolution |
+| O(1) singleton preservation plus O(k) evidence | Claiming arbitrary guarded selection is O(1) |
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | MEDIUM | Tool versions and ecosystem guidance were checked against primary sources, but exact CI/platform compatibility remains to be proven. |
-| Features | MEDIUM/HIGH | Scope and defects come directly from the concerns audit and project decisions; external UX semantics are less certain. |
-| Architecture | HIGH/MEDIUM | Boundaries fit the inspected code and single-module constraint; lock and snapshot cost still needs benchmarks/mypyc validation. |
-| Pitfalls | MEDIUM/HIGH | Reproduced repository failure modes are high confidence; remedies involving platforms and callback policy need implementation tests. |
+| Stack | HIGH | Current Python/mypyc/dependency/tool boundaries are directly verified in the repository; no new technology is needed |
+| Features | HIGH | Core direction, one-API decision, explicit priority, deterministic ties, and motivating example come from direct user decisions and project inspection |
+| Architecture | HIGH/MEDIUM | Singular seams and affected consumers are directly identified; exact compiled layout and cost require measurement |
+| Pitfalls | HIGH/MEDIUM | Most failure modes follow directly from current one-entry assumptions and accepted lifecycle contracts; severity/default choices require tests |
 
-**Overall confidence:** MEDIUM, with high confidence in the priority ordering and
-the required defect scope.
+**Overall confidence:** HIGH in the milestone shape and phase order; MEDIUM in
+unmeasured native performance and the remaining declarative/schema choices.
 
 ### Gaps to Address
 
-- Decide exact exception/result fields while preserving all public symbols and
-  existing callback signatures; test migration of callers against safe defaults.
-- Benchmark non-blocking lock/owner checks, history, guards, callbacks, logging,
-  and declarative dispatch in both modes before freezing implementation choices.
-- Define default diagnostic budgets and whether budget exhaustion is an exception
-  or explicit incomplete result for each existing API.
-- Verify mypyc accepts new slot fields/value objects and that interpreted
-  subclasses of `conditions.py` continue to work.
-- Prove pure-source import isolation and every published compiled wheel on native
-  targets; decide whether universal2 is retained only after both slices run.
-- Reconcile current v0.2.3 tag/version/changelog drift without retagging a
-  different source tree, then generate the v0.3.0 release identity from one
-  source.
+- **Constitution conflict:** Amend the blanket O(1) and no-candidate-loop rules
+  before implementation. This is a prerequisite, not optional documentation.
+- **Declarative identity:** Decide how decorator source/target/priority metadata
+  maps to machine candidates without requiring inconsistent duplicate policy;
+  define ambiguous direct `handle_event*()` behavior.
+- **Serialization typing:** Freeze the candidate-level guard key and precedence
+  between tuple keys and legacy trigger keys; reject ambiguous mappings.
+- **Selection-stage schema:** Add and document the grouped-exhaustion stage while
+  preserving existing resolution/guard/state-permission exception stages.
+- **Shadow severity:** Report definite versus possible unconditional shadowing
+  conservatively because custom state/declarative permission can veto an
+  otherwise unguarded edge.
+- **Public record migration:** Confirm priority fields on `TransitionResult`,
+  `TransitionRecord`, generated path steps, and adjacency rows preserve existing
+  positional construction where still desired.
+- **Performance guidance:** Set candidate-count recommendations only after pure
+  and compiled first/middle/last/no-match data; keep only the existing compiled
+  singleton floor as a hard quantitative requirement beforehand.
+- **Project metadata cleanup:** `PROJECT.md` currently lists “Transition API
+  evolution” under Out of Scope even though it is the milestone's central
+  target; requirements generation should remove or correct that contradictory
+  row.
 
 ## Sources
 
-### Primary (HIGH confidence)
+### Primary Repository Evidence (HIGH confidence)
 
-- `.planning/codebase/CONCERNS.md` — independent executable assessment,
-  reproduced bugs, security risks, scaling limits, and test gaps.
-- `.planning/PROJECT.md` — v0.3.0 goal, constraints, safe-default decision,
-  public compatibility, one runtime dependency, mypyc boundary, 722-test
-  baseline, and >=200,000 throughput requirement.
-- `src/fast_fsm/core.py`, `validation.py`, `visualization.py`, `setup.py`, and
-  repository tests — direct implementation evidence cited by the research.
+- [`STACK.md`](STACK.md) — unchanged dependency/toolchain recommendation,
+  native representation, benchmark matrix, and complexity analysis.
+- [`FEATURES.md`](FEATURES.md) — user-facing registration/selection contract,
+  acceptance scenarios, migration, and deferrals.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — singular integration seams, immutable
+  group design, lifecycle data flow, adapter/tooling changes, and implementation
+  order.
+- [`PITFALLS.md`](PITFALLS.md) — failure taxonomy, prevention controls,
+  phase-specific warnings, and exit evidence.
+- [`PROJECT.md`](../PROJECT.md), [`core.py`](../../src/fast_fsm/core.py),
+  [`_diagnostics.py`](../../src/fast_fsm/_diagnostics.py),
+  [`validation.py`](../../src/fast_fsm/validation.py), and
+  [`visualization.py`](../../src/fast_fsm/visualization.py) — current milestone,
+  one-entry assumptions, accepted lifecycle/ownership semantics, and all
+  topology consumers.
 
-### Secondary (MEDIUM confidence)
+### External Primary References (MEDIUM confidence via GSD research seam)
 
-- `.planning/research/STACK.md` — pinned stack, build modes, CI/release gates,
-  and standard-library recommendations.
-- `.planning/research/FEATURES.md` — table stakes, differentiators,
-  anti-features, dependencies, and acceptance boundaries.
-- `.planning/research/ARCHITECTURE.md` — internal seams, staged lifecycle,
-  snapshots, analyzer design, and dependency-aware build order.
-- `.planning/research/PITFALLS.md` — failure taxonomy, prevention/recovery,
-  integration gotchas, and verification gates.
-- Python, PyPA, mypyc, cibuildwheel, GitHub Actions, Mermaid, PlantUML, OWASP,
-  `transitions`, and NetworkX documentation linked in the detailed research
-  files.
+- [W3C SCXML 1.0](https://www.w3.org/TR/scxml/) — deterministic first-enabled
+  selection before transition execution.
+- [XState guarded transitions](https://stately.ai/docs/guards) — ordered guarded
+  alternatives, first match, and final fallback convention.
+- [python-statemachine conditions](https://python-statemachine.readthedocs.io/en/stable/guards.html)
+  — multiple guarded transitions per event and first-passing resolution.
+- [Stateless guard clauses](https://github.com/dotnet-state-machine/stateless/blob/dev/README.md#guard-clauses)
+  — contrasting mutually exclusive guards and explicit unhandled-trigger policy.
+- [Python `bisect`](https://docs.python.org/3.10/library/bisect.html) — O(k)
+  ordered insertion/materialization behavior.
+- [Python asyncio tasks](https://docs.python.org/3.10/library/asyncio-task.html) —
+  sequential await/cancellation and cleanup semantics.
+- [mypyc native classes](https://mypyc.readthedocs.io/en/stable/native_classes.html)
+  and [mypyc Python differences](https://mypyc.readthedocs.io/en/stable/differences_from_python.html)
+  — native slots/layout, interpreted subclass, and concurrency constraints.
 
 ---
-*Research completed: 2026-08-29*
-*Ready for roadmap: yes*
+*Research completed: 2026-09-06*
+*Ready for requirements and roadmap: yes*

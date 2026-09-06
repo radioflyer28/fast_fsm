@@ -1,327 +1,341 @@
-# Stack Research
+# Technology Stack: Priority-Aware Guarded Transitions
 
-**Domain:** Hardening an existing high-performance Python FSM library
-**Researched:** 2026-08-29
-**Confidence:** MEDIUM — repository findings are direct; current-version and ecosystem claims were verified against primary sources but the research seam classifies web-sourced evidence as MEDIUM
+**Project:** Fast FSM v0.4.0
+**Researched:** 2026-09-06
+**Overall confidence:** MEDIUM — repository/runtime findings are direct and HIGH-confidence; external documentation was verified against primary sources, but the GSD research seam classifies web-retrieved evidence as MEDIUM
 
 ## Recommendation in One Sentence
 
-Keep the production stack exactly as small as it is—Python 3.10+ plus
-`mypy-extensions`—and harden it with standard-library synchronization,
-logging, metadata, and sparse-graph primitives; spend the milestone's tooling
-budget on reproducible builds and testing the artifacts users actually install.
+Keep Fast FSM's production stack unchanged—Python 3.10+ with only
+`mypy-extensions` at runtime—and implement priority inside the existing compiled
+`core.py` as a direct `(state, trigger)` dictionary lookup followed by a
+preordered, finite candidate scan; carry the same scalar priority through the
+builder, declarative metadata, immutable graph snapshot, serialization,
+diagnostics, and existing pure/compiled proof harness.
 
 ## Recommended Stack
 
-### Core Technologies
+### Core Runtime
 
-| Technology | Version | Status | Purpose | Why Recommended |
-|------------|---------|--------|---------|-----------------|
-| CPython | 3.10–3.14 | Keep | Supported runtime matrix | This is the project's established compatibility contract. Do not add 3.15 during a hardening milestone; first make the existing five-version matrix release-auditable. |
-| `mypy-extensions` | 1.1.0 resolved; public requirement `>=1.0` | Keep | Runtime `@mypyc_attr` support | Preserve the one-runtime-dependency constraint and current subclassing boundary. No hardening concern requires another runtime package. |
-| mypy + mypyc | **2.3.1 exact for builds** | Upgrade and pin | Compile only `src/fast_fsm/core.py`; authoritative compatibility check for compiled code | Build isolation otherwise resolves an arbitrary future compiler. An exact pin makes wheel output reproducible and the same compiler is available to `uv run mypy src/fast_fsm/core.py`. |
-| setuptools | **84.0.0 exact in `[build-system].requires`** | Upgrade and pin | Existing PEP 517 backend and selective `ext_modules` hook | Retain setuptools because the project already needs the small `setup.py` mypyc hook. Changing backends adds risk without solving a milestone concern. |
-| wheel | **0.48.0 exact in `[build-system].requires`** | Upgrade and pin | Wheel construction | Exact build-isolation pins prevent artifact drift between local, CI, and tag builds. |
-| uv | **0.12.7** | Upgrade and pin | Environment, lockfile, and local build orchestration | Continue the established tool. Add `tool.uv.required-version = "==0.12.7"`, install that version in CI, and use `uv sync --locked`; the current workflow silently accepts both a mutable uv version and an ignored lockfile. |
-| cibuildwheel | **4.2.0** | Upgrade and pin | Compiled wheel matrix and installed-wheel tests | Current 4.2 supports the required CPython/platform matrix, native ARM runners, pinned dependency sets, wheel tests, and the `build` frontend. Move configuration into `pyproject.toml` so CI and release behavior cannot drift. |
+| Technology | Project Version | Purpose | Recommendation |
+|------------|-----------------|---------|----------------|
+| CPython | `>=3.10`; CI covers 3.10–3.14 | Runtime language and standard containers | Keep. The feature needs only dictionaries, tuples/lists, integers, and existing locks. Do not raise the Python floor. |
+| `mypy-extensions` | Runtime requirement `>=1.0`; lock resolves 1.1.0 | Existing `@mypyc_attr` boundary | Keep as the sole runtime dependency. Priority resolution does not justify another package. |
+| mypy + mypyc | Build pin `1.17.1` | Compile `src/fast_fsm/core.py` and enforce its static types | Keep the reviewed pin for this milestone. Do not combine the semantic change with a compiler upgrade. |
+| setuptools | Build pin `80.9.0` | Existing selective-mypyc build hook | Keep. No backend change is needed. |
+| wheel | Build pin `0.45.1` | Pure and native wheel production | Keep. Validate both artifact modes after the core representation changes. |
 
-**Version policy:** exact-pin build-producing tools and CI actions; let `uv.lock`
-pin development tools. Keep compatible lower bounds in the `dev` group only
-where they are useful to contributors. `ty` is the exception: pin it exactly
-because its official version policy permits diagnostic changes in every 0.0.x
-release.
+**Confidence: HIGH.** These versions and boundaries come directly from
+`pyproject.toml`, `setup.py`, `uv.lock`, CI, and the v0.3 release-evidence
+contract.
 
-### Standard-Library Building Blocks
+### Runtime Representation
 
-| Library / Algorithm | Version | Status | Purpose | Integration Point |
-|---------------------|---------|--------|---------|-------------------|
-| `threading.Lock` | Python 3.10+ | Required | Reject overlapping or reentrant synchronous mutations without blocking | One non-reentrant lock per `StateMachine`; acquire with `blocking=False` at every state/topology mutation boundary. `RLock` is intentionally wrong because it permits the reentrancy the safe default must reject. |
-| `asyncio.Lock` + `asyncio.current_task()` | Python 3.10+ | Required | Exclusive async mutation and owner identification | One task lock per `AsyncStateMachine`; record the owning task so recursive callbacks fail immediately instead of deadlocking. Do not use this lock for OS-thread safety—the official API explicitly is not thread-safe. |
-| `collections.deque(maxlen=N)` | Python 3.10+ | Required | O(1) bounded history retention | Replace front-deletion from a list. Reject `max_entries <= 0` with `ValueError`; do not let a zero-length deque silently disguise invalid configuration. Return a list copy from the public `history` property. |
-| `logging` + `NullHandler` | Python 3.10+ | Required | Application-owned logging with safe defaults | Attach only `NullHandler` at the package logger. `configure_fsm_logging()` may add/remove only a handler it created and marked; it must never clear host handlers. Log trigger key names/counts, never payload values, by default. |
-| `importlib.metadata` + `importlib.machinery` | Python 3.10+ | Required | Installed version and loader verification | Compare `fast_fsm.__version__` with `importlib.metadata.version("fast_fsm")`; assert `ExtensionFileLoader` for compiled wheels and `SourceFileLoader` for the pure wheel. This is stronger than checking `.so`/`.pyd` suffix strings. |
-| Iterative Tarjan SCC | O(V+E) | Required | Complete cycle membership and graph condensation | Implement internally over sparse adjacency. SCC size >1, or a singleton with a self-loop, identifies every state in a cycle. Iterative traversal avoids Python recursion-depth failures on large machines. |
-| SCC condensation + topological DP | O(V+E) | Required | Bounded longest-path diagnostics | Condense SCCs to a DAG, then process it with `graphlib.TopologicalSorter` or an internal Kahn pass. Do not enumerate every acyclic path. |
-| Deterministic work budgets | Node/edge/path expansion counters | Required | Bound expensive diagnostics | Limit graph work by counts, not wall-clock time. Return explicit `truncated`, `budget_used`, and reason metadata so results remain deterministic in tests and across machines. |
+Retain the outer lookup shape:
 
-### Supporting Test Libraries
-
-These are development-only and should remain outside the runtime dependency
-set.
-
-| Library | Verified Current Version | Status | Purpose | When to Use |
-|---------|--------------------------|--------|---------|-------------|
-| pytest | **9.1.1** | Upgrade in lock | Main correctness and artifact parity suite | Run the same hardening suite against pure source, the universal pure wheel, in-place compiled core, and every published compiled wheel. |
-| pytest-asyncio | **1.4.0** | Upgrade in lock | Async ownership, reentrancy, callback, and guard parity | Keep `asyncio_mode = "auto"`; this project supports asyncio only, so strict multi-framework isolation adds ceremony without value. |
-| Hypothesis | **6.165.10** | Upgrade in lock | Generated topology and transition-sequence invariants | Add `RuleBasedStateMachine`/generated graph tests for registration identity, duplicate names, builder freeze, serialization round trips, sync/async parity, and bounded diagnostics. |
-| pytest-cov | **7.1.0** | Upgrade in lock | Source coverage | Measure `core.py` only in a proven pure-Python environment. Report compiled-wheel parity separately; compiled execution cannot honestly count as Python line coverage. |
-| Ruff | **0.16.5** | Upgrade in lock | Formatting and lint gate | Set `target-version = "py310"` explicitly; require both `ruff format --check src tests` and `ruff check src tests` before tests and release. |
-| ty | **0.0.75 exact** | Upgrade and exact-pin | Fast broad type diagnostics | Keep as the fast full-package gate, but not as the only type check: ty remains beta and documents unstable diagnostics. |
-| mypy | **2.3.1 exact** | Upgrade and exact-pin | mypyc compatibility and static typing | Add a mandatory `uv run mypy src/fast_fsm/core.py` CI step. Successful C compilation is not a substitute for the intended source-level gate. |
-
-No new test framework is required. Concurrency tests should use
-`threading.Barrier`, `threading.Thread`/`ThreadPoolExecutor`, `asyncio.Event`,
-and `asyncio.create_task()`/`gather()` so tests exercise the library's actual
-ownership boundary in one process.
-
-## Build-Mode Contract
-
-The current broad `except Exception` in `setup.py` can turn a broken mypyc
-configuration into a silently slow artifact. Preserve convenient local
-fallback while making release intent explicit:
-
-| Mode | Selector | Required Behavior |
-|------|----------|-------------------|
-| Pure Python | Existing `FAST_FSM_PURE_PYTHON=1` | Build a `py3-none-any` wheel and sdist without invoking mypyc; installed probe must load `core.py`. |
-| Strict compiled | Add `FAST_FSM_REQUIRE_COMPILED=1` | Any import, mypycification, compiler, or extension-build failure aborts the build; installed probe must load an extension module. |
-| Local automatic | Neither variable | May preserve the current convenience fallback, but it is forbidden in CI/release and must emit an actionable warning naming the failed stage. |
-
-Build and publish a tested universal pure-Python wheel in addition to compiled
-platform wheels and the sdist. It gives unsupported platforms a real fallback
-instead of asking their installer to discover whether compilation happens to
-work. Compatible platform wheels remain preferred by Python installers.
-
-## Required CI and Release Gates
-
-### 1. Reproducibility and Quality
-
-Run on every pull request and every push; remove the broad `paths-ignore` rules
-for `uv.lock`, Markdown, changelog, and release metadata.
-
-```bash
-uv sync --locked --group dev
-uv run ruff format --check src/ tests/
-uv run ruff check src/ tests/
-uv run ty check src/fast_fsm/
-uv run mypy src/fast_fsm/core.py
-uv run pytest tests/ -x -q
+```text
+dict[source_state_name][trigger] -> TransitionEntry | TransitionGroup
 ```
 
-Required configuration changes:
+Use two private, native, slotted core containers:
 
-- Pin uv 0.12.7 through setup-uv and `[tool.uv].required-version`; never use an
-  unqualified `latest` installer in a release-producing workflow.
-- Treat `uv.lock` changes as CI-relevant and use `--locked` so stale lockfiles
-  fail instead of being repaired during a job.
-- Establish a green baseline first: fix the known Ruff F841 and formatting
-  failures before using this gate to judge hardening changes.
-- Keep the pure correctness matrix at Python 3.10–3.14 on Linux, macOS, and
-  Windows; assert the loaded core is source code at test start.
+```python
+class TransitionEntry:
+    __slots__ = ("to_state", "condition", "priority")
 
-### 2. Version and Metadata Integrity
-
-Use `pyproject.toml` as the single writable version source. Keep
-`fast_fsm.__version__` derived from `importlib.metadata`; do not add
-`setuptools-scm` for one static pre-1.0 release number.
-
-A standard-library verification script should fail unless:
-
-1. installed `fast_fsm.__version__` equals
-   `importlib.metadata.version("fast_fsm")`;
-2. the sdist filename, its `PKG-INFO`, every wheel filename, and wheel
-   `METADATA` all contain the same normalized version;
-3. for tag builds, that version equals `GITHUB_REF_NAME` after stripping `v`;
-4. `CHANGELOG.md` contains a released heading for that exact version and no
-   v0.3.0 changes remain stranded under `Unreleased`;
-5. documentation contains no authoritative hard-coded test count—CI should
-   report the collected count rather than making it release metadata.
-
-Run source-integrity checks before a tag can build artifacts, then rerun them
-over the downloaded aggregate artifact set before creating the GitHub release.
-
-### 3. Compiled/Pure Parity
-
-The ordinary matrix currently tests pure Python while the compiled job performs
-only one smoke transition. Replace that asymmetry with these gates:
-
-| Gate | Frequency | Mode Assertion | Tests |
-|------|-----------|----------------|-------|
-| Pure source matrix | Every PR/push | `SourceFileLoader` | Full suite on 3.10–3.14 × Linux/macOS/Windows |
-| Compiled core | Every PR/push | `ExtensionFileLoader` | Full suite plus mypyc guard on Linux CPython 3.12 |
-| Performance | Push to main and release candidate | `ExtensionFileLoader` | Existing 200,000 ops/sec compiled floor, 30,000 pure floor, history ratio, and guarded-transition floor |
-| Pure universal wheel | Release | `SourceFileLoader` from a clean temporary environment | Full suite and pure performance floor |
-| Every compiled wheel | Release | `ExtensionFileLoader` from cibuildwheel test environment | Full hardening/parity suite; at minimum all core, async, safety, builder, validation, logging, serialization, and invariant tests |
-
-Do not publish artifacts covered only by `CIBW_TEST_SKIP`. Use native runners
-(`ubuntu-24.04-arm`, macOS Intel, and macOS Apple Silicon) for the architectures
-currently built under QEMU or cross-compilation. If a universal2 wheel remains,
-download and install the same wheel on both Intel and Apple Silicon runners so
-both slices are exercised. Otherwise publish the two tested architecture wheels
-and drop universal2.
-
-Move cibuildwheel settings to `[tool.cibuildwheel]` and pin its test requirements
-to the same versions used by `uv.lock`. Explicitly keep musllinux and
-free-threaded CPython builds out of scope until they have native execution and
-mypyc/locking verification.
-
-### 4. Safe Runtime Semantics
-
-Required deterministic verification:
-
-- A callback that recursively calls `trigger()`/`trigger_async()` fails
-  immediately with the documented reentrancy result; it never deadlocks.
-- Two synchronized threads/tasks attempting a transition cannot both mutate
-  from the same source state. Tests start contenders with barriers/events and
-  assert one committed transition plus one explicit concurrency failure.
-- Locks are released on guard, exit callback, state mutation, enter callback,
-  listener, and exception paths.
-- Callback failures are surfaced and transition outcome/state follow one
-  documented transaction policy. Tests should not assume external callback side
-  effects are rollbackable.
-- Lock-free read methods are retained only when a coherent snapshot is possible;
-  any read spanning multiple mutable structures uses the same ownership guard.
-- Measure the lock/owner check in the compiled hot-path benchmark. Rejecting
-  races is not permission to fall below 200,000 `trigger()` operations/sec.
-
-### 5. Graph and Diagnostic Bounds
-
-Use sparse `dict[node, iterable[node]]` structures internally. Compute SCCs once
-per diagnostic run and reuse the condensation for cycle membership,
-reachability summaries, and longest-path scoring. Add deterministic budgets for
-node visits, edge visits, and generated test paths. Dense N×N adjacency may
-remain as an explicitly requested compatibility view, but must reject or mark
-truncation beyond a documented size rather than allocate without bound.
-
-## GitHub Actions Hardening
-
-As of the research date, the official repositories list these current releases:
-
-| Action | Current Release | Recommendation |
-|--------|-----------------|----------------|
-| `actions/checkout` | 6.0.2 | Upgrade from v4, set `persist-credentials: false`, and pin the reviewed release to its full commit SHA. |
-| `astral-sh/setup-uv` | 9.0.0 | Upgrade from v5, pin full SHA, and request uv 0.12.7 explicitly. |
-| `actions/upload-artifact` | 7.0.1 | Upgrade from v4 and pin full SHA. |
-| `actions/download-artifact` | 8.0.1 | Upgrade from v4 and pin full SHA; v8 fails artifact digest mismatches by default. |
-| `pypa/cibuildwheel` | 4.2.0 | Upgrade from v2.22.0 and pin full SHA/version. |
-
-Declare top-level `permissions: contents: read`; grant `contents: write` only to
-the GitHub-release job and `id-token: write` only to a future PyPI trusted-publish
-job. Make the release job depend on artifact verification, not merely artifact
-build completion. Full-SHA action pins are required because GitHub's own
-hardening guidance notes that tags can move.
-
-## Installation and Pin Update
-
-Target configuration (performed during the implementation phase, not by this
-research task):
-
-```toml
-[build-system]
-requires = [
-  "setuptools==84.0.0",
-  "wheel==0.48.0",
-  "mypy[mypyc]==2.3.1",
-]
-build-backend = "setuptools.build_meta"
-
-[tool.uv]
-package = true
-required-version = "==0.12.7"
+class TransitionGroup:
+    __slots__ = ("candidates",)
+    # candidates: tuple[TransitionEntry, ...], ascending priority
 ```
 
-Then upgrade deliberately and commit the resolved lock:
+Recommended behavior:
 
-```bash
-uv lock --upgrade
-uv sync --locked --all-groups
+- Preserve a lone transition as a direct `TransitionEntry`. This keeps the
+  overwhelmingly common one-transition path close to its current allocation,
+  memory, and dispatch cost.
+- Promote to `TransitionGroup` only when a second transition is registered for
+  the same `(source, trigger)` pair.
+- Store group candidates as an immutable tuple sorted once during topology
+  mutation. Dispatch must never sort.
+- Replace a group atomically with a newly prepared group rather than mutating a
+  shared list in place. This fits the current normalize/preflight/commit model,
+  makes graph snapshots stable, and prevents `clone()` from sharing a mutable
+  candidate list accidentally.
+- Keep candidate ordering ascending by an explicit integer priority. Use
+  `priority: int = 0` as the keyword-only public default; reject booleans and
+  non-integers (`type(priority) is int`), and reject a conflicting equal
+  priority within one source/trigger group. An exactly identical registration
+  may remain an idempotent no-op.
+- Do not use registration order as a hidden tie-break. Python preserves dict
+  insertion order and sort stability, but safety-significant precedence should
+  survive setup-code reordering and topology round trips.
+
+This representation adds one predictable type branch after the existing direct
+lookup while avoiding a new wrapper allocation and tuple iteration for every
+ordinary single transition.
+
+**Confidence: HIGH** for fit with the current code; **MEDIUM** for the exact
+performance/memory result until measured in both pure and compiled modes.
+
+### Ordering Primitive
+
+Use a standard-library insertion routine during registration. A small explicit
+linear insertion into a copied list followed by `tuple(...)` is preferable to a
+new sorted-collection dependency. `bisect` is also available on every supported
+Python and gained `key=` in Python 3.10, but its search advantage does not
+change the required O(k) list insertion cost.
+
+The cold-path cost is therefore:
+
+```text
+lookup candidate group: O(1) relative to total topology
+insert/rebuild group:    O(k) for k candidates in that group
 ```
 
-Do not copy all current PyPI versions into unbounded `>=` constraints and call
-that reproducibility. The committed lock controls developer/CI tools; exact
-`[build-system]` pins control isolated wheel builds.
+The hot-path cost is:
+
+```text
+lookup candidate group:  O(1) relative to total topology
+resolve candidate:       O(k) worst case, because up to k guards must run
+ordinary singleton:      O(1), as today
+```
+
+This is the honest complexity contract. No container can choose the first
+passing arbitrary predicate in sublinear time without evaluating the preceding
+predicates. The roadmap must update blanket claims that every `trigger()` and
+`add_transition()` call is O(1): prioritized groups are bounded by their local
+candidate count, not by the size of the full FSM graph.
+
+**Confidence: HIGH.** Python's official `bisect` documentation explicitly notes
+that O(log n) search is dominated by O(n) insertion, and the need to evaluate
+arbitrary guards establishes the dispatch lower bound.
+
+### Sync and Async Evaluation
+
+Keep the current split evaluators and one shared candidate representation:
+
+| Path | Required behavior |
+|------|-------------------|
+| `can_trigger()` / `trigger()` | Evaluate candidates sequentially in priority order through `_evaluate_condition_sync()`. Reject awaitable requirements as today. |
+| `can_trigger_async()` / `trigger_async()` | Await candidates sequentially in the same priority order through `_evaluate_condition_async()`. |
+| Guard context | Sanitize keyword arguments once per public trigger attempt when any candidate needs them, then reuse that same fresh mapping for every candidate evaluation. |
+| Ownership | Hold the existing per-machine sync/async ownership envelope across candidate selection and the chosen lifecycle. |
+| Cancellation | Preserve existing async cancellation behavior. Never convert cancellation into a lower-priority fallback. |
+
+Do not use `asyncio.gather()` or tasks to evaluate competing guards in parallel.
+Parallel evaluation would execute guards that should have been short-circuited,
+make side effects race, and let completion timing replace explicit priority as
+the decision rule.
+
+Once a candidate passes all pre-transition eligibility checks and lifecycle
+execution begins, callback failure must return that candidate's existing staged
+failure; it must not fall through to a lower-priority transition. Likewise, a
+guard exception should preserve the current fail-closed result rather than be
+silently treated as false unless the milestone explicitly changes the global
+guard-error contract.
+
+**Confidence: HIGH.** This preserves the Phase 17 lifecycle and Phase 18
+ownership/cancellation contracts already implemented in `core.py`.
+
+### Builder and Declarative APIs
+
+Do not add parallel public APIs. Thread the same keyword through existing ones:
+
+```python
+fsm.add_transition(..., priority=10)
+builder.add_transition(..., priority=10)
+@transition(..., priority=10)
+```
+
+Implementation constraints:
+
+- Extend `FSMBuilder._transitions` staging rows to carry priority, and include
+  every staged candidate when recursively detecting async guard requirements.
+- Keep builder publication atomic: conflicting priorities or invalid later
+  candidates must not publish a partially built machine or freeze a failed
+  builder.
+- `DeclarativeState._handlers` currently stores one metadata dictionary per
+  trigger. Priority-aware declarative alternatives require a finite collection
+  per trigger and resolution by canonical target plus priority. Merely adding
+  priority to machine edges while leaving `_handlers[trigger]` singular would
+  execute or guard the wrong handler.
+- Continue using the existing target-aware declarative resolver and
+  context-local prepared-guard marker. Extend their identity to include the
+  selected candidate/priority so one candidate cannot consume another's guard
+  marker.
+
+**Confidence: HIGH** that these seams must change; exact decorator semantics
+remain a requirements decision.
+
+### Graph, Serialization, and Diagnostics
+
+Priority is topology, not runtime payload. Carry it through every existing
+projection:
+
+| Surface | Required stack change |
+|---------|-----------------------|
+| `_GraphTransition` / `_GraphSnapshot` | Add scalar `priority`; emit one immutable edge row per candidate in deterministic `(source, trigger, priority, target)` order. |
+| `_DiagnosticEdge` | Add scalar priority and retain candidate multiplicity instead of collapsing edges by target. |
+| `to_dict()` / `from_dict()` | Include a JSON integer `priority` on every transition row and restore candidate groups through the existing `add_transition()`. No serialization package is needed. |
+| `clone()` | Copy outer/inner dictionaries while safely sharing immutable transition entries/groups and conditions, matching the existing shallow-topology contract. |
+| Mermaid / PlantUML / JSON | Render/export the priority so diagrams and machine-readable output explain why an edge wins. |
+| Validation | Treat distinct priorities as deterministic ordering, not the current "multiple targets means non-deterministic" result; flag duplicate priority and an unconditional candidate that shadows every lower candidate. |
+
+The current `from_dict(..., conditions={trigger: guard})` lookup cannot uniquely
+address multiple guarded candidates sharing a trigger. Requirements must define
+an exact candidate key—prefer a tuple such as `(from_state, trigger, priority)`
+with the existing string key retained only as a fallback—rather than introduce a
+second deserializer. This is an evolution of the existing `conditions`
+parameter, not a new API surface.
+
+Keep `_diagnostics.py`, `validation.py`, and `visualization.py` interpreted and
+opt-in. Candidate-aware validation must consume the immutable snapshot; it must
+not be called from `trigger()`.
+
+**Confidence: HIGH.** These are direct consumers of the current single-entry
+shape and will otherwise lose or misclassify candidate edges.
+
+## Verification Stack
+
+Reuse the repository's established tools and pins:
+
+| Tool | Resolved / Required Version | Priority-specific use |
+|------|-----------------------------|-----------------------|
+| pytest | 8.4.1 | API validation, tie rejection, selection/fallthrough, lifecycle failure, serialization, clone, and introspection tests |
+| pytest-asyncio | 1.3.0 | Sequential async guard order, short-circuiting, exceptions, cancellation, and sync/async parity |
+| Hypothesis | 6.138.8 resolved | Generate finite candidate groups with unique priorities and assert the minimum passing priority wins independent of registration order |
+| mypy/mypyc | 1.17.1 build pin | Blocking type/compile check for the new union/group representation in `core.py` |
+| Ruff | 0.12.11 resolved | Existing format/lint gate |
+| uv | 0.12.6 evidence pin | Reproduce pure, compiled, test, docs, and artifact verification environments |
+| Sphinx + doctest | Existing docs group | Verify the public priority API and telemetry example |
+
+Required benchmark cases:
+
+1. Existing unguarded singleton toggle, unchanged, remains the principal
+   compiled `trigger()` floor of at least 200,000 operations/second.
+2. Guarded singleton transition, to expose any cost added by the group-capable
+   preparation path.
+3. Candidate groups of 2, 4, and 8 where the first guard passes.
+4. Candidate groups of 2, 4, and 8 where only the last guard passes.
+5. Candidate groups where every guard rejects.
+6. Matching sequential async scenarios as semantic/relative measurements rather
+   than the synchronous throughput floor.
+7. Registration scaling that varies unrelated topology separately from local
+   candidate count, proving `O(1) + O(k)` rather than accidentally scanning the
+   whole graph.
+8. Per-singleton and per-candidate memory measurements, including pure/native
+   layout and the slots-policy audit.
+
+Run the same priority oracle against source, installed pure wheel, and installed
+compiled wheel. Reuse the Phase 20 artifact-conformance/evidence machinery rather
+than creating a new benchmark or packaging framework.
+
+**Confidence: HIGH.** Every named tool and artifact mode already exists in the
+repository.
 
 ## Alternatives Considered
 
-| Recommended | Alternative | When the Alternative Would Be Appropriate |
-|-------------|-------------|-------------------------------------------|
-| Per-instance `threading.Lock` / `asyncio.Lock` | Application-supplied external locks | Only if Fast FSM explicitly documented itself as single-owner and did not promise safe defaults. That is contrary to this milestone decision. |
-| Fail-fast overlap semantics | Queue/serialize concurrent triggers | A later API could add an explicit queued dispatcher when ordering/backpressure semantics are designed. Silently waiting now can deadlock callbacks and hides misuse. |
-| Internal iterative Tarjan + topological DP | NetworkX SCC/DAG algorithms | Use NetworkX in benchmark/research scripts or if diagnostic breadth becomes a separate product. It is not justified as a runtime dependency for two linear algorithms. |
-| Static version in `pyproject.toml` + validation | `setuptools-scm` | Use SCM-derived versions in projects already designed around dynamic version metadata. Here it adds build-time behavior while the existing import path already derives from distribution metadata. |
-| Existing pytest + explicit timing loops | `pytest-benchmark` or `pyperf` | Add a benchmark framework only if the project starts tracking statistically comparable historical runs. The milestone needs a stable floor and mode assertion, not a new benchmark product. |
-| Native architecture runners | QEMU/cross-build with skipped tests | Emulation is acceptable for non-published experimental artifacts. Published wheels should execute on their target architecture. |
+| Category | Recommended | Alternative | Why Not |
+|----------|-------------|-------------|---------|
+| Public API | Extend `add_transition`, builder, and `@transition` with `priority=` | Add `add_transition_candidate()` | Duplicates the concept; the user has explicitly chosen one transition API. |
+| Storage | Direct singleton entry; promote competing keys to a slotted immutable group | Store a list for every trigger | Adds allocation, pointer indirection, and iteration to every ordinary transition before evidence shows it is necessary. |
+| Ordering | Explicit integer priority, lower value first, equal value rejected | Registration order | Implicit precedence changes when setup code or serialized rows are reordered. |
+| Mutation | Preorder/copy candidates during topology commit | Sort candidates inside every trigger | Moves avoidable work into the compiled hot path. |
+| Candidate lookup | Existing nested dictionaries | Scan all outgoing edges | Violates the graph-size-independent lookup contract. |
+| Async selection | Sequential awaits with short-circuiting | `gather()` competing guards | Runs irrelevant guards and makes timing/side effects part of resolution. |
+| Ordered collection | Standard tuple/list operations | `sortedcontainers` or another runtime package | Local groups are small, mutation is cold, and a dependency weakens the minimal-runtime contract. |
+| Priority type | Non-boolean `int` | floats, enums, arbitrary comparable keys | Complicates JSON, type checking, NaN/tie semantics, and mypyc without adding useful expressiveness. |
+| Dispatch policy | First eligible candidate wins | External telemetry/event arbitration | Recreates transition logic outside the FSM, the problem this milestone exists to remove. |
+| Compilation | Keep only `core.py` native | Compile `conditions.py` or diagnostics | Breaks the interpreted user-subclass boundary and adds no justified hot-path benefit. |
+| Tooling | Existing pytest/Hypothesis/evidence harness | New benchmarking or FSM framework | Adds maintenance while the current harness already proves pure/native semantics and throughput. |
 
-## What NOT to Use
+## What Must Not Be Added
 
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| New runtime dependencies | They weaken the library's defining small-footprint contract and none are needed for the audited concerns. | Python standard library plus existing `mypy-extensions`. |
-| `threading.RLock` for transition ownership | It explicitly permits same-thread recursion, preserving the unsafe behavior being removed. | Non-reentrant `threading.Lock` with nonblocking acquisition and owner diagnostics. |
-| `pytest-xdist` for concurrency correctness | Multiple processes do not exercise shared in-process state and can make race tests less deterministic. | Barriers/events and multiple threads/tasks inside one pytest process. |
-| Wall-clock diagnostic timeouts | Results vary with machine load and can leave partial work hard to reproduce. | Explicit node/edge/path expansion budgets and truncation metadata. |
-| `networkx` in `project.dependencies` | Large dependency cost for SCC and DAG operations that are linear and narrow. | Internal sparse Tarjan + `graphlib`/Kahn processing. |
-| `structlog` or a redaction package | Logging ownership and payload exposure are policy bugs, not missing logging infrastructure. | Standard `logging`, `NullHandler`, structural messages, and an optional caller redactor callback. |
-| A compiler/toolchain rewrite (Cython, Rust, C extension by hand) | High risk to subclassing, public symbols, and the core-only mypyc boundary; unrelated to current correctness gaps. | Keep mypyc and make its artifacts observable and fail-closed. |
-| Source-tree coverage while an ignored extension exists | It can report `core.py` at 0% while tests actually execute stale native code. | Clean isolated installs plus explicit loader assertions before coverage/test execution. |
-| Automatically publishing untested cross-compiled wheels | A successful build is not evidence that imports, dispatch, or callbacks work on the target. | Native test runners or omit the artifact. |
+- No new runtime dependency.
+- No second candidate-registration API.
+- No scheduler, polling loop, heartbeat timer, or telemetry policy that chooses
+  transitions; derived facts may remain outside the FSM, but guards and
+  precedence belong to the machine.
+- No runtime sorting, topology-wide scan, validation call, graph snapshot, or
+  diagnostic allocation in `trigger()`.
+- No automatic parallel guard evaluation.
+- No registration-order or object-identity tie-break.
+- No mutable candidate list shared between clones or escaped through snapshots.
+- No compilation of `conditions.py`, `condition_templates.py`, diagnostics,
+  validation, or visualization.
+- No mypyc/build-tool upgrade bundled into the semantic milestone unless native
+  compatibility proves the current reviewed pin cannot implement the design.
 
-## Version Compatibility
+## Installation
 
-| Package / Tool | Compatible With | Notes |
-|----------------|-----------------|-------|
-| mypy/mypyc 2.3.1 | Python 3.10–3.14 project matrix | Official metadata requires Python 3.10+ and publishes the `mypyc` extra. Compile/test each targeted CPython because generated extensions remain interpreter/platform-specific. |
-| pytest 9.1.1 | Python 3.10+ | Matches the project's floor. Upgrade together with pytest-asyncio and pytest-cov in one lock change. |
-| pytest-asyncio 1.4.0 | Python 3.10–3.14 | Official metadata lists this exact supported range and matches the current `asyncio_mode = "auto"` design. |
-| Hypothesis 6.165.10 | Python 3.10+ | Use for design-time/stateful tests only; never import from production modules. |
-| Ruff 0.16.5 | Python 3.10 target | Set target explicitly even though Ruff's documented default is currently py310. |
-| ty 0.0.75 | Targets Python 3.10+ | Beta and unstable across 0.0.x; exact pin is mandatory if diagnostics are a merge gate. |
-| cibuildwheel 4.2.0 | Host Python 3.11+; builds CPython 3.10+ wheels | Its own host requirement does not change the package's Python 3.10 runtime floor. |
-| setup-uv 9.0.0 / uv 0.12.7 | GitHub-hosted runners | Pin both action SHA and installed uv version; the action can read `required-version` from `pyproject.toml`. |
+No production installation change is recommended:
+
+```bash
+uv sync --all-groups
+
+# Targeted development gates
+uv run ruff format --check src/ tests/
+uv run ruff check src/ tests/
+uv run mypy src/fast_fsm/core.py
+uv run pytest tests/ -x -q
+
+# Native compatibility and performance
+FAST_FSM_BUILD_MODE=compiled uv run python setup.py build_ext --inplace
+uv run python tools/release_evidence.py slots-policy --json
+uv run pytest tests/test_performance_benchmarks.py -m slow -x -q
+```
+
+The milestone should modify source and tests, not package dependencies or the
+lockfile.
+
+## Roadmap Implications
+
+1. **Freeze semantics first:** priority type/default/order, equal-priority
+   handling, guard rejection versus exception behavior, and candidate-specific
+   declarative/serialization identity.
+2. **Change the compiled topology representation:** slotted entry/group,
+   atomic registration, lookup/preparation, sync selection, clone, and graph
+   snapshot.
+3. **Reach parity before adding adapters:** async sequential resolution,
+   builder staging/preflight, and declarative handler collections.
+4. **Make every projection truthful:** `to_dict`/`from_dict`, diagnostics,
+   determinism checks, Mermaid, PlantUML, JSON, docs, and examples.
+5. **Close on measured artifacts:** complexity counters, candidate-count
+   benchmarks, slots/memory evidence, full suite, docs, and installed pure/native
+   conformance.
 
 ## Sources
 
-### Primary / Official
+### Repository sources (HIGH confidence)
 
-- [Fast FSM project contract](../PROJECT.md) and
-  [independent concerns audit](../codebase/CONCERNS.md) — current architecture,
-  reproduced failures, and performance constraints (direct repository evidence,
-  HIGH confidence).
-- [Python Packaging User Guide: single-sourcing the version](https://packaging.python.org/en/latest/discussions/single-source-version/) — recommends testing import version against installed distribution metadata (MEDIUM via research seam).
-- [PyPA source distribution specification](https://packaging.python.org/en/latest/specifications/source-distribution-format/) and
-  [core metadata specification](https://packaging.python.org/en/latest/specifications/core-metadata/) — filename/metadata and sdist/wheel consistency rules (MEDIUM).
-- [cibuildwheel 4.2 options](https://cibuildwheel.pypa.io/en/latest/options/) and
-  [configuration](https://cibuildwheel.pypa.io/en/latest/configuration/) — build frontend, test command, pinned test requirements, native architectures, and test skips (MEDIUM).
-- [Python 3.10 threading locks](https://docs.python.org/3.10/library/threading.html#lock-objects) and
-  [asyncio synchronization](https://docs.python.org/3.10/library/asyncio-sync.html#lock) — nonblocking sync acquisition and task-only async mutual exclusion (MEDIUM).
-- [Python bounded deque](https://docs.python.org/3.10/library/collections.html#collections.deque),
-  [library logging guidance](https://docs.python.org/3.10/howto/logging.html#configuring-logging-for-a-library),
-  [importlib metadata](https://docs.python.org/3.10/library/importlib.metadata.html), and
-  [graphlib](https://docs.python.org/3.10/library/graphlib.html) — standard-library implementation primitives (MEDIUM).
-- [Tarjan, “Depth-First Search and Linear Graph Algorithms,” SIAM Journal on Computing](https://epubs.siam.org/doi/abs/10.1137/0201010) — linear strongly connected components algorithm (MEDIUM).
-- [GitHub workflow hardening guidance](https://docs.github.com/en/enterprise-cloud@latest/code-security/tutorials/secure-your-organization/protect-against-threats) — full-SHA action pins and least permissions (MEDIUM).
-- Official release/metadata pages for
-  [uv 0.12.7](https://pypi.org/project/uv/),
-  [pytest 9.1.1](https://pypi.org/project/pytest/),
-  [pytest-asyncio 1.4.0](https://pypi.org/project/pytest-asyncio/),
-  [pytest-cov 7.1.0](https://pypi.org/project/pytest-cov/),
-  [Hypothesis 6.165.10](https://pypi.org/project/hypothesis/),
-  [Ruff 0.16.5](https://pypi.org/project/ruff/),
-  [ty 0.0.75](https://pypi.org/project/ty/),
-  [mypy/mypyc 2.3.1](https://pypi.org/project/mypy/),
-  [setuptools 84.0.0](https://pypi.org/project/setuptools/),
-  [wheel 0.48.0](https://pypi.org/project/wheel/), and
-  [cibuildwheel 4.2.0](https://pypi.org/project/cibuildwheel/) — versions verified 2026-08-29 (MEDIUM).
-- Official action releases for
-  [checkout](https://github.com/actions/checkout/releases),
-  [setup-uv](https://github.com/astral-sh/setup-uv),
-  [upload-artifact](https://github.com/actions/upload-artifact/releases), and
-  [download-artifact](https://github.com/actions/download-artifact/releases) — current action majors and security behavior (MEDIUM).
+- `pyproject.toml` — runtime/build dependencies, Python floor, pytest settings
+- `setup.py` — selective `core.py` mypyc compilation
+- `src/fast_fsm/core.py` — transition storage, sync/async resolution, builder,
+  declarative handlers, graph snapshot, clone, and serialization
+- `src/fast_fsm/_diagnostics.py`, `validation.py`, and `visualization.py` —
+  interpreted snapshot consumers that must preserve candidate multiplicity
+- `tests/test_performance_benchmarks.py` and `tools/release_evidence.py` —
+  complexity, compiled throughput, slots, and installed-artifact proof
+- `.specify/memory/spr-core-api.md` and `docs/dev/architecture.md` — current
+  lifecycle, ownership, complexity, and compilation contracts
 
-## Research Gaps to Resolve During Implementation
+### External primary sources (MEDIUM confidence via research seam)
 
-- Benchmark the exact per-instance lock/owner representation under mypyc 2.3.1
-  before freezing slots; the behavior recommendation is firm, but field layout
-  belongs to implementation measurement.
-- Decide whether to retain universal2 after proving the same artifact on both
-  macOS architectures; separate tested arm64/x86_64 wheels are preferable to an
-  incompletely tested universal artifact.
-- Verify the full 722+ test suite against pytest 9/mypy 2 before merging the
-  lock upgrade. Current-version compatibility metadata is necessary but not a
-  substitute for this repository's mypyc-specific tests.
-- Define the exact callback transaction outcome before code changes. Locks can
-  guarantee exclusivity, but no stack choice can roll back external side
-  effects performed by user callbacks.
+- [Python 3.10 `bisect` documentation](https://docs.python.org/3.10/library/bisect.html) — ordered insertion and O(n) `insort` cost
+- [Python 3.10 built-in container documentation](https://docs.python.org/3.10/library/stdtypes.html#list.sort) — stable sort and insertion-ordered dictionaries
+- [mypyc native classes](https://mypyc.readthedocs.io/en/stable/native_classes.html) — native layouts, generic erasure, interpreted subclasses, and dataclass efficiency caveat
+- [mypyc differences from Python](https://mypyc.readthedocs.io/en/stable/differences_from_python.html) — compile-time typing, native runtime checks, early binding, and concurrency cautions
+- [python-statemachine transitions](https://python-statemachine.readthedocs.io/en/stable/transitions.html) — ecosystem precedent for one event evaluating ordered guarded alternatives until the first match
 
----
-*Stack research for: Fast FSM v0.3.0 Reliability & Runtime Hardening*
-*Researched: 2026-08-29*
+## Open Questions for Requirements
+
+- Does an exact duplicate `(source, trigger, priority, target, guard identity)`
+  remain an idempotent no-op, or are all repeated priorities errors?
+- When `State.can_transition()` or a candidate-specific declarative guard returns
+  false, does selection continue to the next candidate? The recommended answer
+  is yes: a candidate wins only after all pre-lifecycle eligibility checks pass.
+- What exact key addresses candidate guards in `from_dict(..., conditions=...)`?
+  A trigger string alone is insufficient once candidates share that trigger.
+- Must every competing candidate have an explicit priority, or is the default
+  integer accepted? The recommended simple contract is default `0` with equal
+  priorities rejected, making unannotated duplicates fail visibly.
