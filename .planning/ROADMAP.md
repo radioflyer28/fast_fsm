@@ -46,7 +46,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 
 **Milestone Goal:** Add deterministic, priority-aware guarded transition resolution so one `(state, trigger)` selects among finite ordered candidates without external dispatch logic.
 
-- [ ] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules.
+- [x] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules. (completed 2026-09-06)
 - [ ] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics.
 - [ ] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path.
 - [ ] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority.
@@ -66,7 +66,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
   3. Batch, multi-source, bidirectional, emergency, and builder-backed registration either publish every affected candidate group or leave topology and graph version unchanged.
   4. Candidate groups are immutable after publication, remain isolated across clones, and `core.py` continues to pass the native compilation/type boundary.
 
-**Plans:** 2/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -155,7 +155,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | In Progress|  |
+| 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 0/TBD | Not started | — |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |

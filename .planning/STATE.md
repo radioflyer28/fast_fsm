@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
-current_phase: 21
-current_phase_name: Priority Contract & Atomic Registration
-status: verifying
-stopped_at: Completed 21-02-PLAN.md
-last_updated: "2026-09-06T22:42:02.112Z"
+current_phase: 22
+current_phase_name: Ordered Runtime Selection & Lifecycle Integration
+status: planning
+stopped_at: Phase 21 complete, ready to plan Phase 22
+last_updated: "2026-09-06T23:32:15.327Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 21 execution started
-state_head: 776a6bb9077688776416ee43f425f4de8690a1e8
+last_activity_desc: Phase 21 complete, transitioned to Phase 22
+state_head: 4baeceb8d8cff0de4a655fbd1123cc24edca4cab
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
   completed_plans: 2
-  percent: 0
+  percent: 20
 ---
 
 # State: Fast FSM
@@ -25,20 +25,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-06)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** Phase 21 — Priority Contract & Atomic Registration
+**Current focus:** Phase 22 — Ordered Runtime Selection & Lifecycle Integration
 
 ## Current Position
 
-Phase: 21 (Priority Contract & Atomic Registration) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-09-06 — Phase 21 execution started
+Phase: 22 — Ordered Runtime Selection & Lifecycle Integration
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-06 — Phase 21 complete, transitioned to Phase 22
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 41
+- Total plans completed: 43
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -52,6 +52,7 @@ Last activity: 2026-09-06 — Phase 21 execution started
 | 18 | 8 | - | - |
 | 19 | 8 | - | - |
 | 20 | 6 | - | - |
+| 21 | 2 | - | - |
 
 **Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof; v0.4.0 now has five dependency-ordered phases with full requirement coverage.
 **Per-Plan Metrics:**
@@ -154,7 +155,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 21 must amend the blanket O(1)/single-transition project contract before candidate iteration is implemented; this is a planned prerequisite, not an external blocker.
 - v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
 
 ## Deferred Items
@@ -168,8 +168,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-06T22:42:02.101Z
-Stopped at: Completed 21-02-PLAN.md
+Last session: 2026-09-06T23:32:15.327Z
+Stopped at: Phase 21 complete, ready to plan Phase 22
 Resume file: None
 
 ## Rebuild Log

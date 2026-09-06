@@ -136,7 +136,9 @@ dispatch.
 | Keep default trace metadata-only and fail closed on redactor errors | Diagnostic convenience must not expose application payloads | ✓ Implemented and accepted in Phase 19 |
 | Treat logging handlers as application-owned unless the library created them | Configuration must be reversible and non-invasive | ✓ Implemented and accepted in Phase 19 |
 | Require exact-SHA hosted evidence and independently recomputed downloads before a v0.3.0 tag | Release authorization needs both host execution and local evidence verification; the tag workflow retains a separate identity gate | ✓ Verified in Phase 20; no tag or release created |
-| Evolve `add_transition()` rather than add a second candidate-registration API | Priority is an attribute of an ordinary transition; one coherent API avoids redundant abstractions | — Pending v0.4.0 |
+| Evolve `add_transition()` rather than add a second candidate-registration API | Priority is an attribute of an ordinary transition; one coherent API avoids redundant abstractions | ✓ Phase 21 registration contract implemented |
+| Keep one candidate direct and promote only competing priorities into private immutable groups | Preserve the existing singleton path while making priority ordering finite and deterministic | ✓ Phase 21 implemented and verified |
+| Validate priority as an exact non-boolean integer at the object-typed mypyc boundary | Prevent compiled coercion from weakening the public priority contract | ✓ Phase 21 implemented and verified |
 
 ## Evolution
 
@@ -156,4 +158,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-06 after starting v0.4.0 Priority-Aware Guarded Transitions*
+*Last updated: 2026-09-06 after Phase 21*
