@@ -3236,7 +3236,7 @@ def _validate_evidence_only_workflow(workflow: dict[str, object]) -> None:
     # The verifier creates this directory before the workflow binds its
     # immutable cell record, so the binder must be idempotent.
     assert 'Path("evidence").mkdir(exist_ok=True)' in sdist_runs
-    assert "verify-sdist --sdist \"$sdist\" --skip-performance" in sdist_runs
+    assert 'verify-sdist --sdist "$sdist" --skip-performance' in sdist_runs
 
     aggregate = jobs["aggregate_release_evidence"]
     assert {"verify_pure", "verify_native", "verify_sdist"}.issubset(
