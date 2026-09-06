@@ -1097,7 +1097,7 @@ def _historical_recorded_value(
         if value == phase:
             return
     elif field == "source_path":
-        if value == HISTORICAL_EVIDENCE_PATHS[int(phase) - 16]:
+        if value == HISTORICAL_EVIDENCE_SOURCE_PATHS[int(phase) - 16]:
             return
     elif isinstance(value, str) and value and value in original_text:
         return
@@ -1176,8 +1176,10 @@ def historical_evidence(*, repository_root: Path | None = None) -> dict[str, Any
     root = (repository_root or REPOSITORY_ROOT).resolve()
     entries: list[dict[str, Any]] = []
     observed_phases: set[str] = set()
-    for expected_phase, relative_path in zip(
-        ("16", "17", "18", "19"), HISTORICAL_EVIDENCE_PATHS
+    for expected_phase, relative_path, original_source_path in zip(
+        ("16", "17", "18", "19"),
+        HISTORICAL_EVIDENCE_PATHS,
+        HISTORICAL_EVIDENCE_SOURCE_PATHS,
     ):
         path = root / relative_path
         try:
@@ -1225,7 +1227,7 @@ def historical_evidence(*, repository_root: Path | None = None) -> dict[str, Any
             raise EvidenceError(
                 f"Historical evidence {relative_path} phase contradicts the allowlist."
             )
-        if fields["source_path"].get("value") != relative_path:
+        if fields["source_path"].get("value") != original_source_path:
             raise EvidenceError(
                 f"Historical evidence {relative_path} path contradicts the allowlist."
             )
@@ -1603,6 +1605,12 @@ _SDIST_REQUIRED_ROOT_FILES = (
     "tools/artifact_conformance.py",
 )
 HISTORICAL_EVIDENCE_PATHS = (
+    ".planning/milestones/v0.3.0-phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+)
+HISTORICAL_EVIDENCE_SOURCE_PATHS = (
     ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
     ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
     ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",

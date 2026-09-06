@@ -1389,7 +1389,7 @@ def test_phase17_runner_has_explicit_lifecycle_overlay_and_suite() -> None:
     for required in (
         "PHASE17_INVENTORY",
         '"tests/test_transition_lifecycle.py"',
-        '".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"',
+        '".planning/milestones/v0.3.0-phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md"',
         'args.suite == "phase17"',
         "lifecycle_success",
     ):

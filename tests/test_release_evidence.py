@@ -655,15 +655,17 @@ def _write_historical_evidence_fixture(
     retrospective_rerun: dict[str, object] | None = None,
 ) -> None:
     """Write one complete, deliberately sparse four-phase evidence inventory."""
-    for phase, relative_path in zip(
-        ("16", "17", "18", "19"), release_evidence.HISTORICAL_EVIDENCE_PATHS
+    for phase, relative_path, original_source_path in zip(
+        ("16", "17", "18", "19"),
+        release_evidence.HISTORICAL_EVIDENCE_PATHS,
+        release_evidence.HISTORICAL_EVIDENCE_SOURCE_PATHS,
     ):
         evidence_path = repository / relative_path
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         command = f"uv run historical-phase-{phase}"
         fields: dict[str, dict[str, object]] = {
             "phase": _historical_field_recorded(phase),
-            "source_path": _historical_field_recorded(relative_path),
+            "source_path": _historical_field_recorded(original_source_path),
             "command": _historical_field_recorded(
                 "not present" if unsupported_value and phase == "16" else command
             ),

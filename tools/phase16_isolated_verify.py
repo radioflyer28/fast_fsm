@@ -50,7 +50,7 @@ PHASE16_INVENTORY = (
     "docs/dev/contributing.md",
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
-    ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
 )
 PHASE17_INVENTORY = (
     "src/fast_fsm/core.py",
@@ -77,7 +77,7 @@ PHASE17_INVENTORY = (
     "docs/dev/architecture.md",
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
-    ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
 )
 PHASE18_INVENTORY = (
     "src/fast_fsm/core.py",
@@ -105,7 +105,7 @@ PHASE18_INVENTORY = (
     "docs/dev/architecture.md",
     "docs/dev/testing.md",
     "evidence/release-baseline.json",
-    ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
 )
 PHASE19_INVENTORY = (
     "src/fast_fsm/core.py",
@@ -136,7 +136,7 @@ PHASE19_INVENTORY = (
     ".specify/memory/spr-visualization.md",
     ".specify/decisions/ADR-006-bounded-diagnostics-safe-output.md",
     "evidence/release-baseline.json",
-    ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+    ".planning/milestones/v0.3.0-phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
 )
 MANIFEST_DESCRIPTOR_SUPPORT = (
     all(

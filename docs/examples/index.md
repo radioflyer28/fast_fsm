@@ -49,6 +49,20 @@ asynchronously.
 
 ---
 
+## Drone Pre-Arm and Failsafes
+
+**File:** `examples/drone_failsafes.py`
+
+A deterministic, non-hardware simulation of drone decision logic. It blocks
+arming until battery, GPS, home-position, propeller-clearance, and geofence
+checks pass; then it demonstrates return-to-home and emergency-landing paths.
+It is a training example, not flight-control or safety-certified software.
+
+**Concepts:** `FuncCondition`, guarded transitions, explicit failsafe events,
+and `TransitionResult` handling.
+
+---
+
 ## Declarative States
 
 **File:** `examples/declarative_state_example.py`
