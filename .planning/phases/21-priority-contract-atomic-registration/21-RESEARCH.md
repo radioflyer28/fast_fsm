@@ -226,7 +226,7 @@ The current `clone()` copies the outer transition mapping and every per-source m
 - **Mutable published list:** breaks clone isolation and permits order-dependent semantics. [VERIFIED: .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md:31-40,48-51]
 - **Sorting during dispatch:** moves registration work onto the hot path and contradicts D-07. [VERIFIED: .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md:54-58]
 - **Calling public registrars from an owned helper:** the lock is deliberately non-reentrant and rejects same-thread reacquisition. [VERIFIED: src/fast_fsm/core.py:842-856]
-- **Accidental Phase 22 behavior:** treating a group as its first candidate in `trigger()` would publish untested winner semantics early. Narrow explicitly and fail closed until the consuming phase updates that path. [ASSUMED]
+- **Accidental Phase 22 behavior:** treating a group as its first candidate in `trigger()` would publish winner semantics outside the approved phase boundary. Narrow explicitly and fail closed; Phase 22 owns runtime selection. [RESOLVED: approved Phase 21 boundary]
 
 ## Don't Hand-Roll
 
@@ -250,7 +250,7 @@ The current `clone()` copies the outer transition mapping and every per-source m
 
 ### Pitfall 3: Wrong duplicate identity for callable guards
 
-**What goes wrong:** repeated registration of the same raw callable may be mistaken for the same stored condition. **Why:** normalization wraps a callable in a fresh `FuncCondition`; `unless` creates fresh `FuncCondition`/`NegatedCondition` wrappers. [VERIFIED: src/fast_fsm/core.py:1376-1394; src/fast_fsm/conditions.py:261-295,337-363] **Recommendation:** interpret D-03 literally as identity of the canonical stored `Condition` object (or `None`); repeated raw callables are not exact duplicates after normalization unless the design deliberately adds an identity token. [ASSUMED]
+**What goes wrong:** repeated registration of the same raw callable may be mistaken for the same stored condition. **Why:** normalization wraps a callable in a fresh `FuncCondition`; `unless` creates fresh `FuncCondition`/`NegatedCondition` wrappers. [VERIFIED: src/fast_fsm/core.py:1376-1394; src/fast_fsm/conditions.py:261-295,337-363] **Resolution:** D-03 identity is the canonical post-normalization `Condition` object (or `None`); repeated raw callables and repeated `unless=` inputs therefore conflict at equal priority, and Phase 21 introduces no input-identity token. [RESOLVED: approved Phase 21 clarification]
 
 ### Pitfall 4: Clone snapshot is structurally isolated but temporally torn
 
@@ -258,7 +258,7 @@ The current `clone()` copies the outer transition mapping and every per-source m
 
 ### Pitfall 5: Singular consumers break or silently lie
 
-`to_dict`, `_graph_snapshot`, reachability/query helpers, prepared dispatch, and debug/completeness logic dereference a singular `TransitionEntry`. [VERIFIED: src/fast_fsm/core.py:1127-1159,1277-1303,1907-1954,1995-2032,3229-3286] This phase should make union handling explicit without implementing later projection or selection semantics; do not suppress the mismatch with `Any`. [ASSUMED]
+`to_dict`, `_graph_snapshot`, reachability/query helpers, prepared dispatch, and debug/completeness logic dereference a singular `TransitionEntry`. [VERIFIED: src/fast_fsm/core.py:1127-1159,1277-1303,1907-1954,1995-2032,3229-3286] Phase 21 explicitly narrows the storage union and fails closed for grouped consumers without choosing or flattening candidates; runtime selection remains Phase 22 scope and supported public query/projection parity remains Phase 23 scope. The mismatch must not be suppressed with `Any`. [RESOLVED: approved Phase 21 boundary]
 
 ### Pitfall 6: Policy and benchmark drift
 
@@ -303,20 +303,20 @@ This is a design skeleton, not copied source; it instantiates the locked normali
 | Blanket O(1)/one-transition policy | O(1) slot lookup/singleton dispatch; O(k) local group work | Makes the contract truthful before Phase 22 adds candidate iteration. [VERIFIED: .specify/memory/constitution.md:41-47,117; .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md:54-58] |
 | Builder calls `add_transition` once per staged edge | One batch transition materialization | A builder build becomes one transition-registration transaction. [VERIFIED: src/fast_fsm/core.py:4887-4910; .planning/phases/21-priority-contract-atomic-registration/21-CONTEXT.md:43-47] |
 
-## Assumptions Log
+## Resolution Log
 
 | # | Claim | Section | Risk if wrong |
 |---|-------|---------|---------------|
-| A1 | Duplicate identity should use the post-normalization stored `Condition` identity, so repeated raw callables at the same priority conflict rather than no-op. | Common Pitfalls | If users expect raw-callable identity, `_PreparedTransition` needs an additional canonical identity/polarity token and tests. |
-| A2 | Until Phases 22–24 update singular consumers, grouped values should be explicitly narrowed and fail closed rather than selecting or flattening implicitly. | Anti-Patterns / Common Pitfalls | A different integration strategy may be needed to keep intermediate milestone tests green. |
+| R1 | **RESOLVED:** Duplicate identity uses the post-normalization stored `Condition` identity, so repeated raw callables and repeated `unless=` wrappers at the same priority conflict rather than no-op. | Approved Phase 21 clarification | No input-identity token is introduced. |
+| R2 | **RESOLVED:** Phase 21 grouped consumers explicitly narrow and fail closed rather than selecting or flattening implicitly. | Approved Phase 21 scope | Runtime selection is Phase 22; supported public query/projection parity is Phase 23. |
 | A3 | The pseudocode helper/private symbol names are illustrative; exact names may follow local mypyc conventions. | Code Examples | No semantic risk if the locked behavior is preserved. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **What does “condition object identity” mean for a raw callable?** The code converts raw callables and `unless` inputs to fresh wrapper objects during every normalization. [VERIFIED: src/fast_fsm/core.py:1376-1394] Recommendation: lock stored canonical `Condition` identity for Phase 21; if raw-callable idempotence is intended, add an explicit normalized identity token rather than comparing wrapper internals. [ASSUMED]
-2. **How should intermediate grouped values behave in consumers owned by later phases?** Those consumers currently assume a direct entry. [VERIFIED: src/fast_fsm/core.py:1127-1159,1277-1303,1907-1954,1995-2032,3229-3286] Recommendation: add explicit private narrowing and fail-closed branches now; do not silently pick the first candidate or implement projection parity early. [ASSUMED]
+1. **RESOLVED — post-normalization identity.** The code converts raw callables and `unless` inputs to fresh wrapper objects during every normalization. [VERIFIED: src/fast_fsm/core.py:1376-1394] The approved Phase 21 clarification defines exact duplicate identity by the resulting canonical `Condition` object identity. Repeated raw callables and repeated `unless=` wrappers therefore conflict at equal priority; no normalized input-identity token is added.
+2. **RESOLVED — grouped-consumer boundary.** Existing consumers assume a direct entry. [VERIFIED: src/fast_fsm/core.py:1127-1159,1277-1303,1907-1954,1995-2032,3229-3286] The approved Phase 21 scope requires explicit private union narrowing and fail-closed grouped branches, without silently picking a candidate or implementing projection parity. Runtime winner selection belongs to Phase 22, while supported public query/projection parity belongs to Phase 23.
 
-Neither question blocks planning; both recommendations preserve the phase boundary and make later work explicit. [ASSUMED]
+Both choices are resolved by the approved Phase 21 clarification and phase boundary; neither remains an implementation assumption.
 
 ## Environment Availability
 
@@ -426,7 +426,7 @@ This is an in-process library topology mutation with no authentication, session,
 
 - Standard stack: HIGH — read from repository pins and probed locally. [VERIFIED: pyproject.toml:1-45; environment probes]
 - Architecture: HIGH — locked design mapped directly to the existing transaction/ownership seams and compiled experimentally. [VERIFIED: CONTEXT and core citations throughout]
-- Pitfalls: HIGH for last-write, clone, singular-consumer, and mypyc issues; MEDIUM for the recommended raw-callable identity interpretation. [VERIFIED: source/probe citations throughout] [ASSUMED]
+- Pitfalls: HIGH for last-write, clone, singular-consumer, mypyc, and post-normalization identity issues; the two formerly open choices are resolved by the approved Phase 21 clarification and scope boundary. [VERIFIED: source/probe citations throughout]
 - Validation: HIGH — existing tests and commands were inspected and the targeted baseline passed. [VERIFIED: local command execution 2026-09-06]
 
 **Research date:** 2026-09-06  
