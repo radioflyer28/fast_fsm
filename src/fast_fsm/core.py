@@ -1960,7 +1960,15 @@ class StateMachine:
         Performance: O(1) - Direct dictionary lookup + condition check
         Use this for validation before expensive operations.
         """
-        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        # Only declarative states consume the scoped marker used to suppress a
+        # duplicate decorator guard.  Keeping the ContextVar boundary out of
+        # ordinary transitions preserves that nested/declarative contract
+        # without charging the common trigger hot path for it.
+        consumer_token = (
+            _declarative_consumer_machine_id.set(id(self))
+            if isinstance(self._current_state, DeclarativeState)
+            else None
+        )
         try:
             prepared = self._prepare_transition(trigger, args, kwargs)
             if isinstance(prepared, TransitionResult):
@@ -1981,7 +1989,8 @@ class StateMachine:
                 trigger, entry.to_state, args, kwargs
             )
         finally:
-            _declarative_consumer_machine_id.reset(consumer_token)
+            if consumer_token is not None:
+                _declarative_consumer_machine_id.reset(consumer_token)
 
     def _prepare_transition(
         self, trigger: str, args: Tuple[Any, ...], kwargs: Dict[str, Any]
@@ -2964,7 +2973,11 @@ class StateMachine:
         Returns:
             TransitionResult indicating success or failure
         """
-        consumer_token = _declarative_consumer_machine_id.set(id(self))
+        consumer_token = (
+            _declarative_consumer_machine_id.set(id(self))
+            if isinstance(self._current_state, DeclarativeState)
+            else None
+        )
         try:
             owner_thread_id = self._acquire_sync_ownership("trigger")
             try:
@@ -2989,7 +3002,8 @@ class StateMachine:
             finally:
                 self._release_sync_ownership(owner_thread_id)
         finally:
-            _declarative_consumer_machine_id.reset(consumer_token)
+            if consumer_token is not None:
+                _declarative_consumer_machine_id.reset(consumer_token)
 
     def _trigger_owned(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one ordinary trigger while its caller owns this machine."""
