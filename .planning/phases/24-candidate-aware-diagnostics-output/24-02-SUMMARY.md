@@ -70,7 +70,7 @@ coverage:
     description: "Each JSON candidate record consumes a result reservation and one-less limits return the existing incomplete budget failure."
     requirement: DIAG-02
     verification:
-      - kind: boundary
+      - kind: integration
         ref: "tests/test_diagnostic_contracts.py::test_json_reserves_each_candidate_record_before_returning_output"
         status: pass
     human_judgment: false
