@@ -5,11 +5,11 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
 status: planning
-stopped_at: Phase 24 complete, ready to plan Phase 25
-last_updated: "2026-09-07T04:46:57.213Z"
+stopped_at: Phase 25 context gathered
+last_updated: "2026-09-07T04:48:03.517Z"
 last_activity: 2026-09-07
 last_activity_desc: Phase 24 complete, transitioned to Phase 25
-state_head: 5d766a60a4fba5b6b0ded27ea39eea687adceeb7
+state_head: 6ae4a4db72aa7a737fec1e25d3145ddc529541b7
 progress:
   total_phases: 5
   completed_phases: 4
@@ -179,9 +179,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T03:12:20.971Z
-Stopped at: Phase 24 complete, ready to plan Phase 25
-Resume file: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md
+Last session: 2026-09-07T04:48:03.351Z
+Stopped at: Phase 25 context gathered
+Resume file: .planning/phases/25-performance-artifact-proof-drone-guidance/25-CONTEXT.md
 
 ## Rebuild Log
 
