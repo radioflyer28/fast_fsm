@@ -81,6 +81,53 @@
 
 ---
 
+## Milestone: v0.4.0 — Priority-Aware Guarded Transitions
+
+**Completed:** 2026-09-07
+**Phases:** 5 (21–25) | **Plans:** 16 | **Requirements:** 15/15
+
+### What Was Built
+
+- One existing `add_transition(..., priority=...)` API now creates finite,
+  immutable ordered candidate groups while retaining a direct singleton path.
+- Deterministic sync and async selection, construction/parity, diagnostics,
+  installed artifact proof, and a controller-owned drone example all share the
+  same priority contract.
+
+### What Worked
+
+- Fixed priority values, immutable topology publication, and phase-by-phase
+  verification made the core model easy to carry through every integration
+  surface.
+- The milestone audit caught stale validation records and reconciled them before
+  archival, producing a complete 15/15 requirements cross-reference.
+
+### What Was Inefficient
+
+- Release-evidence hardening initially overfit a local `uv` version, offline
+  setting, and cache path. User feedback correctly simplified the policy to
+  `uv.lock` plus `uv sync --locked`, while preserving the useful guarded
+  baseline-diff validation.
+
+### Patterns Established
+
+- A priority is an attribute of a normal transition, not a second API.
+- Keep singleton work O(1); describe finite candidate insertion/selection as
+  explicit local O(k) work rather than hiding its cost.
+- Put operational telemetry facts in helpers and priority decisions in the FSM
+  guards; issue adapter commands only after a committed destination transition.
+
+### Key Lessons
+
+1. Finite ordered guarded candidates materially reduce external dispatch
+   boilerplate and make simultaneous-signal precedence auditable.
+2. Release evidence should protect durable outputs, not impose incidental local
+   package-manager/cache constraints beyond the lockfile.
+3. A short integration audit after phase completion is valuable for finding
+   stale planning records even when code and tests are already green.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution

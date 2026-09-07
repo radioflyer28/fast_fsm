@@ -1,0 +1,1 @@
+{"content":"Python timeit recommends repeating benchmark timing because other processes affect measurements and using the best repetition for accurate small-snippet timing; its CLI reports loop count, repetitions, and normalized time.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-09-07T04:51:41.130Z","ttl":86400000,"kind":"web"}

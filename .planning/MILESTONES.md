@@ -1,5 +1,34 @@
 # Milestones
 
+## v0.4.0 Priority-Aware Guarded Transitions (Shipped: 2026-09-07)
+
+**Phases completed:** 5 phases, 16 plans, 31 tasks
+
+**Verification:** 15/15 requirements, 5/5 phase reports, and the cross-phase
+milestone audit passed. Known verification overrides: 0 newly acknowledged,
+1 carried forward from a prior close (see `STATE.md` Deferred Items).
+
+**Key accomplishments:**
+
+- `add_transition(..., priority=...)` now constructs exact-validated singleton or immutable ordered candidate topology with atomic duplicate-safe publication.
+- Priority-aware registration now reaches every scoped fan-out path atomically, while cloned machines capture one coherent topology and native singleton dispatch retains its direct fast path.
+- Synchronous priority groups now select the first fully eligible candidate before a single existing lifecycle, while query, failure, and projection boundaries remain explicit.
+- Async priority groups now await exactly one candidate stage at a time, select one prepared winner before lifecycle, and fail closed on exception, cancellation, or exhaustion.
+- Priority-aware selection now carries one candidate scalar through results, history, and metadata-only tracing, with source/native proof that singleton dispatch stays direct and grouped work stays local.
+- Priority candidate groups now round-trip through a callable-safe scalar schema and remain complete in topology snapshots, target queries, and sync/async clone views.
+- Declarative FSM states now retain immutable same-trigger candidates and run only the source/target/priority-selected handler in sync or async lifecycles.
+- Quick factories now publish complete priority-bearing candidate batches atomically, while native-safe structural and behavioral checks lock the full construction-to-projection contract.
+- Candidate-aware diagnostics now preserve immutable priority and eligibility evidence from core snapshot capture through strict determinism and conservative shadow validation.
+- Every diagnostic representation now exposes each finite transition candidate with its numeric priority, while preserving one-snapshot escaping and fail-explicit budget semantics.
+- Candidate-aware diagnostics now have one real-machine oracle proving identical pure and freshly compiled behavior from immutable snapshot facts through bounded outputs.
+- Priority-group registration now uses a one-pass immutable insertion, with deterministic local-work proofs and a runnable environment-labelled timing matrix.
+- One portable priority oracle now proves exact winner, guard, result/history, exhaustion, exception, and cancellation semantics across clean source plus fresh pure and compiled wheel installs.
+- One normalized drone sample now enters a controller-owned FSM exactly once, while fixed guards choose the failsafe and a committed state entry alone commands a replaceable aircraft adapter.
+- Guarded baseline refreshes and source/pure/compiled artifact proof preserve durable evidence integrity while normal `uv sync --locked` governs dependency resolution.
+- Release evidence now uses ordinary locked `uv` workflows while still preventing a tracked baseline refresh from changing any durable release contract field.
+
+---
+
 ## v0.3.0 Reliability & Runtime Hardening (Completed: 2026-09-06; untagged and unreleased)
 
 **Phases completed:** 6 phases, 41 plans, 81 tasks

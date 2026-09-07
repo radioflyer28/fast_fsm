@@ -12,6 +12,13 @@ truthful local O(k) insertion and ordered selection. The ≥200,000 ops/sec floo
 applies only to fresh installed compiled singleton dispatch; exact timings are
 environment-labeled observations.
 
+## Current State
+
+v0.4.0 Priority-Aware Guarded Transitions is complete: 15/15 requirements,
+five verified phases, and a passing cross-phase milestone audit. The milestone
+is a completed development/planning cycle; no package release, publication, or
+version bump has been performed. Next work starts with a new milestone.
+
 ## Completed: v0.2.3 Timing Condition Helpers (shipped 2026-04-05)
 
 15/15 requirements satisfied. `TimeoutCondition`, `CooldownCondition`, `ElapsedCondition`. 722 tests.
@@ -34,6 +41,13 @@ environment-labeled observations.
 - Make callback failure, reentrancy, and concurrent-access behavior safe by default
 - Correct and bound validation, comparison, cycle analysis, visualization, and diagnostic behavior
 - Preserve the performance contract and verify compiled/pure-Python parity
+
+## Completed: v0.4.0 Priority-Aware Guarded Transitions (2026-09-07)
+
+15/15 requirements satisfied across Phases 21–25. `add_transition(...,
+priority=...)` now supports exact-validated, finite ordered candidate groups;
+sync/async selection, construction, serialization, diagnostics, installed
+artifact proof, and the controller-owned drone example preserve that contract.
 
 ## Requirements
 
@@ -81,24 +95,9 @@ environment-labeled observations.
 - ✓ Release metadata, changelog, documentation, and quality gates agree on one auditable v0.3.0 baseline — Phases 15 and 20
 - ✓ Installed compiled and pure-Python artifacts pass the same hardened-behavior oracle while preserving the throughput contract — Phase 20
 
-## Current Milestone: v0.4.0 Priority-Aware Guarded Transitions
-
-**Goal:** Add deterministic, priority-aware guarded transition resolution so one
-`(state, trigger)` selects among finite ordered candidates without external
-dispatch.
-
-**Target features:**
-- Evolve `add_transition(..., priority=...)` to register competing guarded
-  candidates for one source state and trigger.
-- Resolve candidates deterministically across synchronous and asynchronous
-  machines, builders, and declarative states.
-- Keep topology exports, validation, visualizations, diagnostics, benchmarks,
-  and examples truthful about priority-aware transition groups.
-
 ### Active
 
-- [ ] Deterministic, priority-aware guarded transition resolution for one
-  `(state, trigger)` candidate group
+(None — define the next milestone before adding active requirements.)
 
 ### Out of Scope
 
@@ -153,6 +152,7 @@ dispatch.
 | Validate priority as an exact non-boolean integer at the object-typed mypyc boundary | Prevent compiled coercion from weakening the public priority contract | ✓ Phase 21 implemented and verified |
 | Separate O(1) singleton work from local O(k) group work in guidance | Keep performance claims truthful without exposing private group storage as API | ✓ Phase 25 documented and verified |
 | Route each drone sample through one FSM-owned `telemetry_tick` | Keep failsafe precedence in fixed guards and aircraft effects at committed state entry | ✓ Phase 25 example documented and verified |
+| Use `uv.lock` plus `uv sync --locked` for release dependency resolution | Avoid environment-specific uv/cache gates while retaining guarded baseline refresh validation | ✓ Phase 25 release evidence verified |
 
 ## Evolution
 
@@ -172,4 +172,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-06 after Phase 21*
+*Last updated: 2026-09-07 after v0.4.0 milestone completion*

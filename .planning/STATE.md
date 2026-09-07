@@ -2,37 +2,37 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
-current_phase: 25
-current_phase_name: Performance, Artifact Proof & Drone Guidance
-status: milestone_audit
-stopped_at: Phase 25 complete; milestone completion audit pending
-last_updated: "2026-09-07T21:15:00Z"
+status: Awaiting next milestone
+stopped_at: Awaiting next milestone definition
+last_updated: "2026-09-07T22:00:00Z"
 last_activity: 2026-09-07
-last_activity_desc: Phase 25 execution started
-state_head: cea6263
+last_activity_desc: Milestone v0.4.0 completed and archived
+state_head: 9315845b8d6d5c441d9d46c6136b9305cfb594c1
 progress:
   total_phases: 5
   completed_phases: 5
   total_plans: 16
   completed_plans: 16
   percent: 100
+current_phase: null
+current_phase_name: null
 ---
 
 # State: Fast FSM
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-06)
+See: .planning/PROJECT.md (updated 2026-09-07)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** v0.4.0 milestone completion audit
+**Current focus:** Planning the next milestone
 
 ## Current Position
 
-Phase: 25 (Performance, Artifact Proof & Drone Guidance) — COMPLETE
-Plan: 5 of 5
-Status: Phase verification, Nyquist validation, security verification, and UAT complete
-Last activity: 2026-09-07 — normal locked-uv release readiness proof passed
+Phase: Milestone v0.4.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-07 — Milestone v0.4.0 completed and archived
 
 ## Performance Metrics
 
@@ -206,4 +206,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Run `$gsd-audit-milestone` for the completed v0.4.0 milestone.
+- Start the next milestone with /gsd-new-milestone
