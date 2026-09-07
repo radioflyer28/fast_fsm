@@ -108,9 +108,16 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 23-01-PLAN.md — Promote candidate-complete cold topology and add callable-safe round-trip, snapshot, query, and clone parity.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 23-02-PLAN.md — Preserve plural declarative identity through exact sync/async handler selection and builder preflight.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 23-03-PLAN.md — Complete quick/factory construction parity and lock pure/native compiled-core compatibility.
 
 ### Phase 24: Candidate-Aware Diagnostics & Output
