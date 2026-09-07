@@ -47,7 +47,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 **Milestone Goal:** Add deterministic, priority-aware guarded transition resolution so one `(state, trigger)` selects among finite ordered candidates without external dispatch logic.
 
 - [x] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules. (completed 2026-09-06)
-- [ ] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics.
+- [x] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics. (completed 2026-09-06)
 - [ ] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path.
 - [ ] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority.
 - [ ] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern.
@@ -85,7 +85,7 @@ Plans:
   3. Selection completes before lifecycle callbacks, and one trigger attempt can produce at most one lifecycle, one committed history record, and one success-observer sequence.
   4. Exhausting a group returns one uncommitted selection-stage failure and notifies failure observers once, while an absent trigger remains a distinct resolution failure.
 
-**Plans:** 3/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
@@ -162,7 +162,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
-| 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | In Progress|  |
+| 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
 | 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 0/TBD | Not started | — |

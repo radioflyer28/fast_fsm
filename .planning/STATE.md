@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
-current_phase: 22
-current_phase_name: Ordered Runtime Selection & Lifecycle Integration
-status: verifying
-stopped_at: Completed 22-03-PLAN.md
-last_updated: "2026-09-07T01:15:13.291Z"
+current_phase: 23
+current_phase_name: Construction, Declarative & Serialization Parity
+status: planning
+stopped_at: Phase 22 complete, ready to plan Phase 23
+last_updated: "2026-09-07T01:22:17.042Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 22 execution started
-state_head: c1cecfcbbfb445ecfe82c91d6e7fae286d9ee52d
+last_activity_desc: Phase 22 complete, transitioned to Phase 23
+state_head: 2ebf68ca395bbd077b2ae184897313e8bcb2fe36
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 5
   completed_plans: 5
-  percent: 20
+  percent: 40
 ---
 
 # State: Fast FSM
@@ -29,16 +29,16 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 ## Current Position
 
-Phase: 22 (Ordered Runtime Selection & Lifecycle Integration) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-09-06 — Phase 22 execution started
+Phase: 23 — Construction, Declarative & Serialization Parity
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-06 — Phase 22 complete, transitioned to Phase 23
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 43
+- Total plans completed: 46
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -53,6 +53,7 @@ Last activity: 2026-09-06 — Phase 22 execution started
 | 19 | 8 | - | - |
 | 20 | 6 | - | - |
 | 21 | 2 | - | - |
+| 22 | 3 | - | - |
 
 **Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof; v0.4.0 now has five dependency-ordered phases with full requirement coverage.
 **Per-Plan Metrics:**
@@ -177,7 +178,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-07T01:15:13.263Z
-Stopped at: Completed 22-03-PLAN.md
+Stopped at: Phase 22 complete, ready to plan Phase 23
 Resume file: None
 
 ## Rebuild Log
