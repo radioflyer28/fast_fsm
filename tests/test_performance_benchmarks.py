@@ -8,6 +8,7 @@ while being compatible with mypyc compilation.
 import ast
 import contextlib
 import gc
+import importlib.util
 import inspect
 import io
 import logging
@@ -18,6 +19,7 @@ import textwrap
 import time
 from collections import Counter
 from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import coverage
@@ -41,7 +43,20 @@ from tools import release_evidence  # noqa: E402
 
 
 _COMPLEXITY_TOPOLOGY_SIZES = (4, 64, 512)
+_PRIORITY_GROUP_DEPTHS = (2, 8, 32)
 _COARSE_SCALING_OPERATIONS = 200
+
+
+def _load_performance_demo() -> ModuleType:
+    """Load the runnable reporter without requiring benchmarks to be a package."""
+    spec = importlib.util.spec_from_file_location(
+        "performance_demo", ROOT / "benchmarks" / "performance_demo.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("performance demonstration reporter could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class _CountingDict(dict[str, Any]):
@@ -257,6 +272,123 @@ def test_transition_slot_merge_uses_one_local_immutable_scan_without_sorting() -
         for call in calls
     )
     assert len([node for node in ast.walk(merge) if isinstance(node, ast.For)]) == 1
+
+
+@pytest.mark.parametrize("topology_size", _COMPLEXITY_TOPOLOGY_SIZES)
+@pytest.mark.parametrize("group_depth", _PRIORITY_GROUP_DEPTHS)
+@pytest.mark.parametrize("winner_position", ("first", "middle", "last"))
+def test_priority_group_winner_work_is_ranked_and_topology_independent(
+    topology_size: int, group_depth: int, winner_position: str
+) -> None:
+    """Every representative winner scans only through its local rank."""
+    winner_rank = {
+        "first": 0,
+        "middle": group_depth // 2,
+        "last": group_depth - 1,
+    }[winner_position]
+    source = State("source")
+    machine = StateMachine(source, name=f"group-{group_depth}-{topology_size}")
+    guard_calls: list[int] = []
+
+    class RankedCondition(Condition):
+        __slots__ = ("rank",)
+
+        def __init__(self, rank: int) -> None:
+            super().__init__(f"rank-{rank}", "representative ranked guard")
+            self.rank = rank
+
+        def check(self, *args: object, **kwargs: object) -> bool:
+            guard_calls.append(self.rank)
+            return self.rank == winner_rank
+
+    for rank in range(group_depth):
+        target = State(f"target-{rank}")
+        machine.add_state(target)
+        machine.add_transition(
+            "advance", source, target, RankedCondition(rank), priority=rank
+        )
+    for index in range(topology_size):
+        machine.add_state(State(f"unrelated-{index}"))
+
+    counts = _count_topology_operations(machine)
+    result = machine.trigger("advance")
+
+    assert result.success is True
+    assert result.priority == winner_rank
+    assert guard_calls == list(range(winner_rank + 1))
+    assert sum(counts.values()) == 2
+
+
+@pytest.mark.parametrize("topology_size", _COMPLEXITY_TOPOLOGY_SIZES)
+@pytest.mark.parametrize("group_depth", _PRIORITY_GROUP_DEPTHS)
+def test_priority_group_exhaustion_scans_exactly_its_local_depth(
+    topology_size: int, group_depth: int
+) -> None:
+    """Exhaustion evaluates every local guard without topology-dependent lookup work."""
+    source = State("source")
+    machine = StateMachine(source, name=f"exhausted-{group_depth}-{topology_size}")
+    guard_calls: list[int] = []
+
+    class RejectingCondition(Condition):
+        __slots__ = ("rank",)
+
+        def __init__(self, rank: int) -> None:
+            super().__init__(f"rank-{rank}", "representative exhausted guard")
+            self.rank = rank
+
+        def check(self, *args: object, **kwargs: object) -> bool:
+            guard_calls.append(self.rank)
+            return False
+
+    for rank in range(group_depth):
+        target = State(f"target-{rank}")
+        machine.add_state(target)
+        machine.add_transition(
+            "advance", source, target, RejectingCondition(rank), priority=rank
+        )
+    for index in range(topology_size):
+        machine.add_state(State(f"unrelated-{index}"))
+
+    counts = _count_topology_operations(machine)
+    result = machine.trigger("advance")
+
+    assert result.success is False
+    assert result.stage == "selection"
+    assert guard_calls == list(range(group_depth))
+    assert sum(counts.values()) == 2
+
+
+def test_priority_group_reporter_labels_each_environmental_observation() -> None:
+    """Descriptive benchmark rows expose their environment and finite work shape."""
+    performance_demo = _load_performance_demo()
+    rows = performance_demo.collect_priority_group_observations(
+        topology_sizes=(4,), group_depths=(2,), sample_count=1, iterations=1
+    )
+
+    assert {row["winner_position"] for row in rows} == {
+        "first",
+        "middle",
+        "last",
+        "exhausted",
+    }
+    for row in rows:
+        assert {
+            "python",
+            "implementation",
+            "core_mode",
+            "core_origin",
+            "platform",
+            "topology_size",
+            "group_depth",
+            "winner_position",
+            "guard_evaluations",
+            "sample_count",
+            "operations_per_second",
+        } <= row.keys()
+        assert row["topology_size"] == 4
+        assert row["group_depth"] == 2
+        assert row["sample_count"] == 1
+        assert row["operations_per_second"] > 0
 
 
 def test_add_state_constant_registry_lookup_and_writes_across_topology_sizes() -> None:
