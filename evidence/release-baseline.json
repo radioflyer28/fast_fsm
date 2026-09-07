@@ -1,5 +1,329 @@
 {
   "artifact_evidence": {
+    "conformance": {
+      "payload_leak_free": true,
+      "scenarios": [
+        {
+          "async_detected": true,
+          "builder_sealed": true,
+          "builder_success": true,
+          "declarative_success": true,
+          "family": "builder-declarative",
+          "handler_calls": 1,
+          "id": "builder-declarative.dispatch",
+          "redacted": true,
+          "state": "target"
+        },
+        {
+          "error_redacted": true,
+          "exact_complete": true,
+          "exact_count": 4,
+          "exact_limit": 4,
+          "exhausted_dimension": "max_dense_cells",
+          "family": "diagnostic-budget",
+          "id": "diagnostic.dense_cells-boundary",
+          "one_less_exhausted": true,
+          "one_less_limit": 3,
+          "redacted": true
+        },
+        {
+          "error_redacted": true,
+          "exact_complete": true,
+          "exact_count": 1,
+          "exact_limit": 1,
+          "exhausted_dimension": "max_path_expansions",
+          "family": "diagnostic-budget",
+          "id": "diagnostic.path_expansions-boundary",
+          "one_less_exhausted": true,
+          "one_less_limit": 0,
+          "redacted": true
+        },
+        {
+          "error_redacted": true,
+          "exact_complete": true,
+          "exact_count": 1,
+          "exact_limit": 1,
+          "exhausted_dimension": "max_results",
+          "family": "diagnostic-budget",
+          "id": "diagnostic.results-boundary",
+          "one_less_exhausted": true,
+          "one_less_limit": 0,
+          "redacted": true
+        },
+        {
+          "error_redacted": true,
+          "exact_complete": true,
+          "exact_count": 3,
+          "exact_limit": 3,
+          "exhausted_dimension": "max_work",
+          "family": "diagnostic-budget",
+          "id": "diagnostic.work-boundary",
+          "one_less_exhausted": true,
+          "one_less_limit": 2,
+          "redacted": true
+        },
+        {
+          "canonical_endpoints": true,
+          "committed": false,
+          "duplicate_state_rejected": true,
+          "family": "graph-guard",
+          "guard_context_observed": true,
+          "history": [],
+          "id": "graph.guard-rejection",
+          "redacted": true,
+          "rejected_topology_unchanged": true,
+          "snapshot_facts_exact": true,
+          "snapshot_immutable": true,
+          "stage": "guard",
+          "state": "guard-source",
+          "success": false
+        },
+        {
+          "callback_order": [
+            "source-exit",
+            "destination-enter",
+            "observer-one",
+            "observer-two"
+          ],
+          "committed": true,
+          "family": "lifecycle-result-history",
+          "history": [
+            [
+              "source",
+              "advance",
+              "destination"
+            ]
+          ],
+          "id": "lifecycle.destination-enter-failure",
+          "redacted": true,
+          "stage": "destination-enter",
+          "state": "destination",
+          "success": false
+        },
+        {
+          "callback_order": [
+            "source-exit",
+            "observer-one",
+            "observer-two"
+          ],
+          "committed": false,
+          "family": "lifecycle-result-history",
+          "history": [],
+          "id": "lifecycle.precommit-failure-observation",
+          "redacted": true,
+          "stage": "source-exit",
+          "state": "source",
+          "success": false
+        },
+        {
+          "custom_failure_safe": true,
+          "custom_redactor_called": true,
+          "custom_redactor_safe": true,
+          "family": "logging-redaction",
+          "handler_restored": true,
+          "id": "logging.metadata-redaction",
+          "recorded": true,
+          "redacted": true,
+          "success": true
+        },
+        {
+          "family": "output-containment",
+          "id": "output.grammar-containment",
+          "json_safe": true,
+          "mermaid_safe": true,
+          "output_sha256": "c651d4be0faede2e77d9e6429d741ee31e7e20d7eedfdaf1e86e7e31dac8ca1e",
+          "plantuml_safe": true,
+          "redacted": true
+        },
+        {
+          "family": "ownership-cancellation",
+          "heartbeat_ran": true,
+          "id": "ownership.async-task-serialization",
+          "owner_success": true,
+          "redacted": true,
+          "waiter_blocked_while_owned": true,
+          "waiter_success": true
+        },
+        {
+          "cancelled": true,
+          "family": "ownership-cancellation",
+          "id": "ownership.cancellation-reuse",
+          "redacted": true,
+          "reused": true,
+          "state": "destination"
+        },
+        {
+          "bound_loop_preserved": true,
+          "family": "ownership-cancellation",
+          "foreign_guard_not_evaluated": true,
+          "foreign_loop_rejected": true,
+          "id": "ownership.cross-loop-rejection",
+          "redacted": true
+        },
+        {
+          "baseexception_propagated": true,
+          "family": "ownership-cancellation",
+          "id": "ownership.mutator-baseexception-release",
+          "mutator_admitted_after_release": true,
+          "mutator_rejected_while_owned": true,
+          "redacted": true,
+          "topology_unchanged": true
+        },
+        {
+          "family": "ownership-cancellation",
+          "id": "ownership.reentry-independent-machine",
+          "independent_success": true,
+          "nested_rejected": true,
+          "outer_success": true,
+          "redacted": true
+        },
+        {
+          "family": "ownership-cancellation",
+          "first_success": true,
+          "id": "ownership.sync-thread-serialization",
+          "redacted": true,
+          "second_blocked_while_owned": true,
+          "second_success": true
+        },
+        {
+          "active_priority": -3,
+          "cancelled": true,
+          "family": "priority-selection",
+          "guard_order": [
+            "blocked"
+          ],
+          "history_count": 0,
+          "id": "priority.async.cancellation",
+          "lower_candidate_suppressed": true,
+          "observer_count": 1,
+          "post_cancellation_reuse": true,
+          "redacted": true,
+          "stage": "guard",
+          "state": "source"
+        },
+        {
+          "active_priority": -3,
+          "committed": false,
+          "family": "priority-selection",
+          "guard_order": [
+            "raising"
+          ],
+          "history_count": 0,
+          "id": "priority.async.guard_exception",
+          "lower_candidate_suppressed": true,
+          "observer_count": 1,
+          "redacted": true,
+          "stage": "guard",
+          "state": "source",
+          "success": false
+        },
+        {
+          "committed": true,
+          "family": "priority-selection",
+          "guard_order": [
+            "rejected",
+            "winner"
+          ],
+          "history_count": 1,
+          "history_priority": 3,
+          "id": "priority.async.winner",
+          "lower_candidate_suppressed": true,
+          "redacted": true,
+          "result_priority": 3,
+          "state": "winner",
+          "success": true,
+          "target": "winner"
+        },
+        {
+          "all_candidates_evaluated": true,
+          "committed": false,
+          "family": "priority-selection",
+          "guard_order": [
+            "first",
+            "second"
+          ],
+          "history_count": 0,
+          "id": "priority.sync.exhaustion",
+          "observer_count": 1,
+          "redacted": true,
+          "result_priority": null,
+          "stage": "selection",
+          "state": "source",
+          "success": false
+        },
+        {
+          "active_priority": -3,
+          "committed": false,
+          "family": "priority-selection",
+          "guard_order": [
+            "raising"
+          ],
+          "history_count": 0,
+          "id": "priority.sync.guard_exception",
+          "lower_candidate_suppressed": true,
+          "observer_count": 1,
+          "redacted": true,
+          "stage": "guard",
+          "state": "source",
+          "success": false
+        },
+        {
+          "committed": true,
+          "family": "priority-selection",
+          "guard_order": [
+            "rejected",
+            "winner"
+          ],
+          "history_count": 1,
+          "history_priority": 3,
+          "id": "priority.sync.winner",
+          "lower_candidate_suppressed": true,
+          "redacted": true,
+          "result_priority": 3,
+          "state": "winner",
+          "success": true,
+          "target": "winner"
+        },
+        {
+          "async_callback_order": [
+            "exit",
+            "enter"
+          ],
+          "async_committed": true,
+          "async_history": [
+            [
+              "source",
+              "advance",
+              "destination"
+            ]
+          ],
+          "async_stage": null,
+          "async_state": "destination",
+          "async_success": true,
+          "family": "sync-async",
+          "id": "sync-async.equivalence",
+          "redacted": true,
+          "sync_callback_order": [
+            "exit",
+            "enter"
+          ],
+          "sync_committed": true,
+          "sync_history": [
+            [
+              "source",
+              "advance",
+              "destination"
+            ]
+          ],
+          "sync_stage": null,
+          "sync_state": "destination",
+          "sync_success": true
+        }
+      ],
+      "schema_version": 1,
+      "semantic_sha256": "2b8012aedb05353c99636a1b4f1e82645224662ee2be6d1613030dbcfd23caa9",
+      "suite_sha256": "40ae2df5dc0e013f025403099bb80f38ee8d9ca731c370fb5790cdf724c3069a"
+    },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
@@ -50,7 +374,7 @@
       "os": "macos",
       "requires_origin": true,
       "requires_parity": true,
-      "requires_performance": true,
+      "requires_performance": false,
       "sdist_parent": null
     },
     {
@@ -94,7 +418,7 @@
       "os": "macos",
       "requires_origin": true,
       "requires_parity": true,
-      "requires_performance": true,
+      "requires_performance": false,
       "sdist_parent": "sdist-archive"
     },
     {
@@ -161,7 +485,7 @@
           }
         },
         "phase": "16",
-        "source_path": ".planning/phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
+        "source_path": ".planning/milestones/v0.3.0-phases/16-canonical-graph-dispatch-invariants/16-PERFORMANCE-EVIDENCE.md",
         "source_sha256": "6d69ac9a130d745e3fea8ecd09dc854f8a2c89dd1fadee623a5325d8c39c1c16"
       },
       {
@@ -217,7 +541,7 @@
           }
         },
         "phase": "17",
-        "source_path": ".planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
+        "source_path": ".planning/milestones/v0.3.0-phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md",
         "source_sha256": "8db9a3ee557a7618db83f987b7b7595c6acf9a82450514f24bd702b3e23eec47"
       },
       {
@@ -273,7 +597,7 @@
           }
         },
         "phase": "18",
-        "source_path": ".planning/phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
+        "source_path": ".planning/milestones/v0.3.0-phases/18-safe-ownership-concurrency/18-PERFORMANCE-EVIDENCE.md",
         "source_sha256": "4174b1ffb592d9914dce3bf15d7f740ddfcd3c1d048d732d8300452ec1f97656"
       },
       {
@@ -326,7 +650,7 @@
           }
         },
         "phase": "19",
-        "source_path": ".planning/phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
+        "source_path": ".planning/milestones/v0.3.0-phases/19-bounded-diagnostics-safe-output/19-PERFORMANCE-EVIDENCE.md",
         "source_sha256": "7d4912a71182084deadbacd851acffae9918b25d34d719245fe7f271e883bd1c"
       }
     ],
@@ -350,7 +674,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.086768,
+      "elapsed_seconds": 0.093441,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -360,7 +684,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 460997.45,
+      "ops_per_second": 428078.38,
       "warmup_operations": 2000
     }
   },
@@ -368,7 +692,7 @@
     "observations": [
       {
         "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-        "elapsed_seconds": 0.086768,
+        "elapsed_seconds": 0.093441,
         "environment": {
           "implementation": "cpython",
           "machine": "arm64",
@@ -378,7 +702,7 @@
         "metric": "StateMachine.trigger operations per second",
         "mode": "pure",
         "operations": 40000,
-        "ops_per_second": 460997.45,
+        "ops_per_second": 428078.38,
         "warmup_operations": 2000
       }
     ],
@@ -387,18 +711,18 @@
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 97.52,
-      "total_percent": 98.11
+      "core_percent": 96.15,
+      "total_percent": 97.26
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1626,
+      "collected": 1798,
       "errors": 0,
       "failed": 0,
-      "passed": 1626,
-      "skipped": 0
+      "passed": 1792,
+      "skipped": 6
     }
   },
   "release_identity": {
@@ -429,7 +753,7 @@
       },
       {
         "classification": "slot-protected",
-        "line": 104,
+        "line": 107,
         "qualified_name": "fast_fsm._diagnostics._DiagnosticBudget",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
@@ -441,7 +765,7 @@
       },
       {
         "classification": "slot-protected",
-        "line": 91,
+        "line": 94,
         "qualified_name": "fast_fsm._diagnostics._DiagnosticGraph",
         "source_path": "src/fast_fsm/_diagnostics.py"
       },
@@ -568,116 +892,134 @@
       },
       {
         "classification": "slot-protected",
-        "line": 4382,
+        "line": 5006,
         "qualified_name": "fast_fsm.core.AsyncDeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 3275,
+        "line": 3741,
         "qualified_name": "fast_fsm.core.AsyncStateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 721,
+        "line": 846,
         "qualified_name": "fast_fsm.core.CallbackState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4244,
+        "line": 4842,
         "qualified_name": "fast_fsm.core.DeclarativeState",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4462,
+        "line": 5091,
         "qualified_name": "fast_fsm.core.FSMBuilder",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4958,
+        "line": 5606,
         "qualified_name": "fast_fsm.core.FSMLoggingHandle",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 124,
+        "line": 144,
         "qualified_name": "fast_fsm.core.FSMTraceEvent",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 650,
+        "line": 775,
         "qualified_name": "fast_fsm.core.State",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 751,
+        "line": 876,
         "qualified_name": "fast_fsm.core.StateMachine",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 579,
+        "line": 611,
         "qualified_name": "fast_fsm.core.TransitionEntry",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "registered-exception",
         "exception_reason": "@mypyc_attr(native_class=False) preserves normal Python exception behavior.",
-        "line": 500,
+        "line": 525,
         "qualified_name": "fast_fsm.core.TransitionError",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 555,
+        "line": 581,
         "qualified_name": "fast_fsm.core.TransitionRecord",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 519,
+        "line": 544,
         "qualified_name": "fast_fsm.core.TransitionResult",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 4950,
+        "line": 750,
+        "qualified_name": "fast_fsm.core._DeclarativeHandler",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 739,
+        "qualified_name": "fast_fsm.core._DeclarativeHandlerMetadata",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 5598,
         "qualified_name": "fast_fsm.core._FSMStreamHandler",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 609,
+        "line": 708,
         "qualified_name": "fast_fsm.core._GraphSnapshot",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 596,
+        "line": 692,
         "qualified_name": "fast_fsm.core._GraphTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 638,
+        "line": 762,
         "qualified_name": "fast_fsm.core._PreparedDispatch",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 628,
+        "line": 727,
         "qualified_name": "fast_fsm.core._PreparedTransition",
         "source_path": "src/fast_fsm/core.py"
       },
       {
         "classification": "slot-protected",
-        "line": 541,
+        "line": 656,
+        "qualified_name": "fast_fsm.core._TransitionGroup",
+        "source_path": "src/fast_fsm/core.py"
+      },
+      {
+        "classification": "slot-protected",
+        "line": 634,
         "qualified_name": "fast_fsm.validation.EnhancedFSMValidator",
         "source_path": "src/fast_fsm/validation.py"
       },
@@ -689,7 +1031,7 @@
       },
       {
         "classification": "slot-protected",
-        "line": 503,
+        "line": 596,
         "qualified_name": "fast_fsm.validation.ValidationIssue",
         "source_path": "src/fast_fsm/validation.py"
       }
@@ -702,7 +1044,7 @@
       },
       {
         "has_instance_dict": false,
-        "instance_size_bytes": 96,
+        "instance_size_bytes": 104,
         "qualified_name": "fast_fsm.core.TransitionResult"
       }
     ],
@@ -925,6 +1267,16 @@
       {
         "dictoffset": 0,
         "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._DeclarativeHandler"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._DeclarativeHandlerMetadata"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
         "qualified_name": "fast_fsm.core._FSMStreamHandler"
       },
       {
@@ -946,6 +1298,11 @@
         "dictoffset": 0,
         "has_instance_dict": false,
         "qualified_name": "fast_fsm.core._PreparedTransition"
+      },
+      {
+        "dictoffset": 0,
+        "has_instance_dict": false,
+        "qualified_name": "fast_fsm.core._TransitionGroup"
       },
       {
         "dictoffset": 0,

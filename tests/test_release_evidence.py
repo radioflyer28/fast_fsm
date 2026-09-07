@@ -2281,6 +2281,76 @@ def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_
     assert observed_wheel and not observed_wheel[0].parent.exists()
 
 
+def test_child_conformance_accepts_canonical_json_object_order() -> None:
+    """Installed JSON remains valid after deterministic key canonicalization."""
+    conformance = artifact_conformance.collect_conformance()
+    canonical_child = json.loads(json.dumps(conformance, sort_keys=True))
+
+    assert (
+        release_evidence._validate_child_conformance(
+            canonical_child,
+            expected_suite_sha256=conformance["suite_sha256"],
+        )
+        == canonical_child
+    )
+
+
+def test_manifest_records_source_conformance_via_shared_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The release baseline records the exact clean-source conformance oracle."""
+    conformance = artifact_conformance.collect_conformance()
+    monkeypatch.setattr(
+        release_evidence,
+        "_collect_test_and_coverage",
+        lambda **_kwargs: (
+            {"collected": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0},
+            {"total_percent": 100.0, "core_percent": 100.0},
+        ),
+    )
+    monkeypatch.setattr(
+        release_evidence,
+        "verify_wheels",
+        lambda *_args, **_kwargs: {"artifacts": []},
+    )
+    monkeypatch.setattr(
+        release_evidence,
+        "slots_policy",
+        lambda *_args, **_kwargs: {
+            "inventory": [],
+            "runtime_layouts": [],
+            "registered_exceptions": [],
+            "representative_measurements": [],
+        },
+    )
+    monkeypatch.setattr(
+        release_evidence,
+        "_collect_trigger_benchmark",
+        lambda: {"fixture": "benchmark"},
+    )
+    monkeypatch.setattr(
+        release_evidence, "_resolved_uv_version", lambda **_kwargs: "0.12.6"
+    )
+    monkeypatch.setattr(
+        release_evidence, "_distribution_version", lambda _name: "fixture"
+    )
+    monkeypatch.setattr(
+        release_evidence, "_locked_package_version", lambda _name: "fixture"
+    )
+
+    manifest = release_evidence._collect_manifest_after_preflight(
+        source_root=ROOT / "src",
+        source={
+            "core_origin": "src/fast_fsm/core.py",
+            "distribution_version": "0.3.0",
+        },
+        environment={},
+        wheel_paths=(),
+    )
+
+    assert manifest["artifact_evidence"]["conformance"] == conformance
+
+
 @pytest.mark.parametrize("count", [0, 2])
 def test_temporary_wheel_selection_requires_exactly_one_archive(
     tmp_path: Path, count: int

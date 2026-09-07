@@ -2551,6 +2551,54 @@ def _expected_conformance_suite_sha256() -> str:
     return value
 
 
+def _ordered_conformance_for_contract(
+    value: Mapping[str, Any], contract: Any
+) -> dict[str, Any]:
+    """Restore declaration order after JSON's canonical object-key ordering.
+
+    The child emits sorted JSON for reproducible digests, while the shared
+    oracle intentionally checks declaration-order fields to reject schema drift.
+    Validate each exact key set before rebuilding that trusted declaration order.
+    """
+    definitions = getattr(contract, "_SCENARIO_DEFINITIONS", None)
+    if not isinstance(definitions, tuple):
+        raise EvidenceError("Installed artifact conformance contract is incomplete.")
+    expected_fields_by_id: dict[str, tuple[str, ...]] = {}
+    for definition in definitions:
+        if not isinstance(definition, Mapping):
+            raise EvidenceError(
+                "Installed artifact conformance contract is incomplete."
+            )
+        identifier = definition.get("id")
+        fields = definition.get("fields")
+        if not isinstance(identifier, str) or not isinstance(fields, tuple):
+            raise EvidenceError(
+                "Installed artifact conformance contract is incomplete."
+            )
+        expected_fields_by_id[identifier] = fields
+
+    scenarios = value["scenarios"]
+    if not isinstance(scenarios, list):
+        raise EvidenceError("Installed artifact conformance scenario set is invalid.")
+    ordered_scenarios: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        if not isinstance(scenario, Mapping):
+            raise EvidenceError("Installed artifact conformance scenario is malformed.")
+        identifier = scenario.get("id")
+        fields = expected_fields_by_id.get(identifier)
+        if fields is None or set(scenario) != set(fields):
+            raise EvidenceError("Installed artifact conformance scenario is malformed.")
+        ordered_scenarios.append({field: scenario[field] for field in fields})
+
+    return {
+        "schema_version": value["schema_version"],
+        "suite_sha256": value["suite_sha256"],
+        "scenarios": ordered_scenarios,
+        "semantic_sha256": value["semantic_sha256"],
+        "payload_leak_free": value["payload_leak_free"],
+    }
+
+
 def _path_is_contained(path: Path, root: Path) -> bool:
     """Return whether a resolved artifact-runtime path is inside its fresh env."""
     try:
@@ -3273,11 +3321,14 @@ def _validate_child_conformance(
         raise EvidenceError(
             "Installed artifact conformance semantic digest is invalid."
         )
-    validator = getattr(_load_conformance_contract(), "validate_conformance", None)
-    if not callable(validator):
-        raise EvidenceError("Installed artifact conformance contract is incomplete.")
     try:
-        validator(value)
+        contract = _load_conformance_contract()
+        validator = getattr(contract, "validate_conformance", None)
+        if not callable(validator):
+            raise EvidenceError(
+                "Installed artifact conformance contract is incomplete."
+            )
+        validator(_ordered_conformance_for_contract(value, contract))
     except Exception as error:
         raise EvidenceError(
             "Installed artifact conformance contradicts required contract."
@@ -5616,6 +5667,13 @@ def _collect_manifest_after_preflight(
 ) -> dict[str, Any]:
     """Collect release facts after a caller has proved the pure source origin."""
     tests, coverage = _collect_test_and_coverage(environment=environment)
+    contract = _load_conformance_contract()
+    collector = getattr(contract, "collect_conformance", None)
+    if not callable(collector):
+        raise EvidenceError("Installed artifact conformance contract is incomplete.")
+    source_conformance = _validate_child_conformance(
+        collector(), expected_suite_sha256=_expected_conformance_suite_sha256()
+    )
     wheel_artifacts = verify_wheels(
         wheel_paths, expected_version=source["distribution_version"]
     )["artifacts"]
@@ -5676,6 +5734,7 @@ def _collect_manifest_after_preflight(
         "artifact_evidence": {
             "wheels": wheel_artifacts,
             "source": {"core_origin": source["core_origin"]},
+            "conformance": source_conformance,
         },
         "slots_policy": {
             "inventory": slots["inventory"],
