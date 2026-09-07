@@ -5,11 +5,11 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 24
 current_phase_name: Candidate-Aware Diagnostics & Output
 status: planning
-stopped_at: Phase 23 complete, ready to plan Phase 24
-last_updated: "2026-09-07T03:09:09.388Z"
+stopped_at: Phase 24 context gathered
+last_updated: "2026-09-07T03:12:21.048Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 23 complete, transitioned to Phase 24
-state_head: 44bac303a3c28c3bd929fa240c1f984f0261c853
+state_head: eab851b5e8cb97f0ad5164646d4b448011637b4c
 progress:
   total_phases: 5
   completed_phases: 3
@@ -178,9 +178,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T01:24:48.340Z
-Stopped at: Phase 23 complete, ready to plan Phase 24
-Resume file: .planning/phases/23-construction-declarative-serialization-parity/23-CONTEXT.md
+Last session: 2026-09-07T03:12:20.971Z
+Stopped at: Phase 24 context gathered
+Resume file: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md
 
 ## Rebuild Log
 
