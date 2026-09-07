@@ -48,7 +48,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 
 - [x] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules. (completed 2026-09-06)
 - [x] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics. (completed 2026-09-06)
-- [ ] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path.
+- [x] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path. (completed 2026-09-06)
 - [ ] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority.
 - [ ] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern.
 
@@ -105,20 +105,20 @@ Plans:
   3. `to_dict()` followed by `from_dict()` preserves every candidate and its priority, including multiple candidates with the same source, trigger, and target.
   4. Deserialization can attach guards to a specific candidate without serializing callables, and ambiguous legacy guard keys fail explicitly rather than attaching to the wrong transition.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 **Wave 1**
 
-- [ ] 23-01-PLAN.md — Promote candidate-complete cold topology and add callable-safe round-trip, snapshot, query, and clone parity.
+- [x] 23-01-PLAN.md — Promote candidate-complete cold topology and add callable-safe round-trip, snapshot, query, and clone parity.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 23-02-PLAN.md — Preserve plural declarative identity through exact sync/async handler selection and builder preflight.
+- [x] 23-02-PLAN.md — Preserve plural declarative identity through exact sync/async handler selection and builder preflight.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 23-03-PLAN.md — Complete quick/factory construction parity and lock pure/native compiled-core compatibility.
+- [x] 23-03-PLAN.md — Complete quick/factory construction parity and lock pure/native compiled-core compatibility.
 
 ### Phase 24: Candidate-Aware Diagnostics & Output
 
@@ -176,7 +176,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
-| 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
+| 23. Construction, Declarative & Serialization Parity | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
 | 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 0/TBD | Not started | — |
 

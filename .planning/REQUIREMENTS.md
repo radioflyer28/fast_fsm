@@ -43,15 +43,15 @@ research synthesis.
 
 ### Complete Library Parity
 
-- [ ] **PAR-01**: Declarative handlers, factories, quick builders, and
+- [x] **PAR-01**: Declarative handlers, factories, quick builders, and
   deserialization preserve candidate identity and priority without singular
   trigger-key overwrites.
 
-- [ ] **PAR-02**: `can_trigger*()`, `TransitionResult`, transition history,
+- [x] **PAR-02**: `can_trigger*()`, `TransitionResult`, transition history,
   tracing, cloning, topology snapshots, and query helpers expose coherent
   priority-aware behavior without changing callback signatures.
 
-- [ ] **PAR-03**: `to_dict()`/`from_dict()` round-trip candidate topology and
+- [x] **PAR-03**: `to_dict()`/`from_dict()` round-trip candidate topology and
   candidate-specific guard attachment without serializing callables.
 
 ### Diagnostics and Output
@@ -131,9 +131,9 @@ research synthesis.
 | SEL-02 | Phase 22 | Complete |
 | SEL-03 | Phase 22 | Complete |
 | SEL-04 | Phase 22 | Complete |
-| PAR-01 | Phase 23 | Pending |
-| PAR-02 | Phase 23 | Pending |
-| PAR-03 | Phase 23 | Pending |
+| PAR-01 | Phase 23 | Complete |
+| PAR-02 | Phase 23 | Complete |
+| PAR-03 | Phase 23 | Complete |
 | DIAG-01 | Phase 24 | Pending |
 | DIAG-02 | Phase 24 | Pending |
 | PERF-01 | Phase 25 | Pending |

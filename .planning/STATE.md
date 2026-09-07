@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
-current_phase: 23
-current_phase_name: Construction, Declarative & Serialization Parity
-status: executing
-stopped_at: Phase 23 context gathered
-last_updated: "2026-09-07T02:05:51.883Z"
+current_phase: 24
+current_phase_name: Candidate-Aware Diagnostics & Output
+status: planning
+stopped_at: Phase 23 complete, ready to plan Phase 24
+last_updated: "2026-09-07T03:09:09.388Z"
 last_activity: 2026-09-06
-last_activity_desc: Phase 22 complete, transitioned to Phase 23
-state_head: fc17567db5d151007469e64f0b8c0cfc55fce9da
+last_activity_desc: Phase 23 complete, transitioned to Phase 24
+state_head: 44bac303a3c28c3bd929fa240c1f984f0261c853
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 5
-  percent: 40
+  completed_plans: 8
+  percent: 60
 ---
 
 # State: Fast FSM
@@ -25,20 +25,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-06)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** Phase 22 — Ordered Runtime Selection & Lifecycle Integration
+**Current focus:** Phase 24 — Candidate-Aware Diagnostics & Output
 
 ## Current Position
 
-Phase: 23 (Construction, Declarative & Serialization Parity) — READY TO EXECUTE
+Phase: 24 — Candidate-Aware Diagnostics & Output
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-06 — Phase 22 complete, transitioned to Phase 23
+Status: Ready to plan
+Last activity: 2026-09-06 — Phase 23 complete, transitioned to Phase 24
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 46
+- Total plans completed: 49
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -54,6 +54,7 @@ Last activity: 2026-09-06 — Phase 22 complete, transitioned to Phase 23
 | 20 | 6 | - | - |
 | 21 | 2 | - | - |
 | 22 | 3 | - | - |
+| 23 | 3 | - | - |
 
 **Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof; v0.4.0 now has five dependency-ordered phases with full requirement coverage.
 **Per-Plan Metrics:**
@@ -178,7 +179,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-07T01:24:48.340Z
-Stopped at: Phase 23 context gathered
+Stopped at: Phase 23 complete, ready to plan Phase 24
 Resume file: .planning/phases/23-construction-declarative-serialization-parity/23-CONTEXT.md
 
 ## Rebuild Log
