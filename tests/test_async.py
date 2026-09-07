@@ -6,6 +6,7 @@ FSMBuilder async auto-detection, and AsyncDeclarativeState.
 """
 
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -1263,8 +1264,11 @@ class TestAsyncPriorityCloneParity:
         assert len(clone._transitions["idle"]["go"].entries) == 3
 
     def test_async_selector_does_not_call_cold_projection_helper(self):
-        import inspect
-
-        selector_source = inspect.getsource(AsyncStateMachine._select_transition_async)
+        core_source = (
+            Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+        ).read_text()
+        start = core_source.index("    async def _select_transition_async(")
+        end = core_source.index("    async def _select_async_candidate(", start)
+        selector_source = core_source[start:end]
         assert "_transition_entries" not in selector_source
         assert "slot.entries" in selector_source

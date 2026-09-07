@@ -9,6 +9,7 @@ tool snapshot without turning any of those details into public API.
 from __future__ import annotations
 
 from enum import IntEnum
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -185,9 +186,12 @@ def test_clone_shares_candidate_identity_but_not_candidate_tables() -> None:
 
 def test_priority_selectors_do_not_call_the_cold_projection_helper() -> None:
     """Phase 22 keeps direct singleton/group selection independently guarded."""
-    import inspect
-
-    selector_source = inspect.getsource(StateMachine._select_transition_sync)
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    start = core_source.index("    def _select_transition_sync(")
+    end = core_source.index("    def _select_sync_candidate(", start)
+    selector_source = core_source[start:end]
     assert "_transition_entries" not in selector_source
     assert "slot.entries" in selector_source
 
