@@ -4,17 +4,17 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 current_phase: 22
 current_phase_name: Ordered Runtime Selection & Lifecycle Integration
-status: executing
-stopped_at: Completed 22-02-PLAN.md
-last_updated: "2026-09-07T00:58:16.239Z"
+status: verifying
+stopped_at: Completed 22-03-PLAN.md
+last_updated: "2026-09-07T01:15:13.291Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 22 execution started
-state_head: aec0731b1d2d02014d22d267dbb5141354ea3131
+state_head: c1cecfcbbfb445ecfe82c91d6e7fae286d9ee52d
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
   percent: 20
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 Phase: 22 (Ordered Runtime Selection & Lifecycle Integration) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-06 — Phase 22 execution started
 
 ## Performance Metrics
@@ -84,6 +84,7 @@ Last activity: 2026-09-06 — Phase 22 execution started
 | Phase 21-priority-contract-atomic-registration P02 | 48m | 2 tasks | 6 files |
 | Phase 22 P01 | 6m | 2 tasks | 4 files |
 | Phase 22 P02 | 6m | 2 tasks | 4 files |
+| Phase 22 P03 | 15 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -153,6 +154,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 22]: Synchronous selection keeps singleton dispatch direct and scans only frozen priority groups before one lifecycle handoff.
 - [Phase 22]: Group rejection is private scan control; exceptions are terminal and exhaustion is one redacted selection failure.
 - [Phase 22]: Async candidate selection awaits one stored candidate stage at a time and uses a task-local cancellation-stage marker only within the owned trigger boundary.
+- [Phase 22]: Phase 22: Carry selected TransitionEntry priority as additive runtime metadata without passing it through caller callbacks.
+- [Phase 22]: Phase 22: Use AST and counted-operation tests to lock direct singleton lookup and local candidate-group work.
 
 ### Pending Todos
 
@@ -173,8 +176,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T00:58:16.213Z
-Stopped at: Completed 22-02-PLAN.md
+Last session: 2026-09-07T01:15:13.263Z
+Stopped at: Completed 22-03-PLAN.md
 Resume file: None
 
 ## Rebuild Log
