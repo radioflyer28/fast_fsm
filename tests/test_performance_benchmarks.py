@@ -9,13 +9,11 @@ import ast
 import contextlib
 import gc
 import importlib.util
-import inspect
 import io
 import logging
 import os
 from pathlib import Path
 import sys
-import textwrap
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -25,6 +23,7 @@ from typing import Any
 import coverage
 import pytest
 
+import fast_fsm.core as fast_fsm_core
 from fast_fsm.core import (
     AsyncStateMachine,
     State,
@@ -45,6 +44,12 @@ from tools import release_evidence  # noqa: E402
 _COMPLEXITY_TOPOLOGY_SIZES = (4, 64, 512)
 _PRIORITY_GROUP_DEPTHS = (2, 8, 32)
 _COARSE_SCALING_OPERATIONS = 200
+
+
+def _expected_mapping_operations() -> int:
+    """Account for mypyc bypassing Python mapping instrumentation."""
+    suffix = Path(fast_fsm_core.__file__ or "").suffix
+    return 0 if suffix in {".dll", ".pyd", ".so"} else 2
 
 
 def _load_performance_demo() -> ModuleType:
@@ -255,9 +260,7 @@ def test_priority_group_work_stops_at_winner_and_ignores_unrelated_topology() ->
 
 def test_transition_slot_merge_uses_one_local_immutable_scan_without_sorting() -> None:
     """Grouped insertion may scan one published tuple but never comparison-sort it."""
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(StateMachine._merge_transition_slot))
-    )
+    tree = ast.parse((ROOT / "src" / "fast_fsm" / "core.py").read_text())
     merge = next(
         node
         for node in ast.walk(tree)
@@ -316,7 +319,7 @@ def test_priority_group_winner_work_is_ranked_and_topology_independent(
     assert result.success is True
     assert result.priority == winner_rank
     assert guard_calls == list(range(winner_rank + 1))
-    assert sum(counts.values()) == 2
+    assert sum(counts.values()) == _expected_mapping_operations()
 
 
 @pytest.mark.parametrize("topology_size", _COMPLEXITY_TOPOLOGY_SIZES)
@@ -355,7 +358,7 @@ def test_priority_group_exhaustion_scans_exactly_its_local_depth(
     assert result.success is False
     assert result.stage == "selection"
     assert guard_calls == list(range(group_depth))
-    assert sum(counts.values()) == 2
+    assert sum(counts.values()) == _expected_mapping_operations()
 
 
 def test_priority_group_reporter_labels_each_environmental_observation() -> None:
