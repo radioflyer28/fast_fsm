@@ -398,6 +398,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "condition_name",
             "priority",
             "condition_ref",
+            "statically_unconditional",
         },
         "_GraphSnapshot": {
             "name",
