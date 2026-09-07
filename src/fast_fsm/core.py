@@ -1194,7 +1194,14 @@ class StateMachine:
             raise TypeError("from_dict: conditions must be a dictionary")
 
         parsed_rows: List[
-            Tuple[int, str, Union[str, List[str]], str, int, Optional[str]]
+            Tuple[
+                int,
+                str,
+                Union[str, List[Union[str, State]]],
+                str,
+                int,
+                Optional[str],
+            ]
         ] = []
         expanded_candidate_counts: Dict[str, int] = {}
         all_state_names: set[str] = {initial, *explicit}
@@ -1225,9 +1232,12 @@ class StateMachine:
                     raise ValueError(
                         f"from_dict: transition[{index}] field 'from' must be a non-empty string or list of non-empty strings"
                     )
-                sources: Union[str, List[str]] = list(raw_sources)
-                expanded_count = len(sources)
-                all_state_names.update(sources)
+                source_names = list(raw_sources)
+                sources: Union[str, List[Union[str, State]]] = cast(
+                    List[Union[str, State]], source_names
+                )
+                expanded_count = len(source_names)
+                all_state_names.update(source_names)
             elif isinstance(raw_sources, str) and raw_sources:
                 sources = raw_sources
                 expanded_count = 1
@@ -2211,8 +2221,8 @@ class StateMachine:
         reachable = set()
 
         for slot in self._transitions.get(state_name, {}).values():
-            entry = _require_singleton_entry(slot)
-            reachable.add(entry.to_state.name)
+            for entry in _transition_entries(slot):
+                reachable.add(entry.to_state.name)
 
         return list(reachable)
 
@@ -2242,8 +2252,10 @@ class StateMachine:
             return False
 
         if to_state is not None:
-            entry = _require_singleton_entry(self._transitions[state_name][trigger])
-            return entry.to_state.name == to_state
+            return any(
+                entry.to_state.name == to_state
+                for entry in _transition_entries(self._transitions[state_name][trigger])
+            )
 
         return True
 
