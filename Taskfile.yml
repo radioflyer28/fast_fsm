@@ -123,22 +123,37 @@ tasks:
     cmds:
       - uv run python {{.EVIDENCE_TOOL}} verify-source --json
 
+  release-proof-environment-check:
+    internal: true
+    desc: Require the reviewed offline release-proof environment before source checks
+    cmds:
+      - test "${UV_OFFLINE:-}" = "1" || { printf '%s\n' 'release proof requires caller-provided UV_OFFLINE=1' >&2; exit 1; }
+      - |
+          uv_version="$(uv --version)"
+          case "$uv_version" in
+            "uv 0.12.6"|"uv 0.12.6 "*) ;;
+            *) printf '%s\n' "release proof requires uv 0.12.6, resolved $uv_version" >&2; exit 1 ;;
+          esac
+      - task: pure-source-check
+
   release-baseline-write:
     desc: Intentionally regenerate the tracked pure-source release baseline
+    deps:
+      - task: release-proof-environment-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv sync --locked --all-groups
-      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
       - uv run python {{.EVIDENCE_TOOL}} evidence --write --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
 
   release-baseline-check:
     desc: Read-only pure-source release evidence freshness and coverage check
+    deps:
+      - task: release-proof-environment-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv sync --locked --all-groups
-      - uv run python {{.EVIDENCE_TOOL}} verify-source --json
       - uv run python {{.EVIDENCE_TOOL}} evidence --check --manifest {{.EVIDENCE_MANIFEST}} --build-wheel
 
   release-history-check:
@@ -294,7 +309,7 @@ tasks:
   release-installed-artifacts-check:
     desc: Capture clean source then prove direct pure and compiled installed parity
     deps:
-      - task: pure-source-check
+      - task: release-proof-environment-check
     cmds:
       - |
           uv run python - <<'PY'
@@ -469,6 +484,8 @@ tasks:
 
   release-installed-performance-check:
     desc: Prove the installed native compiled median without using historical or pure observations
+    deps:
+      - task: release-proof-environment-check
     cmds:
       - |
           uv run python - <<'PY'
@@ -497,6 +514,8 @@ tasks:
 
   release-readiness-check:
     desc: Run ordered local-only release proof; ty remains explicitly advisory
+    deps:
+      - task: release-proof-environment-check
     cmds:
       - task: format-check
       - task: lint
@@ -504,7 +523,6 @@ tasks:
       - task: test
       - task: docs-check
       - task: docs-test
-      - task: pure-source-check
       - task: release-baseline-check
       - task: release-identity-check
       - task: release-installed-artifacts-check
@@ -609,8 +627,9 @@ tasks:
 
   release-gate:
     desc: "Complete local release gate with named components and no hidden shell chain"
+    deps:
+      - task: release-proof-environment-check
     cmds:
-      - task: pure-source-check
       - task: format-check
       - task: lint
       - task: typecheck-mypy

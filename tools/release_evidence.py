@@ -47,6 +47,20 @@ PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
 REQUIRED_UV_VERSION = "0.12.6"
 MANIFEST_SCHEMA_VERSION = 2
+RELEASE_BASELINE_PATH = (
+    REPOSITORY_ROOT / "evidence" / "release-baseline.json"
+).resolve()
+
+_RELEASE_BASELINE_STABLE_REFRESH_PATHS = (
+    ("quality_baseline", "tests", "collected"),
+    ("quality_baseline", "tests", "passed"),
+)
+_RELEASE_BASELINE_RAW_REFRESH_PATHS = (
+    *_RELEASE_BASELINE_STABLE_REFRESH_PATHS,
+    ("measurement_environment",),
+    ("performance_contract", "observation"),
+    ("pure_source_performance", "observations"),
+)
 
 _RELEASE_VERSION = "0.3.0"
 _SUPPORTED_CPYTHON_MINORS = ("3.10", "3.11", "3.12", "3.13", "3.14")
@@ -5552,6 +5566,13 @@ def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
     return version
 
 
+def _require_release_proof_environment(*, environment: Mapping[str, str]) -> str:
+    """Fail closed unless evidence runs offline with the reviewed uv executable."""
+    if environment.get("UV_OFFLINE") != "1":
+        raise EvidenceError("Release evidence requires caller-provided UV_OFFLINE=1.")
+    return _resolved_uv_version(environment=environment)
+
+
 def _source_preflight(
     *, source_root: Path, environment: Mapping[str, str]
 ) -> dict[str, str]:
@@ -5787,6 +5808,7 @@ def collect_manifest(
         raise EvidenceError("Use either supplied wheels or --build-wheel, not both.")
     resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
     environment = _command_environment()
+    _require_release_proof_environment(environment=environment)
     source = _source_preflight(
         source_root=resolved_source_root, environment=environment
     )
@@ -5857,6 +5879,154 @@ def write_or_check_manifest(
             + "\n".join(f"  - {difference}" for difference in differences)
         )
     return dict(manifest)
+
+
+def _manifest_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a JSON manifest without retaining mutable caller-owned containers."""
+    projection = json.loads(serialize_manifest(manifest))
+    if not isinstance(projection, dict):  # pragma: no cover - serializer contract.
+        raise EvidenceError("Release evidence manifest must be a JSON object.")
+    return projection
+
+
+def _manifest_value_at_path(manifest: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    """Return one required manifest field with a precise fail-closed error."""
+    current: Any = manifest
+    rendered_path = ".".join(path)
+    for part in path:
+        if not isinstance(current, Mapping) or part not in current:
+            raise EvidenceError(
+                f"Release baseline refresh requires {rendered_path} to be present."
+            )
+        current = current[part]
+    return current
+
+
+def _manifest_without_paths(
+    manifest: Mapping[str, Any], paths: Sequence[tuple[str, ...]]
+) -> dict[str, Any]:
+    """Return one deep manifest projection without explicitly refreshable fields."""
+    projection = _manifest_projection(manifest)
+    for path in paths:
+        current: dict[str, Any] = projection
+        for part in path[:-1]:
+            candidate = current.get(part)
+            if not isinstance(candidate, dict):  # validated by the caller first.
+                raise EvidenceError(
+                    f"Release baseline refresh requires {'.'.join(path)} to be present."
+                )
+            current = candidate
+        current.pop(path[-1], None)
+    return projection
+
+
+def _projection_differences(expected: Any, observed: Any, path: str = "") -> list[str]:
+    """Compare raw JSON projections without freshness normalization."""
+    if isinstance(expected, Mapping) and isinstance(observed, Mapping):
+        differences: list[str] = []
+        for key in sorted(set(expected) | set(observed)):
+            key_path = f"{path}.{key}" if path else str(key)
+            if key not in expected:
+                differences.append(
+                    f"{key_path}: unexpected {_render_field_value(observed[key])}"
+                )
+            elif key not in observed:
+                differences.append(f"{key_path}: missing")
+            else:
+                differences.extend(
+                    _projection_differences(expected[key], observed[key], key_path)
+                )
+        return differences
+    if expected != observed:
+        return [
+            f"{path}: expected {_render_field_value(expected)}, "
+            f"observed {_render_field_value(observed)}"
+        ]
+    return []
+
+
+def _validate_release_baseline_refresh(
+    snapshot: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> None:
+    """Allow only collection counts and generator-owned observations to refresh."""
+    for manifest in (snapshot, candidate):
+        for path in _RELEASE_BASELINE_RAW_REFRESH_PATHS:
+            _manifest_value_at_path(manifest, path)
+
+    stable_differences = _projection_differences(
+        _manifest_without_paths(
+            _stable_manifest(snapshot), _RELEASE_BASELINE_STABLE_REFRESH_PATHS
+        ),
+        _manifest_without_paths(
+            _stable_manifest(candidate), _RELEASE_BASELINE_STABLE_REFRESH_PATHS
+        ),
+    )
+    raw_differences = _projection_differences(
+        _manifest_without_paths(snapshot, _RELEASE_BASELINE_RAW_REFRESH_PATHS),
+        _manifest_without_paths(candidate, _RELEASE_BASELINE_RAW_REFRESH_PATHS),
+    )
+    validation_errors: list[str] = []
+    for manifest in (snapshot, candidate):
+        try:
+            validate_release_baseline_static_contract(manifest)
+            validate_performance_observation(manifest)
+            pure_observations = _manifest_value_at_path(
+                manifest, ("pure_source_performance", "observations")
+            )
+            if not isinstance(pure_observations, list) or len(pure_observations) != 1:
+                raise EvidenceError(
+                    "Release baseline refresh requires exactly one "
+                    "pure_source_performance.observations entry."
+                )
+            validate_performance_observation(
+                {"performance_contract": {"observation": pure_observations[0]}}
+            )
+        except EvidenceError as error:
+            validation_errors.append(str(error))
+
+    if stable_differences or raw_differences or validation_errors:
+        differences = [
+            *(f"stable: {difference}" for difference in stable_differences),
+            *(f"raw: {difference}" for difference in raw_differences),
+            *(f"validation: {error}" for error in validation_errors),
+        ]
+        raise EvidenceError(
+            "Release baseline refresh rejected:\n"
+            + "\n".join(f"  - {difference}" for difference in differences)
+        )
+
+
+def _write_release_baseline_guarded(
+    manifest: Mapping[str, Any], *, baseline_path: Path = RELEASE_BASELINE_PATH
+) -> dict[str, Any]:
+    """Validate a protected baseline replacement before writing any bytes."""
+    original_bytes = baseline_path.read_bytes()
+    snapshot = _read_manifest(baseline_path)
+    try:
+        _validate_release_baseline_refresh(snapshot, manifest)
+    except EvidenceError:
+        assert baseline_path.read_bytes() == original_bytes
+        raise
+    _write_manifest(baseline_path, manifest)
+    return dict(manifest)
+
+
+def _resolve_release_manifest_path(manifest_path: Path) -> Path:
+    """Anchor relative evidence paths before selecting the protected writer."""
+    expanded = manifest_path.expanduser()
+    if not expanded.is_absolute():
+        expanded = REPOSITORY_ROOT / expanded
+    return expanded.resolve()
+
+
+def _write_or_check_release_manifest(
+    manifest: Mapping[str, Any], *, manifest_path: Path, write: bool
+) -> dict[str, Any]:
+    """Route only the canonical tracked baseline through transactional refresh."""
+    resolved_path = _resolve_release_manifest_path(manifest_path)
+    if write and resolved_path == RELEASE_BASELINE_PATH:
+        return _write_release_baseline_guarded(manifest, baseline_path=resolved_path)
+    return write_or_check_manifest(manifest, manifest_path=resolved_path, write=write)
 
 
 def _render_summary(manifest: Mapping[str, Any]) -> str:
@@ -6149,7 +6319,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             manifest = collect_manifest(
                 wheel_paths=parsed.wheel, build_wheel=parsed.build_wheel
             )
-            write_or_check_manifest(
+            _write_or_check_release_manifest(
                 manifest, manifest_path=parsed.manifest, write=parsed.write
             )
             summary = _render_summary(manifest)

@@ -2252,8 +2252,11 @@ def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_
         }
 
     def build(arguments: Iterable[str], **_kwargs: object) -> str:
-        calls.append("build")
         arguments = list(arguments)
+        if arguments == ["uv", "--version"]:
+            calls.append("environment")
+            return "uv 0.12.6\n"
+        calls.append("build")
         assert arguments[:3] == ["uv", "build", "--wheel"]
         _write_wheel(
             Path(arguments[-1]),
@@ -2277,7 +2280,7 @@ def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_
     assert release_evidence.collect_manifest(build_wheel=True) == {
         "status": "collected"
     }
-    assert calls == ["preflight", "build", "collect"]
+    assert calls == ["environment", "preflight", "build", "collect"]
     assert observed_wheel and not observed_wheel[0].parent.exists()
 
 
@@ -2456,9 +2459,9 @@ def _validate_taskfile_pure_source_order(taskfile: dict[str, object]) -> None:
         assert {"task": "pure-source-check"} in dependencies, (
             f"{task_name}: pure-source-check must run before package import"
         )
-    release_commands = tasks["release-gate"].get("cmds", [])
-    assert release_commands and release_commands[0] == {"task": "pure-source-check"}, (
-        "release-gate must run pure-source-check before every aggregate component"
+    release_dependencies = tasks["release-gate"].get("deps", [])
+    assert release_dependencies == [{"task": "release-proof-environment-check"}], (
+        "release-gate must depend on the serialized release-proof environment gate"
     )
 
 
@@ -2541,7 +2544,6 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
         "test",
         "docs-check",
         "docs-test",
-        "pure-source-check",
         "release-baseline-check",
         *PHASE20_LOCAL_TASKS,
     ]
@@ -4683,7 +4685,7 @@ def _validate_release_proof_environment_taskfile(taskfile: dict[str, object]) ->
     version_index = commands.index("uv --version")
     source_index = commands.index("pure-source-check")
     assert offline_index < version_index < source_index
-    assert "UV_OFFLINE" in commands and "= \"1\"" in commands
+    assert "UV_OFFLINE" in commands and '= "1"' in commands
     assert "0.12.6" in commands
 
     for task_name in RELEASE_PROOF_TASKS:
@@ -4695,7 +4697,9 @@ def _validate_release_proof_environment_taskfile(taskfile: dict[str, object]) ->
         assert dependencies == ["release-proof-environment-check"], task_name
 
 
-def test_taskfile_serializes_reviewed_offline_environment_before_release_proof() -> None:
+def test_taskfile_serializes_reviewed_offline_environment_before_release_proof() -> (
+    None
+):
     """No sibling dependency may run uv or source proof before the environment gate."""
     _validate_release_proof_environment_taskfile(_taskfile_data())
 
@@ -4751,9 +4755,7 @@ def test_guarded_release_baseline_write_allows_only_the_five_refreshable_paths(
     protected.write_bytes(baseline)
     candidate = _baseline_candidate_with_allowed_refreshes()
 
-    release_evidence._write_release_baseline_guarded(
-        candidate, baseline_path=protected
-    )
+    release_evidence._write_release_baseline_guarded(candidate, baseline_path=protected)
 
     assert protected.read_text(encoding="utf-8") == serialize_manifest(candidate)
 
