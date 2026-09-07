@@ -57,20 +57,24 @@ A deterministic, non-hardware simulation of drone decision logic. It blocks
 arming until battery, GPS, home-position, propeller-clearance, and geofence
 checks pass; then it demonstrates return-to-home and emergency-landing paths.
 It is a training example, not flight-control or safety-certified software.
-`DroneController` owns the FSM, while `SimulatedAircraft` is a replaceable
-command adapter. Its `update_from_telemetry()` method shows the loop boundary:
-normalize one reading, then offer ordered candidate triggers to the FSM. The
-FSM's transition guards query a stateful `TelemetryPolicy` for current and
-time-derived facts, such as heartbeat age; the policy never selects events or
-checks states. The controller only declares priority (critical fault before link
-loss before low battery) and stops after the first accepted transition. Each
-successfully entered command state calls a concrete method on
-`SimulatedAircraft` after the transition commits—for example,
-`failsafe_low_battery` enters
-`ReturnHome`, which calls `aircraft.command_return_to_home()`.
+`DroneController` owns `TelemetryPolicy`, the FSM, and a replaceable
+`AircraftCommands` adapter; `SimulatedAircraft` is one adapter, not an FSM
+subclass. Its `update_from_telemetry()` method observes one normalized reading
+and invokes exactly one `telemetry_tick`. FSM guards read current and
+time-derived facts, such as heartbeat age, and own fixed priority: critical
+fault before link loss before low battery, followed by state-local facts such
+as reaching home or touchdown. Telemetry selects no event, transition, state,
+priority, or command. After the selected transition commits, only its bound
+destination-state entry callback invokes the adapter—for example,
+`ReturnHome` calls `aircraft.command_return_to_home()`.
+
+```{literalinclude} ../../examples/drone_failsafes.py
+:language: python
+:caption: Controller-owned single-event telemetry routing simulation
+```
 
 **Concepts:** controller-owned FSM composition, `Protocol` command ports,
-`FuncCondition`, guarded transitions, explicit failsafe events,
+`FuncCondition`, guarded priority candidates, one `telemetry_tick`,
 `TransitionResult` handling, and a simulated live-telemetry loop.
 
 ---

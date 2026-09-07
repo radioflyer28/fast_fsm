@@ -58,18 +58,25 @@ StateMachine (__slots__)
 └── AsyncStateMachine      # adds trigger_async(), awaits AsyncCondition.check()
 ```
 
-Core data structures (all O(1) lookup):
+Core data structures use O(1) registry lookup; candidate-group work is local to
+one already selected `(source, trigger)` slot:
 
 | Attribute | Type | Purpose |
 |-----------|------|---------|
 | `_states` | `dict[str, State]` | Name → State |
-| `_transitions` | `dict[str, dict[str, TransitionEntry]]` | `from_state → {trigger → (to_state, condition)}` |
+| `_transitions` | `dict[str, dict[str, TransitionEntry \| _TransitionGroup]]` | `from_state → {trigger → direct singleton or immutable candidate group}` |
 | `_initial_state` | `State` | Declared construction identity |
 | `_current_state` | `State` | Active state reference |
 | `_graph_version` | `int` | Monotonic successful-topology version |
 
-`trigger()` is a dictionary lookup by the current-state name, then a
-dictionary lookup by trigger. No topology scanning is on the dispatch path.
+`trigger()` and `can_trigger()` look up the current-state name, then the
+trigger, through dictionaries. A direct `TransitionEntry` singleton dispatches
+in O(1); an immutable `_TransitionGroup` scans its local ordered candidates in
+O(k) until the first eligible entry. Groups are stored already ordered, so
+dispatch does not sort them, and neither path scans unrelated graph topology.
+`_TransitionGroup` is a private storage detail, not public inspection API.
+`add_state()` remains O(1); builder work is a separate one-time pass over its
+staged declarations.
 
 ### Canonical Topology and Private Graph Projection
 
@@ -141,9 +148,10 @@ enumeration of cyclic simple paths. JSON, diagrams, fences, and documents use
 the same snapshot and budget rather than calling public helpers that recapture.
 
 `core.py` supplies only capture plus guarded trace/logging seams. It performs
-no diagnostic traversal or dense allocation, so `trigger()`, `can_trigger()`,
-`add_state()`, and `add_transition()` retain their O(1) contract. At the trace
-level, the core first checks `logger.isEnabledFor(logging.DEBUG - 5)` before
+no diagnostic traversal or dense allocation, so source/trigger lookup and
+singleton dispatch remain O(1), while immutable grouped insertion and ordered
+selection stay local O(k). At the trace level, the core first checks
+`logger.isEnabledFor(logging.DEBUG - 5)` before
 constructing an event, traversing keys/values, looking up a handler, or calling
 a redactor. The ordinary default record is metadata-only; raw data exists only
 in the ephemeral explicit-redactor event. A marked, generation-aware library
@@ -382,19 +390,21 @@ Slot-protected instances eliminate `__dict__` per instance, yielding:
 
 | Metric | Threshold |
 |--------|-----------|
-| `trigger()` throughput | ≥ 200,000 ops/sec |
-| `can_trigger()` throughput | ≥ 400,000 ops/sec |
+| Fresh installed compiled singleton `trigger()` throughput | ≥ 200,000 ops/sec |
+| Grouped dispatch and all other timings | Environment-labeled observations, not durable thresholds |
 | Base FSM memory | ≤ 0.5 KB |
 | Per-state overhead | ≤ 64 bytes |
-| Core operation complexity | O(1) |
+| Lookup/singleton complexity | O(1) |
+| Immutable group insertion / ordered selection | Local O(k) |
 
 ### Hot-Path Rules
 
 1. **No validation in dispatch.** `validation.py` is a design-time tool.
    It and `_diagnostics.py`/`visualization.py` MUST NOT be called from
    `trigger()`, `can_trigger()`, `add_state()`, or `add_transition()`.
-2. **No iteration where lookup suffices.** Transition dispatch is a dict
-   lookup, never a loop over candidates.
+2. **No unrelated graph scan or dispatch-time sort.** Transition dispatch uses
+   dictionary lookup, then either direct singleton dispatch or an ordered local
+   candidate-group scan.
 3. **Lazy logging.** Logger calls are guarded to avoid string formatting
    when logging is disabled.
 

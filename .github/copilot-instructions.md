@@ -48,8 +48,13 @@ These constraints apply to EVERY task. Violating any of them is a bug.
   boundary; and ADR-006 accepts interpreted `DiagnosticBudgetExceeded` for
   its bounded diagnostic status. These are measured exceptions, not a reason
   to weaken slots on hot-path classes.
-- Compiled `trigger()` throughput MUST stay ≥ 200,000 ops/sec
-- Core operations (`trigger()`, `can_trigger()`, `add_state()`, `add_transition()`) MUST be O(1)
+- Fresh installed compiled singleton `trigger()` throughput MUST stay ≥200,000
+  ops/sec. All exact benchmark timings are environment-labeled observations.
+- Current-source and trigger dictionary lookup, direct singleton dispatch, and
+  `add_state()` MUST stay O(1). Immutable candidate-group insertion and
+  first-eligible ordered selection are local O(k); stored groups are not sorted
+  during dispatch and neither path scans unrelated graph topology. Builder work
+  is separate one-time construction work.
 - Verify with: `uv run python benchmarks/benchmark_fast_fsm.py`
 
 **Backward compatibility:**

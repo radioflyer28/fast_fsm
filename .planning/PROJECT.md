@@ -6,7 +6,11 @@ High-performance, memory-efficient finite state machine library for Python. Outp
 
 ## Core Value
 
-Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000 ops/sec and all core operations must remain O(1).
+Blazing-fast FSM transitions — current-source/trigger lookup and direct
+singleton dispatch remain O(1), while finite immutable candidate groups use
+truthful local O(k) insertion and ordered selection. The ≥200,000 ops/sec floor
+applies only to fresh installed compiled singleton dispatch; exact timings are
+environment-labeled observations.
 
 ## Completed: v0.2.3 Timing Condition Helpers (shipped 2026-04-05)
 
@@ -35,7 +39,10 @@ Blazing-fast, zero-overhead FSM transitions — `trigger()` must stay ≥200,000
 
 ### Validated
 
-- ✓ `StateMachine` with O(1) `trigger()`, `can_trigger()`, `add_state()`, `add_transition()` — existing
+- ✓ `StateMachine` with O(1) source/trigger lookup, direct singleton dispatch,
+  and `add_state()`; immutable candidate-group insertion and first-eligible
+  selection are local O(k) without dispatch-time sorting or unrelated graph
+  scans — Phase 25
 - ✓ `AsyncStateMachine` with `trigger_async()` and async condition/callback support — existing
 - ✓ `FSMBuilder` fluent builder with auto async detection — existing
 - ✓ `DeclarativeState` / `AsyncDeclarativeState` convention-based state handling — existing
@@ -116,7 +123,12 @@ dispatch.
 
 ## Constraints
 
-- **Performance:** `trigger()` throughput ≥200,000 ops/sec — must verify after any change to `core.py`
+- **Performance:** Current-source/trigger lookup, direct singleton dispatch,
+  and `add_state()` are O(1). Immutable group insertion and ordered
+  first-eligible selection are local O(k), with no dispatch-time sort or
+  unrelated graph scan. The ≥200,000 ops/sec floor applies only to fresh
+  installed compiled singleton dispatch; all exact timings are
+  environment-labeled observations.
 - **Backward compatibility:** No public API changes — all condition and callback signatures preserved
 - **Compilation:** `core.py` changes must pass `uv run mypy src/fast_fsm/core.py` (mypyc compat)
 - **Python version:** ≥3.10
@@ -139,6 +151,8 @@ dispatch.
 | Evolve `add_transition()` rather than add a second candidate-registration API | Priority is an attribute of an ordinary transition; one coherent API avoids redundant abstractions | ✓ Phase 21 registration contract implemented |
 | Keep one candidate direct and promote only competing priorities into private immutable groups | Preserve the existing singleton path while making priority ordering finite and deterministic | ✓ Phase 21 implemented and verified |
 | Validate priority as an exact non-boolean integer at the object-typed mypyc boundary | Prevent compiled coercion from weakening the public priority contract | ✓ Phase 21 implemented and verified |
+| Separate O(1) singleton work from local O(k) group work in guidance | Keep performance claims truthful without exposing private group storage as API | ✓ Phase 25 documented and verified |
+| Route each drone sample through one FSM-owned `telemetry_tick` | Keep failsafe precedence in fixed guards and aircraft effects at committed state entry | ✓ Phase 25 example documented and verified |
 
 ## Evolution
 

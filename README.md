@@ -9,8 +9,8 @@ with a clean, intuitive API.
 
 ## Performance Highlights
 
-- **Stable performance contract** — compiled `trigger()` throughput is at least
-  200,000 operations per second.
+- **Stable performance contract** — fresh installed compiled singleton
+  `trigger()` throughput is at least 200,000 operations per second.
 - **Memory-conscious design** — direct dictionary lookups and `__slots__` keep
   the hot path lean.
 - **Production-ready verification** — 700+ tests, optional validation, and
@@ -493,10 +493,11 @@ print(to_plantuml(fsm))
 
 ### Bounded Diagnostics and Safe Output
 
-Diagnostics are opt-in design-time work. `trigger()`, `can_trigger()`,
-`add_state()`, and `add_transition()` remain O(1); importing or using the
-diagnostic APIs adds no runtime dependency and never puts graph traversal on
-that path. Each top-level validator, comparison, JSON export, or renderer
+Diagnostics are opt-in design-time work. They preserve O(1) source/trigger
+lookup, direct singleton dispatch, and `add_state()` work, while immutable
+candidate-group insertion and ordered selection remain local O(k). Importing
+or using diagnostic APIs adds no runtime dependency and never puts graph
+traversal on either dispatch path. Each top-level validator, comparison, JSON export, or renderer
 captures one immutable private graph view and shares one budget through its
 nested analysis. Structural reachability always begins at the machine's
 declared initial state. The captured current state is reported separately; it
@@ -656,7 +657,8 @@ print(v.export_report('json'))
 
 ## Key Capabilities
 
-- **Ultra-High Performance** — compiled `trigger()` contract ≥200,000 ops/sec
+- **Ultra-High Performance** — fresh installed compiled singleton `trigger()`
+  contract ≥200,000 ops/sec; other timings are environment-labeled observations
 - **Memory Efficient** — direct dictionary lookups and slots-aware hot paths
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
@@ -688,6 +690,10 @@ uv run python examples/<script>.py
 | `declarative_state_example.py` | `@transition` decorator, async declarative states |
 | `enhanced_builder_example.py` | `FSMBuilder` auto-async detection, fluent API |
 | `cross_fsm_demo.py` | Cross-FSM conditions, coordinated multi-FSM systems |
+| [`drone_failsafes.py`](examples/drone_failsafes.py) | One telemetry tick through FSM-owned failsafe priority; deterministic training simulation only, not flight-control software |
+
+The drone example is educational and deterministic: it neither controls real
+hardware nor provides certified or real-time flight-control guidance.
 
 ## Running Tests
 
@@ -713,7 +719,10 @@ src/fast_fsm/
 
 1. **`__slots__` on hot paths** — all relevant production classes are audited
    recursively; the measured exceptions are documented in the contributor guide
-2. **Direct dictionary lookups** — O(1) `trigger()`, `can_trigger()`, `add_state()`, `add_transition()`
+2. **Direct lookup, local groups** — current-source and trigger lookup plus
+   direct singleton dispatch are O(1); immutable group insertion and
+   first-eligible ordered selection are local O(k), never scan unrelated graph
+   topology, and do not sort during dispatch
 3. **Minimal abstraction** — clean API without unnecessary layers
 4. **Optional features** — validation/logging add zero runtime overhead when unused
 5. **Selective mypyc compilation** — `core.py` compiled, `conditions.py` stays
@@ -723,15 +732,19 @@ src/fast_fsm/
 
 | Operation | Complexity | Throughput | Memory |
 |-----------|-----------|------------|--------|
-| `trigger()` | O(1) | compiled ≥200,000 ops/sec | implementation-dependent |
-| `trigger()` + history | O(1) | environment-labeled evidence | implementation-dependent |
-| `can_trigger()` | O(1) | environment-labeled evidence | implementation-dependent |
+| `trigger()` / `can_trigger()` with a singleton | O(1) lookup and direct dispatch | fresh installed compiled singleton ≥200,000 ops/sec | implementation-dependent |
+| `trigger()` / `can_trigger()` with a candidate group | local O(k) first-eligible ordered selection | environment-labeled observation | implementation-dependent |
+| `trigger()` + history | dispatch path above plus O(1) bounded append | environment-labeled observation | implementation-dependent |
 | `add_state()` | O(1) | implementation-dependent | implementation-dependent |
-| `add_transition()` | O(1) | implementation-dependent | implementation-dependent |
-| `FSMBuilder.build()` | O(n) | one-time | implementation-dependent |
+| `add_transition()` singleton | O(1) | implementation-dependent | implementation-dependent |
+| `add_transition()` into an immutable candidate group | local O(k) insertion | environment-labeled observation | implementation-dependent |
+| `FSMBuilder.build()` | one-time builder work over staged declarations | environment-labeled observation | implementation-dependent |
 
-See the [release evidence manifest](evidence/release-baseline.json) for exact
-observations from the reviewed clean-source collection.
+Stored candidate groups are already priority ordered, so their dispatch path does
+not sort them. Neither path scans unrelated graph topology. Exact benchmark
+timings are environment-specific observations; the durable throughput floor
+applies only to fresh installed compiled singleton dispatch. See the [release
+evidence manifest](evidence/release-baseline.json) for reviewed observations.
 
 ## Contributing
 
