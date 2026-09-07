@@ -1,8 +1,8 @@
 ---
 phase: 25
 slug: performance-artifact-proof-drone-guidance
-status: draft
-nyquist_compliant: false
+status: validated
+nyquist_compliant: true
 wave_0_complete: true
 created: 2026-09-07
 ---
@@ -38,13 +38,15 @@ created: 2026-09-07
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 25-01-01 | 01 | 1 | PERF-01 | T-25-01 | Ordered candidate insertion does one local linear scan, preserves duplicate/conflict atomicity, and never sorts at dispatch. | unit/structural | `UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_priority_selection.py tests/test_performance_benchmarks.py -x -q` | ✅ | ⬜ pending |
-| 25-01-02 | 01 | 1 | PERF-01 | T-25-01 | Representative depth/winner/exhaustion records prove local guard work and no unrelated topology scan; observations carry environment metadata. | benchmark characterization | `uv run pytest tests/test_performance_benchmarks.py -x -q && task benchmark` | ✅ | ⬜ pending |
-| 25-02-01 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Source, pure wheel, and compiled wheel share required priority scenario values and reject malformed or incomplete evidence. | unit | `UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_artifact_conformance.py -x -q` | ✅ | ⬜ pending |
-| 25-02-02 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Parent-side artifact validation and Taskfile wiring receive fast feedback before any wheel build or clean-origin proof. | unit/task inspection | `UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_installed_artifacts.py -m "not integration" -x -q && task --summary release-installed-artifacts-check && task --summary release-installed-performance-check` | ✅ | ⬜ pending |
-| 25-02-03 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Clean source origin is compared to each fresh installed artifact; compiled provenance and three-sample median remain at least 200,000 ops/sec. | installed-artifact | `task pure-source-check && UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache uv run pytest tests/test_artifact_conformance.py tests/test_installed_artifacts.py -x -q -m integration && task release-installed-artifacts-check && task release-installed-performance-check && task release-baseline-check` | ✅ | ⬜ pending |
-| 25-03-01 | 03 | 3 | DOC-01 | T-25-04 | A controller sends exactly one `telemetry_tick`; priority guards select the winner and bound entry callbacks alone issue the selected aircraft command. | example/unit | `UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_drone_failsafes_example.py -x -q && UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache uv run python examples/drone_failsafes.py` | ✅ | ⬜ pending |
-| 25-03-02 | 03 | 3 | PERF-01, DOC-01 | T-25-04 | Public and maintainer guidance describe singleton O(1) versus local grouped O(k), preserve the simulation disclaimer, and render the runnable example. | docs/lint | `task docs-check && task docs-test && UV_CACHE_DIR=/private/tmp/fast-fsm-phase23-uv-cache uv run pytest tests/test_readme_examples.py tests/test_drone_failsafes_example.py -x -q` | ✅ | ⬜ pending |
+| 25-01-01 | 01 | 1 | PERF-01 | T-25-01 | Ordered candidate insertion does one local linear scan, preserves duplicate/conflict atomicity, and never sorts at dispatch. | unit/structural | `UV_OFFLINE=1 FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_priority_selection.py tests/test_performance_benchmarks.py -x -q` | ✅ | ✅ green |
+| 25-01-02 | 01 | 1 | PERF-01 | T-25-01 | Representative depth/winner/exhaustion records prove local guard work and no unrelated topology scan; observations carry environment metadata. | benchmark characterization | `UV_OFFLINE=1 task benchmark` | ✅ | ✅ green |
+| 25-02-01 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Source, pure wheel, and compiled wheel share required priority scenario values and reject malformed or incomplete evidence. | unit | `UV_OFFLINE=1 FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_artifact_conformance.py -x -q` | ✅ | ✅ green |
+| 25-02-02 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Parent-side artifact validation and Taskfile wiring receive fast feedback before any wheel build or clean-origin proof. | unit/task inspection | `UV_OFFLINE=1 FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_installed_artifacts.py -m "not integration" -x -q && task --summary release-installed-artifacts-check && task --summary release-installed-performance-check` | ✅ | ✅ green |
+| 25-02-03 | 02 | 2 | PERF-02 | T-25-02, T-25-03 | Clean source origin is compared to each fresh installed artifact; compiled provenance and three-sample median remain at least 200,000 ops/sec. | installed-artifact | `UV_OFFLINE=1 task release-installed-artifacts-check && task release-installed-performance-check && task release-baseline-check` | ✅ | ✅ green |
+| 25-03-01 | 03 | 3 | DOC-01 | T-25-04 | A controller sends exactly one `telemetry_tick`; priority guards select the winner and bound entry callbacks alone issue the selected aircraft command. | example/unit | `UV_OFFLINE=1 FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_drone_failsafes_example.py -x -q && uv run python examples/drone_failsafes.py` | ✅ | ✅ green |
+| 25-03-02 | 03 | 3 | PERF-01, DOC-01 | T-25-04 | Public and maintainer guidance describe singleton O(1) versus local grouped O(k), preserve the simulation disclaimer, and render the runnable example. | docs/lint | `UV_OFFLINE=1 task docs-check && task docs-test && uv run pytest tests/test_readme_examples.py tests/test_drone_failsafes_example.py -x -q` | ✅ | ✅ green |
+| 25-04-01 | 04 | 4 | PERF-02 | T-25-G01, T-25-G02 | The pinned offline generator preserves every stable baseline field except the approved test-count refresh, and the reader is byte-preserving. | release-evidence integration | `PATH=/private/tmp/fast-fsm-uv-0.12.6/uv-aarch64-apple-darwin:$PATH UV_OFFLINE=1 task release-baseline-check` | ✅ | ✅ green |
+| 25-04-02 | 04 | 4 | PERF-02 | T-25-G03, T-25-G04 | Full release quality, clean source/pure/compiled parity, native loader provenance, and the three-sample compiled singleton median preserve strict gates. | release integration | `PATH=/private/tmp/fast-fsm-uv-0.12.6/uv-aarch64-apple-darwin:$PATH UV_OFFLINE=1 task release-gate && task release-installed-artifacts-check && task release-installed-performance-check` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -72,6 +74,22 @@ Existing infrastructure covers all phase requirements. Phase work extends existi
 - [x] Wave 0 covers all references because no test-framework bootstrap is needed.
 - [x] No watch-mode flags are used.
 - [x] Focused feedback latency is bounded below 120 seconds.
-- [ ] `nyquist_compliant: true` set in frontmatter after execution evidence is green.
+- [x] `nyquist_compliant: true` set in frontmatter after execution evidence is green.
 
 **Approval:** approved 2026-09-07
+
+## Validation Audit 2026-09-07
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+The Nyquist audit executed the focused behavioral suite, documentation/benchmark tasks,
+clean-source proof, read-only baseline check, fresh pure/compiled wheel parity proof,
+installed compiled singleton gate, and the full release gate with pinned offline uv 0.12.6.
+The sequential suite result was 1,799 passed and 6 expected skips; the fresh installed
+compiled singleton median was 662,758.70 ops/sec, above the fixed 200,000 ops/sec floor.
+Wave 4's existing automated evidence routes were added to this map; no implementation or
+test change was required.
