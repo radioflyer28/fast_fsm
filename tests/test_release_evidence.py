@@ -2606,6 +2606,10 @@ def test_phase20_taskfile_keeps_local_readiness_non_authorizing() -> None:
         _validate_phase20_release_taskfile(release_profile)
 
 
+@pytest.mark.skipif(
+    not Path("/bin/sh").is_file(),
+    reason="hosted record discovery is a POSIX shell workflow contract",
+)
 def test_hosted_record_discovery_preserves_every_artifact_subdirectory(
     tmp_path: Path,
 ) -> None:
