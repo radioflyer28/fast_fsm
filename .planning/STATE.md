@@ -5,17 +5,17 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
 status: executing
-stopped_at: Phase 25 context gathered
-last_updated: "2026-09-07T05:33:42.444Z"
+stopped_at: Completed 25-01-PLAN.md
+last_updated: "2026-09-07T05:51:17.121Z"
 last_activity: 2026-09-07
-last_activity_desc: Phase 24 complete, transitioned to Phase 25
-state_head: 0c367334c205c7bb0a9d82ce436380642f084e39
+last_activity_desc: Phase 25 execution started
+state_head: 89eaaca8446e7f9f456113e4561e3dd9b83b4c1e
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 14
-  completed_plans: 11
-  percent: 79
+  completed_plans: 12
+  percent: 80
 ---
 
 # State: Fast FSM
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-06)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** Phase 24 — Candidate-Aware Diagnostics & Output
+**Current focus:** Phase 25 — Performance, Artifact Proof & Drone Guidance
 
 ## Current Position
 
-Phase: 25 (Performance, Artifact Proof & Drone Guidance) — READY TO EXECUTE
-Plan: Not started
+Phase: 25 (Performance, Artifact Proof & Drone Guidance) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-09-07 — Phase 24 complete, transitioned to Phase 25
+Last activity: 2026-09-07 — Phase 25 execution started
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Last activity: 2026-09-07 — Phase 24 complete, transitioned to Phase 25
 | Phase 22 P01 | 6m | 2 tasks | 4 files |
 | Phase 22 P02 | 6m | 2 tasks | 4 files |
 | Phase 22 P03 | 15 min | 2 tasks | 6 files |
+| Phase 25 P01 | 14m | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 22]: Async candidate selection awaits one stored candidate stage at a time and uses a task-local cancellation-stage marker only within the owned trigger boundary.
 - [Phase 22]: Phase 22: Carry selected TransitionEntry priority as additive runtime metadata without passing it through caller callbacks.
 - [Phase 22]: Phase 22: Use AST and counted-operation tests to lock direct singleton lookup and local candidate-group work.
+- [Phase 25]: Use one forward local scan and one immutable tuple splice for grouped priority registration.
+- [Phase 25]: Keep priority-group timings environment-labelled; only installed compiled singleton dispatch has a throughput floor.
 
 ### Pending Todos
 
@@ -179,9 +182,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T04:48:03.351Z
-Stopped at: Phase 25 context gathered
-Resume file: .planning/phases/25-performance-artifact-proof-drone-guidance/25-CONTEXT.md
+Last session: 2026-09-07T05:51:17.033Z
+Stopped at: Completed 25-01-PLAN.md
+Resume file: None
 
 ## Rebuild Log
 

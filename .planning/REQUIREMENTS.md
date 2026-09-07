@@ -66,7 +66,7 @@ research synthesis.
 
 ### Performance and Documentation
 
-- [ ] **PERF-01**: The architecture preserves O(1) source/trigger lookup and
+- [x] **PERF-01**: The architecture preserves O(1) source/trigger lookup and
   singleton dispatch; grouped selection and local group mutation are documented
   and measured as O(k) without unrelated-graph scans or dispatch-time sorting.
 
@@ -136,7 +136,7 @@ research synthesis.
 | PAR-03 | Phase 23 | Complete |
 | DIAG-01 | Phase 24 | Complete |
 | DIAG-02 | Phase 24 | Complete |
-| PERF-01 | Phase 25 | Pending |
+| PERF-01 | Phase 25 | Complete |
 | PERF-02 | Phase 25 | Pending |
 | DOC-01 | Phase 25 | Pending |
 
