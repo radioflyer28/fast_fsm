@@ -1,282 +1,188 @@
 #!/usr/bin/env python3
-"""
-Performance Demonstration Script
+"""Environment-labelled observations for Fast FSM priority candidate groups.
 
-Shows Fast FSM's performance characteristics in action.
-Run this to see the O(1) performance and memory efficiency claims verified.
+This reporter is intentionally descriptive. The deterministic benchmark tests
+enforce the O(1) source/trigger lookup and local O(k) group-work contract;
+these timing rows show representative runtime observations only.
 """
 
+from __future__ import annotations
+
+import importlib.machinery
+import json
+from pathlib import Path
+import platform
+import statistics
 import time
-import sys
-import gc
-from fast_fsm import StateMachine, State
+from collections.abc import Callable
+
+import fast_fsm.core as core
+from fast_fsm import State, StateMachine
+from fast_fsm.conditions import Condition
 
 
-def performance_header(title: str):
-    """Print a formatted performance test header"""
+TOPOLOGY_SIZES = (4, 64, 512)
+GROUP_DEPTHS = (2, 8, 32)
+WINNER_POSITIONS = ("first", "middle", "last", "exhausted")
+DEFAULT_SAMPLE_COUNT = 5
+DEFAULT_ITERATIONS = 1_000
+
+
+class _PriorityCondition(Condition):
+    """Count one candidate's actual evaluation during a descriptive sample."""
+
+    __slots__ = ("calls", "rank", "winner_rank")
+
+    def __init__(self, rank: int, winner_rank: int | None) -> None:
+        super().__init__(f"rank-{rank}", "priority-group benchmark guard")
+        self.calls = 0
+        self.rank = rank
+        self.winner_rank = winner_rank
+
+    def check(self, *args: object, **kwargs: object) -> bool:
+        self.calls += 1
+        return self.rank == self.winner_rank
+
+
+def performance_header(title: str) -> None:
+    """Print a formatted benchmark header."""
     print(f"\n{'=' * 60}")
     print(f"🚀 {title}")
     print(f"{'=' * 60}")
 
 
-def measure_time(func, *args, **kwargs):
-    """Measure execution time of a function"""
-    start = time.perf_counter()
-    result = func(*args, **kwargs)
-    end = time.perf_counter()
-    return result, (end - start) * 1000  # Convert to milliseconds
+def measure_time(operation: Callable[[], None], iterations: int) -> float:
+    """Measure a fixed number of operations with a high-resolution clock."""
+    started = time.perf_counter_ns()
+    for _ in range(iterations):
+        operation()
+    return (time.perf_counter_ns() - started) / 1_000_000_000
 
 
-def measure_memory(obj):
-    """Get approximate memory usage of an object"""
-    return sys.getsizeof(obj)
+def _winner_rank(group_depth: int, winner_position: str) -> int | None:
+    """Return the rank represented by a descriptive position label."""
+    if winner_position == "first":
+        return 0
+    if winner_position == "middle":
+        return group_depth // 2
+    if winner_position == "last":
+        return group_depth - 1
+    if winner_position == "exhausted":
+        return None
+    raise ValueError(f"unknown winner position: {winner_position}")
 
 
-def test_creation_performance():
-    """Test FSM creation performance - should be O(1)"""
-    performance_header("FSM Creation Performance")
-
-    sizes = [10, 100, 1000]
-
-    for size in sizes:
-        print(f"\n📊 Creating FSM with {size} states:")
-
-        # Test StateMachine creation
-        initial_state = State("state_0")
-        fsm, creation_time = measure_time(
-            StateMachine, initial_state, name=f"TestFSM_{size}"
-        )
-
-        # Add states
-        states = [State(f"state_{i}") for i in range(1, size)]
-        add_start = time.perf_counter()
-        for state in states:
-            fsm.add_state(state)
-        add_time = (time.perf_counter() - add_start) * 1000
-
-        # Add transitions
-        transition_start = time.perf_counter()
-        for i in range(size - 1):
-            fsm.add_transition(f"next_{i}", f"state_{i}", f"state_{i + 1}")
-        transition_time = (time.perf_counter() - transition_start) * 1000
-
-        # Measure memory
-        memory_usage = measure_memory(fsm) + sum(
-            measure_memory(s) for s in fsm._states.values()
-        )
-
-        print(f"  ⏱️  Creation: {creation_time:.2f}ms")
-        print(f"  ⏱️  Add states: {add_time:.2f}ms ({add_time / size:.3f}ms per state)")
-        print(
-            f"  ⏱️  Add transitions: {transition_time:.2f}ms ({transition_time / (size - 1):.3f}ms per transition)"
-        )
-        print(
-            f"  💾 Memory usage: {memory_usage / 1024:.2f}KB ({memory_usage / size:.1f} bytes per state)"
-        )
-
-
-def test_transition_performance():
-    """Test transition performance - should be O(1)"""
-    performance_header("Transition Performance")
-
-    # Create a simple 2-state FSM for rapid transitions
-    state1 = State("state1")
-    state2 = State("state2")
-
-    fsm = StateMachine(state1, name="PerfTest")
-    fsm.add_state(state2)
-    fsm.add_transition("toggle", "state1", "state2")
-    fsm.add_transition("toggle", "state2", "state1")
-
-    # Test different iteration counts
-    test_counts = [1000, 10000, 100000]
-
-    for count in test_counts:
-        print(f"\n📊 Testing {count:,} transitions:")
-
-        # Force garbage collection for clean measurement
-        gc.collect()
-
-        # Measure transition performance
-        start_time = time.perf_counter()
-        for _ in range(count):
-            fsm.trigger("toggle")
-        end_time = time.perf_counter()
-
-        total_time = end_time - start_time
-        transitions_per_sec = count / total_time
-        time_per_transition = (total_time * 1000 * 1000) / count  # microseconds
-
-        print(f"  ⏱️  Total time: {total_time * 1000:.2f}ms")
-        print(f"  🚀 Transitions/sec: {transitions_per_sec:,.0f}")
-        print(f"  ⚡ Time per transition: {time_per_transition:.2f}μs")
-
-
-def test_can_trigger_performance():
-    """Test can_trigger performance - should be very fast"""
-    performance_header("can_trigger() Performance")
-
-    # Create FSM with many possible triggers
-    state = State("state")
-    fsm = StateMachine(state, name="CanTriggerTest")
-
-    num_triggers = 1000
-    for i in range(num_triggers):
-        fsm.add_transition(f"trigger_{i}", "state", "state")
-
-    print(f"📊 Testing can_trigger() with {num_triggers} possible triggers:")
-
-    # Test can_trigger performance
-    test_count = 10000
-    start_time = time.perf_counter()
-    for i in range(test_count):
-        trigger_name = f"trigger_{i % num_triggers}"
-        can_fire = fsm.can_trigger(trigger_name)
-        assert can_fire  # Should always be true
-    end_time = time.perf_counter()
-
-    total_time = end_time - start_time
-    checks_per_sec = test_count / total_time
-    time_per_check = (total_time * 1000 * 1000) / test_count  # microseconds
-
-    print(f"  ⏱️  {test_count:,} checks in {total_time * 1000:.2f}ms")
-    print(f"  🚀 Checks/sec: {checks_per_sec:,.0f}")
-    print(f"  ⚡ Time per check: {time_per_check:.2f}μs")
-
-
-def test_builder_performance():
-    """Test FSMBuilder performance"""
-    performance_header("FSMBuilder Performance")
-
-    sizes = [50, 500]
-
-    for size in sizes:
-        print(
-            f"\n📊 Building complex FSM with {size} states using direct construction:"
-        )
-
-        # Build directly for comparison
-        direct_start = time.perf_counter()
-
-        initial_state = State("initial")
-        fsm = StateMachine(initial_state, name=f"Direct_{size}")
-
-        # Add states
-        states = []
-        for i in range(1, size):
-            state = State(f"state_{i}")
-            states.append(state)
-            fsm.add_state(state)
-
-        # Add transitions in a pattern
-        for i in range(size - 1):
-            from_state = "initial" if i == 0 else f"state_{i}"
-            to_state = f"state_{i + 1}"
-            fsm.add_transition(f"next_{i}", from_state, to_state)
-
-        direct_time = (time.perf_counter() - direct_start) * 1000
-
-        # Test the built FSM performance
-        test_transitions = min(1000, size - 1)
-        trigger_start = time.perf_counter()
-        for i in range(test_transitions):
-            trigger_name = f"next_{i % (size - 1)}"
-            if fsm.can_trigger(trigger_name):
-                fsm.trigger(trigger_name)
-        trigger_time = (time.perf_counter() - trigger_start) * 1000
-
-        print(
-            f"  ⏱️  Build time: {direct_time:.2f}ms ({direct_time / size:.3f}ms per state)"
-        )
-        print(f"  ⏱️  {test_transitions} transitions: {trigger_time:.2f}ms")
-        print(
-            f"  🚀 Built FSM speed: {test_transitions / trigger_time * 1000:.0f} transitions/sec"
-        )
-        print(f"  💾 Final memory: {measure_memory(fsm) / 1024:.2f}KB")
-
-
-def test_memory_efficiency():
-    """Compare memory usage with regular Python objects"""
-    performance_header("Memory Efficiency Comparison")
-
-    class RegularState:
-        """Regular Python class without slots"""
-
-        def __init__(self, name):
-            self.name = name
-
-    class SlottedState:
-        """Python class with slots (like Fast FSM)"""
-
-        __slots__ = ("name",)
-
-        def __init__(self, name):
-            self.name = name
-
-    # Test single object memory
-    regular = RegularState("test")
-    slotted = SlottedState("test")
-    fast_fsm_state = State("test")
-
-    regular_size = sys.getsizeof(regular) + sys.getsizeof(regular.__dict__)
-    slotted_size = sys.getsizeof(slotted)
-    fast_fsm_size = sys.getsizeof(fast_fsm_state)
-
-    print("📊 Single Object Memory Comparison:")
-    print(f"  📦 Regular Python object: {regular_size} bytes")
-    print(f"  📦 Slotted Python object: {slotted_size} bytes")
-    print(f"  📦 Fast FSM State: {fast_fsm_size} bytes")
-    print(
-        f"  🎯 Fast FSM efficiency: {regular_size / fast_fsm_size:.1f}x better than regular"
+def _build_priority_group_machine(
+    *, group_depth: int, topology_size: int, winner_rank: int | None
+) -> tuple[StateMachine, tuple[_PriorityCondition, ...]]:
+    """Build repeatable group-dispatch sources plus unrelated topology."""
+    source = State("source")
+    targets = tuple(State(f"target-{rank}") for rank in range(group_depth))
+    machine = StateMachine(source, name=f"priority-group-{group_depth}-{topology_size}")
+    for state in targets:
+        machine.add_state(state)
+    conditions = tuple(
+        _PriorityCondition(rank, winner_rank) for rank in range(group_depth)
     )
 
-    # Test many objects
-    count = 1000
-    print(f"\n📊 {count:,} Objects Memory Comparison:")
-
-    regular_objects = [RegularState(f"state_{i}") for i in range(count)]
-    slotted_objects = [SlottedState(f"state_{i}") for i in range(count)]
-    fast_fsm_objects = [State(f"state_{i}") for i in range(count)]
-
-    regular_total = sum(
-        sys.getsizeof(obj) + sys.getsizeof(obj.__dict__) for obj in regular_objects
-    )
-    slotted_total = sum(sys.getsizeof(obj) for obj in slotted_objects)
-    fast_fsm_total = sum(sys.getsizeof(obj) for obj in fast_fsm_objects)
-
-    print(f"  📦 Regular Python objects: {regular_total / 1024:.1f}KB")
-    print(f"  📦 Slotted Python objects: {slotted_total / 1024:.1f}KB")
-    print(f"  📦 Fast FSM States: {fast_fsm_total / 1024:.1f}KB")
-    print(
-        f"  🎯 Fast FSM efficiency: {regular_total / fast_fsm_total:.1f}x better than regular"
-    )
+    # Every reachable result state gets the same finite group so a sample can
+    # repeatedly measure priority dispatch without private state mutation.
+    for candidate_source in (source, *targets):
+        for rank, target in enumerate(targets):
+            machine.add_transition(
+                "priority_tick",
+                candidate_source,
+                target,
+                conditions[rank],
+                priority=rank,
+            )
+    for index in range(topology_size):
+        machine.add_state(State(f"unrelated-{index}"))
+    return machine, conditions
 
 
-def main():
-    """Run all performance demonstrations"""
-    print("🚀 Fast FSM Performance Demonstration")
-    print("This script demonstrates the O(1) performance characteristics")
-    print("and memory efficiency of the Fast FSM library.")
-    print(f"\nPython version: {sys.version}")
-    print(f"Running on: {sys.platform}")
+def _runtime_labels() -> dict[str, str]:
+    """Describe the interpreter and actual core loader origin for each row."""
+    origin = Path(core.__file__ or "<unknown>").resolve()
+    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+    mode = "compiled-native" if str(origin).endswith(suffixes) else "pure-python"
+    return {
+        "python": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "core_mode": mode,
+        "core_origin": str(origin),
+        "platform": platform.platform(),
+    }
 
-    # Run all performance tests
-    test_creation_performance()
-    test_transition_performance()
-    test_can_trigger_performance()
-    test_builder_performance()
-    test_memory_efficiency()
 
-    # Summary
-    print(f"\n{'=' * 60}")
-    print("✅ Performance Demonstration Complete!")
-    print("Key Takeaways:")
-    print("  • All operations maintain O(1) complexity")
-    print("  • Transition performance: ~250K/sec")
-    print("  • Memory efficiency: 1000x better than dict-based classes")
-    print("  • Builder pattern has no runtime overhead")
-    print("  • Slots optimization provides massive memory savings")
-    print(f"{'=' * 60}")
+def collect_priority_group_observations(
+    *,
+    topology_sizes: tuple[int, ...] = TOPOLOGY_SIZES,
+    group_depths: tuple[int, ...] = GROUP_DEPTHS,
+    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    iterations: int = DEFAULT_ITERATIONS,
+) -> list[dict[str, object]]:
+    """Return representative labelled group timings without enforcing rate policy."""
+    if sample_count < 1 or iterations < 1:
+        raise ValueError("sample_count and iterations must be positive")
+
+    labels = _runtime_labels()
+    observations: list[dict[str, object]] = []
+    for topology_size in topology_sizes:
+        for group_depth in group_depths:
+            for winner_position in WINNER_POSITIONS:
+                winner_rank = _winner_rank(group_depth, winner_position)
+                machine, conditions = _build_priority_group_machine(
+                    group_depth=group_depth,
+                    topology_size=topology_size,
+                    winner_rank=winner_rank,
+                )
+                expected_guard_evaluations = (
+                    group_depth if winner_rank is None else winner_rank + 1
+                )
+                expected_success = winner_rank is not None
+
+                def operation() -> None:
+                    result = machine.trigger("priority_tick")
+                    if result.success is not expected_success:
+                        raise RuntimeError(
+                            "priority-group observation changed result shape"
+                        )
+
+                elapsed_samples = [
+                    measure_time(operation, iterations) for _ in range(sample_count)
+                ]
+                observed_guard_evaluations = sum(
+                    condition.calls for condition in conditions
+                )
+                if observed_guard_evaluations != (
+                    expected_guard_evaluations * iterations * sample_count
+                ):
+                    raise RuntimeError("priority-group observation changed guard work")
+                median_elapsed = statistics.median(elapsed_samples)
+                observations.append(
+                    {
+                        **labels,
+                        "topology_size": topology_size,
+                        "group_depth": group_depth,
+                        "winner_position": winner_position,
+                        "guard_evaluations": expected_guard_evaluations,
+                        "sample_count": sample_count,
+                        "iterations": iterations,
+                        "operations_per_second": iterations / median_elapsed,
+                    }
+                )
+    return observations
+
+
+def main() -> None:
+    """Print descriptive priority-group observations for the active runtime."""
+    performance_header("Priority Group Performance Observations")
+    print("Source/trigger lookup and singleton dispatch are O(1).")
+    print("Finite group selection and immutable group mutation are local O(k).")
+    print("Rows below are environment-labelled observations, not release thresholds.")
+    for observation in collect_priority_group_observations():
+        print("PRIORITY_GROUP_OBSERVATION " + json.dumps(observation, sort_keys=True))
 
 
 if __name__ == "__main__":

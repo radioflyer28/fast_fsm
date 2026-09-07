@@ -204,16 +204,16 @@ tasks:
   # ─────────────────────────────────────────────
 
   benchmark:
-    desc: Run Fast FSM performance benchmark
+    desc: Run environment-labelled priority-group performance observations
     cmds:
-      - uv run python benchmarks/benchmark_fast_fsm.py
+      - uv run python benchmarks/performance_demo.py
 
   benchmark-compiled:
-    desc: "Benchmark with mypyc build (clean → build → benchmark)"
+    desc: "Observe priority groups with a mypyc build (clean → build → reporter)"
     cmds:
       - task: clean
       - task: build
-      - uv run python benchmarks/benchmark_fast_fsm.py
+      - uv run python benchmarks/performance_demo.py
 
   benchmark-compare:
     desc: Run comparison benchmarks against other FSM libraries
