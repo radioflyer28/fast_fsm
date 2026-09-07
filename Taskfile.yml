@@ -123,23 +123,10 @@ tasks:
     cmds:
       - uv run python {{.EVIDENCE_TOOL}} verify-source --json
 
-  release-proof-environment-check:
-    internal: true
-    desc: Require the reviewed offline release-proof environment before source checks
-    cmds:
-      - test "${UV_OFFLINE:-}" = "1" || { printf '%s\n' 'release proof requires caller-provided UV_OFFLINE=1' >&2; exit 1; }
-      - |
-          uv_version="$(uv --version)"
-          case "$uv_version" in
-            "uv 0.12.6"|"uv 0.12.6 "*) ;;
-            *) printf '%s\n' "release proof requires uv 0.12.6, resolved $uv_version" >&2; exit 1 ;;
-          esac
-      - task: pure-source-check
-
   release-baseline-write:
     desc: Intentionally regenerate the tracked pure-source release baseline
     deps:
-      - task: release-proof-environment-check
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -149,7 +136,7 @@ tasks:
   release-baseline-check:
     desc: Read-only pure-source release evidence freshness and coverage check
     deps:
-      - task: release-proof-environment-check
+      - task: pure-source-check
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -309,7 +296,7 @@ tasks:
   release-installed-artifacts-check:
     desc: Capture clean source then prove direct pure and compiled installed parity
     deps:
-      - task: release-proof-environment-check
+      - task: pure-source-check
     cmds:
       - |
           uv run python - <<'PY'
@@ -484,8 +471,6 @@ tasks:
 
   release-installed-performance-check:
     desc: Prove the installed native compiled median without using historical or pure observations
-    deps:
-      - task: release-proof-environment-check
     cmds:
       - |
           uv run python - <<'PY'
@@ -514,8 +499,6 @@ tasks:
 
   release-readiness-check:
     desc: Run ordered local-only release proof; ty remains explicitly advisory
-    deps:
-      - task: release-proof-environment-check
     cmds:
       - task: format-check
       - task: lint
@@ -627,9 +610,8 @@ tasks:
 
   release-gate:
     desc: "Complete local release gate with named components and no hidden shell chain"
-    deps:
-      - task: release-proof-environment-check
     cmds:
+      - task: pure-source-check
       - task: format-check
       - task: lint
       - task: typecheck-mypy

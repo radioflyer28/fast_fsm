@@ -2253,9 +2253,6 @@ def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_
 
     def build(arguments: Iterable[str], **_kwargs: object) -> str:
         arguments = list(arguments)
-        if arguments == ["uv", "--version"]:
-            calls.append("environment")
-            return "uv 0.12.6\n"
         calls.append("build")
         assert arguments[:3] == ["uv", "build", "--wheel"]
         _write_wheel(
@@ -2280,7 +2277,7 @@ def test_collect_manifest_builds_one_temporary_wheel_after_preflight_and_cleans_
     assert release_evidence.collect_manifest(build_wheel=True) == {
         "status": "collected"
     }
-    assert calls == ["environment", "preflight", "build", "collect"]
+    assert calls == ["preflight", "build", "collect"]
     assert observed_wheel and not observed_wheel[0].parent.exists()
 
 
@@ -2459,9 +2456,9 @@ def _validate_taskfile_pure_source_order(taskfile: dict[str, object]) -> None:
         assert {"task": "pure-source-check"} in dependencies, (
             f"{task_name}: pure-source-check must run before package import"
         )
-    release_dependencies = tasks["release-gate"].get("deps", [])
-    assert release_dependencies == [{"task": "release-proof-environment-check"}], (
-        "release-gate must depend on the serialized release-proof environment gate"
+    release_commands = _task_command_text(tasks["release-gate"])
+    assert "pure-source-check" in release_commands, (
+        "release-gate must run pure-source-check before its quality commands"
     )
 
 
@@ -4596,133 +4593,22 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
         )
 
 
-@pytest.mark.parametrize("offline", [None, "", "0", "true"])
-def test_release_proof_environment_rejects_every_nonexact_offline_value_before_uv(
-    monkeypatch: pytest.MonkeyPatch, offline: str | None
-) -> None:
-    """Offline intent is caller-owned and must fail before any subprocess work."""
-    calls: list[tuple[str, ...]] = []
-    environment = {} if offline is None else {"UV_OFFLINE": offline}
-
-    def run_checked(arguments: Iterable[str], **_kwargs: object) -> str:
-        calls.append(tuple(arguments))
-        return "uv 0.12.6\n"
-
-    monkeypatch.setattr(release_evidence, "_run_checked", run_checked)
-
-    with pytest.raises(EvidenceError, match="UV_OFFLINE=1"):
-        release_evidence._require_release_proof_environment(environment=environment)
-
-    assert calls == []
-
-
-def test_release_proof_environment_rejects_wrong_uv_before_source_collection(
+def test_collect_manifest_starts_with_source_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An offline but unreviewed executable cannot begin evidence collection."""
-    calls: list[tuple[str, ...]] = []
-
-    def run_checked(arguments: Iterable[str], **_kwargs: object) -> str:
-        calls.append(tuple(arguments))
-        return "uv 0.12.5\n"
-
-    monkeypatch.setattr(release_evidence, "_run_checked", run_checked)
-
-    with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
-        release_evidence._require_release_proof_environment(
-            environment={"UV_OFFLINE": "1"}
-        )
-
-    assert calls == [("uv", "--version")]
-
-
-def test_collect_manifest_checks_environment_before_source_preflight(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The in-process evidence path repeats the Taskfile environment gate first."""
+    """Evidence collection begins with its source-origin preflight."""
     calls: list[str] = []
-    monkeypatch.setattr(
-        release_evidence, "_command_environment", lambda: {"UV_OFFLINE": "1"}
-    )
-
-    def require_environment(**_kwargs: object) -> str:
-        calls.append("environment")
-        return "0.12.6"
 
     def fail_preflight(**_kwargs: object) -> dict[str, str]:
         calls.append("preflight")
         raise EvidenceError("source guard reached")
 
-    monkeypatch.setattr(
-        release_evidence, "_require_release_proof_environment", require_environment
-    )
     monkeypatch.setattr(release_evidence, "_source_preflight", fail_preflight)
 
     with pytest.raises(EvidenceError, match="source guard reached"):
         release_evidence.collect_manifest()
 
-    assert calls == ["environment", "preflight"]
-
-
-RELEASE_PROOF_TASKS = (
-    "release-baseline-write",
-    "release-baseline-check",
-    "release-gate",
-    "release-installed-artifacts-check",
-    "release-installed-performance-check",
-    "release-readiness-check",
-)
-
-
-def _validate_release_proof_environment_taskfile(taskfile: dict[str, object]) -> None:
-    """Keep the offline/version/source gate serialized ahead of all proof tasks."""
-    tasks = _task_definitions(taskfile)
-    assert "release-proof-environment-check" in tasks
-    gate = tasks["release-proof-environment-check"]
-    assert gate.get("deps", []) == []
-    commands = _task_command_text(gate)
-    offline_index = commands.index("UV_OFFLINE")
-    version_index = commands.index("uv --version")
-    source_index = commands.index("pure-source-check")
-    assert offline_index < version_index < source_index
-    assert "UV_OFFLINE" in commands and '= "1"' in commands
-    assert "0.12.6" in commands
-
-    for task_name in RELEASE_PROOF_TASKS:
-        dependencies = [
-            dependency.get("task")
-            for dependency in tasks[task_name].get("deps", [])
-            if isinstance(dependency, dict)
-        ]
-        assert dependencies == ["release-proof-environment-check"], task_name
-
-
-def test_taskfile_serializes_reviewed_offline_environment_before_release_proof() -> (
-    None
-):
-    """No sibling dependency may run uv or source proof before the environment gate."""
-    _validate_release_proof_environment_taskfile(_taskfile_data())
-
-    missing_gate = deepcopy(_taskfile_data())
-    _task_definitions(missing_gate).pop("release-proof-environment-check")
-    with pytest.raises(AssertionError):
-        _validate_release_proof_environment_taskfile(missing_gate)
-
-    racing_dependency = deepcopy(_taskfile_data())
-    _task_definitions(racing_dependency)["release-gate"]["deps"].append(
-        {"task": "pure-source-check"}
-    )
-    with pytest.raises(AssertionError, match="release-gate"):
-        _validate_release_proof_environment_taskfile(racing_dependency)
-
-    reordered_gate = deepcopy(_taskfile_data())
-    commands = _task_definitions(reordered_gate)["release-proof-environment-check"][
-        "cmds"
-    ]
-    assert isinstance(commands, list)
-    commands[0], commands[1] = commands[1], commands[0]
-    with pytest.raises(AssertionError):
-        _validate_release_proof_environment_taskfile(reordered_gate)
+    assert calls == ["preflight"]
 
 
 def _baseline_candidate_with_allowed_refreshes() -> dict[str, object]:

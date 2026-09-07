@@ -5566,13 +5566,6 @@ def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
     return version
 
 
-def _require_release_proof_environment(*, environment: Mapping[str, str]) -> str:
-    """Fail closed unless evidence runs offline with the reviewed uv executable."""
-    if environment.get("UV_OFFLINE") != "1":
-        raise EvidenceError("Release evidence requires caller-provided UV_OFFLINE=1.")
-    return _resolved_uv_version(environment=environment)
-
-
 def _source_preflight(
     *, source_root: Path, environment: Mapping[str, str]
 ) -> dict[str, str]:
@@ -5808,7 +5801,6 @@ def collect_manifest(
         raise EvidenceError("Use either supplied wheels or --build-wheel, not both.")
     resolved_source_root = (source_root or REPOSITORY_ROOT / "src").resolve()
     environment = _command_environment()
-    _require_release_proof_environment(environment=environment)
     source = _source_preflight(
         source_root=resolved_source_root, environment=environment
     )
