@@ -202,7 +202,7 @@ The Phase 22 context names `tests/test_lifecycle_results.py`, but that path does
 **Implementation guidance:**
 
 ```python
-# Illustrative private shape; exact helper names are agent discretion.
+# Fixed private shape; Plans 22-01/02 use the exact selector names below.
 slot = source_slots.get(trigger) if source_slots is not None else None
 if isinstance(slot, TransitionEntry):
     return evaluate_single_candidate(slot, singleton_semantics=True)
@@ -351,7 +351,7 @@ This preserves auditability without presenting a public topology enumeration. Ph
 
 ## Code Examples
 
-The examples below are implementation skeletons derived from the verified in-repo seams; private helper names are illustrative.
+The examples below are implementation skeletons derived from the verified in-repo seams. The concrete selector names and return union are fixed in the resolved decisions below; the small wrapper names inside the pseudocode remain descriptive only.
 
 ### Sync selection outcome feeding one lifecycle
 
@@ -397,14 +397,14 @@ return self._finalize_failure(
     self._build_failure_result(
         source.name,
         trigger,
-        GROUP_EXHAUSTED_ERROR,
+        _PRIORITY_GROUP_EXHAUSTED_ERROR,
         stage=_LIFECYCLE_STAGE_SELECTION,
     ),
     kwargs,
 )
 ```
 
-The exact new fixed error wording is implementation discretion; it must remain redacted, stable in tests, `committed=False`, `to_state=None`, `cause=None`, and `priority=None`.
+Define `_PRIORITY_GROUP_EXHAUSTED_ERROR = "No eligible transition candidate"` and use that exact fixed redacted text. The result remains `committed=False`, `to_state=None`, `cause=None`, and `priority=None`.
 
 ## State of the Art
 
@@ -421,22 +421,16 @@ The exact new fixed error wording is implementation discretion; it must remain r
 
 | # | Claim | Section | Risk if wrong |
 |---|-------|---------|---------------|
-| A1 | Private helper and outcome names in code skeletons are illustrative. [ASSUMED] | Architecture Patterns / Code Examples | None to public behavior; planner may choose mypyc-friendlier names/shapes. |
-| A2 | Exact fixed text for the new group-exhaustion error is not locked. [ASSUMED] | Code Examples | Tests and docs must agree on the chosen redacted wording. |
+| A1 | Resolved: the private helpers are `_select_transition_sync()` and `_select_transition_async()`; each returns `Union[_PreparedDispatch, TransitionResult]`, with no additional outcome type. | Architecture Patterns / Code Examples | None; Plans 22-01 through 22-03 lock structure and type/native tests to this shape. |
+| A2 | Resolved: `_PRIORITY_GROUP_EXHAUSTED_ERROR` is exactly `"No eligible transition candidate"`. | Code Examples | None; sync, async, and native tests assert the same constant and exact text. |
 
-## Open Questions
+## Open Questions — Resolved
 
-1. **Which private result shape best satisfies mypyc?**
-   - What we know: hot-path values must be slotted, and `_PreparedDispatch` already provides a frozen slotted handoff. [VERIFIED: src/fast_fsm/core.py:670-680; .github/copilot-instructions.md:40-53]
-   - What's unclear: whether extending `_PreparedDispatch` alone or adding one small slotted terminal-outcome type produces the clearest mypy narrowing.
-   - Recommendation: extend `_PreparedDispatch` with captured source/priority context and use `TransitionResult` for terminal failure unless typecheck evidence requires a dedicated private outcome.
+1. **Resolved selector outcome/result shape:** `_select_transition_sync()` and `_select_transition_async()` each return exactly `Union[_PreparedDispatch, TransitionResult]`; do not add a third private outcome type. `_PreparedDispatch` remains `@dataclass(frozen=True, slots=True)` with fields, in order: `entry: TransitionEntry`, `source_state: State`, `current_name: str`, `trigger: str`, `args: Tuple[Any, ...]`, `condition_kwargs: Optional[Dict[str, Any]]`, and `declarative_handler: Optional[Dict[str, Any]]`. Candidate priority is read from `entry.priority`, not duplicated on the prepared value. Each selector accepts an explicit keyword-only `for_query: bool` mode: `can_trigger*` converts a returned `TransitionResult` to `False` without finalization or lifecycle work, preserves outward transition-condition/state-permission exception behavior, and treats declarative-query exceptions as terminal `False`; owned trigger paths receive terminal failures as `TransitionResult` and finalize them once. [VERIFIED basis: src/fast_fsm/core.py:670-680,2063-2271,3882-4135; .github/copilot-instructions.md:40-58]
 
-2. **What fixed error string should group exhaustion expose?**
-   - What we know: D-04 locks stage `selection`, one uncommitted failure, and one observer notification, but not the text.
-   - What's unclear: exact redacted phrasing.
-   - Recommendation: choose one concise fixed string in core and assert it without embedding candidate count, priorities, state names beyond the existing result fields, or condition representations.
+2. **Resolved group-exhaustion text:** define `_PRIORITY_GROUP_EXHAUSTED_ERROR = "No eligible transition candidate"`. Sync, async, pure, and compiled tests assert that exact string. It is the complete message and therefore cannot include candidate count, priority values, trigger/state text, condition representations, exception text, or payload data. The accompanying result is `stage="selection"`, `committed=False`, `to_state=None`, `cause=None`, and `priority=None` per D-04.
 
-There is no planning blocker; both questions are explicitly within agent discretion.
+No open questions remain for Phase 22 planning.
 
 ## Environment Availability
 
