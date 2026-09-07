@@ -21,6 +21,7 @@ from tools import artifact_conformance  # noqa: E402
 REQUIRED_FAMILIES = {
     "graph-guard",
     "lifecycle-result-history",
+    "priority-selection",
     "sync-async",
     "builder-declarative",
     "ownership-cancellation",
@@ -28,6 +29,32 @@ REQUIRED_FAMILIES = {
     "output-containment",
     "logging-redaction",
 }
+
+_PRIORITY_REQUIRED_VALUES = (
+    ("priority.sync.winner", "target", "winner"),
+    ("priority.sync.winner", "guard_order", ["rejected", "winner"]),
+    ("priority.sync.winner", "result_priority", 3),
+    ("priority.sync.winner", "history_priority", 3),
+    ("priority.sync.winner", "lower_candidate_suppressed", True),
+    ("priority.sync.exhaustion", "stage", "selection"),
+    ("priority.sync.exhaustion", "guard_order", ["first", "second"]),
+    ("priority.sync.exhaustion", "result_priority", None),
+    ("priority.sync.exhaustion", "history_count", 0),
+    ("priority.sync.guard_exception", "stage", "guard"),
+    ("priority.sync.guard_exception", "active_priority", -3),
+    ("priority.sync.guard_exception", "lower_candidate_suppressed", True),
+    ("priority.async.winner", "target", "winner"),
+    ("priority.async.winner", "guard_order", ["rejected", "winner"]),
+    ("priority.async.winner", "result_priority", 3),
+    ("priority.async.winner", "history_priority", 3),
+    ("priority.async.guard_exception", "stage", "guard"),
+    ("priority.async.guard_exception", "active_priority", -3),
+    ("priority.async.guard_exception", "lower_candidate_suppressed", True),
+    ("priority.async.cancellation", "stage", "guard"),
+    ("priority.async.cancellation", "active_priority", -3),
+    ("priority.async.cancellation", "observer_count", 1),
+    ("priority.async.cancellation", "post_cancellation_reuse", True),
+)
 
 _OWNERSHIP_OBSERVATIONS = (
     ("ownership.sync-thread-serialization", "first_success"),
@@ -99,6 +126,114 @@ def test_tracer_lifecycle_record_is_stable_and_payload_safe() -> None:
     rendered = artifact_conformance.canonical_json(first)
     for secret in ("caller-secret", "destination-secret", "observer-secret"):
         assert secret not in rendered
+
+
+def test_priority_records_have_independent_required_values() -> None:
+    """Priority parity cannot certify a shared wrong winner or failure record."""
+    records = {
+        record["id"]: record
+        for record in artifact_conformance.collect_conformance()["scenarios"]
+    }
+
+    assert records["priority.sync.winner"] == {
+        "id": "priority.sync.winner",
+        "family": "priority-selection",
+        "success": True,
+        "committed": True,
+        "state": "winner",
+        "target": "winner",
+        "guard_order": ["rejected", "winner"],
+        "result_priority": 3,
+        "history_priority": 3,
+        "history_count": 1,
+        "lower_candidate_suppressed": True,
+        "redacted": True,
+    }
+    assert records["priority.sync.exhaustion"] == {
+        "id": "priority.sync.exhaustion",
+        "family": "priority-selection",
+        "success": False,
+        "committed": False,
+        "stage": "selection",
+        "state": "source",
+        "guard_order": ["first", "second"],
+        "result_priority": None,
+        "history_count": 0,
+        "observer_count": 1,
+        "all_candidates_evaluated": True,
+        "redacted": True,
+    }
+    assert records["priority.sync.guard_exception"] == {
+        "id": "priority.sync.guard_exception",
+        "family": "priority-selection",
+        "success": False,
+        "committed": False,
+        "stage": "guard",
+        "state": "source",
+        "guard_order": ["raising"],
+        "active_priority": -3,
+        "history_count": 0,
+        "lower_candidate_suppressed": True,
+        "observer_count": 1,
+        "redacted": True,
+    }
+    assert records["priority.async.winner"] == {
+        "id": "priority.async.winner",
+        "family": "priority-selection",
+        "success": True,
+        "committed": True,
+        "state": "winner",
+        "target": "winner",
+        "guard_order": ["rejected", "winner"],
+        "result_priority": 3,
+        "history_priority": 3,
+        "history_count": 1,
+        "lower_candidate_suppressed": True,
+        "redacted": True,
+    }
+    assert records["priority.async.guard_exception"] == {
+        "id": "priority.async.guard_exception",
+        "family": "priority-selection",
+        "success": False,
+        "committed": False,
+        "stage": "guard",
+        "state": "source",
+        "guard_order": ["raising"],
+        "active_priority": -3,
+        "history_count": 0,
+        "lower_candidate_suppressed": True,
+        "observer_count": 1,
+        "redacted": True,
+    }
+    assert records["priority.async.cancellation"] == {
+        "id": "priority.async.cancellation",
+        "family": "priority-selection",
+        "cancelled": True,
+        "stage": "guard",
+        "active_priority": -3,
+        "state": "source",
+        "guard_order": ["blocked"],
+        "history_count": 0,
+        "lower_candidate_suppressed": True,
+        "observer_count": 1,
+        "post_cancellation_reuse": True,
+        "redacted": True,
+    }
+
+
+@pytest.mark.parametrize(("identifier", "field", "value"), _PRIORITY_REQUIRED_VALUES)
+def test_each_priority_required_value_is_immutable_and_fail_closed(
+    identifier: str, field: str, value: object
+) -> None:
+    """Required priority facts are validated independently of artifact parity."""
+    payload = copy.deepcopy(artifact_conformance.collect_conformance())
+    records = {record["id"]: record for record in payload["scenarios"]}
+    replacement = not value if isinstance(value, bool) else "wrong-value"
+    records[identifier][field] = replacement
+    _rehash(payload)
+
+    with pytest.raises(artifact_conformance.ConformanceError):
+        artifact_conformance.validate_conformance(payload)
 
 
 def test_parity_mismatch_reports_only_scenario_and_field_names() -> None:
