@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Callable, Protocol
 
-from fast_fsm import FSMBuilder, FuncCondition, State
+from fast_fsm import FSMBuilder, FuncCondition, State, TransitionResult
 
 
 class AircraftCommands(Protocol):
@@ -79,7 +79,7 @@ class DroneState(State):
         super().__init__(name)
         self.entry_action = entry_action
 
-    def on_enter(self, from_state, trigger, **kwargs):
+    def on_enter(self, from_state, trigger, *args, **kwargs):
         source = from_state.name if from_state else "start"
         print(f"  -> {self.name} ({source} --{trigger}--> {self.name})")
         if self.entry_action is not None:
@@ -88,7 +88,7 @@ class DroneState(State):
 
 @dataclass(frozen=True)
 class TelemetrySample:
-    """One normalized telemetry reading plus an optional operator request."""
+    """One normalized telemetry reading used only as a source of facts."""
 
     battery_pct: int
     gps_fix: bool = False
@@ -100,7 +100,6 @@ class TelemetrySample:
     home_reached: bool = False
     on_ground: bool = False
     critical_fault: bool = False
-    operator_command: str | None = None
 
 
 class TelemetryPolicy:
@@ -183,17 +182,6 @@ def touchdown_detected(telemetry_policy: TelemetryPolicy, **_) -> bool:
     return telemetry_policy.sample.on_ground
 
 
-# This is an ordering declaration, not telemetry classification. Every rule
-# that makes a candidate event valid lives in its transition's FuncCondition.
-TELEMETRY_EVENT_PRIORITY = (
-    "failsafe_critical_fault",
-    "failsafe_link_lost",
-    "failsafe_low_battery",
-    "home_reached",
-    "touchdown",
-)
-
-
 def create_drone_fsm(aircraft: AircraftCommands):
     """Build the controller's ground, mission, return, and emergency FSM."""
     pre_arm = DroneState("PreArm")
@@ -228,39 +216,45 @@ def create_drone_fsm(aircraft: AircraftCommands):
             condition=FuncCondition(launch_clear, name="launch_clear"),
         )
         .add_transition("begin_mission", "Takeoff", "Mission")
-        # The telemetry policy selects one event from its ordered rule table.
-        # These transitions alone determine which flight states accept it.
+        # One telemetry trigger leaves all selection in the FSM. Lower integer
+        # priorities win, so critical fault, link loss, and low battery keep
+        # their fixed failsafe precedence without controller-side routing.
         .add_transition(
-            "failsafe_link_lost",
-            ["Takeoff", "Mission"],
-            "ReturnHome",
-            condition=FuncCondition(link_lost, name="link_lost"),
-        )
-        .add_transition(
-            "failsafe_low_battery",
-            ["Takeoff", "Mission"],
-            "ReturnHome",
-            condition=FuncCondition(battery_critical, name="battery_critical"),
-        )
-        .add_transition(
-            "failsafe_critical_fault",
-            ["Takeoff", "Mission", "ReturnHome"],
+            "telemetry_tick",
+            ["Takeoff", "Mission", "ReturnHome", "Landing"],
             "EmergencyLanding",
             condition=FuncCondition(
                 critical_fault_present, name="critical_fault_present"
             ),
+            priority=0,
         )
         .add_transition(
-            "home_reached",
+            "telemetry_tick",
+            ["Takeoff", "Mission"],
+            "ReturnHome",
+            condition=FuncCondition(link_lost, name="link_lost"),
+            priority=10,
+        )
+        .add_transition(
+            "telemetry_tick",
+            ["Takeoff", "Mission"],
+            "ReturnHome",
+            condition=FuncCondition(battery_critical, name="battery_critical"),
+            priority=20,
+        )
+        .add_transition(
+            "telemetry_tick",
             "ReturnHome",
             "Landing",
             condition=FuncCondition(home_reached, name="home_reached"),
+            priority=30,
         )
         .add_transition(
-            "touchdown",
+            "telemetry_tick",
             ["Landing", "EmergencyLanding"],
             "Landed",
             condition=FuncCondition(touchdown_detected, name="touchdown_detected"),
+            priority=30,
         )
         .add_transition("prepare_next_flight", "Landed", "PreArm")
         .build()
@@ -288,33 +282,38 @@ class DroneController:
         """Return the controller's current flight state."""
         return self._fsm.current_state_name
 
-    def update_from_telemetry(self, sample: TelemetrySample) -> None:
-        """Apply one reading by offering ordered triggers to the FSM.
+    def update_from_telemetry(self, sample: TelemetrySample) -> TransitionResult:
+        """Observe one normalized sample and send one telemetry tick to the FSM.
 
         In a real integration, construct ``TelemetrySample`` from a normalized,
         independently validated telemetry packet, then call this method once per
-        packet. The policy retains telemetry facts; transition guards are their
-        sole consumer for deciding whether an event is valid. This controller
-        only submits named triggers in priority order.
+        packet. The policy retains only facts; fixed-priority FSM guards select
+        the transition, and a committed destination entry may command aircraft.
         """
         self._telemetry_policy.observe(sample)
         print(
             f"\nTelemetry: battery={sample.battery_pct}% "
             f"link={'ok' if sample.link_ok else 'lost'} "
-            f"state={self.current_state_name} "
-            f"command={sample.operator_command or '-'}"
+            f"state={self.current_state_name}"
         )
 
-        for event in (*TELEMETRY_EVENT_PRIORITY, sample.operator_command):
-            if event is not None and self._dispatch(event).success:
-                return
-        print("• no state transition")
+        return self._report(
+            self._fsm.trigger("telemetry_tick", telemetry_policy=self._telemetry_policy)
+        )
 
-    def _dispatch(self, event: str):
-        """Send one candidate event and report an accepted transition."""
-        result = self._fsm.trigger(event, telemetry_policy=self._telemetry_policy)
+    def perform_operator_action(self, action: str) -> TransitionResult:
+        """Submit one explicit non-telemetry operator action to the FSM."""
+        print(f"\nOperator action: {action} state={self.current_state_name}")
+        return self._report(
+            self._fsm.trigger(action, telemetry_policy=self._telemetry_policy)
+        )
+
+    def _report(self, result: TransitionResult) -> TransitionResult:
+        """Print one FSM result without attempting a fallback trigger."""
         if result.success:
-            print(f"✓ {event}: {result.from_state} -> {result.to_state}")
+            print(f"✓ {result.trigger}: {result.from_state} -> {result.to_state}")
+        else:
+            print("• no state transition")
         return result
 
 
@@ -329,17 +328,11 @@ def simulated_telemetry() -> list[TelemetrySample]:
         "launch_area_clear": True,
     }
     return [
-        TelemetrySample(**{**ready, "battery_pct": 20, "operator_command": "arm"}),
-        TelemetrySample(**{**ready, "operator_command": "arm"}),
-        TelemetrySample(**{**ready, "operator_command": "takeoff"}),
-        TelemetrySample(**{**ready, "operator_command": "begin_mission"}),
         TelemetrySample(**{**ready, "battery_pct": 74}),
         TelemetrySample(**{**ready, "battery_pct": 22}),
         TelemetrySample(**{**ready, "battery_pct": 20, "home_reached": True}),
         TelemetrySample(**{**ready, "battery_pct": 20, "on_ground": True}),
-        TelemetrySample(**{**ready, "operator_command": "prepare_next_flight"}),
-        TelemetrySample(**{**ready, "operator_command": "arm"}),
-        TelemetrySample(**{**ready, "operator_command": "takeoff"}),
+        TelemetrySample(**ready),
         TelemetrySample(**{**ready, "critical_fault": True}),
         TelemetrySample(**{**ready, "on_ground": True}),
     ]
@@ -356,6 +349,11 @@ def main() -> None:
     for index, sample in enumerate(simulated_telemetry(), start=1):
         print(f"--- Telemetry tick {index} ---")
         drone.update_from_telemetry(sample)
+        if index in (1, 5):
+            if index == 5:
+                drone.perform_operator_action("prepare_next_flight")
+            for action in ("arm", "takeoff", "begin_mission"):
+                drone.perform_operator_action(action)
 
     print(f"\nFinal state: {drone.current_state_name}")
     print(f"Commands issued: {', '.join(aircraft.commands)}")
