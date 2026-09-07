@@ -74,7 +74,7 @@ research synthesis.
   same priority winner, evaluation order, result/history metadata, and failure
   semantics; compiled singleton dispatch remains ≥200,000 ops/sec.
 
-- [ ] **DOC-01**: Documentation and the drone example show one telemetry event
+- [x] **DOC-01**: Documentation and the drone example show one telemetry event
   dispatched to FSM-owned priority resolution, while telemetry services provide
   facts such as heartbeat age without selecting transitions.
 
@@ -138,7 +138,7 @@ research synthesis.
 | DIAG-02 | Phase 24 | Complete |
 | PERF-01 | Phase 25 | Complete |
 | PERF-02 | Phase 25 | Complete |
-| DOC-01 | Phase 25 | Pending |
+| DOC-01 | Phase 25 | Complete |
 
 **Coverage:**
 

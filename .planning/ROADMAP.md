@@ -163,7 +163,7 @@ Plans:
 
 - [x] 25-01-PLAN.md
 - [x] 25-02-PLAN.md
-- [ ] 25-03-PLAN.md
+- [x] 25-03-PLAN.md
 
 ## Requirement Coverage
 
@@ -194,7 +194,7 @@ Plans:
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 3/3 | Complete    | 2026-09-07 |
-| 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 2/3 | In Progress|  |
+| 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 3/3 | In Progress|  |
 
 ---
 *Roadmap created: 2026-09-06 for v0.4.0 Priority-Aware Guarded Transitions*

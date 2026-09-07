@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 2
+open_count: 3
 waived_count: 1
 fixed_count: 2
-total_count: 5
-last_updated: 2026-09-05T19:51:37.764Z
+total_count: 6
+last_updated: 2026-09-07T06:52:40.414Z
 ---
 
 # Broken Windows Ledger
@@ -20,6 +20,7 @@ last_updated: 2026-09-05T19:51:37.764Z
 | 3 | 20 | unrun-verify | evidence/release-baseline.json |  | Baseline freshness requires the reviewed uv 0.12.6 binary; local host only has uv 0.12.9. | open |  | 2026-09-05T02:17:23.737Z |  |
 | 4 | 20 | unrun-verify | Taskfile.yml |  | release-readiness-check cannot complete release-baseline-check locally because host uv 0.12.9 differs from reviewed exact uv 0.12.6; the pin remains preserved. | waived | Duplicate of open entry 3, which already records the same exact-uv baseline verification gap. | 2026-09-05T19:50:43.486Z | 2026-09-05T19:51:37.764Z |
 | 5 | 20 | unrun-verify | Taskfile.yml |  | release-hosted-prerelease-check requires an explicitly authorized exact-SHA terminal Release Evidence run and was intentionally not run; hosted runner/matrix evidence remains required before tagging. | open |  | 2026-09-05T19:50:43.569Z |  |
+| 6 | 25 | unrun-verify | tests/test_build_modes.py | 234 | Full pure-suite result was inconclusive because the available offline phase cache lacked pinned isolated-build requirements; the exact blocked test passed from the existing local cache. | open |  | 2026-09-07T06:52:40.414Z |  |
 
 ````json
 [
@@ -81,6 +82,18 @@ last_updated: 2026-09-05T19:51:37.764Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-05T19:50:43.569Z",
+    "resolved_at": null
+  },
+  {
+    "id": 6,
+    "kind": "unrun-verify",
+    "phase": "25",
+    "file": "tests/test_build_modes.py",
+    "line": 234,
+    "description": "Full pure-suite result was inconclusive because the available offline phase cache lacked pinned isolated-build requirements; the exact blocked test passed from the existing local cache.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-07T06:52:40.414Z",
     "resolved_at": null
   }
 ]

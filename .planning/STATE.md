@@ -4,17 +4,17 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
-status: executing
-stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-09-07T06:36:47.210Z"
+status: verifying
+stopped_at: Completed 25-03-PLAN.md
+last_updated: "2026-09-07T06:53:25.540Z"
 last_activity: 2026-09-07
 last_activity_desc: Phase 25 execution started
-state_head: 925969bd40e796a2008d333f7d6a2e327e510152
+state_head: 296c4315063c41970facf87ca36f62bf145f74ba
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
   percent: 80
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 Phase: 25 (Performance, Artifact Proof & Drone Guidance) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-07 — Phase 25 execution started
 
 ## Performance Metrics
@@ -90,6 +90,7 @@ Last activity: 2026-09-07 — Phase 25 execution started
 | Phase 22 P03 | 15 min | 2 tasks | 6 files |
 | Phase 25 P01 | 14m | 2 tasks | 6 files |
 | Phase 25 P02 | 37m | 3 tasks | 7 files |
+| Phase 25 P03 | 12m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 25]: Priority selection uses six independent exact-value scenarios without changing conformance schema version 1.
 - [Phase 25]: Canonical installed-child JSON must pass exact-key validation before parent reconstruction of contract declaration order.
 - [Phase 25]: The release baseline stores the clean-source contract under existing artifact evidence rather than weakening origin-bound wheel proof.
+- [Phase 25]: Use one FSM-owned telemetry_tick with fixed guarded candidates instead of controller-side trigger priority routing.
+- [Phase 25]: Keep telemetry fact-only and command aircraft only from the selected destination state's post-commit entry callback.
+- [Phase 25]: Describe direct singleton dispatch as O(1), and immutable group insertion or ordered selection as local O(k), with exact timings labelled by environment.
 
 ### Pending Todos
 
@@ -186,8 +190,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T06:35:50.734Z
-Stopped at: Completed 25-02-PLAN.md
+Last session: 2026-09-07T06:53:25.477Z
+Stopped at: Completed 25-03-PLAN.md
 Resume file: None
 
 ## Rebuild Log
