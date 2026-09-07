@@ -1723,19 +1723,24 @@ class StateMachine:
         entries = (
             existing.entries if isinstance(existing, _TransitionGroup) else (existing,)
         )
-        for entry in entries:
-            if entry.priority != candidate.priority:
-                continue
-            if (
-                entry.to_state is candidate.to_state
-                and entry.condition is candidate.condition
-                and entry.condition_ref == candidate.condition_ref
-            ):
-                return existing
-            raise ValueError("transition priority is already registered for this slot")
+        insertion_index = len(entries)
+        for index, entry in enumerate(entries):
+            if entry.priority == candidate.priority:
+                if (
+                    entry.to_state is candidate.to_state
+                    and entry.condition is candidate.condition
+                    and entry.condition_ref == candidate.condition_ref
+                ):
+                    return existing
+                raise ValueError(
+                    "transition priority is already registered for this slot"
+                )
+            if entry.priority > candidate.priority:
+                insertion_index = index
+                break
 
         return _TransitionGroup(
-            tuple(sorted((*entries, candidate), key=lambda entry: entry.priority))
+            entries[:insertion_index] + (candidate,) + entries[insertion_index:]
         )
 
     def add_transition(
@@ -2271,7 +2276,9 @@ class StateMachine:
         """
         Check if a trigger can be fired from the current state.
 
-        Performance: O(1) - Direct dictionary lookup + condition check
+        Performance: source/trigger lookup and direct singleton selection are O(1).
+        A competing immutable candidate group performs local O(k) eligibility selection.
+        Exact throughput observations depend on the labelled runtime environment.
         Use this for validation before expensive operations.
         """
         # Only declarative states consume the scoped marker used to suppress a
@@ -3555,8 +3562,9 @@ class StateMachine:
         """
         Trigger a state transition.
 
-        Performance: O(1) - Direct dictionary lookup + condition evaluation
-        Throughput: ~250,000 transitions/sec on modern hardware
+        Performance: source/trigger lookup and direct singleton dispatch are O(1).
+        A competing immutable candidate group performs local O(k) ordered selection.
+        Exact throughput observations depend on the labelled runtime environment.
 
         Args:
             trigger: The trigger/event name
@@ -4207,7 +4215,12 @@ class AsyncStateMachine(StateMachine):
         )
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
-        """Async version of can_trigger"""
+        """Check whether an async trigger can fire without lifecycle work.
+
+        Performance: source/trigger lookup and direct singleton selection are O(1).
+        A competing immutable candidate group performs local O(k) ordered selection.
+        Exact throughput observations depend on the labelled runtime environment.
+        """
         consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
             self._bind_or_check_async_loop("can_trigger_async")
@@ -4425,7 +4438,12 @@ class AsyncStateMachine(StateMachine):
             _reset_prepared_declarative_guard(token)
 
     async def trigger_async(self, trigger: str, *args, **kwargs) -> TransitionResult:
-        """Run one owned async transition with permanent-loop admission."""
+        """Run one owned async transition with permanent-loop admission.
+
+        Performance: source/trigger lookup and direct singleton dispatch are O(1).
+        A competing immutable candidate group performs local O(k) ordered selection.
+        Exact throughput observations depend on the labelled runtime environment.
+        """
         consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
             owner_task, owner_root, token = await self._acquire_async_ownership(

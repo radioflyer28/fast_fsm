@@ -240,7 +240,9 @@ def test_priority_group_work_stops_at_winner_and_ignores_unrelated_topology() ->
 
 def test_transition_slot_merge_uses_one_local_immutable_scan_without_sorting() -> None:
     """Grouped insertion may scan one published tuple but never comparison-sort it."""
-    tree = ast.parse(textwrap.dedent(inspect.getsource(StateMachine._merge_transition_slot)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(StateMachine._merge_transition_slot))
+    )
     merge = next(
         node
         for node in ast.walk(tree)
@@ -251,7 +253,8 @@ def test_transition_slot_merge_uses_one_local_immutable_scan_without_sorting() -
         isinstance(call.func, ast.Name) and call.func.id == "sorted" for call in calls
     )
     assert not any(
-        isinstance(call.func, ast.Attribute) and call.func.attr == "sort" for call in calls
+        isinstance(call.func, ast.Attribute) and call.func.attr == "sort"
+        for call in calls
     )
     assert len([node for node in ast.walk(merge) if isinstance(node, ast.For)]) == 1
 
