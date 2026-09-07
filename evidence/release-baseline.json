@@ -674,7 +674,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.093441,
+      "elapsed_seconds": 0.092174,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -684,7 +684,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 428078.38,
+      "ops_per_second": 433963.82,
       "warmup_operations": 2000
     }
   },
@@ -692,7 +692,7 @@
     "observations": [
       {
         "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-        "elapsed_seconds": 0.093441,
+        "elapsed_seconds": 0.092174,
         "environment": {
           "implementation": "cpython",
           "machine": "arm64",
@@ -702,7 +702,7 @@
         "metric": "StateMachine.trigger operations per second",
         "mode": "pure",
         "operations": 40000,
-        "ops_per_second": 428078.38,
+        "ops_per_second": 433963.82,
         "warmup_operations": 2000
       }
     ],
@@ -718,10 +718,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1798,
+      "collected": 1805,
       "errors": 0,
       "failed": 0,
-      "passed": 1792,
+      "passed": 1799,
       "skipped": 6
     }
   },
