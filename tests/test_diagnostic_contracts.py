@@ -842,9 +842,7 @@ def test_candidate_adapters_preserve_same_target_priority_and_path_identity() ->
     dense = _dense_adjacency(graph, _DiagnosticBudget())
     assert [edge["priority"] for edge in dense["transitions"]] == [-5, 20]
 
-    paths = _generate_paths(
-        graph, _DiagnosticBudget(), max_length=1, max_paths=2
-    )
+    paths = _generate_paths(graph, _DiagnosticBudget(), max_length=1, max_paths=2)
     assert paths == (
         (("idle", "return", "home", -5),),
         (("idle", "return", "home", 20),),

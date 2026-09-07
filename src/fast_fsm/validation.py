@@ -267,12 +267,12 @@ class FSMValidator:
 
     def get_transition_matrix(
         self, *, limits: DiagnosticLimits | None = None
-    ) -> Dict[str, Dict[str, List[str]]]:
+    ) -> Dict[str, Dict[str, List[Dict[str, int | str]]]]:
         """
         Generate complete transition matrix showing all state-event combinations.
 
         Returns:
-            Nested dict: {state: {event: [target_states]}}
+            Nested dict: {state: {event: [{"to_state", "priority"}, ...]}}
         """
         return _dense_adjacency(
             self._diagnostic_graph,
@@ -297,7 +297,7 @@ class FSMValidator:
             - ``events``: sorted list of event names (index = event_idx in transitions)
             - ``transitions``: flat list of dicts, each with ``idx``,
               ``from_state_idx``, ``from_state``, ``to_state_idx``, ``to_state``,
-              ``event_idx``, ``event``
+              ``event_idx``, ``event``, ``priority``
             - ``matrix``: N×N list-of-lists where ``matrix[i][j]`` is a list of
               transition indices (into ``transitions``) from state ``i`` to
               state ``j``; an empty list means no direct transition
@@ -316,12 +316,7 @@ class FSMValidator:
         Returns:
             Dictionary containing validation results
         """
-        total_transitions = sum(
-            len(self.transitions[state][event])
-            for state in self.states
-            for event in self.events
-            if event in self.transitions[state]
-        )
+        total_transitions = len(self._diagnostic_graph.edges)
 
         budget = self._operation_budget(limits)
         reachable = {
@@ -373,7 +368,7 @@ class FSMValidator:
         *,
         max_expansions: int | None = None,
         limits: DiagnosticLimits | None = None,
-    ) -> List[List[Tuple[str, str, str]]]:
+    ) -> List[List[Tuple[str, str, str, int]]]:
         """
         Generate test paths through the FSM for testing purposes.
 
@@ -382,7 +377,8 @@ class FSMValidator:
             max_paths: Maximum number of paths to generate
 
         Returns:
-            List of paths, where each path is [(from_state, event, to_state), ...]
+            List of paths, where each path is
+            [(from_state, event, to_state, priority), ...]
         """
         paths = _generate_paths(
             self._diagnostic_graph,
@@ -749,12 +745,7 @@ class EnhancedFSMValidator(FSMValidator):
 
         # Calculate complexity metrics
         total_possible_transitions = len(self.states) * len(self.events)
-        actual_transitions = sum(
-            len(self.transitions[state][event])
-            for state in self.states
-            for event in self.events
-            if event in self.transitions[state]
-        )
+        actual_transitions = len(self._diagnostic_graph.edges)
 
         density = actual_transitions / max(total_possible_transitions, 1)
         # Classify design style using the configurable threshold and minimum
@@ -1652,7 +1643,7 @@ if __name__ == "__main__":  # pragma: no cover
     print("Sample test paths:")
     for i, path in enumerate(test_paths):
         print(f"  Path {i + 1}: ", end="")
-        for j, (from_state, event, to_state) in enumerate(path):
+        for j, (from_state, event, to_state, _priority) in enumerate(path):
             if j == 0:
                 print(f"{from_state} --[{event}]--> {to_state}", end="")
             else:

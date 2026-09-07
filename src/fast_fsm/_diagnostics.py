@@ -457,6 +457,7 @@ def _sparse_adjacency(
                 "event_idx": event_indices[edge.trigger],
                 "event": edge.trigger,
                 "condition": edge.condition_name,
+                "priority": edge.priority,
             }
         )
     return {
@@ -487,7 +488,7 @@ def _dense_adjacency(
         budget.reserve_dense_cells(
             stage="dense.transition.preflight", amount=required_cells
         )
-        transition_matrix: dict[str, dict[str, list[str]]] = {
+        transition_matrix: dict[str, dict[str, list[dict[str, int | str]]]] = {
             state_name: {event_name: [] for event_name in event_names}
             for state_name in state_names
         }
@@ -495,7 +496,7 @@ def _dense_adjacency(
             budget.reserve_work(stage="dense.transition.edge")
             budget.reserve_result(stage="dense.transition.result")
             transition_matrix[state_names[edge.from_index]][edge.trigger].append(
-                state_names[edge.to_index]
+                {"to_state": state_names[edge.to_index], "priority": edge.priority}
             )
         return transition_matrix
 
@@ -519,6 +520,7 @@ def _dense_adjacency(
                 "to_state": state_names[edge.to_index],
                 "event_idx": event_indices[edge.trigger],
                 "event": edge.trigger,
+                "priority": edge.priority,
             }
         )
         adjacency_matrix[edge.from_index][edge.to_index].append(edge_index)
@@ -537,7 +539,7 @@ def _generate_paths(
     max_length: int = 10,
     max_paths: int = 50,
     max_expansions: int | None = None,
-) -> tuple[tuple[tuple[str, str, str], ...], ...]:
+) -> tuple[tuple[tuple[str, str, str, int], ...], ...]:
     """Enumerate deterministic paths with iterative frames and bounded expansion."""
     for value in (max_length, max_paths):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -551,8 +553,8 @@ def _generate_paths(
     if graph.initial_index is None or max_length == 0 or max_paths == 0:
         return ()
 
-    paths: list[tuple[tuple[str, str, str], ...]] = []
-    frames: list[tuple[int, int, tuple[tuple[str, str, str], ...]]] = [
+    paths: list[tuple[tuple[str, str, str, int], ...]] = []
+    frames: list[tuple[int, int, tuple[tuple[str, str, str, int], ...]]] = [
         (graph.initial_index, 0, ())
     ]
     while frames and len(paths) < max_paths:
@@ -571,6 +573,7 @@ def _generate_paths(
                 graph.state_names[edge.from_index],
                 edge.trigger,
                 graph.state_names[edge.to_index],
+                edge.priority,
             ),
         )
         paths.append(next_path)
