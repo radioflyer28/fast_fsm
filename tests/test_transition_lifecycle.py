@@ -388,26 +388,12 @@ def test_priority_metadata_survives_a_post_selection_lifecycle_failure() -> None
 
 
 @pytest.mark.asyncio
-async def test_async_cancellation_reports_the_evaluated_candidate_priority() -> None:
-    """Cancellation inside one awaited candidate retains only that candidate's scalar."""
-
-    class CapturingAsyncMachine(AsyncStateMachine):
-        __slots__ = ("failures",)
-
-        def __init__(self, initial_state: State) -> None:
-            super().__init__(initial_state, name="priority-cancellation")
-            self.failures: list[TransitionResult] = []
-
-        def _finalize_failure(
-            self, result: TransitionResult, kwargs: dict[str, object]
-        ) -> TransitionResult:
-            self.failures.append(result)
-            return super()._finalize_failure(result, kwargs)
-
+async def test_async_cancellation_stops_at_the_evaluated_candidate() -> None:
+    """Cancellation finalizes only the awaited candidate and never falls through."""
     started = asyncio.Event()
     release = asyncio.Event()
     source = State("source")
-    machine = CapturingAsyncMachine(source)
+    machine = AsyncStateMachine(source, name="priority-cancellation")
     machine.add_state(State("first"))
     machine.add_state(State("later"))
     machine.add_transition(
@@ -418,6 +404,10 @@ async def test_async_cancellation_reports_the_evaluated_candidate_priority() -> 
         priority=-4,
     )
     machine.add_transition("advance", source, "later", priority=2)
+    observed_errors: list[str] = []
+    machine.on_failed(
+        lambda _trigger, _from_state, error, **_kwargs: observed_errors.append(error)
+    )
 
     pending = asyncio.create_task(machine.trigger_async("advance"))
     try:
@@ -425,9 +415,7 @@ async def test_async_cancellation_reports_the_evaluated_candidate_priority() -> 
         pending.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(pending, timeout=_ASYNC_TEST_TIMEOUT)
-        assert [(result.stage, result.priority) for result in machine.failures] == [
-            ("guard", -4)
-        ]
+        assert observed_errors == ["Transition cancelled at guard"]
     finally:
         await _cleanup_spawned_tasks(pending)
 

@@ -2230,7 +2230,7 @@ class StateMachine:
             )
 
         selected_singleton = self._select_sync_candidate(
-            slot,
+            cast(TransitionEntry, slot),
             source_state,
             current_name,
             trigger,
@@ -4092,7 +4092,7 @@ class AsyncStateMachine(StateMachine):
             )
 
         selected_singleton = await self._select_async_candidate(
-            slot,
+            cast(TransitionEntry, slot),
             source_state,
             current_name,
             trigger,

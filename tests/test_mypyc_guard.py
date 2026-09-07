@@ -23,6 +23,7 @@ for full rationale.
 """
 
 import ast
+import asyncio
 from enum import IntEnum
 import importlib.util
 import json
@@ -1411,7 +1412,7 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     ]
     assert fields[:5] == ["success", "from_state", "to_state", "trigger", "error"]
-    assert fields[5:] == ["committed", "stage", "cause"]
+    assert fields[5:] == ["committed", "stage", "cause", "priority"]
 
     raise_if_failed = next(
         node
@@ -1439,6 +1440,219 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         )
         for item in error.decorator_list
     )
+
+
+def test_priority_selectors_keep_their_closed_slotted_boundary() -> None:
+    """Selector structure must not widen, copy, sort, or fan out candidates."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+    prepared = classes["_PreparedDispatch"]
+    decorator = next(
+        item
+        for item in prepared.decorator_list
+        if isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "dataclass"
+    )
+    assert {
+        keyword.arg: keyword.value.value
+        for keyword in decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    } == {"frozen": True, "slots": True}
+    assert [
+        item.target.id
+        for item in prepared.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+    ] == [
+        "entry",
+        "source_state",
+        "current_name",
+        "trigger",
+        "args",
+        "condition_kwargs",
+        "declarative_handler",
+    ]
+
+    for class_name, selector_name in (
+        ("StateMachine", "_select_transition_sync"),
+        ("AsyncStateMachine", "_select_transition_async"),
+    ):
+        selector = next(
+            node
+            for node in classes[class_name].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == selector_name
+        )
+        assert [argument.arg for argument in selector.args.kwonlyargs] == ["for_query"]
+        assert (
+            ast.unparse(selector.returns)
+            == "Union[_PreparedDispatch, TransitionResult]"
+        )
+        source = ast.unparse(selector)
+        assert "cast(TransitionEntry, slot)" in source
+        assert "_TransitionGroup" in source
+        assert "slot.entries" in source
+        calls = [
+            node.func.id
+            for node in ast.walk(selector)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+        assert not {"sorted", "list", "tuple"} & set(calls)
+        assert source.count("self._transitions") == 1
+
+    async_selector = next(
+        node
+        for node in classes["AsyncStateMachine"].body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_select_transition_async"
+    )
+    async_source = ast.unparse(async_selector)
+    assert "create_task" not in async_source
+    assert "gather" not in async_source
+
+    async_owned = next(
+        node
+        for node in classes["AsyncStateMachine"].body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_trigger_async_owned"
+    )
+    owned_source = ast.unparse(async_owned)
+    assert "_async_selection_priority.get()" in owned_source
+    assert "priority=selected_priority" in owned_source
+
+
+def test_priority_runtime_records_remain_compact_and_private() -> None:
+    """Priority metadata is additive on records, not a topology API."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    trace_event = classes["FSMTraceEvent"]
+    assert [
+        item.target.id
+        for item in trace_event.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+    ] == [
+        "operation",
+        "stage",
+        "result",
+        "trigger",
+        "source_state",
+        "destination_state",
+        "positional_args",
+        "keyword_args",
+        "error",
+        "priority",
+    ]
+    record = classes["TransitionRecord"]
+    slots = next(
+        node.value
+        for node in record.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(slots, ast.Tuple)
+    assert [item.value for item in slots.elts if isinstance(item, ast.Constant)] == [
+        "from_state",
+        "trigger",
+        "to_state",
+        "timestamp",
+        "priority",
+    ]
+    package_tree = ast.parse(
+        PACKAGE_INIT.read_text(encoding="utf-8"), filename=str(PACKAGE_INIT)
+    )
+    exported = next(
+        node.value
+        for node in package_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(exported, ast.List)
+    assert "_PreparedDispatch" not in {
+        item.value for item in exported.elts if isinstance(item, ast.Constant)
+    }
+
+
+def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None:
+    """The same narrow winner/history/query oracle runs in both core modes."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if os.environ.get("FAST_FSM_BUILD_MODE") == "compiled":
+        assert spec.origin.endswith((".so", ".pyd"))
+
+    from fast_fsm.core import AsyncStateMachine, State, StateMachine
+
+    class Source(State):
+        __slots__ = ("permissions",)
+
+        def __init__(self, name: str) -> None:
+            super().__init__(name)
+            self.permissions: list[str] = []
+
+        def can_transition(self, trigger, to_state, *args, **kwargs):
+            self.permissions.append(to_state.name)
+            return to_state.name == "winner"
+
+    source = Source("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    machine = StateMachine(source)
+    machine.add_state(rejected)
+    machine.add_state(winner)
+    machine.enable_history()
+    machine.add_transition("advance", source, winner, priority=4)
+    machine.add_transition("advance", source, rejected, priority=-3)
+
+    assert machine.can_trigger("advance") is True
+    result = machine.trigger("advance")
+    assert (result.success, result.priority) == (True, 4)
+    assert [(record.to_state, record.priority) for record in machine.history] == [
+        ("winner", 4)
+    ]
+    assert source.permissions == ["rejected", "winner", "rejected", "winner"]
+
+    class AsyncSource(Source):
+        __slots__ = ()
+
+        async def can_transition_async(self, trigger, to_state, *args, **kwargs):
+            self.permissions.append(to_state.name)
+            return to_state.name == "winner"
+
+    async def run_async_probe() -> None:
+        async_source = AsyncSource("async-source")
+        async_rejected = State("rejected")
+        async_winner = State("winner")
+        async_machine = AsyncStateMachine(async_source)
+        async_machine.add_state(async_rejected)
+        async_machine.add_state(async_winner)
+        async_machine.enable_history()
+        async_machine.add_transition("advance", async_source, async_winner, priority=4)
+        async_machine.add_transition(
+            "advance", async_source, async_rejected, priority=-3
+        )
+
+        assert await async_machine.can_trigger_async("advance") is True
+        async_result = await async_machine.trigger_async("advance")
+        assert (async_result.success, async_result.priority) == (True, 4)
+        assert [
+            (record.to_state, record.priority) for record in async_machine.history
+        ] == [("winner", 4)]
+        assert async_source.permissions == [
+            "rejected",
+            "winner",
+            "rejected",
+            "winner",
+        ]
+
+    asyncio.run(run_async_probe())
 
 
 def test_private_graph_records_are_not_public_exports() -> None:

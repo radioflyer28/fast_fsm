@@ -155,6 +155,86 @@ def test_can_trigger_constant_lookup_and_guard_invariant_across_topology_sizes()
     _assert_constant_count(observed, upper_bound=2, operation="can_trigger")
 
 
+def test_priority_group_work_stops_at_winner_and_ignores_unrelated_topology() -> None:
+    """Ordered candidate work is local to the winner rank, not graph size."""
+    observed: dict[int, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+
+    class Source(State):
+        __slots__ = ("permission_calls",)
+
+        def __init__(self) -> None:
+            super().__init__("source")
+            self.permission_calls: list[str] = []
+
+        def can_transition(
+            self, trigger: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            self.permission_calls.append(to_state.name)
+            return to_state.name == "winner"
+
+    class RecordedCondition(Condition):
+        __slots__ = ("label", "calls")
+
+        def __init__(self, label: str, calls: list[str]) -> None:
+            super().__init__(label, "local priority work")
+            self.label = label
+            self.calls = calls
+
+        def check(self, *args: object, **kwargs: object) -> bool:
+            self.calls.append(self.label)
+            return True
+
+    for size in _COMPLEXITY_TOPOLOGY_SIZES:
+        source = Source()
+        first = State("first")
+        second = State("second")
+        winner = State("winner")
+        later = State("later")
+        machine = StateMachine(source, name=f"local-group-{size}")
+        for state in (first, second, winner, later):
+            machine.add_state(state)
+        guard_calls: list[str] = []
+        machine.add_transition(
+            "advance",
+            source,
+            later,
+            RecordedCondition("later", guard_calls),
+            priority=4,
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            winner,
+            RecordedCondition("winner", guard_calls),
+            priority=2,
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            second,
+            RecordedCondition("second", guard_calls),
+            priority=0,
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            first,
+            RecordedCondition("first", guard_calls),
+            priority=-1,
+        )
+        for index in range(size):
+            machine.add_state(State(f"unrelated-{index}"))
+
+        result = machine.trigger("advance")
+
+        assert result.priority == 2
+        observed[size] = (tuple(guard_calls), tuple(source.permission_calls))
+
+    assert set(observed.values()) == {
+        (("first", "second", "winner"), ("first", "second", "winner"))
+    }
+
+
 def test_add_state_constant_registry_lookup_and_writes_across_topology_sizes() -> None:
     """add_state() does one registry lookup and writes exactly two direct entries."""
     observed: dict[int, int] = {}
