@@ -14,7 +14,7 @@ affects: [25-03, release-evidence, installed-artifact-proof]
 actuals:
   tokens: 16773
   tasks: 3
-  commits: 6
+  commits: 7
 tech-stack:
   added: []
   patterns:
@@ -89,6 +89,8 @@ status: complete
 1. **Task 1: Carry one priority winner through the shared source/installed oracle** - `8979060` (test), `e7dc232` (feat)
 2. **Task 2: Bind clean source, pure wheel, and compiled wheel workflow** - `6f31119` (test), `d32dfc4` (feat)
 3. **Task 3: Run the final clean-origin artifact proof and regenerate reviewed evidence** - `b4160ac` (feat)
+
+**Plan metadata:** `925969b` (docs)
 
 ## Files Created/Modified
 

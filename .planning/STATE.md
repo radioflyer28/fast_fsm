@@ -6,10 +6,10 @@ current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
 status: executing
 stopped_at: Completed 25-02-PLAN.md
-last_updated: "2026-09-07T06:35:50.823Z"
+last_updated: "2026-09-07T06:36:47.210Z"
 last_activity: 2026-09-07
 last_activity_desc: Phase 25 execution started
-state_head: b4160ac85931e4e22c5de08d9ed730b112d4565c
+state_head: 925969bd40e796a2008d333f7d6a2e327e510152
 progress:
   total_phases: 5
   completed_phases: 4
@@ -165,6 +165,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 25]: Keep priority-group timings environment-labelled; only installed compiled singleton dispatch has a throughput floor.
 - [Phase 25]: Priority selection uses six independent exact-value scenarios without changing conformance schema version 1.
 - [Phase 25]: Canonical installed-child JSON must pass exact-key validation before parent reconstruction of contract declaration order.
+- [Phase 25]: The release baseline stores the clean-source contract under existing artifact evidence rather than weakening origin-bound wheel proof.
 
 ### Pending Todos
 
