@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
 
 from fast_fsm.conditions import Condition
-from fast_fsm.core import DeclarativeState, State, StateMachine, transition
+from fast_fsm.core import (
+    CallbackState,
+    DeclarativeState,
+    State,
+    StateMachine,
+    transition,
+)
 
 
 class _RecordingCondition(Condition):
@@ -145,3 +152,425 @@ def test_sync_group_selects_the_first_fully_eligible_candidate_before_lifecycle(
     assert handler_payloads == [
         (("telemetry",), {"priority": "caller-payload", "battery": 41})
     ]
+
+
+def test_sync_group_rejections_fall_through_each_eligibility_stage() -> None:
+    """Normal false values advance locally until one candidate is fully eligible."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def declarative_guard(*_args: object, **_kwargs: object) -> bool:
+        events.append("declarative-guard")
+        return False
+
+    class Source(DeclarativeState):
+        __slots__ = ("_events",)
+
+        def __init__(self) -> None:
+            self._events = events
+            super().__init__("source")
+
+        def can_transition(
+            self, trigger_name: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            self._events.append(f"permission:{to_state.name}")
+            if to_state.name == "permission-rejected":
+                return False
+            return super().can_transition(trigger_name, to_state, *args, **kwargs)
+
+        @transition("go", to_state="declarative-rejected", condition=declarative_guard)
+        def go(self) -> None:
+            raise AssertionError("rejected declarative handler must not run")
+
+    source = Source()
+    guard_rejected = State("guard-rejected")
+    declarative_rejected = State("declarative-rejected")
+    permission_rejected = State("permission-rejected")
+    winner = State("winner")
+    machine = StateMachine(source, name="priority-fallthrough")
+    for state in (
+        guard_rejected,
+        declarative_rejected,
+        permission_rejected,
+        winner,
+    ):
+        machine.add_state(state)
+    machine.add_transition(
+        "go",
+        source,
+        winner,
+        _RecordingCondition(events, "winner-guard", True, payloads),
+        priority=4,
+    )
+    machine.add_transition("go", source, permission_rejected, priority=2)
+    machine.add_transition("go", source, declarative_rejected, priority=0)
+    machine.add_transition(
+        "go",
+        source,
+        guard_rejected,
+        _RecordingCondition(events, "guard-rejected", False, payloads),
+        priority=-3,
+    )
+
+    result = machine.trigger("go")
+
+    assert result.success is True
+    assert machine.current_state is winner
+    assert events == [
+        "guard-rejected",
+        "declarative-guard",
+        "permission:permission-rejected",
+        "winner-guard",
+        "permission:winner",
+    ]
+
+
+def test_sync_group_exhaustion_is_one_redacted_selection_failure() -> None:
+    """Rejected candidates are scan control, not individually observed failures."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    source = State("source")
+    first = State("first")
+    second = State("second")
+    machine = StateMachine(source, name="priority-exhaustion")
+    machine.add_state(first)
+    machine.add_state(second)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        first,
+        _RecordingCondition(events, "first-guard", False, payloads),
+        priority=-1,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        second,
+        _RecordingCondition(events, "second-guard", False, payloads),
+        priority=3,
+    )
+    observed: list[tuple[str, str, str, dict[str, object]]] = []
+    machine.on_failed(
+        lambda trigger_name, from_state, error, **kwargs: observed.append(
+            (trigger_name, from_state, error, dict(kwargs))
+        )
+    )
+
+    result = machine.trigger("go", secret="caller-secret", priority="payload")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == "selection"
+    assert result.to_state is None
+    assert result.cause is None
+    assert result.error == "No eligible transition candidate"
+    assert "first" not in result.error
+    assert "second" not in result.error
+    assert "caller-secret" not in result.error
+    assert machine.current_state is source
+    assert machine.history == []
+    assert events == ["first-guard", "second-guard"]
+    assert observed == [
+        (
+            "go",
+            "source",
+            "No eligible transition candidate",
+            {"secret": "caller-secret", "priority": "payload"},
+        )
+    ]
+
+
+def test_sync_group_guard_exception_is_terminal_and_finalized_once() -> None:
+    """An eligibility exception cannot activate a lower-priority candidate."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    failure = RuntimeError("guard-secret")
+    source = State("source")
+    failed = State("failed")
+    later = State("later")
+    machine = StateMachine(source, name="priority-guard-exception")
+    machine.add_state(failed)
+    machine.add_state(later)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        failed,
+        _RecordingCondition(events, "raising-guard", failure, payloads),
+        priority=-1,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _RecordingCondition(events, "later-guard", True, payloads),
+        priority=2,
+    )
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.stage == "guard"
+    assert result.cause is failure
+    assert machine.current_state is source
+    assert machine.history == []
+    assert events == ["raising-guard"]
+    assert observed == ["observer"]
+
+
+def test_sync_group_declarative_and_permission_exceptions_stop_selection() -> None:
+    """Both remaining eligibility seams are terminal before lifecycle work."""
+    declarative_events: list[str] = []
+    declarative_failure = RuntimeError("declarative-secret")
+
+    def failing_declarative_guard(*_args: object, **_kwargs: object) -> bool:
+        declarative_events.append("declarative-guard")
+        raise declarative_failure
+
+    class DeclarativeSource(DeclarativeState):
+        __slots__ = ()
+
+        @transition("go", to_state="failed", condition=failing_declarative_guard)
+        def go(self) -> None:
+            raise AssertionError("failed candidate handler must not run")
+
+    source = DeclarativeSource("source")
+    failed = State("failed")
+    later = State("later")
+    machine = StateMachine(source, name="priority-declarative-exception")
+    machine.add_state(failed)
+    machine.add_state(later)
+    machine.add_transition("go", source, failed, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _RecordingCondition(declarative_events, "later-guard", True, []),
+        priority=1,
+    )
+
+    declarative_result = machine.trigger("go")
+
+    assert declarative_result.stage == "guard"
+    assert declarative_result.cause is declarative_failure
+    assert declarative_events == ["declarative-guard"]
+
+    permission_events: list[str] = []
+    permission_failure = RuntimeError("permission-secret")
+
+    class PermissionSource(State):
+        __slots__ = ()
+
+        def can_transition(
+            self, trigger_name: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            raise permission_failure
+
+    permission_source = PermissionSource("permission-source")
+    permission_failed = State("permission-failed")
+    permission_later = State("permission-later")
+    permission_machine = StateMachine(
+        permission_source, name="priority-permission-exception"
+    )
+    permission_machine.add_state(permission_failed)
+    permission_machine.add_state(permission_later)
+    permission_machine.add_transition(
+        "go", permission_source, permission_failed, priority=-1
+    )
+    permission_machine.add_transition(
+        "go",
+        permission_source,
+        permission_later,
+        _RecordingCondition(permission_events, "later-guard", True, []),
+        priority=1,
+    )
+
+    permission_result = permission_machine.trigger("go")
+
+    assert permission_result.stage == "state-permission"
+    assert permission_result.cause is permission_failure
+    assert permission_events == []
+
+
+def test_can_trigger_uses_selection_order_without_observers_or_mutation() -> None:
+    """Queries share the candidate boundary but do not enter the lifecycle."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    source = State("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    machine = StateMachine(source, name="priority-query")
+    machine.add_state(rejected)
+    machine.add_state(winner)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        _RecordingCondition(events, "rejected-guard", False, payloads),
+        priority=-2,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        winner,
+        _RecordingCondition(events, "winner-guard", True, payloads),
+        priority=0,
+    )
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    assert machine.can_trigger("go", priority="caller-payload") is True
+
+    assert events == ["rejected-guard", "winner-guard"]
+    assert machine.current_state is source
+    assert machine.history == []
+    assert observed == []
+
+
+def test_can_trigger_does_not_advance_after_a_condition_or_permission_exception() -> (
+    None
+):
+    """Queries preserve terminal outward exceptions and never inspect a lower edge."""
+    failure = RuntimeError("query-guard-secret")
+    events: list[str] = []
+    source = State("source")
+    failed = State("failed")
+    later = State("later")
+    machine = StateMachine(source, name="priority-query-guard-exception")
+    machine.add_state(failed)
+    machine.add_state(later)
+    machine.add_transition(
+        "go",
+        source,
+        failed,
+        _RecordingCondition(events, "raising", failure, []),
+        priority=-1,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _RecordingCondition(events, "later", True, []),
+        priority=1,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        machine.can_trigger("go")
+
+    assert raised.value is failure
+    assert events == ["raising"]
+
+    permission_failure = RuntimeError("query-permission-secret")
+
+    class PermissionSource(State):
+        __slots__ = ()
+
+        def can_transition(
+            self, trigger_name: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            raise permission_failure
+
+    permission_source = PermissionSource("permission-source")
+    permission_target = State("permission-target")
+    permission_later = State("permission-later")
+    permission_machine = StateMachine(
+        permission_source, name="priority-query-permission"
+    )
+    permission_machine.add_state(permission_target)
+    permission_machine.add_state(permission_later)
+    permission_machine.add_transition(
+        "go", permission_source, permission_target, priority=-1
+    )
+    permission_machine.add_transition(
+        "go",
+        permission_source,
+        permission_later,
+        _RecordingCondition(events, "permission-later", True, []),
+        priority=1,
+    )
+
+    with pytest.raises(RuntimeError) as permission_raised:
+        permission_machine.can_trigger("go")
+
+    assert permission_raised.value is permission_failure
+    assert events == ["raising"]
+
+
+def test_can_trigger_treats_a_declarative_exception_as_terminal_false() -> None:
+    """The declarative query compatibility path cannot fall through on error."""
+    events: list[str] = []
+    failure = RuntimeError("query-declarative-secret")
+
+    def failing_guard(*_args: object, **_kwargs: object) -> bool:
+        events.append("declarative-guard")
+        raise failure
+
+    class Source(DeclarativeState):
+        __slots__ = ()
+
+        @transition("go", to_state="failed", condition=failing_guard)
+        def go(self) -> None:
+            raise AssertionError("failing candidate handler must not run")
+
+    source = Source("source")
+    failed = State("failed")
+    later = State("later")
+    machine = StateMachine(source, name="priority-query-declarative")
+    machine.add_state(failed)
+    machine.add_state(later)
+    machine.add_transition("go", source, failed, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _RecordingCondition(events, "later-guard", True, []),
+        priority=1,
+    )
+
+    assert machine.can_trigger("go") is False
+
+    assert events == ["declarative-guard"]
+    assert machine.current_state is source
+
+
+def test_lifecycle_failure_after_selection_never_evaluates_a_lower_candidate() -> None:
+    """Lifecycle failure is a result of the selected edge, not scan control."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    failure = RuntimeError("destination-secret")
+
+    def fail_destination(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    source = State("source")
+    selected = CallbackState("selected", on_enter=fail_destination)
+    later = State("later")
+    machine = StateMachine(source, name="priority-lifecycle-failure")
+    machine.add_state(selected)
+    machine.add_state(later)
+    machine.enable_history()
+    machine.add_transition("go", source, selected, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _RecordingCondition(events, "later-guard", True, payloads),
+        priority=1,
+    )
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.stage == "destination-enter"
+    assert result.committed is True
+    assert result.cause is failure
+    assert machine.current_state is selected
+    assert len(machine.history) == 1
+    assert events == []
+    assert observed == ["observer"]

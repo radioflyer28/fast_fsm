@@ -79,6 +79,7 @@ _ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextV
 # producer consumes these constants; the tuple below is the corresponding
 # catalog for contract validation and documentation.
 _LIFECYCLE_STAGE_RESOLUTION = "resolution"
+_LIFECYCLE_STAGE_SELECTION = "selection"
 _LIFECYCLE_STAGE_GUARD = "guard"
 _LIFECYCLE_STAGE_STATE_PERMISSION = "state-permission"
 _LIFECYCLE_STAGE_BEFORE_TRANSITION = "before-transition"
@@ -95,6 +96,7 @@ _LIFECYCLE_STAGE_AFTER_TRANSITION = "after-transition"
 
 _LIFECYCLE_STAGES: Tuple[str, ...] = (
     _LIFECYCLE_STAGE_RESOLUTION,
+    _LIFECYCLE_STAGE_SELECTION,
     _LIFECYCLE_STAGE_GUARD,
     _LIFECYCLE_STAGE_STATE_PERMISSION,
     _LIFECYCLE_STAGE_BEFORE_TRANSITION,
@@ -605,6 +607,7 @@ class _TransitionGroup:
 
 _TransitionSlot = Union[TransitionEntry, _TransitionGroup]
 _PRIORITY_GROUP_RUNTIME_ERROR = "Priority candidate resolution is not available"
+_PRIORITY_GROUP_EXHAUSTED_ERROR = "No eligible transition candidate"
 _PRIORITY_GROUP_PROJECTION_ERROR = (
     "Priority candidate groups are not supported by this projection"
 )
@@ -2192,8 +2195,8 @@ class StateMachine:
             return self._build_failure_result(
                 current_name,
                 trigger,
-                _PRIORITY_GROUP_RUNTIME_ERROR,
-                stage=_LIFECYCLE_STAGE_RESOLUTION,
+                _PRIORITY_GROUP_EXHAUSTED_ERROR,
+                stage=_LIFECYCLE_STAGE_SELECTION,
             )
 
         selected_singleton = self._select_sync_candidate(

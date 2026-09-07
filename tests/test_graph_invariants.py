@@ -296,18 +296,17 @@ def test_priority_rejection_happens_before_topology_or_version_mutation(
     assert machine._graph_version == before_version
 
 
-def test_grouped_consumers_fail_closed_without_selecting_or_projecting() -> None:
+def test_grouped_runtime_selects_while_projections_remain_fail_closed() -> None:
     machine, idle, running = make_machine()
     complete = State("complete")
     machine.add_state(complete)
     machine.add_transition("go", idle, running, priority=1)
     machine.add_transition("go", idle, complete, priority=0)
 
-    assert not machine.can_trigger("go")
+    assert machine.can_trigger("go")
     result = machine.trigger("go")
-    assert not result.success
-    assert result.stage == "resolution"
-    assert result.error == "Priority candidate resolution is not available"
+    assert result.success
+    assert result.to_state == "complete"
     with pytest.raises(
         RuntimeError,
         match="Priority candidate groups are not supported by this projection",

@@ -169,6 +169,7 @@ def test_lifecycle_stage_catalog_covers_every_produced_result_stage() -> None:
     """The pure/native lifecycle matrix shares one ordered stage vocabulary."""
     assert _LIFECYCLE_STAGES == (
         "resolution",
+        "selection",
         "guard",
         "state-permission",
         "before-transition",
