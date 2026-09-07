@@ -141,6 +141,57 @@ def test_graph_snapshot_flattens_candidate_groups_with_scalar_identity() -> None
         snapshot.transitions[0].condition_ref = "changed"
 
 
+def test_clone_shares_candidate_identity_but_not_candidate_tables() -> None:
+    """Clones retain immutable entries/references while registrations isolate."""
+    from fast_fsm import FuncCondition
+
+    shared = FuncCondition(lambda **kw: True, name="shared")
+    machine = StateMachine.from_dict(
+        {
+            "initial": "idle",
+            "transitions": [
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "safe",
+                    "priority": 1,
+                    "condition_ref": "shared",
+                },
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "alternate",
+                    "priority": 2,
+                    "condition_ref": "shared",
+                },
+            ],
+        },
+        conditions={"shared": shared},
+    )
+
+    clone = machine.clone()
+    original_slot = machine._transitions["idle"]["go"]
+    assert clone._transitions["idle"]["go"] is original_slot
+    assert tuple(entry.condition_ref for entry in original_slot.entries) == (
+        "shared",
+        "shared",
+    )
+    assert all(entry.condition is shared for entry in original_slot.entries)
+
+    clone.add_transition("go", "idle", "alternate", priority=-1)
+    assert len(machine._transitions["idle"]["go"].entries) == 2
+    assert len(clone._transitions["idle"]["go"].entries) == 3
+
+
+def test_priority_selectors_do_not_call_the_cold_projection_helper() -> None:
+    """Phase 22 keeps direct singleton/group selection independently guarded."""
+    import inspect
+
+    selector_source = inspect.getsource(StateMachine._select_transition_sync)
+    assert "_transition_entries" not in selector_source
+    assert "slot.entries" in selector_source
+
+
 def test_version_changes_only_for_successful_topology_changes() -> None:
     idle = State("idle")
     running = State("running")

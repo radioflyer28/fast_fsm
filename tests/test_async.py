@@ -1222,3 +1222,49 @@ class TestAsyncBuilderPreflight:
         assert await machine.can_trigger_async("start")
         assert (await machine.trigger_async("start")).success
         assert leaf.call_count == 2
+
+
+class TestAsyncPriorityCloneParity:
+    @pytest.mark.asyncio
+    async def test_async_clone_preserves_candidate_refs_and_table_independence(self):
+        shared = AlwaysTrueCondition()
+        machine = AsyncStateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "safe",
+                        "priority": 1,
+                        "condition_ref": "shared",
+                    },
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "alternate",
+                        "priority": 2,
+                        "condition_ref": "shared",
+                    },
+                ],
+            },
+            conditions={"shared": shared},
+        )
+
+        clone = machine.clone()
+        original_slot = machine._transitions["idle"]["go"]
+        assert clone._transitions["idle"]["go"] is original_slot
+        assert all(entry.condition is shared for entry in original_slot.entries)
+        assert set(clone.get_reachable_states("idle")) == {"safe", "alternate"}
+        assert await clone.can_trigger_async("go")
+
+        clone.add_transition("go", "idle", "alternate", priority=-1)
+        assert len(machine._transitions["idle"]["go"].entries) == 2
+        assert len(clone._transitions["idle"]["go"].entries) == 3
+
+    def test_async_selector_does_not_call_cold_projection_helper(self):
+        import inspect
+
+        selector_source = inspect.getsource(AsyncStateMachine._select_transition_async)
+        assert "_transition_entries" not in selector_source
+        assert "slot.entries" in selector_source

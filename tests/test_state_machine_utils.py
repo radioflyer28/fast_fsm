@@ -195,6 +195,22 @@ class TestTransitionExists:
         # Current state is "red", so "timer" from red should exist
         assert traffic_light_fsm.transition_exists("timer")
 
+    def test_grouped_targets_are_complete_while_trigger_names_stay_deduplicated(self):
+        idle = State("idle")
+        safe = State("safe")
+        alternate = State("alternate")
+        machine = StateMachine(idle, name="grouped-queries")
+        machine.add_state(safe)
+        machine.add_state(alternate)
+        machine.add_transition("go", idle, safe, priority=5)
+        machine.add_transition("go", idle, alternate, priority=-1)
+
+        assert machine.get_available_triggers("idle") == ["go"]
+        assert set(machine.triggers) == {"go"}
+        assert set(machine.get_reachable_states("idle")) == {"safe", "alternate"}
+        assert machine.transition_exists("go", "idle", "safe")
+        assert machine.transition_exists("go", "idle", "alternate")
+
 
 # ---------------------------------------------------------------------------
 # debug_info / print_debug_info
