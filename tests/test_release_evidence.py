@@ -4592,3 +4592,237 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
             checked_out_commit="a" * 40,
             tag_ref="v0.3.0",
         )
+
+
+@pytest.mark.parametrize("offline", [None, "", "0", "true"])
+def test_release_proof_environment_rejects_every_nonexact_offline_value_before_uv(
+    monkeypatch: pytest.MonkeyPatch, offline: str | None
+) -> None:
+    """Offline intent is caller-owned and must fail before any subprocess work."""
+    calls: list[tuple[str, ...]] = []
+    environment = {} if offline is None else {"UV_OFFLINE": offline}
+
+    def run_checked(arguments: Iterable[str], **_kwargs: object) -> str:
+        calls.append(tuple(arguments))
+        return "uv 0.12.6\n"
+
+    monkeypatch.setattr(release_evidence, "_run_checked", run_checked)
+
+    with pytest.raises(EvidenceError, match="UV_OFFLINE=1"):
+        release_evidence._require_release_proof_environment(environment=environment)
+
+    assert calls == []
+
+
+def test_release_proof_environment_rejects_wrong_uv_before_source_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An offline but unreviewed executable cannot begin evidence collection."""
+    calls: list[tuple[str, ...]] = []
+
+    def run_checked(arguments: Iterable[str], **_kwargs: object) -> str:
+        calls.append(tuple(arguments))
+        return "uv 0.12.5\n"
+
+    monkeypatch.setattr(release_evidence, "_run_checked", run_checked)
+
+    with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
+        release_evidence._require_release_proof_environment(
+            environment={"UV_OFFLINE": "1"}
+        )
+
+    assert calls == [("uv", "--version")]
+
+
+def test_collect_manifest_checks_environment_before_source_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The in-process evidence path repeats the Taskfile environment gate first."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        release_evidence, "_command_environment", lambda: {"UV_OFFLINE": "1"}
+    )
+
+    def require_environment(**_kwargs: object) -> str:
+        calls.append("environment")
+        return "0.12.6"
+
+    def fail_preflight(**_kwargs: object) -> dict[str, str]:
+        calls.append("preflight")
+        raise EvidenceError("source guard reached")
+
+    monkeypatch.setattr(
+        release_evidence, "_require_release_proof_environment", require_environment
+    )
+    monkeypatch.setattr(release_evidence, "_source_preflight", fail_preflight)
+
+    with pytest.raises(EvidenceError, match="source guard reached"):
+        release_evidence.collect_manifest()
+
+    assert calls == ["environment", "preflight"]
+
+
+RELEASE_PROOF_TASKS = (
+    "release-baseline-write",
+    "release-baseline-check",
+    "release-gate",
+    "release-installed-artifacts-check",
+    "release-installed-performance-check",
+    "release-readiness-check",
+)
+
+
+def _validate_release_proof_environment_taskfile(taskfile: dict[str, object]) -> None:
+    """Keep the offline/version/source gate serialized ahead of all proof tasks."""
+    tasks = _task_definitions(taskfile)
+    assert "release-proof-environment-check" in tasks
+    gate = tasks["release-proof-environment-check"]
+    assert gate.get("deps", []) == []
+    commands = _task_command_text(gate)
+    offline_index = commands.index("UV_OFFLINE")
+    version_index = commands.index("uv --version")
+    source_index = commands.index("pure-source-check")
+    assert offline_index < version_index < source_index
+    assert "UV_OFFLINE" in commands and "= \"1\"" in commands
+    assert "0.12.6" in commands
+
+    for task_name in RELEASE_PROOF_TASKS:
+        dependencies = [
+            dependency.get("task")
+            for dependency in tasks[task_name].get("deps", [])
+            if isinstance(dependency, dict)
+        ]
+        assert dependencies == ["release-proof-environment-check"], task_name
+
+
+def test_taskfile_serializes_reviewed_offline_environment_before_release_proof() -> None:
+    """No sibling dependency may run uv or source proof before the environment gate."""
+    _validate_release_proof_environment_taskfile(_taskfile_data())
+
+    missing_gate = deepcopy(_taskfile_data())
+    _task_definitions(missing_gate).pop("release-proof-environment-check")
+    with pytest.raises(AssertionError):
+        _validate_release_proof_environment_taskfile(missing_gate)
+
+    racing_dependency = deepcopy(_taskfile_data())
+    _task_definitions(racing_dependency)["release-gate"]["deps"].append(
+        {"task": "pure-source-check"}
+    )
+    with pytest.raises(AssertionError, match="release-gate"):
+        _validate_release_proof_environment_taskfile(racing_dependency)
+
+    reordered_gate = deepcopy(_taskfile_data())
+    commands = _task_definitions(reordered_gate)["release-proof-environment-check"][
+        "cmds"
+    ]
+    assert isinstance(commands, list)
+    commands[0], commands[1] = commands[1], commands[0]
+    with pytest.raises(AssertionError):
+        _validate_release_proof_environment_taskfile(reordered_gate)
+
+
+def _baseline_candidate_with_allowed_refreshes() -> dict[str, object]:
+    """Return the real static envelope with only generator-owned drift."""
+    baseline = json.loads(
+        (ROOT / "evidence" / "release-baseline.json").read_text(encoding="utf-8")
+    )
+    candidate = json.loads(serialize_manifest(baseline))
+    tests = candidate["quality_baseline"]["tests"]
+    tests["collected"] += 1
+    tests["passed"] += 1
+    candidate["measurement_environment"]["machine"] = "refreshed-machine"
+    for observation in (
+        candidate["performance_contract"]["observation"],
+        candidate["pure_source_performance"]["observations"][0],
+    ):
+        observation["elapsed_seconds"] *= 1.01
+        observation["ops_per_second"] = round(
+            observation["operations"] / observation["elapsed_seconds"], 2
+        )
+    return candidate
+
+
+def test_guarded_release_baseline_write_allows_only_the_five_refreshable_paths(
+    tmp_path: Path,
+) -> None:
+    """A protected refresh accepts counts plus the three generator observations."""
+    protected = tmp_path / "release-baseline.json"
+    baseline = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(baseline)
+    candidate = _baseline_candidate_with_allowed_refreshes()
+
+    release_evidence._write_release_baseline_guarded(
+        candidate, baseline_path=protected
+    )
+
+    assert protected.read_text(encoding="utf-8") == serialize_manifest(candidate)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("toolchain", "uv"), "0.12.5"),
+        (("quality_baseline", "coverage", "total_percent"), 0.0),
+        (("quality_baseline", "tests", "failed"), 1),
+        (("schema_version",), 99),
+        (("slots_policy", "inventory"), []),
+        (("artifact_evidence", "conformance"), {}),
+    ],
+)
+def test_guarded_release_baseline_rejects_durable_drift_without_byte_change(
+    tmp_path: Path, path: tuple[str, ...], replacement: object
+) -> None:
+    """Every unapproved field difference rejects before the protected write."""
+    protected = tmp_path / "release-baseline.json"
+    original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(original)
+    candidate = _baseline_candidate_with_allowed_refreshes()
+    target = candidate
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+
+    with pytest.raises(EvidenceError, match=re.escape(".".join(path))):
+        release_evidence._write_release_baseline_guarded(
+            candidate, baseline_path=protected
+        )
+
+    assert protected.read_bytes() == original
+
+
+def test_release_baseline_path_resolution_guards_relative_and_absolute_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The tracked path is canonicalized before writer selection; temp files stay generic."""
+    calls: list[tuple[str, Path]] = []
+
+    def guarded(_manifest: object, *, baseline_path: Path) -> dict[str, object]:
+        calls.append(("guarded", baseline_path))
+        return {"writer": "guarded"}
+
+    def generic(
+        _manifest: object, *, manifest_path: Path, write: bool
+    ) -> dict[str, object]:
+        assert write is True
+        calls.append(("generic", manifest_path))
+        return {"writer": "generic"}
+
+    monkeypatch.setattr(release_evidence, "_write_release_baseline_guarded", guarded)
+    monkeypatch.setattr(release_evidence, "write_or_check_manifest", generic)
+    protected = (ROOT / "evidence" / "release-baseline.json").resolve()
+
+    assert release_evidence._write_or_check_release_manifest(
+        {}, manifest_path=Path("evidence/release-baseline.json"), write=True
+    ) == {"writer": "guarded"}
+    assert release_evidence._write_or_check_release_manifest(
+        {}, manifest_path=protected, write=True
+    ) == {"writer": "guarded"}
+    temporary = (tmp_path / "evidence.json").resolve()
+    assert release_evidence._write_or_check_release_manifest(
+        {}, manifest_path=temporary, write=True
+    ) == {"writer": "generic"}
+    assert calls == [
+        ("guarded", protected),
+        ("guarded", protected),
+        ("generic", temporary),
+    ]
