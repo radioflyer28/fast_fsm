@@ -487,7 +487,9 @@ def test_transition_matrix_preflight_uses_state_event_cells(
 
     exact = _DiagnosticBudget(DiagnosticLimits(max_dense_cells=required_cells))
     transition_matrix = _dense_adjacency(graph, exact, representation="transition")
-    assert transition_matrix["root"]["to-leaf-0"] == ["leaf-0"]
+    assert transition_matrix["root"]["to-leaf-0"] == [
+        {"to_state": "leaf-0", "priority": 0}
+    ]
     assert exact.status.dense_cell_count == required_cells
 
     with pytest.raises(DiagnosticBudgetExceeded) as raised:
@@ -825,3 +827,25 @@ def test_json_captures_one_snapshot_and_never_rereads_live_topology(
     payload = to_json(machine)
     assert calls == 1
     assert payload["analysis"]["diagnostic_status"]["complete"] is True
+
+
+def test_candidate_adapters_preserve_same_target_priority_and_path_identity() -> None:
+    """Every candidate remains visible even when its destination is shared."""
+    machine = StateMachine.from_states("idle", "home", initial="idle")
+    machine.add_transition("return", "idle", "home", priority=20)
+    machine.add_transition("return", "idle", "home", priority=-5)
+    graph = _graph_from_snapshot(machine._graph_snapshot())
+
+    sparse = _sparse_adjacency(graph, _DiagnosticBudget())
+    assert [edge["priority"] for edge in sparse["edges"]] == [-5, 20]
+
+    dense = _dense_adjacency(graph, _DiagnosticBudget())
+    assert [edge["priority"] for edge in dense["transitions"]] == [-5, 20]
+
+    paths = _generate_paths(
+        graph, _DiagnosticBudget(), max_length=1, max_paths=2
+    )
+    assert paths == (
+        (("idle", "return", "home", -5),),
+        (("idle", "return", "home", 20),),
+    )

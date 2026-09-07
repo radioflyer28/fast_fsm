@@ -372,7 +372,7 @@ class TestFSMValidator:
         assert isinstance(matrix, dict)
         assert "idle" in matrix
         assert "start" in matrix["idle"]
-        assert "running" in matrix["idle"]["start"]
+        assert {"to_state": "running", "priority": 0} in matrix["idle"]["start"]
 
     def test_validate_completeness_defaults_to_sparse_adjacency(
         self, well_designed_fsm
@@ -406,7 +406,9 @@ class TestFSMValidator:
             "running",
         )
         report = validator.validate_completeness(include_dense=True)
-        assert report["transition_matrix"]["idle"]["start"] == ["running"]
+        assert report["transition_matrix"]["idle"]["start"] == [
+            {"to_state": "running", "priority": 0}
+        ]
 
     def test_dense_report_status_reflects_completed_dense_work(self):
         """Structured report status is captured after optional dense generation."""
@@ -455,12 +457,30 @@ class TestFSMValidator:
         v = FSMValidator(well_designed_fsm)
         paths = v.generate_test_paths(max_length=3, max_paths=5)
         assert len(paths) > 0
-        # Each path is a list of (from_state, event, to_state) tuples
+        # Each path is a list of (from_state, event, to_state, priority) tuples.
         for path in paths:
-            for from_state, event, to_state in path:
+            for from_state, event, to_state, priority in path:
                 assert from_state in v.states
                 assert to_state in v.states
                 assert event in v.events
+                assert type(priority) is int
+
+    def test_candidate_transition_matrix_and_counts_keep_same_target_priorities(self):
+        """Compatibility adapters expose one record for every ordered candidate."""
+        machine = StateMachine.from_states("idle", "home", initial="idle")
+        machine.add_transition("return", "idle", "home", priority=20)
+        machine.add_transition("return", "idle", "home", priority=-5)
+
+        validator = FSMValidator(machine)
+        assert validator.get_transition_matrix()["idle"]["return"] == [
+            {"to_state": "home", "priority": -5},
+            {"to_state": "home", "priority": 20},
+        ]
+        assert validator.validate_completeness()["total_transitions"] == 2
+        assert validator.generate_test_paths(max_length=1, max_paths=2) == [
+            [("idle", "return", "home", -5)],
+            [("idle", "return", "home", 20)],
+        ]
 
 
 # ---------------------------------------------------------------------------
