@@ -847,3 +847,41 @@ def test_candidate_adapters_preserve_same_target_priority_and_path_identity() ->
         (("idle", "return", "home", -5),),
         (("idle", "return", "home", 20),),
     )
+
+
+def test_json_reserves_each_candidate_record_before_returning_output() -> None:
+    """A second same-target edge consumes its own JSON result reservation."""
+
+    def machine_with_candidates(*priorities: int) -> StateMachine:
+        machine = StateMachine.from_states("idle", "home", initial="idle")
+        for priority in priorities:
+            machine.add_transition(
+                "return",
+                "idle",
+                "home",
+                FuncCondition(lambda: True, name=f"guard-{priority}"),
+                priority=priority,
+            )
+        return machine
+
+    one_candidate = to_json(machine_with_candidates(0))
+    two_candidates = to_json(machine_with_candidates(-5, 20))
+    required_results = two_candidates["analysis"]["diagnostic_status"]["result_count"]
+
+    assert required_results == (
+        one_candidate["analysis"]["diagnostic_status"]["result_count"] + 2
+    )
+    exact = to_json(
+        machine_with_candidates(-5, 20),
+        limits=DiagnosticLimits(max_results=required_results),
+    )
+    assert exact["analysis"]["diagnostic_status"]["result_count"] == required_results
+
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        to_json(
+            machine_with_candidates(-5, 20),
+            limits=DiagnosticLimits(max_results=required_results - 1),
+        )
+
+    assert raised.value.status.exhausted_dimension == "max_results"
+    assert raised.value.status.complete is False

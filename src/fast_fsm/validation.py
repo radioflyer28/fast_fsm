@@ -1152,15 +1152,20 @@ class EnhancedFSMValidator(FSMValidator):
                 for j in range(len(sorted_states)):
                     t_indices = matrix[i][j]
                     if t_indices:
-                        events_in_cell = [
-                            transitions_list[idx]["event"] for idx in t_indices
-                        ]
-                        row_cells.append(
-                            ", ".join(
-                                f"`{_escape_markdown_text(event)}`"
-                                for event in events_in_cell
+                        events_in_cell = []
+                        for idx in t_indices:
+                            transition = transitions_list[idx]
+                            event = transition["event"]
+                            priority = transition["priority"]
+                            assert isinstance(event, str)
+                            assert type(priority) is int
+                            self._budget.reserve_result(
+                                stage="validation.markdown.adjacency.candidate"
                             )
-                        )
+                            events_in_cell.append(
+                                f"`{_escape_markdown_text(event)}` [priority {priority}]"
+                            )
+                        row_cells.append(", ".join(events_in_cell))
                     else:
                         row_cells.append("—")
                 lines.append(
@@ -1172,13 +1177,16 @@ class EnhancedFSMValidator(FSMValidator):
         # Numbered transitions table
         if transitions_list:
             lines.extend(["", "## Transitions", ""])
-            lines.append("| # | From | Event | To |")
-            lines.append("|---|------|-------|----|")
+            lines.append("| # | From | Event | To | Priority |")
+            lines.append("|---|------|-------|----|----------|")
             for t in transitions_list:
+                priority = t["priority"]
+                assert type(priority) is int
+                self._budget.reserve_result(stage="validation.markdown.transition")
                 lines.append(
                     f"| {t['idx']} | {_escape_markdown_text(t['from_state'])} | "
                     f"`{_escape_markdown_text(t['event'])}` | "
-                    f"{_escape_markdown_text(t['to_state'])} |"
+                    f"{_escape_markdown_text(t['to_state'])} | {priority} |"
                 )
 
         # Issues

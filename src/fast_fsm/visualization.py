@@ -92,6 +92,7 @@ def _capture_diagnostic_graph(
 def _transition_label(
     trigger: str,
     condition_name: str | None,
+    priority: int,
     *,
     show_conditions: bool,
     escape: Any,
@@ -100,7 +101,7 @@ def _transition_label(
     label = escape(trigger)
     if show_conditions and condition_name is not None:
         label = f"{label} [{escape(condition_name)}]"
-    return label
+    return f"{label} [priority {priority}]"
 
 
 def _append_rendered_line(
@@ -153,6 +154,7 @@ def _to_mermaid_from_snapshot(
         label = _transition_label(
             edge.trigger,
             edge.condition_name,
+            edge.priority,
             show_conditions=show_conditions,
             escape=_escape_mermaid_text,
         )
@@ -210,6 +212,7 @@ def _to_plantuml_from_snapshot(
         label = _transition_label(
             edge.trigger,
             edge.condition_name,
+            edge.priority,
             show_conditions=show_conditions,
             escape=_escape_plantuml_text,
         )
@@ -252,7 +255,8 @@ def to_mermaid(
         fsm: The state machine to visualize.
         title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
         show_conditions: When ``True``, condition names are appended to
-            transition labels in ``[brackets]``.  Defaults to ``True``.
+            transition labels in ``[brackets]``. Candidate priorities are
+            always shown. Defaults to ``True``.
         limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
@@ -271,8 +275,8 @@ def to_mermaid(
             state "idle" as s0
             state "running" as s1
             [*] --> s0
-            s0 --> s1 : start
-            s1 --> s0 : stop
+            s0 --> s1 : start [priority 0]
+            s1 --> s0 : stop [priority 0]
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
     return _to_mermaid_from_snapshot(
@@ -298,7 +302,8 @@ def to_plantuml(
         fsm: The state machine to visualize.
         title: Optional diagram title (rendered with the ``title`` keyword).
         show_conditions: When ``True``, condition names are appended to
-            transition labels in ``[brackets]``.  Defaults to ``True``.
+            transition labels in ``[brackets]``. Candidate priorities are
+            always shown. Defaults to ``True``.
         limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
@@ -316,8 +321,8 @@ def to_plantuml(
         state "idle" as s0
         state "running" as s1
         [*] --> s0
-        s0 --> s1 : start
-        s1 --> s0 : stop
+        s0 --> s1 : start [priority 0]
+        s1 --> s0 : stop [priority 0]
         @enduml
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
@@ -427,12 +432,14 @@ def _to_json_from_snapshot(
     transitions: list[dict[str, object]] = []
     for edge in graph.edges:
         budget.reserve_work(stage="json.transition")
+        budget.reserve_result(stage="json.transition")
         transitions.append(
             {
                 "trigger": edge.trigger,
                 "from": graph.state_names[edge.from_index],
                 "to": graph.state_names[edge.to_index],
-                "has_guard": edge.condition_name is not None,
+                "has_guard": edge.has_guard,
+                "priority": edge.priority,
             }
         )
 
@@ -511,7 +518,8 @@ def to_mermaid_fenced(
         fsm: The state machine to visualize.
         title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
         show_conditions: When ``True``, condition names are appended to
-            transition labels.  Defaults to ``True``.
+            transition labels. Candidate priorities are always shown.
+            Defaults to ``True``.
         limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
@@ -535,8 +543,8 @@ def to_mermaid_fenced(
             state "idle" as s0
             state "running" as s1
             [*] --> s0
-            s0 --> s1 : start
-            s1 --> s0 : stop
+            s0 --> s1 : start [priority 0]
+            s1 --> s0 : stop [priority 0]
         ```
     """
     snapshot, graph, budget = _capture_diagnostic_graph(fsm, limits)
@@ -621,10 +629,13 @@ def _validate_adjacency_matrix(
             "to_state": graph.state_names[edge.to_index],
             "event_idx": expected_events.index(edge.trigger),
             "event": edge.trigger,
+            "priority": edge.priority,
         }
         if (
             edge_index >= len(transitions)
+            or not isinstance(transitions[edge_index], dict)
             or transitions[edge_index] != expected_transition
+            or type(transitions[edge_index].get("priority")) is not int
         ):
             raise _adjacency_mismatch()
         expected_cells.setdefault((edge.from_index, edge.to_index), []).append(
@@ -785,9 +796,13 @@ def _to_mermaid_document_from_snapshot(
                         ):
                             raise _adjacency_mismatch()
                         event = transitions[transition_index].get("event")
-                        if not isinstance(event, str):
+                        priority = transitions[transition_index].get("priority")
+                        if not isinstance(event, str) or type(priority) is not int:
                             raise _adjacency_mismatch()
-                        events.append(f"`{_escape_markdown_cell(event)}`")
+                        budget.reserve_result(stage="document.adjacency.candidate")
+                        events.append(
+                            f"`{_escape_markdown_cell(event)}` [priority {priority}]"
+                        )
                     row_cells.append(", ".join(events))
                 else:
                     row_cells.append("—")
@@ -810,13 +825,13 @@ def _to_mermaid_document_from_snapshot(
             lines,
             budget,
             stage="document.transitions.header",
-            line="| # | From | Event | To |",
+            line="| # | From | Event | To | Priority |",
         )
         _append_rendered_line(
             lines,
             budget,
             stage="document.transitions.separator",
-            line="|---|------|-------|----|",
+            line="|---|------|-------|----|----------|",
         )
         for transition in transitions:
             if not isinstance(transition, dict):
@@ -825,11 +840,13 @@ def _to_mermaid_document_from_snapshot(
             from_state = transition.get("from_state")
             event = transition.get("event")
             to_state = transition.get("to_state")
+            priority = transition.get("priority")
             if (
                 not isinstance(index, int)
                 or not isinstance(from_state, str)
                 or not isinstance(event, str)
                 or not isinstance(to_state, str)
+                or type(priority) is not int
             ):
                 raise _adjacency_mismatch()
             _append_rendered_line(
@@ -838,7 +855,7 @@ def _to_mermaid_document_from_snapshot(
                 stage="document.transitions.row",
                 line=f"| {index} | {_escape_markdown_cell(from_state)} | "
                 f"`{_escape_markdown_cell(event)}` | "
-                f"{_escape_markdown_cell(to_state)} |",
+                f"{_escape_markdown_cell(to_state)} | {priority} |",
             )
 
     return "\n".join(lines)

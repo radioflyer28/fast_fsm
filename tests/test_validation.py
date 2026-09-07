@@ -660,12 +660,12 @@ class TestEnhancedFSMValidator:
 
     def test_candidate_reports_keep_numeric_priority_in_json_and_markdown(self):
         """Validation reports expose every same-target candidate independently."""
-        source = State("source\\n|<")
+        source = State("source\n|<")
         destination = State("destination")
         fsm = StateMachine(source, name="candidate-report")
         fsm.add_state(destination)
-        fsm.add_transition("return\\n|<", source, destination, priority=7)
-        fsm.add_transition("return\\n|<", source, destination, priority=-3)
+        fsm.add_transition("return\n|<", source, destination, priority=7)
+        fsm.add_transition("return\n|<", source, destination, priority=-3)
 
         validator = EnhancedFSMValidator(fsm)
         payload = json.loads(validator.export_report("json"))

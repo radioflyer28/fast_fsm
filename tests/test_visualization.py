@@ -57,13 +57,13 @@ def conditional_fsm():
 @pytest.fixture
 def priority_candidate_fsm():
     """Same-target candidates with hostile labels exercise every output sink."""
-    source = State("source\\n|<")
+    source = State("source\n|<")
     destination = State("destination")
-    guarded = FuncCondition(lambda: True, "guard\\n|<")
-    fsm = StateMachine(source, name="priority\\n|<")
+    guarded = FuncCondition(lambda: True, "guard\n|<")
+    fsm = StateMachine(source, name="priority\n|<")
     fsm.add_state(destination)
-    fsm.add_transition("return\\n|<", source, destination, guarded, priority=7)
-    fsm.add_transition("return\\n|<", source, destination, priority=-3)
+    fsm.add_transition("return\n|<", source, destination, guarded, priority=7)
+    fsm.add_transition("return\n|<", source, destination, priority=-3)
     return fsm
 
 
