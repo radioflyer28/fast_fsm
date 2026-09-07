@@ -204,16 +204,16 @@ class TestFSMValidator:
         machine.add_transition("go", source, first_target, priority=0)
         machine.add_transition("go", source, second_target, priority=1)
         snapshot = machine._graph_snapshot()
-        invalid_snapshot = replace(
-            snapshot,
-            transitions=tuple(
-                replace(row, priority=priority)
-                for row, priority in zip(snapshot.transitions, priorities)
+        snapshot_graph = _graph_from_snapshot(snapshot)
+        invalid_graph = replace(
+            snapshot_graph,
+            edges=tuple(
+                replace(edge, priority=priority)
+                for edge, priority in zip(snapshot_graph.edges, priorities)
             ),
         )
         validator = FSMValidator(machine)
-        validator._snapshot = invalid_snapshot
-        validator._diagnostic_graph = _graph_from_snapshot(invalid_snapshot)
+        validator._diagnostic_graph = invalid_graph
 
         result = validator.check_determinism(
             limits=DiagnosticLimits(max_work=2, max_results=2)
@@ -245,8 +245,7 @@ class TestFSMValidator:
         assert exhausted.value.status.exhausted_stage == "determinism.candidate"
 
         enhanced = EnhancedFSMValidator(machine)
-        enhanced._snapshot = invalid_snapshot
-        enhanced._diagnostic_graph = _graph_from_snapshot(invalid_snapshot)
+        enhanced._diagnostic_graph = invalid_graph
         enhanced.issues.clear()
         enhanced._analyze_determinism()
         priority_issues = [
