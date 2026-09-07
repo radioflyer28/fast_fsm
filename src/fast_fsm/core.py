@@ -2446,7 +2446,7 @@ class StateMachine:
         if not condition:
             return True
 
-        source_state = cast(DeclarativeState, self._current_state)
+        source_state = cast(DeclarativeState, prepared.source_state)
         try:
             assert prepared.condition_kwargs is not None
             condition_result: Any
@@ -3963,38 +3963,188 @@ class AsyncStateMachine(StateMachine):
         consumer_token = _declarative_consumer_machine_id.set(id(self))
         try:
             self._bind_or_check_async_loop("can_trigger_async")
-            prepared = self._prepare_transition(trigger, args, kwargs)
-            if isinstance(prepared, TransitionResult):
-                return False
-
-            entry = prepared.entry
-            condition = entry.condition
-
-            if condition:
-                assert prepared.condition_kwargs is not None
-                if not await self._evaluate_condition_async(
-                    condition, prepared.args, prepared.condition_kwargs
-                ):
-                    return False
-
-            if not await self._evaluate_declarative_condition_async(prepared):
-                return False
-
-            return await self._can_transition_after_declarative_guard_async(
-                trigger, entry.to_state, args, kwargs
+            selected = await self._select_transition_async(
+                trigger, args, kwargs, for_query=True
             )
+            return not isinstance(selected, TransitionResult)
         finally:
             _declarative_consumer_machine_id.reset(consumer_token)
 
+    async def _select_transition_async(
+        self,
+        trigger: str,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        *,
+        for_query: bool,
+    ) -> Union[_PreparedDispatch, TransitionResult]:
+        """Select one fully eligible async candidate before lifecycle work."""
+        source_state = self._current_state
+        current_name = source_state.name
+        entries = self._transitions.get(current_name)
+        slot = entries.get(trigger) if entries is not None else None
+        if slot is None:
+            error_msg = (
+                f"No transition for trigger '{trigger}' from state '{current_name}'"
+            )
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
+            )
+
+        if isinstance(slot, _TransitionGroup):
+            for entry in slot.entries:
+                selected = await self._select_async_candidate(
+                    entry,
+                    source_state,
+                    current_name,
+                    trigger,
+                    args,
+                    kwargs,
+                    for_query=for_query,
+                    scan_group=True,
+                )
+                if selected is not None:
+                    return selected
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                _PRIORITY_GROUP_EXHAUSTED_ERROR,
+                stage=_LIFECYCLE_STAGE_SELECTION,
+            )
+
+        selected_singleton = await self._select_async_candidate(
+            slot,
+            source_state,
+            current_name,
+            trigger,
+            args,
+            kwargs,
+            for_query=for_query,
+            scan_group=False,
+        )
+        assert selected_singleton is not None
+        return selected_singleton
+
+    async def _select_async_candidate(
+        self,
+        entry: TransitionEntry,
+        source_state: State,
+        current_name: str,
+        trigger: str,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        *,
+        for_query: bool,
+        scan_group: bool,
+    ) -> Union[_PreparedDispatch, TransitionResult, None]:
+        """Await one candidate, using ``None`` only for group fallthrough."""
+        declarative_handler = _resolve_declarative_handler(
+            source_state, trigger, entry.to_state
+        )
+        has_declarative_guard = bool(
+            declarative_handler and declarative_handler.get("condition")
+        )
+        condition_kwargs = (
+            self._sanitize_condition_kwargs(kwargs)
+            if entry.condition or has_declarative_guard
+            else None
+        )
+        prepared = _PreparedDispatch(
+            entry,
+            source_state,
+            current_name,
+            trigger,
+            args,
+            condition_kwargs,
+            declarative_handler,
+        )
+        condition = entry.condition
+        if condition:
+            try:
+                assert condition_kwargs is not None
+                if not await self._evaluate_condition_async(
+                    condition, args, condition_kwargs
+                ):
+                    if scan_group:
+                        return None
+                    return self._build_failure_result(
+                        current_name,
+                        trigger,
+                        f"Transition guard rejected trigger '{trigger}' "
+                        f"from state '{current_name}'",
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                    )
+            except Exception as cause:
+                if for_query:
+                    raise
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition guard raised an exception",
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=cause,
+                )
+
+        try:
+            declarative_guard_passed = await self._evaluate_declarative_condition_async(
+                prepared, raise_on_error=True
+            )
+        except Exception as cause:
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "Transition guard raised an exception",
+                stage=_LIFECYCLE_STAGE_GUARD,
+                cause=cause,
+            )
+        if not declarative_guard_passed:
+            if scan_group:
+                return None
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                f"State '{current_name}' rejected transition '{trigger}'",
+                stage=_LIFECYCLE_STAGE_GUARD,
+            )
+
+        try:
+            can_proceed = await self._can_transition_after_declarative_guard_async(
+                source_state, trigger, entry.to_state, args, kwargs
+            )
+        except Exception as cause:
+            if for_query:
+                raise
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "State permission raised an exception",
+                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                cause=cause,
+            )
+        if not can_proceed:
+            if scan_group:
+                return None
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                f"State '{current_name}' rejected transition '{trigger}'",
+                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+            )
+        return prepared
+
     async def _can_transition_after_declarative_guard_async(
         self,
+        source_state: State,
         trigger: str,
         to_state: State,
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> bool:
         """Run effective async policy while suppressing only a prepared base guard."""
-        source_state = self._current_state
         if not isinstance(source_state, DeclarativeState):
             if hasattr(source_state, "can_transition_async"):
                 return await source_state.can_transition_async(
@@ -4053,140 +4203,18 @@ class AsyncStateMachine(StateMachine):
         observed once and re-raised unchanged after failure observers run; the
         reached commit/history boundary is never shielded or rolled back.
         """
-        prepared = self._prepare_transition(trigger, args, kwargs)
-        if isinstance(prepared, TransitionResult):
-            return self._finalize_failure(prepared, kwargs)
-        entry = prepared.entry
-        current_name = prepared.current_name
-        to_state = entry.to_state
-        condition = entry.condition
         old_state = self._current_state
         lifecycle_stage = [_LIFECYCLE_STAGE_GUARD]
         committed = [False]
+        to_state = old_state
 
         try:
-            if condition:
-                condition_name = ""
-                if _legacy_debug_enabled(self._logger):
-                    condition_name = str(condition)
-                    _emit_legacy_debug(
-                        self._logger,
-                        "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                        self._name,
-                        condition_name,
-                        current_name,
-                        to_state.name,
-                    )
-                try:
-                    assert prepared.condition_kwargs is not None
-                    condition_result = await self._evaluate_condition_async(
-                        condition, prepared.args, prepared.condition_kwargs
-                    )
-                    if condition_name:
-                        _emit_legacy_debug(
-                            self._logger,
-                            "%s: Condition '%s' result: %s",
-                            self._name,
-                            condition_name,
-                            condition_result,
-                        )
-                    if not condition_result:
-                        error_msg = (
-                            f"Transition guard rejected trigger '{trigger}' "
-                            f"from state '{current_name}'"
-                        )
-                        return self._finalize_failure(
-                            self._build_failure_result(
-                                current_name,
-                                trigger,
-                                error_msg,
-                                stage=_LIFECYCLE_STAGE_GUARD,
-                            ),
-                            kwargs,
-                        )
-                except Exception as cause:
-                    _emit_legacy_warning(
-                        self._logger,
-                        "%s: FAILED guard type=%s",
-                        self._name,
-                        type(cause).__name__,
-                    )
-                    return self._finalize_failure(
-                        self._build_failure_result(
-                            current_name,
-                            trigger,
-                            "Transition guard raised an exception",
-                            stage=_LIFECYCLE_STAGE_GUARD,
-                            cause=cause,
-                        ),
-                        kwargs,
-                    )
-
-            try:
-                declarative_guard_passed = (
-                    await self._evaluate_declarative_condition_async(
-                        prepared, raise_on_error=True
-                    )
-                )
-            except Exception as cause:
-                _emit_legacy_warning(
-                    self._logger,
-                    "%s: FAILED guard type=%s",
-                    self._name,
-                    type(cause).__name__,
-                )
-                return self._finalize_failure(
-                    self._build_failure_result(
-                        current_name,
-                        trigger,
-                        "Transition guard raised an exception",
-                        stage=_LIFECYCLE_STAGE_GUARD,
-                        cause=cause,
-                    ),
-                    kwargs,
-                )
-            if not declarative_guard_passed:
-                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-                return self._finalize_failure(
-                    self._build_failure_result(
-                        current_name,
-                        trigger,
-                        error_msg,
-                        stage=_LIFECYCLE_STAGE_GUARD,
-                    ),
-                    kwargs,
-                )
-
-            lifecycle_stage[0] = _LIFECYCLE_STAGE_STATE_PERMISSION
-            try:
-                can_proceed = await self._can_transition_after_declarative_guard_async(
-                    trigger, to_state, args, kwargs
-                )
-            except Exception as cause:
-                _emit_legacy_warning(
-                    self._logger,
-                    "%s: FAILED state-permission type=%s",
-                    self._name,
-                    type(cause).__name__,
-                )
-                return self._finalize_failure(
-                    self._build_failure_result(
-                        current_name,
-                        trigger,
-                        "State permission raised an exception",
-                        stage=lifecycle_stage[0],
-                        cause=cause,
-                    ),
-                    kwargs,
-                )
-            if not can_proceed:
-                error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-                return self._finalize_failure(
-                    self._build_failure_result(
-                        current_name, trigger, error_msg, stage=lifecycle_stage[0]
-                    ),
-                    kwargs,
-                )
+            prepared = await self._select_transition_async(
+                trigger, args, kwargs, for_query=False
+            )
+            if isinstance(prepared, TransitionResult):
+                return self._finalize_failure(prepared, kwargs)
+            to_state = prepared.entry.to_state
 
             result = await self._execute_transition_async(
                 to_state,

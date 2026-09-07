@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from fast_fsm.conditions import Condition
+from fast_fsm.conditions import AsyncCondition, Condition
 from fast_fsm.core import (
+    AsyncStateMachine,
     CallbackState,
     DeclarativeState,
     State,
@@ -38,6 +41,115 @@ class _RecordingCondition(Condition):
         if isinstance(self._outcome, BaseException):
             raise self._outcome
         return self._outcome
+
+
+class _SequentialAsyncCondition(AsyncCondition):
+    """Async guard that makes ordered, non-speculative evaluation observable."""
+
+    __slots__ = ("_active", "_events", "_label", "_outcome")
+
+    def __init__(
+        self,
+        events: list[str],
+        active: list[int],
+        label: str,
+        outcome: bool | BaseException,
+    ) -> None:
+        super().__init__(label, "priority selection async guard")
+        self._active = active
+        self._events = events
+        self._label = label
+        self._outcome = outcome
+
+    async def check_async(self, *args: object, **kwargs: object) -> bool:
+        self._active[0] += 1
+        try:
+            assert self._active[0] == 1
+            self._events.append(f"guard:{self._label}")
+            await asyncio.sleep(0)
+            if isinstance(self._outcome, BaseException):
+                raise self._outcome
+            return self._outcome
+        finally:
+            self._active[0] -= 1
+
+
+@pytest.mark.asyncio
+async def test_async_group_awaits_one_candidate_at_a_time_in_priority_order() -> None:
+    """Async dispatch must select one ordered winner before lifecycle starts."""
+    events: list[str] = []
+    active = [0]
+    source = State("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="priority-async-sequential")
+    for state in (rejected, winner, later):
+        machine.add_state(state)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _SequentialAsyncCondition(events, active, "later", True),
+        priority=4,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        winner,
+        _SequentialAsyncCondition(events, active, "winner", True),
+        priority=0,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        _SequentialAsyncCondition(events, active, "rejected", False),
+        priority=-2,
+    )
+    machine.on_trigger("go", lambda *_args, **_kwargs: events.append("trigger"))
+
+    result = await machine.trigger_async("go")
+
+    assert result.success is True
+    assert result.to_state == "winner"
+    assert events == ["guard:rejected", "guard:winner", "trigger"]
+    assert active == [0]
+
+
+@pytest.mark.asyncio
+async def test_can_trigger_async_scans_the_same_order_without_lifecycle() -> None:
+    """The async query shares eligibility selection but remains observer-free."""
+    events: list[str] = []
+    active = [0]
+    source = State("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    machine = AsyncStateMachine(source, name="priority-async-query")
+    machine.add_state(rejected)
+    machine.add_state(winner)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        _SequentialAsyncCondition(events, active, "rejected", False),
+        priority=-1,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        winner,
+        _SequentialAsyncCondition(events, active, "winner", True),
+        priority=1,
+    )
+    machine.on_trigger("go", lambda *_args, **_kwargs: events.append("trigger"))
+    machine.on_failed(lambda *_args, **_kwargs: events.append("failed"))
+
+    assert await machine.can_trigger_async("go") is True
+    assert events == ["guard:rejected", "guard:winner"]
+    assert machine.current_state is source
+    assert machine.history == []
 
 
 def test_sync_group_selects_the_first_fully_eligible_candidate_before_lifecycle() -> (
