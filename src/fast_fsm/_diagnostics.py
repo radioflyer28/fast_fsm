@@ -85,6 +85,9 @@ class _DiagnosticEdge:
     trigger: str
     to_index: int
     condition_name: str | None
+    priority: int
+    has_guard: bool
+    statically_unconditional: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +204,9 @@ def _graph_from_snapshot(snapshot: _GraphSnapshot) -> _DiagnosticGraph:
             transition.trigger,
             state_indices[transition.to_state_name],
             transition.condition_name,
+            transition.priority,
+            transition.condition is not None,
+            transition.statically_unconditional,
         )
         for transition in snapshot.transitions
     )

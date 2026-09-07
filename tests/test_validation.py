@@ -148,7 +148,9 @@ class TestFSMValidator:
         machine.add_state(first_target)
         if second_target is not first_target:
             machine.add_state(second_target)
-        machine.add_transition("go", source, first_target, condition=guarded, priority=1)
+        machine.add_transition(
+            "go", source, first_target, condition=guarded, priority=1
+        )
         machine.add_transition("go", source, second_target, priority=5)
 
         captures = 0
@@ -166,7 +168,10 @@ class TestFSMValidator:
         assert captures == 1
         assert guard_calls == 0
         assert [edge.priority for edge in validator._diagnostic_graph.edges] == [1, 5]
-        assert [edge.has_guard for edge in validator._diagnostic_graph.edges] == [True, False]
+        assert [edge.has_guard for edge in validator._diagnostic_graph.edges] == [
+            True,
+            False,
+        ]
         assert determinism["is_deterministic"] is True
         assert determinism["non_deterministic_transitions"] == []
 

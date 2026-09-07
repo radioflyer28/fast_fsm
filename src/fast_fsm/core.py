@@ -701,6 +701,7 @@ class _GraphTransition:
     condition_name: Optional[str]
     priority: int
     condition_ref: Optional[str] = None
+    statically_unconditional: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1537,21 +1538,23 @@ class StateMachine:
         state_names = tuple(state.name for state in states)
         transitions: List[_GraphTransition] = []
         for from_name, entries in sorted(self._transitions.items()):
+            source_state = self._states[from_name]
             for trigger, slot in sorted(entries.items()):
                 for entry in _transition_entries(slot):
                     transitions.append(
                         _GraphTransition(
-                            self._states[from_name],
+                            source_state,
                             trigger,
                             entry.to_state,
                             entry.condition,
-                            self._states[from_name].name,
+                            source_state.name,
                             entry.to_state.name,
                             entry.condition.name
                             if entry.condition is not None
                             else None,
                             entry.priority,
                             entry.condition_ref,
+                            entry.condition is None and type(source_state) is State,
                         )
                     )
         return _GraphSnapshot(

@@ -175,7 +175,10 @@ def test_graph_snapshot_captures_only_narrow_static_unconditional_evidence() -> 
     subclass_snapshot = subclass_machine._graph_snapshot()
 
     assert [row.priority for row in snapshot.transitions] == [1, 2]
-    assert [row.statically_unconditional for row in snapshot.transitions] == [False, True]
+    assert [row.statically_unconditional for row in snapshot.transitions] == [
+        False,
+        True,
+    ]
     assert subclass_snapshot.transitions[0].statically_unconditional is False
     assert guard_calls == 0
     with pytest.raises((AttributeError, TypeError)):

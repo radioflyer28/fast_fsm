@@ -397,26 +397,45 @@ class FSMValidator:
         self, *, limits: DiagnosticLimits | None = None
     ) -> Dict[str, Any]:
         """
-        Check if FSM is deterministic (at most one transition per state-event pair).
+        Check whether every source/event candidate group has strict priorities.
 
         Returns:
             Dictionary with determinism analysis results
         """
         budget = self._operation_budget(limits)
         non_deterministic: List[Tuple[str, str]] = []
-        event_names = tuple(sorted(self.events))
-        for state_index, state_name in enumerate(self._diagnostic_graph.state_names):
-            outgoing = self._diagnostic_graph.forward[state_index]
-            for event_name in event_names:
-                budget.reserve_work(stage="determinism.cell")
-                targets = {
-                    self._diagnostic_graph.edges[edge_index].to_index
-                    for edge_index in outgoing
-                    if self._diagnostic_graph.edges[edge_index].trigger == event_name
-                }
-                if len(targets) > 1:  # pragma: no cover
+        group_key: Tuple[int, str] | None = None
+        previous_priority: int | None = None
+        group_is_malformed = False
+
+        for edge in self._diagnostic_graph.edges:
+            current_key = (edge.from_index, edge.trigger)
+            if current_key != group_key:
+                if group_key is not None and group_is_malformed:
                     budget.reserve_result(stage="determinism.result")
-                    non_deterministic.append((state_name, event_name))
+                    non_deterministic.append(
+                        (self._diagnostic_graph.state_names[group_key[0]], group_key[1])
+                    )
+                group_key = current_key
+                previous_priority = None
+                group_is_malformed = False
+
+            budget.reserve_work(stage="determinism.candidate")
+            priority: object = edge.priority
+            if type(priority) is not int:
+                group_is_malformed = True
+                previous_priority = None
+            elif previous_priority is not None and priority <= previous_priority:
+                group_is_malformed = True
+                previous_priority = priority
+            else:
+                previous_priority = priority
+
+        if group_key is not None and group_is_malformed:
+            budget.reserve_result(stage="determinism.result")
+            non_deterministic.append(
+                (self._diagnostic_graph.state_names[group_key[0]], group_key[1])
+            )
 
         return {
             "is_deterministic": len(non_deterministic) == 0,
