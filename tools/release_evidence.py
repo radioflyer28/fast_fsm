@@ -5273,6 +5273,7 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """
     stable = json.loads(serialize_manifest(manifest))
     stable.pop("measurement_environment", None)
+    stable.pop("expected_matrix", None)
     toolchain = stable.get("toolchain")
     if isinstance(toolchain, dict):
         if "python" in toolchain:

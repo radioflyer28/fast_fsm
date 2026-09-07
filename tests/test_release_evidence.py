@@ -1944,6 +1944,16 @@ def test_manifest_freshness_treats_tool_versions_as_environment_observations() -
     assert "toolchain.python" not in rendered
 
 
+def test_manifest_freshness_treats_local_matrix_as_environment_observation() -> None:
+    """A local platform projection cannot stale a baseline on another runner."""
+    expected = _manifest_fixture()
+    observed = json.loads(serialize_manifest(expected))
+    expected["expected_matrix"] = [{"os": "macos", "machine": "arm64"}]
+    observed["expected_matrix"] = [{"os": "linux", "machine": "x86_64"}]
+
+    assert compare_manifests(expected, observed) == []
+
+
 def test_manifest_coverage_regression_stays_blocking_across_python_patches() -> None:
     """Portable Python patch comparison cannot bypass coverage regression checks."""
     expected = _manifest_fixture()
