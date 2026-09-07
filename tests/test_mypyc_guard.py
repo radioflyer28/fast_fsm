@@ -632,6 +632,7 @@ def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:
         "positional_args",
         "keyword_args",
         "error",
+        "priority",
     ]
 
     emit = next(
