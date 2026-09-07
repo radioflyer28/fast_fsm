@@ -185,6 +185,68 @@ def test_lifecycle_stage_catalog_covers_every_produced_result_stage() -> None:
     )
 
 
+def test_grouped_selection_finishes_before_the_existing_lifecycle_starts() -> None:
+    """Rejected candidates have no lifecycle effects before the winner is chosen."""
+    events: list[str] = []
+
+    class RecordedCondition(Condition):
+        __slots__ = ("_label", "_outcome")
+
+        def __init__(self, label: str, outcome: bool) -> None:
+            super().__init__(label, "grouped lifecycle selection")
+            self._label = label
+            self._outcome = outcome
+
+        def check(self, *args: object, **kwargs: object) -> bool:
+            events.append(self._label)
+            return self._outcome
+
+    source = CallbackState(
+        "source", on_exit=lambda *_args, **_kwargs: events.append("source-exit")
+    )
+    rejected = State("rejected")
+    winner = CallbackState(
+        "winner", on_enter=lambda *_args, **_kwargs: events.append("winner-enter")
+    )
+    later = State("later")
+    machine = StateMachine(source, name="grouped-lifecycle-selection")
+    for state in (rejected, winner, later):
+        machine.add_state(state)
+    machine.enable_history()
+
+    class Listener:
+        def before_transition(self, *_args: object, **_kwargs: object) -> None:
+            events.append("before-transition")
+
+    machine.add_listener(Listener())
+    machine.add_transition(
+        "advance", source, later, RecordedCondition("later-guard", True), priority=5
+    )
+    machine.add_transition(
+        "advance", source, winner, RecordedCondition("winner-guard", True), priority=0
+    )
+    machine.add_transition(
+        "advance",
+        source,
+        rejected,
+        RecordedCondition("rejected-guard", False),
+        priority=-1,
+    )
+
+    result = machine.trigger("advance")
+
+    assert result.success is True
+    assert machine.current_state is winner
+    assert len(machine.history) == 1
+    assert events == [
+        "rejected-guard",
+        "winner-guard",
+        "before-transition",
+        "source-exit",
+        "winner-enter",
+    ]
+
+
 def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

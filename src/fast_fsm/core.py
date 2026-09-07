@@ -672,6 +672,7 @@ class _PreparedDispatch:
     """One fresh canonical lookup and optional guard context for dispatch."""
 
     entry: TransitionEntry
+    source_state: "State"
     current_name: str
     trigger: str
     args: Tuple[Any, ...]
@@ -2077,24 +2078,10 @@ class StateMachine:
             else None
         )
         try:
-            prepared = self._prepare_transition(trigger, args, kwargs)
-            if isinstance(prepared, TransitionResult):
-                return False
-
-            entry = prepared.entry
-            if entry.condition:
-                assert prepared.condition_kwargs is not None
-                if not self._evaluate_condition_sync(
-                    entry.condition, prepared.args, prepared.condition_kwargs
-                ):
-                    return False
-
-            if not self._evaluate_declarative_condition_sync(prepared):
-                return False
-
-            return self._can_transition_after_declarative_guard(
-                trigger, entry.to_state, args, kwargs
+            selected = self._select_transition_sync(
+                trigger, args, kwargs, for_query=True
             )
+            return not isinstance(selected, TransitionResult)
         finally:
             if consumer_token is not None:
                 _declarative_consumer_machine_id.reset(consumer_token)
@@ -2149,8 +2136,249 @@ class StateMachine:
             else None
         )
         return _PreparedDispatch(
-            entry, current_name, trigger, args, condition_kwargs, declarative_handler
+            entry,
+            self._current_state,
+            current_name,
+            trigger,
+            args,
+            condition_kwargs,
+            declarative_handler,
         )
+
+    def _select_transition_sync(
+        self,
+        trigger: str,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        *,
+        for_query: bool,
+    ) -> Union[_PreparedDispatch, TransitionResult]:
+        """Select one fully eligible sync candidate before lifecycle work.
+
+        A direct singleton stays on the direct branch. Competing candidates are
+        already stored as an immutable ascending tuple, so only that local tuple
+        is scanned and only normal eligibility rejection continues.
+        """
+        source_state = self._current_state
+        current_name = source_state.name
+        entries = self._transitions.get(current_name)
+        slot = entries.get(trigger) if entries is not None else None
+        if slot is None:
+            error_msg = (
+                f"No transition for trigger '{trigger}' from state '{current_name}'"
+            )
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
+            )
+
+        if isinstance(slot, _TransitionGroup):
+            for entry in slot.entries:
+                selected = self._select_sync_candidate(
+                    entry,
+                    source_state,
+                    current_name,
+                    trigger,
+                    args,
+                    kwargs,
+                    for_query=for_query,
+                    scan_group=True,
+                )
+                if selected is not None:
+                    return selected
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                _PRIORITY_GROUP_RUNTIME_ERROR,
+                stage=_LIFECYCLE_STAGE_RESOLUTION,
+            )
+
+        selected_singleton = self._select_sync_candidate(
+            slot,
+            source_state,
+            current_name,
+            trigger,
+            args,
+            kwargs,
+            for_query=for_query,
+            scan_group=False,
+        )
+        assert selected_singleton is not None
+        return selected_singleton
+
+    def _select_sync_candidate(
+        self,
+        entry: TransitionEntry,
+        source_state: "State",
+        current_name: str,
+        trigger: str,
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+        *,
+        for_query: bool,
+        scan_group: bool,
+    ) -> Union[_PreparedDispatch, TransitionResult, None]:
+        """Evaluate one candidate, using ``None`` only for group fallthrough."""
+        declarative_handler = _resolve_declarative_handler(
+            source_state, trigger, entry.to_state
+        )
+        has_declarative_guard = bool(
+            declarative_handler and declarative_handler.get("condition")
+        )
+        condition_kwargs = (
+            self._sanitize_condition_kwargs(kwargs)
+            if entry.condition or has_declarative_guard
+            else None
+        )
+        prepared = _PreparedDispatch(
+            entry,
+            source_state,
+            current_name,
+            trigger,
+            args,
+            condition_kwargs,
+            declarative_handler,
+        )
+
+        condition = entry.condition
+        if condition:
+            condition_name = ""
+            if _legacy_debug_enabled(self._logger):
+                condition_name = str(condition)
+                _emit_legacy_debug(
+                    self._logger,
+                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
+                    self._name,
+                    condition_name,
+                    current_name,
+                    entry.to_state.name,
+                )
+            try:
+                assert condition_kwargs is not None
+                condition_result = self._evaluate_condition_sync(
+                    condition, args, condition_kwargs
+                )
+                if condition_name:
+                    _emit_legacy_debug(
+                        self._logger,
+                        "%s: Condition '%s' result: %s",
+                        self._name,
+                        condition_name,
+                        condition_result,
+                    )
+            except Exception as cause:
+                if for_query:
+                    raise
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition guard raised an exception",
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=cause,
+                )
+            if not condition_result:
+                if scan_group:
+                    return None
+                error_msg = (
+                    f"Transition guard rejected trigger '{trigger}' "
+                    f"from state '{current_name}'"
+                )
+                _emit_legacy_debug(
+                    self._logger, "%s: FAILED - %s", self._name, error_msg
+                )
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    error_msg,
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                )
+
+        try:
+            declarative_guard_passed = self._evaluate_declarative_condition_sync(
+                prepared, raise_on_error=True
+            )
+        except Exception as cause:
+            if for_query:
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition guard raised an exception",
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=cause,
+                )
+            _emit_legacy_warning(
+                self._logger,
+                "%s: FAILED guard type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "Transition guard raised an exception",
+                stage=_LIFECYCLE_STAGE_GUARD,
+                cause=cause,
+            )
+        if not declarative_guard_passed:
+            if scan_group:
+                return None
+            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage=_LIFECYCLE_STAGE_GUARD,
+            )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: Checking if state '%s' allows transition '%s'",
+            self._name,
+            current_name,
+            trigger,
+        )
+        try:
+            can_proceed = self._can_transition_after_declarative_guard(
+                source_state, trigger, entry.to_state, args, kwargs
+            )
+        except Exception as cause:
+            if for_query:
+                raise
+            _emit_legacy_warning(
+                self._logger,
+                "%s: FAILED state-permission type=%s",
+                self._name,
+                type(cause).__name__,
+            )
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "State permission raised an exception",
+                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                cause=cause,
+            )
+        if not can_proceed:
+            if scan_group:
+                return None
+            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
+            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                error_msg,
+                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+            )
+        return prepared
 
     def _evaluate_declarative_condition_sync(
         self, prepared: _PreparedDispatch, *, raise_on_error: bool = False
@@ -2163,7 +2391,7 @@ class StateMachine:
         if not condition:
             return True
 
-        source_state = cast(DeclarativeState, self._current_state)
+        source_state = cast(DeclarativeState, prepared.source_state)
         try:
             assert prepared.condition_kwargs is not None
             condition_result: Any
@@ -2253,13 +2481,13 @@ class StateMachine:
 
     def _can_transition_after_declarative_guard(
         self,
+        source_state: "State",
         trigger: str,
         to_state: State,
         args: Tuple[Any, ...],
         kwargs: Dict[str, Any],
     ) -> bool:
         """Run effective sync state policy without re-evaluating its base guard."""
-        source_state = self._current_state
         if not isinstance(source_state, DeclarativeState):
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
@@ -2757,12 +2985,7 @@ class StateMachine:
         return result
 
     def _execute_transition(
-        self,
-        to_state: State,
-        trigger: str,
-        *args: Any,
-        declarative_handler: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
+        self, prepared: _PreparedDispatch, kwargs: Dict[str, Any]
     ) -> TransitionResult:
         """Run the synchronous lifecycle around one non-callback commit seam.
 
@@ -2771,7 +2994,11 @@ class StateMachine:
         each ordinary callback failure returns immediately so no later lifecycle
         surface can observe a partially completed suffix.
         """
-        old_state = self._current_state
+        old_state = prepared.source_state
+        to_state = prepared.entry.to_state
+        trigger = prepared.trigger
+        args = prepared.args
+        declarative_handler = prepared.declarative_handler
 
         # Pre-commit: before-transition listeners.
         if self._before_listeners:
@@ -3138,161 +3365,10 @@ class StateMachine:
 
     def _trigger_owned(self, trigger: str, *args, **kwargs) -> TransitionResult:
         """Run one ordinary trigger while its caller owns this machine."""
-        prepared = self._prepare_transition(trigger, args, kwargs)
+        prepared = self._select_transition_sync(trigger, args, kwargs, for_query=False)
         if isinstance(prepared, TransitionResult):
             return self._finalize_failure(prepared, kwargs)
-        entry = prepared.entry
-        current_name = prepared.current_name
-        to_state = entry.to_state
-        condition = entry.condition
-
-        # Check condition with logging
-        if condition:
-            condition_name = ""
-            if _legacy_debug_enabled(self._logger):
-                condition_name = str(condition)
-                _emit_legacy_debug(
-                    self._logger,
-                    "%s: Evaluating condition '%s' for '%s' -> '%s'",
-                    self._name,
-                    condition_name,
-                    current_name,
-                    to_state.name,
-                )
-            try:
-                assert prepared.condition_kwargs is not None
-                condition_result = self._evaluate_condition_sync(
-                    condition, prepared.args, prepared.condition_kwargs
-                )
-                if condition_name:
-                    _emit_legacy_debug(
-                        self._logger,
-                        "%s: Condition '%s' result: %s",
-                        self._name,
-                        condition_name,
-                        condition_result,
-                    )
-                if not condition_result:
-                    error_msg = (
-                        f"Transition guard rejected trigger '{trigger}' "
-                        f"from state '{current_name}'"
-                    )
-                    _emit_legacy_debug(
-                        self._logger, "%s: FAILED - %s", self._name, error_msg
-                    )
-                    return self._finalize_failure(
-                        self._build_failure_result(
-                            current_name,
-                            trigger,
-                            error_msg,
-                            stage=_LIFECYCLE_STAGE_GUARD,
-                        ),
-                        kwargs,
-                    )
-            except Exception as cause:  # guard failure is a truthful result
-                error_msg = "Transition guard raised an exception"
-                _emit_legacy_warning(
-                    self._logger,
-                    "%s: FAILED guard type=%s",
-                    self._name,
-                    type(cause).__name__,
-                )
-                return self._finalize_failure(
-                    self._build_failure_result(
-                        current_name,
-                        trigger,
-                        error_msg,
-                        stage=_LIFECYCLE_STAGE_GUARD,
-                        cause=cause,
-                    ),
-                    kwargs,
-                )
-
-        try:
-            declarative_guard_passed = self._evaluate_declarative_condition_sync(
-                prepared, raise_on_error=True
-            )
-        except Exception as cause:
-            error_msg = "Transition guard raised an exception"
-            _emit_legacy_warning(
-                self._logger,
-                "%s: FAILED guard type=%s",
-                self._name,
-                type(cause).__name__,
-            )
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage=_LIFECYCLE_STAGE_GUARD,
-                    cause=cause,
-                ),
-                kwargs,
-            )
-        if not declarative_guard_passed:
-            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage=_LIFECYCLE_STAGE_GUARD,
-                ),
-                kwargs,
-            )
-
-        # Check if source state allows transition
-        _emit_legacy_debug(
-            self._logger,
-            "%s: Checking if state '%s' allows transition '%s'",
-            self._name,
-            current_name,
-            trigger,
-        )
-        try:
-            can_proceed = self._can_transition_after_declarative_guard(
-                trigger, to_state, args, kwargs
-            )
-        except Exception as cause:
-            error_msg = "State permission raised an exception"
-            _emit_legacy_warning(
-                self._logger,
-                "%s: FAILED state-permission type=%s",
-                self._name,
-                type(cause).__name__,
-            )
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
-                    cause=cause,
-                ),
-                kwargs,
-            )
-        if not can_proceed:
-            error_msg = f"State '{current_name}' rejected transition '{trigger}'"
-            _emit_legacy_debug(self._logger, "%s: FAILED - %s", self._name, error_msg)
-            return self._finalize_failure(
-                self._build_failure_result(
-                    current_name,
-                    trigger,
-                    error_msg,
-                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
-                ),
-                kwargs,
-            )
-
-        result = self._execute_transition(
-            to_state,
-            trigger,
-            *args,
-            declarative_handler=prepared.declarative_handler,
-            **kwargs,
-        )
+        result = self._execute_transition(prepared, kwargs)
         if not result.success:
             return self._finalize_failure(result, kwargs)
         return result
