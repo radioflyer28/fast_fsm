@@ -171,8 +171,19 @@ def test_graph_snapshot_captures_only_narrow_static_unconditional_evidence() -> 
     subclass_machine.add_state(subclass_target)
     subclass_machine.add_transition("go", subclass_source, subclass_target, priority=0)
 
+    from fast_fsm.core import DeclarativeState
+
+    declarative_source = DeclarativeState("declarative")
+    declarative_target = State("declarative-target")
+    declarative_machine = StateMachine(declarative_source)
+    declarative_machine.add_state(declarative_target)
+    declarative_machine.add_transition(
+        "go", declarative_source, declarative_target, priority=0
+    )
+
     snapshot = machine._graph_snapshot()
     subclass_snapshot = subclass_machine._graph_snapshot()
+    declarative_snapshot = declarative_machine._graph_snapshot()
 
     assert [row.priority for row in snapshot.transitions] == [1, 2]
     assert [row.statically_unconditional for row in snapshot.transitions] == [
@@ -180,6 +191,7 @@ def test_graph_snapshot_captures_only_narrow_static_unconditional_evidence() -> 
         True,
     ]
     assert subclass_snapshot.transitions[0].statically_unconditional is False
+    assert declarative_snapshot.transitions[0].statically_unconditional is False
     assert guard_calls == 0
     with pytest.raises((AttributeError, TypeError)):
         snapshot.transitions[1].statically_unconditional = False

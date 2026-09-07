@@ -8,6 +8,7 @@ quick_validation_report).
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -27,6 +28,11 @@ from fast_fsm import (
     fsm_lint,
     validate_fsm,
     quick_validation_report,
+)
+from fast_fsm._diagnostics import (
+    DiagnosticBudgetExceeded,
+    DiagnosticLimits,
+    _graph_from_snapshot,
 )
 
 
@@ -174,6 +180,145 @@ class TestFSMValidator:
         ]
         assert determinism["is_deterministic"] is True
         assert determinism["non_deterministic_transitions"] == []
+
+    @pytest.mark.parametrize(
+        ("priorities", "reason"),
+        [
+            ((0, 0), "duplicate_priority"),
+            ((1, 0), "descending_priority"),
+            ((True, 1), "boolean_priority"),
+            ((0, "invalid"), "non_integer_priority"),
+        ],
+    )
+    def test_candidate_priority_errors_are_scalar_stable_and_budgeted(
+        self, priorities: tuple[object, object], reason: str
+    ) -> None:
+        """Invalid scalar snapshot rows remain candidate-specific findings."""
+
+        source = State("source")
+        first_target = State("first")
+        second_target = State("second")
+        machine = StateMachine(source)
+        machine.add_state(first_target)
+        machine.add_state(second_target)
+        machine.add_transition("go", source, first_target, priority=0)
+        machine.add_transition("go", source, second_target, priority=1)
+        snapshot = machine._graph_snapshot()
+        invalid_snapshot = replace(
+            snapshot,
+            transitions=tuple(
+                replace(row, priority=priority)
+                for row, priority in zip(snapshot.transitions, priorities)
+            ),
+        )
+        validator = FSMValidator(machine)
+        validator._snapshot = invalid_snapshot
+        validator._diagnostic_graph = _graph_from_snapshot(invalid_snapshot)
+
+        result = validator.check_determinism(
+            limits=DiagnosticLimits(max_work=2, max_results=2)
+        )
+
+        assert result["is_deterministic"] is False
+        assert result["non_deterministic_transitions"] == [("source", "go")]
+        assert result["priority_errors"] == [
+            {
+                "from_state": "source",
+                "event": "go",
+                "to_state": "second" if reason != "boolean_priority" else "first",
+                "priority": priorities[1] if reason != "boolean_priority" else True,
+                "reason": reason,
+            }
+        ]
+        assert result["provably_shadowed_candidates"] == []
+        assert result["possibly_shadowed_candidates"] == []
+
+        with pytest.raises(DiagnosticBudgetExceeded) as exhausted:
+            validator.check_determinism(
+                limits=DiagnosticLimits(max_work=1, max_results=2)
+            )
+        assert exhausted.value.status.complete is False
+        assert exhausted.value.status.exhausted_stage == "determinism.candidate"
+
+    def test_candidate_shadow_certainty_and_enhanced_issue_severity_are_conservative(
+        self,
+    ) -> None:
+        """Only an exact-base-State/no-guard row proves later shadowing."""
+
+        class PermissionSubclass(State):
+            def can_transition(self, **_: object) -> bool:
+                raise AssertionError("validation must not call state permissions")
+
+        def candidate_machine(source: State) -> StateMachine:
+            preferred = State(f"{source.name}-preferred")
+            fallback = State(f"{source.name}-fallback")
+            machine = StateMachine(source)
+            machine.add_state(preferred)
+            machine.add_state(fallback)
+            machine.add_transition("go", source, preferred, priority=1)
+            machine.add_transition("go", source, fallback, priority=5)
+            return machine
+
+        proved = FSMValidator(candidate_machine(State("proved"))).check_determinism()
+        possible = FSMValidator(
+            candidate_machine(PermissionSubclass("possible"))
+        ).check_determinism()
+
+        assert proved["provably_shadowed_candidates"] == [
+            {
+                "from_state": "proved",
+                "event": "go",
+                "to_state": "proved-fallback",
+                "priority": 5,
+                "shadowing_priority": 1,
+            }
+        ]
+        assert proved["possibly_shadowed_candidates"] == []
+        assert possible["provably_shadowed_candidates"] == []
+        assert possible["possibly_shadowed_candidates"] == [
+            {
+                "from_state": "possible",
+                "event": "go",
+                "to_state": "possible-fallback",
+                "priority": 5,
+                "shadowing_priority": 1,
+            }
+        ]
+
+        proved_issues = [
+            issue
+            for issue in EnhancedFSMValidator(candidate_machine(State("proved"))).issues
+            if issue.category == "determinism"
+        ]
+        possible_issues = [
+            issue
+            for issue in EnhancedFSMValidator(
+                candidate_machine(PermissionSubclass("possible"))
+            ).issues
+            if issue.category == "determinism"
+        ]
+        assert [issue.severity for issue in proved_issues] == ["warning"]
+        assert [issue.severity for issue in possible_issues] == ["info"]
+
+    def test_guarded_candidate_does_not_establish_shadowing(self) -> None:
+        """A guard is never evaluated or treated as a static proof."""
+
+        def guard(**_: object) -> bool:
+            raise AssertionError("validation must not execute transition guards")
+
+        source = State("source")
+        preferred = State("preferred")
+        fallback = State("fallback")
+        machine = StateMachine(source)
+        machine.add_state(preferred)
+        machine.add_state(fallback)
+        machine.add_transition("go", source, preferred, condition=guard, priority=1)
+        machine.add_transition("go", source, fallback, priority=5)
+
+        result = FSMValidator(machine).check_determinism()
+
+        assert result["provably_shadowed_candidates"] == []
+        assert result["possibly_shadowed_candidates"] == []
 
     def test_reachable_states_good_fsm(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
