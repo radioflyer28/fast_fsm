@@ -5,13 +5,16 @@ These tests verify the performance characteristics of the fast_fsm library
 while being compatible with mypyc compilation.
 """
 
+import ast
 import contextlib
 import gc
+import inspect
 import io
 import logging
 import os
 from pathlib import Path
 import sys
+import textwrap
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -233,6 +236,24 @@ def test_priority_group_work_stops_at_winner_and_ignores_unrelated_topology() ->
     assert set(observed.values()) == {
         (("first", "second", "winner"), ("first", "second", "winner"))
     }
+
+
+def test_transition_slot_merge_uses_one_local_immutable_scan_without_sorting() -> None:
+    """Grouped insertion may scan one published tuple but never comparison-sort it."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(StateMachine._merge_transition_slot)))
+    merge = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_merge_transition_slot"
+    )
+    calls = [node for node in ast.walk(merge) if isinstance(node, ast.Call)]
+    assert not any(
+        isinstance(call.func, ast.Name) and call.func.id == "sorted" for call in calls
+    )
+    assert not any(
+        isinstance(call.func, ast.Attribute) and call.func.attr == "sort" for call in calls
+    )
+    assert len([node for node in ast.walk(merge) if isinstance(node, ast.For)]) == 1
 
 
 def test_add_state_constant_registry_lookup_and_writes_across_topology_sizes() -> None:

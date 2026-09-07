@@ -107,6 +107,73 @@ class _GatedAsyncCondition(AsyncCondition):
         return self._outcome
 
 
+def test_out_of_order_group_registration_preserves_order_dispatch_identity_and_atomicity() -> (
+    None
+):
+    """Public registration publishes one ordered immutable slot or nothing."""
+    source = State("source")
+    alternate_source = State("alternate-source")
+    lowest = State("lowest")
+    middle = State("middle")
+    highest = State("highest")
+    conflicting = State("conflicting")
+    machine = StateMachine(source, name="priority-linear-insertion")
+    for state in (alternate_source, lowest, middle, highest, conflicting):
+        machine.add_state(state)
+    machine.enable_history()
+
+    evaluated: list[str] = []
+
+    class RecordingCondition(Condition):
+        __slots__ = ("label", "outcome")
+
+        def __init__(self, label: str, outcome: bool) -> None:
+            super().__init__(label, "linear insertion test guard")
+            self.label = label
+            self.outcome = outcome
+
+        def check(self, *args: object, **kwargs: object) -> bool:
+            evaluated.append(self.label)
+            return self.outcome
+
+    reject_lowest = RecordingCondition("lowest", False)
+    accept_middle = RecordingCondition("middle", True)
+    accept_highest = RecordingCondition("highest", True)
+
+    # Register end, beginning, then middle to exercise all local insertion points.
+    machine.add_transition("advance", source, highest, accept_highest, priority=30)
+    machine.add_transition("advance", source, lowest, reject_lowest, priority=10)
+    machine.add_transition("advance", source, middle, accept_middle, priority=20)
+
+    published_slot = machine._transitions[source.name]["advance"]
+    assert tuple(entry.priority for entry in published_slot.entries) == (10, 20, 30)
+
+    result = machine.trigger("advance")
+
+    assert result.success is True
+    assert result.to_state == "middle"
+    assert result.priority == 20
+    assert machine.history[-1].priority == 20
+    assert evaluated == ["lowest", "middle"]
+
+    graph_version = machine._graph_version
+    machine.add_transition("advance", source, middle, accept_middle, priority=20)
+
+    assert machine._transitions[source.name]["advance"] is published_slot
+    assert machine._graph_version == graph_version
+
+    with pytest.raises(
+        ValueError, match="transition priority is already registered for this slot"
+    ):
+        machine.add_transition(
+            "advance", [source, alternate_source], conflicting, priority=20
+        )
+
+    assert machine._transitions[source.name]["advance"] is published_slot
+    assert "advance" not in machine._transitions[alternate_source.name]
+    assert machine._graph_version == graph_version
+
+
 @pytest.mark.asyncio
 async def test_async_group_awaits_one_candidate_at_a_time_in_priority_order() -> None:
     """Async dispatch must select one ordered winner before lifecycle starts."""
