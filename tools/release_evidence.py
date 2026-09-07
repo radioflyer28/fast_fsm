@@ -45,7 +45,6 @@ from xml.etree import ElementTree
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "fast_fsm"
 CORE_MODULE_NAME = f"{PACKAGE_NAME}.core"
-REQUIRED_UV_VERSION = "0.12.6"
 MANIFEST_SCHEMA_VERSION = 2
 RELEASE_BASELINE_PATH = (
     REPOSITORY_ROOT / "evidence" / "release-baseline.json"
@@ -57,6 +56,7 @@ _RELEASE_BASELINE_STABLE_REFRESH_PATHS = (
 )
 _RELEASE_BASELINE_RAW_REFRESH_PATHS = (
     *_RELEASE_BASELINE_STABLE_REFRESH_PATHS,
+    ("toolchain", "uv"),
     ("measurement_environment",),
     ("performance_contract", "observation"),
     ("pure_source_performance", "observations"),
@@ -5259,8 +5259,10 @@ def _stable_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     stable = json.loads(serialize_manifest(manifest))
     stable.pop("measurement_environment", None)
     toolchain = stable.get("toolchain")
-    if isinstance(toolchain, dict) and "python" in toolchain:
-        toolchain["python"] = _python_major_minor(toolchain["python"])
+    if isinstance(toolchain, dict):
+        if "python" in toolchain:
+            toolchain["python"] = _python_major_minor(toolchain["python"])
+        toolchain.pop("uv", None)
     performance_contract = stable.get("performance_contract")
     if isinstance(performance_contract, dict):
         performance_contract.pop("observation", None)
@@ -5551,7 +5553,7 @@ def _locked_package_version(package_name: str, lock_path: Path | None = None) ->
 
 
 def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
-    """Return and validate the exact uv executable version for this phase."""
+    """Return the invoking uv version as non-gating environment evidence."""
     stdout = _run_checked(
         ["uv", "--version"], cwd=REPOSITORY_ROOT, environment=environment
     )
@@ -5559,10 +5561,6 @@ def _resolved_uv_version(*, environment: Mapping[str, str]) -> str:
     if len(parts) < 2 or parts[0] != "uv":
         raise EvidenceError(f"Could not parse uv version output: {stdout!r}")
     version = parts[1]
-    if version != REQUIRED_UV_VERSION:
-        raise EvidenceError(
-            f"Release evidence requires uv {REQUIRED_UV_VERSION}, resolved {version}."
-        )
     return version
 
 

@@ -1835,7 +1835,6 @@ def test_manifest_serialization_is_byte_stable_and_ends_with_one_newline() -> No
     [
         (("schema_version",), 2),
         (("quality_baseline", "tests", "passed"), 721),
-        (("toolchain", "uv"), "0.12.5"),
         (("quality_baseline", "source", "core_origin"), "src/fast_fsm/core.so"),
         (("slots_policy", "inventory"), []),
     ],
@@ -1931,8 +1930,8 @@ def test_manifest_freshness_keeps_exact_test_inventory_strict(
     assert "toolchain.python" not in rendered
 
 
-def test_manifest_freshness_keeps_non_python_toolchain_pins_strict() -> None:
-    """Exact uv pins remain stable fields while Python patch drift is portable."""
+def test_manifest_freshness_treats_tool_versions_as_environment_observations() -> None:
+    """Lockfile-pinned dependencies, not the uv executable, define freshness."""
     expected = _manifest_fixture()
     observed = json.loads(serialize_manifest(expected))
     observed["toolchain"]["python"] = "3.12.3"
@@ -1941,7 +1940,7 @@ def test_manifest_freshness_keeps_non_python_toolchain_pins_strict() -> None:
     differences = compare_manifests(expected, observed)
 
     rendered = "\n".join(differences)
-    assert "toolchain.uv" in rendered
+    assert "toolchain.uv" not in rendered
     assert "toolchain.python" not in rendered
 
 
@@ -2367,18 +2366,17 @@ def test_temporary_wheel_selection_requires_exactly_one_archive(
         release_evidence._exactly_one_wheel(tmp_path)
 
 
-def test_resolved_uv_must_match_the_phase_contract(
+def test_resolved_uv_version_accepts_the_invoking_executable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An ambient uv executable cannot silently change release evidence."""
+    """The lockfile, rather than an executable pin, governs dependency resolution."""
     monkeypatch.setattr(
         release_evidence,
         "_run_checked",
         lambda *_args, **_kwargs: "uv 0.12.5 (unexpected)\n",
     )
 
-    with pytest.raises(EvidenceError, match="requires uv 0.12.6"):
-        release_evidence._resolved_uv_version(environment={})
+    assert release_evidence._resolved_uv_version(environment={}) == "0.12.5"
 
 
 def test_build_tool_versions_are_read_from_the_reviewed_lock_not_runtime_imports(
@@ -4617,6 +4615,7 @@ def _baseline_candidate_with_allowed_refreshes() -> dict[str, object]:
         (ROOT / "evidence" / "release-baseline.json").read_text(encoding="utf-8")
     )
     candidate = json.loads(serialize_manifest(baseline))
+    candidate["toolchain"]["uv"] = "0.12.9"
     tests = candidate["quality_baseline"]["tests"]
     tests["collected"] += 1
     tests["passed"] += 1
@@ -4632,10 +4631,10 @@ def _baseline_candidate_with_allowed_refreshes() -> dict[str, object]:
     return candidate
 
 
-def test_guarded_release_baseline_write_allows_only_the_five_refreshable_paths(
+def test_guarded_release_baseline_write_allows_only_the_refreshable_paths(
     tmp_path: Path,
 ) -> None:
-    """A protected refresh accepts counts plus the three generator observations."""
+    """A protected refresh accepts counts, observations, and uv metadata."""
     protected = tmp_path / "release-baseline.json"
     baseline = (ROOT / "evidence" / "release-baseline.json").read_bytes()
     protected.write_bytes(baseline)
@@ -4649,7 +4648,6 @@ def test_guarded_release_baseline_write_allows_only_the_five_refreshable_paths(
 @pytest.mark.parametrize(
     ("path", "replacement"),
     [
-        (("toolchain", "uv"), "0.12.5"),
         (("quality_baseline", "coverage", "total_percent"), 0.0),
         (("quality_baseline", "tests", "failed"), 1),
         (("schema_version",), 99),
