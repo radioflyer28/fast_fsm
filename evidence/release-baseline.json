@@ -674,7 +674,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.092174,
+      "elapsed_seconds": 0.091648,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -684,7 +684,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 433963.82,
+      "ops_per_second": 436450.73,
       "warmup_operations": 2000
     }
   },
@@ -692,7 +692,7 @@
     "observations": [
       {
         "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-        "elapsed_seconds": 0.092174,
+        "elapsed_seconds": 0.091648,
         "environment": {
           "implementation": "cpython",
           "machine": "arm64",
@@ -702,7 +702,7 @@
         "metric": "StateMachine.trigger operations per second",
         "mode": "pure",
         "operations": 40000,
-        "ops_per_second": 433963.82,
+        "ops_per_second": 436450.73,
         "warmup_operations": 2000
       }
     ],
@@ -718,10 +718,10 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1805,
+      "collected": 1812,
       "errors": 0,
       "failed": 0,
-      "passed": 1799,
+      "passed": 1806,
       "skipped": 6
     }
   },
@@ -1331,7 +1331,7 @@
     "setuptools": "80.9.0",
     "sphinx": "9.1.0",
     "ty": "0.0.1a19",
-    "uv": "0.12.6",
+    "uv": "0.12.9",
     "wheel": "0.45.1"
   }
 }
