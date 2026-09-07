@@ -615,17 +615,19 @@ class TransitionEntry:
     it replaces, while giving attribute access and type safety.
     """
 
-    __slots__ = ("to_state", "condition", "priority")
+    __slots__ = ("to_state", "condition", "priority", "condition_ref")
 
     def __init__(
         self,
         to_state: "State",
         condition: Optional[Condition] = None,
         priority: int = 0,
+        condition_ref: Optional[str] = None,
     ) -> None:
         self.to_state: "State" = to_state
         self.condition: Optional[Condition] = condition
         self.priority: int = priority
+        self.condition_ref: Optional[str] = condition_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +652,13 @@ def _require_singleton_entry(slot: _TransitionSlot) -> TransitionEntry:
     return slot
 
 
+def _transition_entries(slot: _TransitionSlot) -> Tuple[TransitionEntry, ...]:
+    """Return the immutable candidate sequence for one cold-path projection."""
+    if isinstance(slot, _TransitionGroup):
+        return slot.entries
+    return (slot,)
+
+
 def _normalize_priority(priority: object) -> int:
     """Accept only an exact built-in integer before compiled narrowing occurs."""
     if type(priority) is not int:
@@ -668,6 +677,8 @@ class _GraphTransition:
     from_state_name: str
     to_state_name: str
     condition_name: Optional[str]
+    priority: int
+    condition_ref: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -698,6 +709,7 @@ class _PreparedTransition:
     target: "State"
     condition: Optional[Condition]
     priority: int
+    condition_ref: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1121,19 +1133,21 @@ class StateMachine:
                 conditions={"start": FuncCondition("ready", lambda **kw: kw.get("ready"))},
             )
 
-        If the same trigger name appears in multiple transition entries, the
-        *same* condition object is applied to all of them — consistent with
-        how a named guard normally applies to a trigger regardless of source
-        state.  To apply different conditions per source state, call
-        :meth:`add_transition` after construction.
+        A transition may instead carry an opaque ``"condition_ref"`` string.
+        The reference resolves to exactly one live condition in ``conditions``;
+        it never serializes callable implementation details.  Legacy bare
+        trigger keys remain supported only when that trigger expands to one
+        candidate, so a guard can never be silently fanned out across a
+        priority group.
 
         Args:
             config: Dictionary describing the machine topology.
             name: Override the machine name.  Takes precedence over
                 ``config["name"]`` if both are provided.
-            conditions: Optional mapping of ``trigger_name → Condition``
-                (or any ``(**kwargs) -> GuardResult`` callable).  Keys that do not
-                match any trigger in *config* are silently ignored.
+            conditions: Optional mapping of opaque condition references or
+                legacy unambiguous trigger names to ``Condition`` instances
+                (or any ``(**kwargs) -> GuardResult`` callable). Keys that do
+                not match a reference or trigger in *config* are ignored.
 
         Returns:
             Configured :class:`StateMachine` instance.
@@ -1148,47 +1162,167 @@ class StateMachine:
             config = json.loads(open("traffic_light.json").read())
             fsm = StateMachine.from_dict(config)
         """
-        # Resolve machine name
-        fsm_name: str = name or config.get("name", "FSM")
-
-        # Validate required field
+        if not isinstance(config, dict):
+            raise TypeError("from_dict: config must be a dictionary")
         if "initial" not in config:
             raise ValueError("from_dict: config must contain an 'initial' key.")
 
-        initial: str = config["initial"]
+        initial = config["initial"]
+        if not isinstance(initial, str) or not initial:
+            raise ValueError("from_dict: 'initial' must be a non-empty string")
+        fsm_name = name if name is not None else config.get("name", "FSM")
+        if not isinstance(fsm_name, str):
+            raise TypeError("from_dict: 'name' must be a string")
 
-        # Parse and validate the transition list
         raw_transitions = config.get("transitions", [])
-        for i, entry in enumerate(raw_transitions):
+        if not isinstance(raw_transitions, list):
+            raise TypeError("from_dict: 'transitions' must be a list")
+        explicit = config.get("states")
+        if explicit is None:
+            explicit = []
+        if not isinstance(explicit, list) or any(
+            not isinstance(state_name, str) or not state_name for state_name in explicit
+        ):
+            raise ValueError("from_dict: 'states' must be a list of non-empty strings")
+
+        registry: Dict[str, Union[Condition, GuardCallable]]
+        if conditions is None:
+            registry = {}
+        elif isinstance(conditions, dict):
+            registry = conditions
+        else:
+            raise TypeError("from_dict: conditions must be a dictionary")
+
+        parsed_rows: List[
+            Tuple[int, str, Union[str, List[str]], str, int, Optional[str]]
+        ] = []
+        expanded_candidate_counts: Dict[str, int] = {}
+        all_state_names: set[str] = {initial, *explicit}
+        for index, entry in enumerate(raw_transitions):
+            if not isinstance(entry, dict):
+                raise TypeError(f"from_dict: transition[{index}] must be a dictionary")
             for required in ("trigger", "from", "to"):
                 if required not in entry:
                     raise ValueError(
-                        f"from_dict: transition[{i}] is missing required key '{required}'."
+                        f"from_dict: transition[{index}] is missing required key '{required}'."
                     )
 
-        # Collect all state names (initial + explicit list + transition endpoints)
-        all_state_names: set[str] = {initial}
-        explicit: List[str] = config.get("states") or []
-        all_state_names.update(explicit)
-        for entry in raw_transitions:
-            frm = entry["from"]
-            if isinstance(frm, list):
-                all_state_names.update(frm)
+            trigger = entry["trigger"]
+            target = entry["to"]
+            raw_sources = entry["from"]
+            if not isinstance(trigger, str) or not trigger:
+                raise ValueError(
+                    f"from_dict: transition[{index}] field 'trigger' must be a non-empty string"
+                )
+            if not isinstance(target, str) or not target:
+                raise ValueError(
+                    f"from_dict: transition[{index}] field 'to' must be a non-empty string"
+                )
+            if isinstance(raw_sources, list):
+                if not raw_sources or any(
+                    not isinstance(source, str) or not source for source in raw_sources
+                ):
+                    raise ValueError(
+                        f"from_dict: transition[{index}] field 'from' must be a non-empty string or list of non-empty strings"
+                    )
+                sources: Union[str, List[str]] = list(raw_sources)
+                expanded_count = len(sources)
+                all_state_names.update(sources)
+            elif isinstance(raw_sources, str) and raw_sources:
+                sources = raw_sources
+                expanded_count = 1
+                all_state_names.add(sources)
             else:
-                all_state_names.add(frm)
-            all_state_names.add(entry["to"])
+                raise ValueError(
+                    f"from_dict: transition[{index}] field 'from' must be a non-empty string or list of non-empty strings"
+                )
 
-        # Build the machine with all discovered states
-        fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
+            try:
+                priority = _normalize_priority(entry.get("priority", 0))
+            except TypeError as error:
+                raise TypeError(
+                    f"from_dict: transition[{index}] field 'priority' {error}"
+                ) from None
+            condition_ref = entry.get("condition_ref")
+            if condition_ref is not None and (
+                not isinstance(condition_ref, str) or not condition_ref
+            ):
+                raise ValueError(
+                    f"from_dict: transition[{index}] field 'condition_ref' must be a non-empty string"
+                )
 
-        # Add transitions — add_transition natively supports str-or-list from_state
-        _conditions: Dict[str, Union[Condition, GuardCallable]] = conditions or {}
-        for entry in raw_transitions:
-            cond = _conditions.get(entry["trigger"])
-            fsm.add_transition(
-                entry["trigger"], entry["from"], entry["to"], condition=cond
+            parsed_rows.append(
+                (index, trigger, sources, target, priority, condition_ref)
             )
+            expanded_candidate_counts[trigger] = (
+                expanded_candidate_counts.get(trigger, 0) + expanded_count
+            )
+            all_state_names.add(target)
 
+        for index, trigger, _, _, _, condition_ref in parsed_rows:
+            if condition_ref is not None and condition_ref not in registry:
+                raise ValueError(
+                    f"from_dict: transition[{index}] field 'condition_ref' references an unknown condition"
+                )
+            if (
+                condition_ref is None
+                and trigger in registry
+                and expanded_candidate_counts[trigger] != 1
+            ):
+                raise ValueError(
+                    f"from_dict: conditions key {trigger!r} is ambiguous for priority candidates"
+                )
+
+        fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
+        normalized_registry: Dict[str, Condition] = {}
+
+        def resolve_condition(reference: str, index: int) -> Condition:
+            existing = normalized_registry.get(reference)
+            if existing is not None:
+                return existing
+            raw_condition = registry[reference]
+            if isinstance(raw_condition, Condition):
+                normalized = raw_condition
+            elif callable(raw_condition):
+                normalized = FuncCondition(raw_condition)
+            else:
+                raise TypeError(
+                    f"from_dict: transition[{index}] condition registry value must be a Condition or callable"
+                )
+            if not isinstance(
+                fsm, AsyncStateMachine
+            ) and fsm._contains_async_requirement(normalized):
+                raise TypeError(
+                    f"from_dict: transition[{index}] AsyncCondition reference requires AsyncStateMachine"
+                )
+            normalized_registry[reference] = normalized
+            return normalized
+
+        plans: List[_PreparedTransition] = []
+        for index, trigger, sources, target, priority, condition_ref in parsed_rows:
+            resolved_reference = condition_ref
+            if resolved_reference is None and trigger in registry:
+                resolved_reference = trigger
+            condition = (
+                resolve_condition(resolved_reference, index)
+                if resolved_reference is not None
+                else None
+            )
+            try:
+                plans.append(
+                    fsm._normalize_transition_request(
+                        trigger,
+                        sources,
+                        target,
+                        condition,
+                        priority=priority,
+                        condition_ref=condition_ref,
+                    )
+                )
+            except (TypeError, ValueError) as error:
+                raise type(error)(f"from_dict: transition[{index}] {error}") from None
+
+        fsm._commit_transition_plan(tuple(plans))
         return fsm
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1208,17 +1342,19 @@ class StateMachine:
             A JSON-serialisable dict with keys ``"name"``, ``"initial"``,
             ``"states"``, and ``"transitions"``.
         """
-        transitions: List[Dict[str, str]] = []
-        for from_name, triggers in self._transitions.items():
-            for trigger_name, slot in triggers.items():
-                entry = _require_singleton_entry(slot)
-                transitions.append(
-                    {
+        transitions: List[Dict[str, Any]] = []
+        for from_name, triggers in sorted(self._transitions.items()):
+            for trigger_name, slot in sorted(triggers.items()):
+                for entry in _transition_entries(slot):
+                    record: Dict[str, Any] = {
                         "trigger": trigger_name,
                         "from": from_name,
                         "to": entry.to_state.name,
+                        "priority": entry.priority,
                     }
-                )
+                    if entry.condition_ref is not None:
+                        record["condition_ref"] = entry.condition_ref
+                    transitions.append(record)
         return {
             "name": self._name,
             "initial": self._initial_state.name,
@@ -1349,18 +1485,22 @@ class StateMachine:
         transitions: List[_GraphTransition] = []
         for from_name, entries in sorted(self._transitions.items()):
             for trigger, slot in sorted(entries.items()):
-                entry = _require_singleton_entry(slot)
-                transitions.append(
-                    _GraphTransition(
-                        self._states[from_name],
-                        trigger,
-                        entry.to_state,
-                        entry.condition,
-                        self._states[from_name].name,
-                        entry.to_state.name,
-                        entry.condition.name if entry.condition is not None else None,
+                for entry in _transition_entries(slot):
+                    transitions.append(
+                        _GraphTransition(
+                            self._states[from_name],
+                            trigger,
+                            entry.to_state,
+                            entry.condition,
+                            self._states[from_name].name,
+                            entry.to_state.name,
+                            entry.condition.name
+                            if entry.condition is not None
+                            else None,
+                            entry.priority,
+                            entry.condition_ref,
+                        )
                     )
-                )
         return _GraphSnapshot(
             self._name,
             self._initial_state,
@@ -1405,9 +1545,14 @@ class StateMachine:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        condition_ref: Optional[str] = None,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
         normalized_priority = _normalize_priority(priority)
+        if condition_ref is not None and (
+            not isinstance(condition_ref, str) or not condition_ref
+        ):
+            raise ValueError("condition_ref must be a non-empty string when provided")
         raw_sources: List[Any]
         if isinstance(from_state, list):
             raw_sources = list(from_state)
@@ -1475,7 +1620,12 @@ class StateMachine:
                     "AsyncStateMachine (or FSMBuilder with async auto-detection) instead."
                 )
         return _PreparedTransition(
-            trigger, tuple(sources), target, normalized_condition, normalized_priority
+            trigger,
+            tuple(sources),
+            target,
+            normalized_condition,
+            normalized_priority,
+            condition_ref,
         )
 
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
@@ -1508,7 +1658,9 @@ class StateMachine:
         existing: Optional[_TransitionSlot], plan: _PreparedTransition
     ) -> _TransitionSlot:
         """Build one replacement slot without mutating a published value."""
-        candidate = TransitionEntry(plan.target, plan.condition, plan.priority)
+        candidate = TransitionEntry(
+            plan.target, plan.condition, plan.priority, plan.condition_ref
+        )
         if existing is None:
             return candidate
 
@@ -1521,6 +1673,7 @@ class StateMachine:
             if (
                 entry.to_state is candidate.to_state
                 and entry.condition is candidate.condition
+                and entry.condition_ref == candidate.condition_ref
             ):
                 return existing
             raise ValueError("transition priority is already registered for this slot")

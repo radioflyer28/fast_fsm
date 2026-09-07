@@ -1943,8 +1943,8 @@ class TestFromDictConditions:
         # Pass with kwarg
         assert fsm.trigger("start", ready=True).success
 
-    def test_condition_applied_to_all_from_states_for_trigger(self):
-        """Same condition applies when the same trigger has multiple from-states."""
+    def test_explicit_condition_ref_applies_to_multiple_candidates(self):
+        """A repeated explicit reference deliberately shares one guard object."""
         from fast_fsm import FuncCondition
 
         call_log: list = []
@@ -1957,11 +1957,21 @@ class TestFromDictConditions:
             {
                 "initial": "a",
                 "transitions": [
-                    {"trigger": "go", "from": "a", "to": "c"},
-                    {"trigger": "go", "from": "b", "to": "c"},
+                    {
+                        "trigger": "go",
+                        "from": "a",
+                        "to": "c",
+                        "condition_ref": "guard",
+                    },
+                    {
+                        "trigger": "go",
+                        "from": "b",
+                        "to": "c",
+                        "condition_ref": "guard",
+                    },
                 ],
             },
-            conditions={"go": FuncCondition(guard, name="g")},
+            conditions={"guard": FuncCondition(guard, name="g")},
         )
         fsm.trigger("go", state="from_a")
         assert call_log == ["from_a"]
@@ -2357,7 +2367,7 @@ class TestPrioritySerialization:
         with pytest.raises((TypeError, ValueError), match=pattern):
             StateMachine.from_dict({"initial": "idle", "transitions": [record]})
 
-    def test_late_priority_conflict_never_reaches_registrar(self, monkeypatch):
+    def test_late_priority_conflict_is_one_atomic_registrar_attempt(self, monkeypatch):
         commits = 0
         original = StateMachine._commit_transition_plan
 
@@ -2382,4 +2392,4 @@ class TestPrioritySerialization:
                     ],
                 }
             )
-        assert commits == 0
+        assert commits == 1

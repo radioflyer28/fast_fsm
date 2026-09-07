@@ -91,6 +91,56 @@ def test_graph_snapshot_is_fresh_sorted_immutable_and_canonical() -> None:
     assert later.transitions[0].trigger == "go"
 
 
+def test_graph_snapshot_flattens_candidate_groups_with_scalar_identity() -> None:
+    """Cold graph projections retain every candidate in canonical order."""
+    from fast_fsm import FuncCondition
+
+    low = FuncCondition(lambda **kw: False, name="low")
+    high = FuncCondition(lambda **kw: True, name="high")
+    machine = StateMachine.from_dict(
+        {
+            "initial": "idle",
+            "transitions": [
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "safe",
+                    "priority": 5,
+                    "condition_ref": "high",
+                },
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "alternate",
+                    "priority": -1,
+                    "condition_ref": "low",
+                },
+                {
+                    "trigger": "go",
+                    "from": "middle",
+                    "to": "safe",
+                    "priority": 0,
+                    "condition_ref": "high",
+                },
+            ],
+        },
+        conditions={"low": low, "high": high},
+    )
+
+    snapshot = machine._graph_snapshot()
+    assert [
+        (row.from_state_name, row.trigger, row.priority, row.condition_ref)
+        for row in snapshot.transitions
+    ] == [
+        ("idle", "go", -1, "low"),
+        ("idle", "go", 5, "high"),
+        ("middle", "go", 0, "high"),
+    ]
+    assert snapshot.transitions[0].condition is low
+    with pytest.raises((AttributeError, TypeError)):
+        snapshot.transitions[0].condition_ref = "changed"
+
+
 def test_version_changes_only_for_successful_topology_changes() -> None:
     idle = State("idle")
     running = State("running")
