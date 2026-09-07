@@ -2200,3 +2200,186 @@ class TestCloneCallbackBehavior:
         clone.trigger("nonexistent")
         assert clone_calls == ["clone"]
         assert original_calls == ["orig"]  # shared callback fires on both
+
+
+class TestPrioritySerialization:
+    """Candidate-complete, callable-safe serialized topology coverage."""
+
+    def test_roundtrip_preserves_ordered_candidate_records_and_refs(self):
+        import json
+
+        from fast_fsm import FuncCondition
+
+        critical = FuncCondition(lambda **kw: kw.get("critical", False), name="c")
+        fallback = FuncCondition(lambda **kw: True, name="f")
+        config = {
+            "name": "priority-roundtrip",
+            "initial": "idle",
+            "transitions": [
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "safe",
+                    "priority": 5,
+                    "condition_ref": "fallback",
+                },
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "safe",
+                    "priority": -10,
+                    "condition_ref": "critical",
+                },
+            ],
+        }
+
+        machine = StateMachine.from_dict(
+            config, conditions={"critical": critical, "fallback": fallback}
+        )
+        exported = machine.to_dict()
+
+        assert exported["transitions"] == [
+            {
+                "trigger": "go",
+                "from": "idle",
+                "to": "safe",
+                "priority": -10,
+                "condition_ref": "critical",
+            },
+            {
+                "trigger": "go",
+                "from": "idle",
+                "to": "safe",
+                "priority": 5,
+                "condition_ref": "fallback",
+            },
+        ]
+        encoded = json.dumps(exported)
+        assert "FuncCondition" not in encoded
+        assert "function" not in encoded
+
+        restored = StateMachine.from_dict(
+            json.loads(encoded), conditions={"critical": critical, "fallback": fallback}
+        )
+        entries = restored._transitions["idle"]["go"].entries
+        assert tuple(entry.priority for entry in entries) == (-10, 5)
+        assert tuple(entry.condition_ref for entry in entries) == (
+            "critical",
+            "fallback",
+        )
+        assert restored.trigger("go", critical=False).priority == 5
+
+    def test_repeated_condition_ref_preserves_live_condition_identity(self):
+        from fast_fsm import FuncCondition
+
+        shared = FuncCondition(lambda **kw: True, name="shared")
+        machine = StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "safe",
+                        "priority": 1,
+                        "condition_ref": "shared",
+                    },
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "safe",
+                        "priority": 2,
+                        "condition_ref": "shared",
+                    },
+                ],
+            },
+            conditions={"shared": shared},
+        )
+
+        entries = machine._transitions["idle"]["go"].entries
+        assert entries[0].condition is shared
+        assert entries[1].condition is shared
+        assert machine.to_dict()["transitions"][0]["condition_ref"] == "shared"
+
+    def test_legacy_trigger_guard_requires_one_expanded_candidate(self, monkeypatch):
+        from fast_fsm import FuncCondition
+
+        commits = 0
+        original = StateMachine._commit_transition_plan
+
+        def count_commit(machine, plans):
+            nonlocal commits
+            commits += 1
+            return original(machine, plans)
+
+        monkeypatch.setattr(StateMachine, "_commit_transition_plan", count_commit)
+        with pytest.raises(ValueError, match="conditions.*go.*ambiguous"):
+            StateMachine.from_dict(
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {"trigger": "go", "from": "idle", "to": "safe"},
+                        {
+                            "trigger": "go",
+                            "from": "idle",
+                            "to": "alternate",
+                            "priority": 1,
+                        },
+                    ],
+                },
+                conditions={"go": FuncCondition(lambda **kw: True, name="legacy")},
+            )
+        assert commits == 0
+
+    @pytest.mark.parametrize(
+        "record, pattern",
+        [
+            (
+                {
+                    "trigger": "go",
+                    "from": "idle",
+                    "to": "safe",
+                    "condition_ref": "missing",
+                },
+                r"transition\[0\].*condition_ref",
+            ),
+            (
+                {"trigger": ["go"], "from": "idle", "to": "safe"},
+                r"transition\[0\].*trigger",
+            ),
+            (
+                {"trigger": "go", "from": "idle", "to": "safe", "priority": True},
+                r"transition\[0\].*priority",
+            ),
+        ],
+    )
+    def test_from_dict_rejects_indexed_malformed_fields(self, record, pattern):
+        with pytest.raises((TypeError, ValueError), match=pattern):
+            StateMachine.from_dict({"initial": "idle", "transitions": [record]})
+
+    def test_late_priority_conflict_never_reaches_registrar(self, monkeypatch):
+        commits = 0
+        original = StateMachine._commit_transition_plan
+
+        def count_commit(machine, plans):
+            nonlocal commits
+            commits += 1
+            return original(machine, plans)
+
+        monkeypatch.setattr(StateMachine, "_commit_transition_plan", count_commit)
+        with pytest.raises(ValueError, match="priority"):
+            StateMachine.from_dict(
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {"trigger": "go", "from": "idle", "to": "safe"},
+                        {
+                            "trigger": "go",
+                            "from": "idle",
+                            "to": "alternate",
+                            "priority": 0,
+                        },
+                    ],
+                }
+            )
+        assert commits == 0

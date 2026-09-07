@@ -34,6 +34,7 @@ def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
                             id(entry.condition)
                             if entry.condition is not None
                             else None,
+                            entry.condition_ref,
                         )
                         for entry in (
                             slot.entries
