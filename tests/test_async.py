@@ -763,6 +763,30 @@ class TestAsyncTriggerGaps:
         assert not await fsm.can_trigger_async("go")
 
     @pytest.mark.asyncio
+    async def test_can_trigger_async_group_exception_is_terminal_and_observer_free(
+        self,
+    ):
+        """Grouped query evaluation must not observe or fall through an exception."""
+        source = State("source")
+        failed = State("failed")
+        later = State("later")
+        machine = AsyncStateMachine(source, name="async_group_query_exception")
+        machine.add_state(failed)
+        machine.add_state(later)
+        machine.add_transition(
+            "go", source, failed, ExplodingAsyncCondition(), priority=-1
+        )
+        machine.add_transition("go", source, later, AlwaysAsyncCondition(), priority=1)
+        observed: list[str] = []
+        machine.on_failed(lambda *_args, **_kwargs: observed.append("failed"))
+
+        with pytest.raises(RuntimeError, match="async boom"):
+            await machine.can_trigger_async("go")
+
+        assert observed == []
+        assert machine.current_state is source
+
+    @pytest.mark.asyncio
     async def test_async_trigger_with_sync_condition(self):
         """trigger_async handles sync Condition objects correctly."""
         s1 = State("s1")

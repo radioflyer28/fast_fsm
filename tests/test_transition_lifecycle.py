@@ -248,6 +248,68 @@ def test_grouped_selection_finishes_before_the_existing_lifecycle_starts() -> No
     ]
 
 
+@pytest.mark.asyncio
+async def test_async_group_selection_completes_before_one_lifecycle_failure() -> None:
+    """An async winner enters lifecycle once; later candidates remain untouched."""
+    events: list[str] = []
+    failure = RuntimeError("async-source-exit-secret")
+
+    class RecordedCondition(AsyncCondition):
+        __slots__ = ("_label", "_outcome")
+
+        def __init__(self, label: str, outcome: bool) -> None:
+            super().__init__(label, "async grouped lifecycle selection")
+            self._label = label
+            self._outcome = outcome
+
+        async def check_async(self, **kwargs: object) -> bool:
+            events.append(self._label)
+            return self._outcome
+
+    class Source(State):
+        __slots__ = ()
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            events.append("source-exit")
+            raise failure
+
+    source = Source("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="async-grouped-lifecycle-selection")
+    for state in (rejected, winner, later):
+        machine.add_state(state)
+    machine.enable_history()
+    machine.add_transition(
+        "advance", source, later, RecordedCondition("later-guard", True), priority=5
+    )
+    machine.add_transition(
+        "advance", source, winner, RecordedCondition("winner-guard", True), priority=0
+    )
+    machine.add_transition(
+        "advance",
+        source,
+        rejected,
+        RecordedCondition("rejected-guard", False),
+        priority=-1,
+    )
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    result = await machine.trigger_async("advance")
+
+    assert result.success is False
+    assert result.stage == "source-exit"
+    assert result.cause is failure
+    assert machine.current_state is source
+    assert machine.history == []
+    assert events == ["rejected-guard", "winner-guard", "source-exit"]
+    assert observed == ["observer"]
+
+
 def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

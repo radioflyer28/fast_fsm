@@ -8,6 +8,7 @@ import pytest
 
 from fast_fsm.conditions import AsyncCondition, Condition
 from fast_fsm.core import (
+    AsyncDeclarativeState,
     AsyncStateMachine,
     CallbackState,
     DeclarativeState,
@@ -72,6 +73,38 @@ class _SequentialAsyncCondition(AsyncCondition):
             return self._outcome
         finally:
             self._active[0] -= 1
+
+
+class _GatedAsyncCondition(AsyncCondition):
+    """Wait for a test-controlled handshake before yielding one guard outcome."""
+
+    __slots__ = ("_events", "_label", "_outcome", "cancellation", "started", "release")
+
+    def __init__(
+        self,
+        events: list[str],
+        label: str,
+        outcome: bool,
+        started: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        super().__init__(label, "priority selection async handshake guard")
+        self._events = events
+        self._label = label
+        self._outcome = outcome
+        self.cancellation: asyncio.CancelledError | None = None
+        self.started = started
+        self.release = release
+
+    async def check_async(self, *args: object, **kwargs: object) -> bool:
+        self._events.append(f"guard:{self._label}")
+        self.started.set()
+        try:
+            await asyncio.wait_for(self.release.wait(), timeout=5)
+        except asyncio.CancelledError as cancellation:
+            self.cancellation = cancellation
+            raise
+        return self._outcome
 
 
 @pytest.mark.asyncio
@@ -150,6 +183,298 @@ async def test_can_trigger_async_scans_the_same_order_without_lifecycle() -> Non
     assert events == ["guard:rejected", "guard:winner"]
     assert machine.current_state is source
     assert machine.history == []
+
+
+@pytest.mark.asyncio
+async def test_async_group_does_not_speculate_beyond_the_current_candidate() -> None:
+    """A lower candidate must finish before the next candidate can begin."""
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    source = State("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    machine = AsyncStateMachine(source, name="priority-async-no-speculation")
+    machine.add_state(rejected)
+    machine.add_state(winner)
+    first = _GatedAsyncCondition(events, "first", False, started, release)
+    machine.add_transition("go", source, rejected, first, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        winner,
+        _SequentialAsyncCondition(events, [0], "winner", True),
+        priority=1,
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("go"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert events == ["guard:first"]
+    release.set()
+    result = await asyncio.wait_for(pending, timeout=5)
+
+    assert result.success is True
+    assert events == ["guard:first", "guard:winner"]
+
+
+@pytest.mark.asyncio
+async def test_async_group_terminal_exception_and_exhaustion_finalize_once() -> None:
+    """Only normal false falls through a group; exceptions and exhaustion are final."""
+    events: list[str] = []
+    failure = RuntimeError("candidate-secret")
+    source = State("source")
+    failed = State("failed")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="priority-async-terminal")
+    machine.add_state(failed)
+    machine.add_state(later)
+    machine.add_transition(
+        "go",
+        source,
+        failed,
+        _SequentialAsyncCondition(events, [0], "failed", failure),
+        priority=-1,
+    )
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _SequentialAsyncCondition(events, [0], "later", True),
+        priority=1,
+    )
+    observed: list[tuple[str, str, str]] = []
+    machine.on_failed(
+        lambda trigger, from_state, error, **_kwargs: observed.append(
+            (trigger, from_state, error)
+        )
+    )
+
+    result = await machine.trigger_async("go")
+
+    assert result.success is False
+    assert result.stage == "guard"
+    assert result.cause is failure
+    assert events == ["guard:failed"]
+    assert observed == [("go", "source", "Transition guard raised an exception")]
+
+    exhaustion_events: list[str] = []
+    exhausted = AsyncStateMachine(State("source"), name="priority-async-exhaustion")
+    exhausted.add_state(State("first"))
+    exhausted.add_state(State("second"))
+    exhausted.add_transition(
+        "go",
+        "source",
+        "first",
+        _SequentialAsyncCondition(exhaustion_events, [0], "first", False),
+        priority=-1,
+    )
+    exhausted.add_transition(
+        "go",
+        "source",
+        "second",
+        _SequentialAsyncCondition(exhaustion_events, [0], "second", False),
+        priority=1,
+    )
+    exhausted_observed: list[str] = []
+    exhausted.on_failed(lambda *_args, **_kwargs: exhausted_observed.append("failed"))
+
+    exhaustion = await exhausted.trigger_async("go")
+
+    assert exhaustion.success is False
+    assert exhaustion.committed is False
+    assert exhaustion.stage == "selection"
+    assert exhaustion.error == "No eligible transition candidate"
+    assert exhaustion.cause is None
+    assert exhaustion_events == ["guard:first", "guard:second"]
+    assert exhausted_observed == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_async_candidate_cancellation_finalizes_once_and_releases_ownership() -> (
+    None
+):
+    """Trigger cancellation is terminal, observer-visible, and leaves no busy owner."""
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    source = State("source")
+    blocked = State("blocked")
+    later = State("later")
+    recovered = State("recovered")
+    machine = AsyncStateMachine(source, name="priority-async-cancellation")
+    for state in (blocked, later, recovered):
+        machine.add_state(state)
+    condition = _GatedAsyncCondition(events, "blocked", True, started, release)
+    machine.add_transition("go", source, blocked, condition, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _SequentialAsyncCondition(events, [0], "later", True),
+        priority=1,
+    )
+    machine.add_transition("recover", source, recovered)
+    observed: list[tuple[str, str, str]] = []
+    machine.on_failed(
+        lambda trigger, from_state, error, **_kwargs: observed.append(
+            (trigger, from_state, error)
+        )
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("go"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(pending, timeout=5)
+
+    assert cancellation.value is condition.cancellation
+    assert events == ["guard:blocked"]
+    assert observed == [("go", "source", "Transition cancelled at guard")]
+    assert machine.current_state is source
+    assert (await machine.trigger_async("recover")).success is True
+
+
+@pytest.mark.asyncio
+async def test_async_permission_cancellation_uses_permission_stage_without_fallback() -> (
+    None
+):
+    """Cancellation in the last candidate stage is still terminal and truthful."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    events: list[str] = []
+
+    class Source(State):
+        __slots__ = ("cancellation",)
+
+        def __init__(self) -> None:
+            super().__init__("source")
+            self.cancellation: asyncio.CancelledError | None = None
+
+        async def can_transition_async(
+            self, trigger: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            started.set()
+            try:
+                await asyncio.wait_for(release.wait(), timeout=5)
+            except asyncio.CancelledError as cancellation:
+                self.cancellation = cancellation
+                raise
+            return True
+
+    source = Source()
+    blocked = State("blocked")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="priority-async-permission-cancel")
+    machine.add_state(blocked)
+    machine.add_state(later)
+    machine.add_transition("go", source, blocked, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _SequentialAsyncCondition(events, [0], "later", True),
+        priority=1,
+    )
+    observed: list[tuple[str, str, str]] = []
+    machine.on_failed(
+        lambda trigger, from_state, error, **_kwargs: observed.append(
+            (trigger, from_state, error)
+        )
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("go"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(pending, timeout=5)
+
+    assert cancellation.value is source.cancellation
+    assert events == []
+    assert observed == [("go", "source", "Transition cancelled at state-permission")]
+
+
+@pytest.mark.asyncio
+async def test_async_declarative_cancellation_and_query_cancellation_do_not_fall_through() -> (
+    None
+):
+    """Cancellation exits its candidate stage without a trigger/query fallback."""
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def declarative_guard(*_args: object, **_kwargs: object) -> bool:
+        events.append("declarative")
+        started.set()
+        await asyncio.wait_for(release.wait(), timeout=5)
+        return True
+
+    class Source(AsyncDeclarativeState):
+        __slots__ = ()
+
+        @transition("go", to_state="blocked", condition=declarative_guard)
+        async def go(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("cancelled candidate handler must not run")
+
+    source = Source("source")
+    blocked = State("blocked")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="priority-async-declarative-cancel")
+    machine.add_state(blocked)
+    machine.add_state(later)
+    machine.add_transition("go", source, blocked, priority=-1)
+    machine.add_transition(
+        "go",
+        source,
+        later,
+        _SequentialAsyncCondition(events, [0], "later", True),
+        priority=1,
+    )
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("failed"))
+
+    pending = asyncio.create_task(machine.trigger_async("go"))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(pending, timeout=5)
+
+    assert events == ["declarative"]
+    assert observed == ["failed"]
+
+    query_events: list[str] = []
+    query_started = asyncio.Event()
+    query_release = asyncio.Event()
+    query_source = State("query-source")
+    query_blocked = State("query-blocked")
+    query_later = State("query-later")
+    query_machine = AsyncStateMachine(query_source, name="priority-async-query-cancel")
+    query_machine.add_state(query_blocked)
+    query_machine.add_state(query_later)
+    query_condition = _GatedAsyncCondition(
+        query_events, "blocked", True, query_started, query_release
+    )
+    query_machine.add_transition(
+        "go", query_source, query_blocked, query_condition, priority=-1
+    )
+    query_machine.add_transition(
+        "go",
+        query_source,
+        query_later,
+        _SequentialAsyncCondition(query_events, [0], "later", True),
+        priority=1,
+    )
+    query_observed: list[str] = []
+    query_machine.on_failed(lambda *_args, **_kwargs: query_observed.append("failed"))
+
+    query = asyncio.create_task(query_machine.can_trigger_async("go"))
+    await asyncio.wait_for(query_started.wait(), timeout=5)
+    query.cancel()
+    with pytest.raises(asyncio.CancelledError) as query_cancellation:
+        await asyncio.wait_for(query, timeout=5)
+
+    assert query_cancellation.value is query_condition.cancellation
+    assert query_events == ["guard:blocked"]
+    assert query_observed == []
 
 
 def test_sync_group_selects_the_first_fully_eligible_candidate_before_lifecycle() -> (

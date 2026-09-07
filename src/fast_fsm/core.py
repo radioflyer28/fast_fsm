@@ -74,6 +74,15 @@ _ownership_root: contextvars.ContextVar[Optional[object]] = contextvars.ContextV
 ]("_ownership_root", default=None)
 
 
+# Async candidate selection has no mutable per-machine bookkeeping because
+# observer-free queries may overlap a future owned trigger.  The owned trigger
+# installs this task-local marker so cancellation can report the last awaited
+# eligibility stage without adding a second selector result type.
+_async_selection_lifecycle_stage: contextvars.ContextVar[str] = contextvars.ContextVar[
+    str
+]("_async_selection_lifecycle_stage", default="selection")
+
+
 # Stable lifecycle labels are deliberately strings so callers can inspect a
 # failure result without importing a private implementation type. Every stage
 # producer consumes these constants; the tuple below is the corresponding
@@ -4066,6 +4075,8 @@ class AsyncStateMachine(StateMachine):
         if condition:
             try:
                 assert condition_kwargs is not None
+                if not for_query:
+                    _async_selection_lifecycle_stage.set(_LIFECYCLE_STAGE_GUARD)
                 if not await self._evaluate_condition_async(
                     condition, args, condition_kwargs
                 ):
@@ -4090,6 +4101,8 @@ class AsyncStateMachine(StateMachine):
                 )
 
         try:
+            if not for_query:
+                _async_selection_lifecycle_stage.set(_LIFECYCLE_STAGE_GUARD)
             declarative_guard_passed = await self._evaluate_declarative_condition_async(
                 prepared, raise_on_error=True
             )
@@ -4112,6 +4125,8 @@ class AsyncStateMachine(StateMachine):
             )
 
         try:
+            if not for_query:
+                _async_selection_lifecycle_stage.set(_LIFECYCLE_STAGE_STATE_PERMISSION)
             can_proceed = await self._can_transition_after_declarative_guard_async(
                 source_state, trigger, entry.to_state, args, kwargs
             )
@@ -4145,16 +4160,17 @@ class AsyncStateMachine(StateMachine):
         kwargs: Dict[str, Any],
     ) -> bool:
         """Run effective async policy while suppressing only a prepared base guard."""
+        async_policy = getattr(source_state, "can_transition_async", None)
         if not isinstance(source_state, DeclarativeState):
-            if hasattr(source_state, "can_transition_async"):
-                return await source_state.can_transition_async(
+            if callable(async_policy):
+                return await cast(Callable[..., Any], async_policy)(
                     trigger, to_state, *args, **kwargs
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
         token = _set_prepared_declarative_guard(self, source_state, trigger, to_state)
         try:
-            if hasattr(source_state, "can_transition_async"):
-                return await source_state.can_transition_async(
+            if callable(async_policy):
+                return await cast(Callable[..., Any], async_policy)(
                     trigger, to_state, *args, **kwargs
                 )
             return source_state.can_transition(trigger, to_state, *args, **kwargs)
@@ -4204,14 +4220,19 @@ class AsyncStateMachine(StateMachine):
         reached commit/history boundary is never shielded or rolled back.
         """
         old_state = self._current_state
-        lifecycle_stage = [_LIFECYCLE_STAGE_GUARD]
+        lifecycle_stage = [_LIFECYCLE_STAGE_SELECTION]
         committed = [False]
         to_state = old_state
+        selection_complete = False
+        selection_token = _async_selection_lifecycle_stage.set(
+            _LIFECYCLE_STAGE_SELECTION
+        )
 
         try:
             prepared = await self._select_transition_async(
                 trigger, args, kwargs, for_query=False
             )
+            selection_complete = True
             if isinstance(prepared, TransitionResult):
                 return self._finalize_failure(prepared, kwargs)
             to_state = prepared.entry.to_state
@@ -4229,17 +4250,24 @@ class AsyncStateMachine(StateMachine):
                 return self._finalize_failure(result, kwargs)
             return result
         except asyncio.CancelledError as cancellation:
+            cancellation_stage = (
+                lifecycle_stage[0]
+                if selection_complete
+                else _async_selection_lifecycle_stage.get()
+            )
             cancelled_result = self._build_failure_result(
                 old_state.name,
                 trigger,
-                f"Transition cancelled at {lifecycle_stage[0]}",
-                stage=lifecycle_stage[0],
+                f"Transition cancelled at {cancellation_stage}",
+                stage=cancellation_stage,
                 to_state=to_state.name if committed[0] else None,
                 committed=committed[0],
                 cause=cancellation,
             )
             self._finalize_failure(cancelled_result, kwargs)
             raise
+        finally:
+            _async_selection_lifecycle_stage.reset(selection_token)
 
 
 # Convenience functions and classes
