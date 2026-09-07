@@ -22,7 +22,7 @@ human_verification:
 
 **Phase Goal:** Users and maintainers can rely on truthful complexity guidance, equivalent installed pure/native behavior, and an example where the FSM owns telemetry-driven routing.
 **Verified:** 2026-09-07T07:49:14Z
-**Status:** human_needed
+**Status:** passed
 **Re-verification:** Yes — after gap closure
 
 ## Goal Achievement
@@ -109,7 +109,7 @@ No linked requirement test is skipped or disabled. No circular expected-value ge
 
 No `TBD`, `FIXME`, `XXX`, placeholder, empty user-visible implementation, or hardcoded-output stub was found in Phase 25 implementation, test, documentation, policy, task, or evidence files. `git diff --check` passed. No phase-declared or conventional probe script exists.
 
-## Human Verification Required
+## Human Verification
 
 ### 1. Editorial performance and safety framing
 
@@ -119,6 +119,8 @@ No `TBD`, `FIXME`, `XXX`, placeholder, empty user-visible implementation, or har
 
 **Why human:** Executable checks prove the wording and rendering, but not a reader's safety/performance interpretation.
 
+**Result:** passed in `25-UAT.md` on 2026-09-07.
+
 ## Closure Re-verification
 
 The Phase 25 security closure changed release-evidence policy, not FSM runtime
@@ -126,6 +128,11 @@ behavior. Its focused guard tests passed, and the user ran the complete normal
 locked-environment readiness proof successfully. The observable goal remains
 11/11 verified; the existing editorial UAT remains valid because the drone and
 performance wording was not changed.
+
+The final removal of the Taskfile's `uv build --offline` flag changes only
+cache-availability behavior. Its focused installed-artifact/task-contract suite
+passed; repeating the complete readiness run is optional because no artifact
+validation, build intent, source, lockfile, or runtime code changed.
 
 ---
 

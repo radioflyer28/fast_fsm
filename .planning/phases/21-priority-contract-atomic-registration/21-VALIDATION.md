@@ -1,8 +1,8 @@
 ---
 phase: 21
 slug: priority-contract-atomic-registration
-status: draft
-nyquist_compliant: false
+status: validated
+nyquist_compliant: true
 wave_0_complete: true
 created: 2026-09-06
 ---
@@ -39,10 +39,10 @@ created: 2026-09-06
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 21-01-01 | 01 | 1 | PRIO-01, PRIO-02 | T-21-01 | Reject non-exact priority values before native coercion; singleton and immutable group shapes are explicit. | unit/type | `uv run pytest tests/test_graph_invariants.py tests/test_mypyc_guard.py -x -q` | ✅ | ⬜ pending |
-| 21-01-02 | 01 | 1 | PRIO-01, PRIO-02 | T-21-02 | Conflicting ties and invalid candidates never partially publish. | unit/property | `uv run pytest tests/test_graph_invariants.py tests/test_hypothesis.py -x -q` | ✅ | ⬜ pending |
-| 21-02-01 | 02 | 2 | PRIO-03 | T-21-03 | Batch, helper, builder, clone, and concurrent registration preserve all-or-nothing graph state. | unit/concurrency | `uv run pytest tests/test_builder.py tests/test_advanced_functionality.py tests/test_ownership_concurrency.py -x -q` | ✅ | ⬜ pending |
-| 21-02-02 | 02 | 2 | PRIO-01..03 | T-21-04 | The slotted union compiles in `core.py` without widening to `Any`; existing singleton lookup evidence remains green. | static/native | `task typecheck-mypy && task typecheck-ty && uv run python tools/release_evidence.py slots-policy --json` | ✅ | ⬜ pending |
+| 21-01-01 | 01 | 1 | PRIO-01, PRIO-02 | T-21-01 | Reject non-exact priority values before native coercion; singleton and immutable group shapes are explicit. | unit/type | `uv run pytest tests/test_graph_invariants.py tests/test_mypyc_guard.py -x -q` | ✅ | ✅ green |
+| 21-01-02 | 01 | 1 | PRIO-01, PRIO-02 | T-21-02 | Conflicting ties and invalid candidates never partially publish. | unit/property | `uv run pytest tests/test_graph_invariants.py tests/test_hypothesis.py -x -q` | ✅ | ✅ green |
+| 21-02-01 | 02 | 2 | PRIO-03 | T-21-03 | Batch, helper, builder, clone, and concurrent registration preserve all-or-nothing graph state. | unit/concurrency | `uv run pytest tests/test_builder.py tests/test_advanced_functionality.py tests/test_ownership_concurrency.py -x -q` | ✅ | ✅ green |
+| 21-02-02 | 02 | 2 | PRIO-01..03 | T-21-04 | The slotted union compiles in `core.py` without widening to `Any`; existing singleton lookup evidence remains green. | static/native | `task typecheck-mypy && task typecheck-ty && uv run python tools/release_evidence.py slots-policy --json` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -65,11 +65,23 @@ must run from a freshly built compiled mode after source validation.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
 - [x] Wave 0 covers all MISSING references
 - [x] No watch-mode flags
 - [x] Focused feedback latency target is < 60 seconds
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** reconciled 2026-09-07
+
+## Validation Audit 2026-09-07
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Phase verification proves all PRIO requirements; the later full release suite,
+type checks, and slots-policy proof remained green. Existing automated coverage
+is therefore Nyquist-compliant without new test files.
