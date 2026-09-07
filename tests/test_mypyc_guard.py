@@ -396,6 +396,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "from_state_name",
             "to_state_name",
             "condition_name",
+            "priority",
+            "condition_ref",
         },
         "_GraphSnapshot": {
             "name",
@@ -413,8 +415,24 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "target",
             "condition",
             "priority",
+            "condition_ref",
         },
         "_TransitionGroup": {"entries"},
+        "_DeclarativeHandlerMetadata": {
+            "trigger",
+            "from_state",
+            "to_state",
+            "condition",
+            "priority",
+        },
+        "_DeclarativeHandler": {
+            "method",
+            "from_state",
+            "to_state",
+            "condition",
+            "is_async",
+            "priority",
+        },
     }.items():
         node = classes.get(name)
         assert node is not None, f"{name} must remain in the compiled core unit"
@@ -460,6 +478,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         "to_state",
         "condition",
         "priority",
+        "condition_ref",
     }
 
 
@@ -1499,6 +1518,8 @@ def test_priority_selectors_keep_their_closed_slotted_boundary() -> None:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         ]
         assert not {"sorted", "list", "tuple"} & set(calls)
+        assert "_transition_entries" not in source
+        assert "_require_singleton_entry" not in source
         assert source.count("self._transitions") == 1
 
     async_selector = next(
@@ -1520,6 +1541,23 @@ def test_priority_selectors_keep_their_closed_slotted_boundary() -> None:
     owned_source = ast.unparse(async_owned)
     assert "_async_selection_priority.get()" in owned_source
     assert "priority=selected_priority" in owned_source
+
+    # Candidate flattening belongs only to the cold projection/query seams.
+    # None may regress to the old singleton-only helper as groups are added.
+    state_machine = classes["StateMachine"]
+    for method_name in (
+        "to_dict",
+        "_graph_snapshot_owned",
+        "get_reachable_states",
+        "transition_exists",
+        "_clone_owned",
+    ):
+        method = next(
+            node
+            for node in state_machine.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        assert "_require_singleton_entry" not in ast.unparse(method)
 
 
 def test_priority_runtime_records_remain_compact_and_private() -> None:
@@ -1653,6 +1691,79 @@ def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None
         ]
 
     asyncio.run(run_async_probe())
+
+
+def test_phase23_construction_projection_and_callback_probe_is_mode_invariant() -> None:
+    """Quick rows, cold projections, declarative identity, and caller kwargs agree."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if os.environ.get("FAST_FSM_BUILD_MODE") == "compiled":
+        assert spec.origin.endswith((".so", ".pyd"))
+
+    from fast_fsm.core import (
+        DeclarativeState,
+        FSMBuilder,
+        State,
+        StateMachine,
+        transition,
+    )
+
+    callback_priorities: list[object] = []
+    quick = StateMachine.quick_build(
+        "idle",
+        [
+            ("go", "idle", "safe", None, -2),
+            ("go", "idle", "alternate", None, 3),
+            ("finish", ["safe", "alternate"], "done", None, 1),
+        ],
+    )
+    quick.on_enter(
+        "safe",
+        lambda _source, _trigger, **kwargs: callback_priorities.append(
+            kwargs["priority"]
+        ),
+    )
+    quick.enable_history()
+    result = quick.trigger("go", priority="caller-owned")
+
+    assert (result.success, result.to_state, result.priority) == (True, "safe", -2)
+    assert callback_priorities == ["caller-owned"]
+    assert quick.history[-1].priority == -2
+    assert quick.transition_exists("go", "idle", "safe")
+    assert set(quick.get_reachable_states("idle")) == {"safe", "alternate"}
+    assert [
+        (row.from_state_name, row.trigger, row.to_state_name, row.priority)
+        for row in quick._graph_snapshot().transitions
+    ] == [
+        ("alternate", "finish", "done", 1),
+        ("idle", "go", "safe", -2),
+        ("idle", "go", "alternate", 3),
+        ("safe", "finish", "done", 1),
+    ]
+    clone = quick.clone()
+    assert clone.to_dict() == quick.to_dict()
+    assert clone._transitions["idle"]["go"] is quick._transitions["idle"]["go"]
+
+    handler_priorities: list[object] = []
+
+    class Source(DeclarativeState):
+        @transition("go", from_state="source", to_state="slow", priority=5)
+        def slow_handler(self, *args, **kwargs):
+            handler_priorities.append(("slow", kwargs["priority"]))
+
+        @transition("go", from_state="source", to_state="fast", priority=-1)
+        def fast_handler(self, *args, **kwargs):
+            handler_priorities.append(("fast", kwargs["priority"]))
+
+    builder = FSMBuilder(Source("source"))
+    builder.add_state(State("slow")).add_state(State("fast"))
+    builder.add_transition("go", "source", "slow", priority=5)
+    builder.add_transition("go", "source", "fast", priority=-1)
+    declarative = builder.build()
+    declarative_result = declarative.trigger("go", priority="caller-owned")
+
+    assert (declarative_result.success, declarative_result.priority) == (True, -1)
+    assert handler_priorities == [("fast", "caller-owned")]
 
 
 def test_private_graph_records_are_not_public_exports() -> None:

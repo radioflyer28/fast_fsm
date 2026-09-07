@@ -1044,26 +1044,23 @@ class TestConvenienceFunctions:
         )
         assert machines[3].trigger("go").to_state == "low"
 
-    def test_quick_factories_keep_state_guard_and_priority_rows_in_one_batch(
-        self, monkeypatch
-    ):
+    def test_quick_factories_keep_state_guard_and_priority_rows_in_one_batch(self):
         """Quick construction transports 4/5-field rows without adapter policy."""
         initial = State("initial")
         middle = State("middle")
         target = State("target")
         guard = FuncCondition(lambda **kwargs: True)
         rows = [("go", [initial, middle], target, guard, -3)]
-        calls: list[list[tuple[object, ...]]] = []
-        original = StateMachine.add_transitions
-
-        def record_batch(self, transitions):
-            calls.append(list(transitions))
-            return original(self, transitions)
-
-        monkeypatch.setattr(StateMachine, "add_transitions", record_batch)
         machine = StateMachine.quick_build(initial, rows)
 
-        assert calls == [rows]
+        source = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py").read_text(
+            encoding="utf-8"
+        )
+        method_start = source.index("    def quick_build(")
+        method_end = source.index("    @classmethod\n    def from_dict(", method_start)
+        quick_build_source = source[method_start:method_end]
+        assert "fsm.add_transitions(transition_rows)" in quick_build_source
+        assert "fsm.add_transition(" not in quick_build_source
         assert machine._states["initial"] is initial
         assert machine._states["middle"] is middle
         assert machine._states["target"] is target
