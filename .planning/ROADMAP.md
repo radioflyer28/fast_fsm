@@ -10,7 +10,7 @@ Fast FSM v0.4.0 evolves one source/trigger slot from a singular edge into a fini
 - ✅ **v0.2.2 Introspection & Agent Tooling** — Phases 7–11.1 (shipped 2026-04-05)
 - ✅ **v0.2.3 Timing Condition Helpers** — Phases 12–14 (shipped 2026-04-05)
 - ✅ **v0.3.0 Reliability & Runtime Hardening** — Phases 15–20 (completed 2026-09-06; untagged and unreleased)
-- 🚧 **v0.4.0 Priority-Aware Guarded Transitions** — Phases 21–25 (planned)
+- 🚧 **v0.4.0 Priority-Aware Guarded Transitions** — Phases 21–25 (completed; milestone audit pending)
 
 ## Phases
 
@@ -42,7 +42,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 
 </details>
 
-### 🚧 v0.4.0 Priority-Aware Guarded Transitions (Planned)
+### 🚧 v0.4.0 Priority-Aware Guarded Transitions (Completion Audit Pending)
 
 **Milestone Goal:** Add deterministic, priority-aware guarded transition resolution so one `(state, trigger)` selects among finite ordered candidates without external dispatch logic.
 
@@ -50,7 +50,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 - [x] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics. (completed 2026-09-06)
 - [x] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path. (completed 2026-09-06)
 - [x] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority. (completed 2026-09-07)
-- [ ] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern.
+- [x] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern. (completed 2026-09-07)
 
 ## Phase Details
 
@@ -159,11 +159,13 @@ Plans:
   4. The drone example submits one telemetry event to a controller-owned FSM; transition guards own priority decisions, aircraft callbacks issue commands, and telemetry services expose facts such as heartbeat age without selecting transitions.
   5. Ruff, mypy/mypyc, the full sync/async test suite, documentation builds, and installed-artifact checks pass from clean evidence origins.
 
-**Plans**: TBD
+**Plans:** 5/5 complete
 
 - [x] 25-01-PLAN.md
 - [x] 25-02-PLAN.md
 - [x] 25-03-PLAN.md
+- [x] 25-04-PLAN.md
+- [x] 25-05-PLAN.md
 
 ## Requirement Coverage
 
@@ -194,7 +196,7 @@ Plans:
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 3/3 | Complete    | 2026-09-07 |
-| 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 3/3 | In Progress|  |
+| 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 5/5 | Complete | 2026-09-07 |
 
 ---
 *Roadmap created: 2026-09-06 for v0.4.0 Priority-Aware Guarded Transitions*

@@ -41,7 +41,7 @@ human_verification:
 | 8 | D-03 composition holds: `DroneController` owns policy, FSM, and a replaceable command adapter; `SimulatedAircraft` is not an FSM subclass. | ✓ VERIFIED | Direct source inspection and the dedicated composition test confirm the composition boundary. |
 | 9 | D-04 holds: one sample is observed once, produces one controller-owned `telemetry_tick`, and fact-only guards encode critical-fault, link-loss, then low-battery precedence. | ✓ VERIFIED | The one-observation/one-trigger and precedence tests passed; `TelemetryPolicy` contains facts/heartbeat age and no transition-choice API. |
 | 10 | Only the selected destination entry callback commands the aircraft after commit; rejected candidates command nothing. | ✓ VERIFIED | The critical-fault and rejected-candidate command-timing tests passed, including state-at-command assertions. |
-| 11 | Clean-origin release quality evidence is fresh and passable. | ✓ VERIFIED | `evidence/release-baseline.json` records 1,805 collected, 1,799 passed, 0 errors, 0 failures, and 6 skipped under uv 0.12.6; pinned offline `task release-baseline-check` and `task release-gate` both exited 0 without changing it. |
+| 11 | Clean-origin release quality evidence is fresh and passable. | ✓ VERIFIED | `evidence/release-baseline.json` records 1,812 collected, 1,806 passed, 0 errors, 0 failures, and 6 skipped. Normal `uv sync --locked` then `task release-baseline-check` and full `task release-readiness-check` exited 0 without unrelated baseline drift. |
 
 **Score:** 11/11 truths verified (0 present, behavior-unverified)
 
@@ -51,7 +51,7 @@ human_verification:
 | --- | --- | --- |
 | `src/fast_fsm/core.py`, performance tests, and reporter | ✓ VERIFIED | Substantive runtime implementation, structural guards, and a Taskfile-wired benchmark reporter. |
 | `tools/artifact_conformance.py`, artifact tests, and Taskfile | ✓ VERIFIED | Shared exact oracle is copied into neutral installed probes and compared against clean source. |
-| `evidence/release-baseline.json` | ✓ VERIFIED | Fresh durable quality/conformance evidence; manifest toolchain records uv 0.12.6. |
+| `evidence/release-baseline.json` | ✓ VERIFIED | Fresh durable quality/conformance evidence; the recorded `uv 0.12.9` is non-gating environment metadata and `uv.lock` remains the dependency-resolution authority. |
 | Drone example, tests, README, architecture, and Examples page | ✓ VERIFIED | Runnable controller composition, behavioral tests, and `literalinclude` wiring all exist and are substantive. |
 
 ### Key Link Verification
@@ -77,11 +77,11 @@ human_verification:
 | Behavior | Command | Result | Status |
 | --- | --- | --- | --- |
 | D-01 registration/local-work and D-02 oracle | Seven selected priority, performance, oracle, and drone pytest tests | 7 passed | ✓ PASS |
-| Environment-labelled representative observations | `UV_OFFLINE=1 task benchmark` with pinned uv 0.12.6 | 36 labelled rows | ✓ PASS |
-| Freshness evidence | `UV_OFFLINE=1 task release-baseline-check` with pinned uv 0.12.6 | Exit 0; source origin verified; manifest check passed | ✓ PASS |
-| Complete release quality | `UV_OFFLINE=1 task release-gate` with pinned uv 0.12.6 | Exit 0: format, lint, mypy, full sequential suite, docs, doctests, and baseline check | ✓ PASS |
-| Three-origin installed parity | `UV_OFFLINE=1 task release-installed-artifacts-check` with pinned uv 0.12.6 | Exit 0 | ✓ PASS |
-| Installed compiled performance | `UV_OFFLINE=1 task release-installed-performance-check` with pinned uv 0.12.6 | Exit 0; native loader/sample/median threshold verifier accepted fresh wheel | ✓ PASS |
+| Environment-labelled representative observations | `task benchmark` | 36 labelled rows | ✓ PASS |
+| Freshness evidence | `task release-baseline-check` | Exit 0; source origin verified; guarded manifest check passed | ✓ PASS |
+| Complete release quality | `task release-readiness-check` | Exit 0: format, lint, mypy, full sequential suite, docs, doctests, baseline check, identity, artifact proof, installed performance, slots, and advisory ty | ✓ PASS |
+| Three-origin installed parity | `task release-readiness-check` | Exit 0 as part of the complete local proof | ✓ PASS |
+| Installed compiled performance | `task release-readiness-check` | Exit 0; native loader/sample/median threshold verifier accepted fresh wheel | ✓ PASS |
 
 ### Requirements Coverage
 
@@ -118,6 +118,14 @@ No `TBD`, `FIXME`, `XXX`, placeholder, empty user-visible implementation, or har
 **Expected:** Environment-specific timing observations must not read as durable promises; the deterministic simulation must not read as certified or real-hardware flight-control guidance.
 
 **Why human:** Executable checks prove the wording and rendering, but not a reader's safety/performance interpretation.
+
+## Closure Re-verification
+
+The Phase 25 security closure changed release-evidence policy, not FSM runtime
+behavior. Its focused guard tests passed, and the user ran the complete normal
+locked-environment readiness proof successfully. The observable goal remains
+11/11 verified; the existing editorial UAT remains valid because the drone and
+performance wording was not changed.
 
 ---
 

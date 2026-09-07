@@ -4,18 +4,18 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
-status: verifying
-stopped_at: Completed 25-03-PLAN.md
-last_updated: "2026-09-07T06:53:25.540Z"
+status: milestone_audit
+stopped_at: Phase 25 complete; milestone completion audit pending
+last_updated: "2026-09-07T21:15:00Z"
 last_activity: 2026-09-07
 last_activity_desc: Phase 25 execution started
-state_head: 296c4315063c41970facf87ca36f62bf145f74ba
+state_head: cea6263
 progress:
   total_phases: 5
-  completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
-  percent: 80
+  completed_phases: 5
+  total_plans: 16
+  completed_plans: 16
+  percent: 100
 ---
 
 # State: Fast FSM
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-06)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** Phase 25 — Performance, Artifact Proof & Drone Guidance
+**Current focus:** v0.4.0 milestone completion audit
 
 ## Current Position
 
-Phase: 25 (Performance, Artifact Proof & Drone Guidance) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-09-07 — Phase 25 execution started
+Phase: 25 (Performance, Artifact Proof & Drone Guidance) — COMPLETE
+Plan: 5 of 5
+Status: Phase verification, Nyquist validation, security verification, and UAT complete
+Last activity: 2026-09-07 — normal locked-uv release readiness proof passed
 
 ## Performance Metrics
 
@@ -170,6 +170,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 25]: Use one FSM-owned telemetry_tick with fixed guarded candidates instead of controller-side trigger priority routing.
 - [Phase 25]: Keep telemetry fact-only and command aircraft only from the selected destination state's post-commit entry callback.
 - [Phase 25]: Describe direct singleton dispatch as O(1), and immutable group insertion or ordered selection as local O(k), with exact timings labelled by environment.
+- [Phase 25]: `uv.lock` plus `uv sync --locked` governs release dependency resolution; the invoking uv version is non-gating environment evidence, while guarded baseline refresh validation remains mandatory.
 
 ### Pending Todos
 
@@ -190,8 +191,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T06:53:25.477Z
-Stopped at: Completed 25-03-PLAN.md
+Last session: 2026-09-07T21:15:00Z
+Stopped at: Phase 25 completion audit preparation
 Resume file: None
 
 ## Rebuild Log
@@ -205,5 +206,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Discuss Phase 21 with `/gsd-discuss-phase 21`.
-- Then plan Phase 21 with `/gsd-plan-phase 21`.
+- Run `$gsd-audit-milestone` for the completed v0.4.0 milestone.
