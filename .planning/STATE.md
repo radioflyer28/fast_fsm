@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
-current_phase: 24
-current_phase_name: Candidate-Aware Diagnostics & Output
-status: executing
-stopped_at: Phase 24 context gathered
-last_updated: "2026-09-07T03:55:12.922Z"
-last_activity: 2026-09-06
-last_activity_desc: Phase 23 complete, transitioned to Phase 24
-state_head: db425a23a24710b2ae56da90d9f7707ab917ff76
+current_phase: 25
+current_phase_name: Performance, Artifact Proof & Drone Guidance
+status: planning
+stopped_at: Phase 24 complete, ready to plan Phase 25
+last_updated: "2026-09-07T04:46:57.213Z"
+last_activity: 2026-09-07
+last_activity_desc: Phase 24 complete, transitioned to Phase 25
+state_head: 5d766a60a4fba5b6b0ded27ea39eea687adceeb7
 progress:
   total_phases: 5
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 8
-  percent: 60
+  completed_plans: 11
+  percent: 80
 ---
 
 # State: Fast FSM
@@ -29,16 +29,16 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 
 ## Current Position
 
-Phase: 24 (Candidate-Aware Diagnostics & Output) — READY TO EXECUTE
+Phase: 25 — Performance, Artifact Proof & Drone Guidance
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-06 — Phase 23 complete, transitioned to Phase 24
+Status: Ready to plan
+Last activity: 2026-09-07 — Phase 24 complete, transitioned to Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 49
+- Total plans completed: 52
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -55,6 +55,7 @@ Last activity: 2026-09-06 — Phase 23 complete, transitioned to Phase 24
 | 21 | 2 | - | - |
 | 22 | 3 | - | - |
 | 23 | 3 | - | - |
+| 24 | 3 | - | - |
 
 **Recent Trend:** v0.3.0 completed all six phases and passed the final hosted installed-artifact proof; v0.4.0 now has five dependency-ordered phases with full requirement coverage.
 **Per-Plan Metrics:**
@@ -179,7 +180,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-07T03:12:20.971Z
-Stopped at: Phase 24 context gathered
+Stopped at: Phase 24 complete, ready to plan Phase 25
 Resume file: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md
 
 ## Rebuild Log

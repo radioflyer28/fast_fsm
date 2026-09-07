@@ -49,7 +49,7 @@ Release integrity, canonical graph and dispatch invariants, atomic lifecycle sem
 - [x] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules. (completed 2026-09-06)
 - [x] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics. (completed 2026-09-06)
 - [x] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path. (completed 2026-09-06)
-- [ ] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority.
+- [x] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority. (completed 2026-09-07)
 - [ ] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern.
 
 ## Phase Details
@@ -136,15 +136,15 @@ Plans:
 
 **Wave 1**
 
-- [ ] 24-01-PLAN.md — Extend the immutable diagnostic projection and implement strict-priority, conservative shadow validation.
+- [x] 24-01-PLAN.md — Extend the immutable diagnostic projection and implement strict-priority, conservative shadow validation.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 24-02-PLAN.md — Propagate candidate identity, priority, escaping, and candidate-sized budgets through adjacency, paths, and every output sink.
+- [x] 24-02-PLAN.md — Propagate candidate identity, priority, escaping, and candidate-sized budgets through adjacency, paths, and every output sink.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 24-03-PLAN.md — Lock pure/native diagnostic parity, source-origin cleanliness, and the living maintainer contract.
+- [x] 24-03-PLAN.md — Lock pure/native diagnostic parity, source-origin cleanliness, and the living maintainer contract.
 
 ### Phase 25: Performance, Artifact Proof & Drone Guidance
 
@@ -189,7 +189,7 @@ Plans:
 | 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
 | 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
-| 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
+| 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 3/3 | Complete    | 2026-09-07 |
 | 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 0/TBD | Not started | — |
 
 ---

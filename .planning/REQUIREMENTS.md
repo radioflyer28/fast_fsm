@@ -56,11 +56,11 @@ research synthesis.
 
 ### Diagnostics and Output
 
-- [ ] **DIAG-01**: Validation treats strictly ordered candidate groups as
+- [x] **DIAG-01**: Validation treats strictly ordered candidate groups as
   deterministic, rejects malformed ties, and reports provably shadowed lower
   candidates conservatively.
 
-- [ ] **DIAG-02**: JSON, Mermaid, PlantUML, Markdown, adjacency data, and
+- [x] **DIAG-02**: JSON, Mermaid, PlantUML, Markdown, adjacency data, and
   generated paths preserve candidate multiplicity and priority under existing
   escaping and budget contracts.
 
@@ -134,8 +134,8 @@ research synthesis.
 | PAR-01 | Phase 23 | Complete |
 | PAR-02 | Phase 23 | Complete |
 | PAR-03 | Phase 23 | Complete |
-| DIAG-01 | Phase 24 | Pending |
-| DIAG-02 | Phase 24 | Pending |
+| DIAG-01 | Phase 24 | Complete |
+| DIAG-02 | Phase 24 | Complete |
 | PERF-01 | Phase 25 | Pending |
 | PERF-02 | Phase 25 | Pending |
 | DOC-01 | Phase 25 | Pending |
