@@ -132,7 +132,19 @@ Plans:
   3. Diagnostic edge counts, work budgets, and generated paths count candidates rather than collapsed source/trigger pairs and retain explicit incomplete-result behavior when a budget is exhausted.
   4. All diagnostic consumers project from one immutable topology snapshot instead of depending on private singleton/group runtime storage.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+**Wave 1**
+
+- [ ] 24-01-PLAN.md — Extend the immutable diagnostic projection and implement strict-priority, conservative shadow validation.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 24-02-PLAN.md — Propagate candidate identity, priority, escaping, and candidate-sized budgets through adjacency, paths, and every output sink.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 24-03-PLAN.md — Lock pure/native diagnostic parity, source-origin cleanliness, and the living maintainer contract.
 
 ### Phase 25: Performance, Artifact Proof & Drone Guidance
 
