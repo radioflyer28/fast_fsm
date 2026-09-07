@@ -937,6 +937,176 @@ class TestConvenienceFunctions:
         with pytest.raises(TypeError):
             StateMachine.quick_build("initial", [], states=[invalid_state])
 
+    @staticmethod
+    def _candidate_fingerprint(machine: StateMachine) -> tuple[object, ...]:
+        """Return semantic candidate rows without comparing machine-local identities."""
+        rows: list[object] = []
+        for source_name, trigger_rows in machine._transitions.items():
+            for trigger, slot in trigger_rows.items():
+                entries = (
+                    slot.entries if isinstance(slot, _TransitionGroup) else (slot,)
+                )
+                rows.append(
+                    (
+                        source_name,
+                        trigger,
+                        tuple(
+                            (
+                                entry.to_state.name,
+                                entry.priority,
+                                entry.condition is not None,
+                            )
+                            for entry in entries
+                        ),
+                    )
+                )
+        return tuple(sorted(rows, key=repr))
+
+    def test_all_constructors_preserve_the_same_priority_candidate_fingerprint(self):
+        """Every adapter replays the registrar's ordered candidate topology."""
+        rows = [
+            ("go", "idle", "high", None, 4),
+            ("go", "idle", "low", None, -1),
+            ("finish", ["low", "high"], "done", None, 2),
+        ]
+
+        def direct_machine() -> StateMachine:
+            machine = StateMachine(State("idle"))
+            for name in ("low", "high", "done"):
+                machine.add_state(State(name))
+            for row in rows:
+                machine.add_transition(*row[:4], priority=row[4])
+            return machine
+
+        def batch_machine() -> StateMachine:
+            machine = StateMachine(State("idle"))
+            for name in ("low", "high", "done"):
+                machine.add_state(State(name))
+            machine.add_transitions(rows)
+            return machine
+
+        def builder_machine() -> StateMachine:
+            builder = FSMBuilder(State("idle"))
+            for name in ("low", "high", "done"):
+                builder.add_state(State(name))
+            for row in rows:
+                builder.add_transition(*row[:4], priority=row[4])
+            return builder.build()
+
+        class DeclarativeIdle(DeclarativeState):
+            @transition(
+                "finish", from_state=["low", "high"], to_state="done", priority=2
+            )
+            def finish(self, *args, **kwargs):
+                return True
+
+            @transition("go", from_state="idle", to_state="high", priority=4)
+            def high(self, *args, **kwargs):
+                return True
+
+            @transition("go", from_state="idle", to_state="low", priority=-1)
+            def low(self, *args, **kwargs):
+                return True
+
+        declarative_builder = FSMBuilder(DeclarativeIdle("idle"))
+        for name in ("low", "high", "done"):
+            declarative_builder.add_state(State(name))
+        for row in rows:
+            declarative_builder.add_transition(*row[:4], priority=row[4])
+        machines = (
+            direct_machine(),
+            batch_machine(),
+            builder_machine(),
+            StateMachine.quick_build("idle", rows),
+            quick_fsm("idle", rows),
+            declarative_builder.build(),
+            StateMachine.from_dict(
+                {
+                    "initial": "idle",
+                    "states": ["idle", "low", "high", "done"],
+                    "transitions": [
+                        {"trigger": "go", "from": "idle", "to": "high", "priority": 4},
+                        {"trigger": "go", "from": "idle", "to": "low", "priority": -1},
+                        {
+                            "trigger": "finish",
+                            "from": ["low", "high"],
+                            "to": "done",
+                            "priority": 2,
+                        },
+                    ],
+                }
+            ),
+        )
+
+        expected = self._candidate_fingerprint(machines[0])
+        assert all(
+            self._candidate_fingerprint(machine) == expected for machine in machines
+        )
+        assert machines[3].trigger("go").to_state == "low"
+
+    def test_quick_factories_keep_state_guard_and_priority_rows_in_one_batch(
+        self, monkeypatch
+    ):
+        """Quick construction transports 4/5-field rows without adapter policy."""
+        initial = State("initial")
+        middle = State("middle")
+        target = State("target")
+        guard = FuncCondition(lambda **kwargs: True)
+        rows = [("go", [initial, middle], target, guard, -3)]
+        calls: list[list[tuple[object, ...]]] = []
+        original = StateMachine.add_transitions
+
+        def record_batch(self, transitions):
+            calls.append(list(transitions))
+            return original(self, transitions)
+
+        monkeypatch.setattr(StateMachine, "add_transitions", record_batch)
+        machine = StateMachine.quick_build(initial, rows)
+
+        assert calls == [rows]
+        assert machine._states["initial"] is initial
+        assert machine._states["middle"] is middle
+        assert machine._states["target"] is target
+        slot = machine._transitions["initial"]["go"]
+        entry = slot.entries[0] if isinstance(slot, _TransitionGroup) else slot
+        assert entry.condition is guard
+        assert entry.priority == -3
+        assert machine.trigger("go").success
+
+    @pytest.mark.parametrize(
+        "bad_row, expected_error",
+        (
+            (("go", "initial", "target", None, True), TypeError),
+            (("go", "initial", "target", SimpleAsyncCondition()), TypeError),
+            (("go", "initial", "target", None, 0), ValueError),
+        ),
+    )
+    def test_quick_factory_late_failures_do_not_publish_a_prefix(
+        self, bad_row, expected_error
+    ):
+        """A complete batch rejects late invalid rows rather than committing a prefix."""
+        rows = [("go", "initial", "one", None, 0), bad_row]
+
+        with pytest.raises(expected_error):
+            StateMachine.quick_build("initial", rows)
+
+    def test_builder_tie_failure_stays_unpublished_and_is_repairable(self):
+        """Builder cache/staging survives a registrar conflict for explicit repair."""
+        builder = FSMBuilder(State("initial"))
+        builder.add_state(State("one")).add_state(State("two"))
+        builder.add_transition("go", "initial", "one", priority=0)
+        builder.add_transition("go", "initial", "two", priority=0)
+        before = builder_staging_fingerprint(builder)
+
+        with pytest.raises(ValueError, match="priority"):
+            builder.build()
+
+        assert builder._machine is None
+        assert builder_staging_fingerprint(builder) == before
+        builder._transitions[-1] = ("go", "initial", "two", None, 1)
+        repaired = builder.build()
+        assert repaired.trigger("go").to_state == "one"
+
 
 # ---------------------------------------------------------------------------
 # DeclarativeState gap coverage
