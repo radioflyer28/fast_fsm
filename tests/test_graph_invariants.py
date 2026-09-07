@@ -142,6 +142,46 @@ def test_graph_snapshot_flattens_candidate_groups_with_scalar_identity() -> None
         snapshot.transitions[0].condition_ref = "changed"
 
 
+def test_graph_snapshot_captures_only_narrow_static_unconditional_evidence() -> None:
+    """Snapshot proof is limited to an unguarded exact-base-State source."""
+
+    class PermissionSubclass(State):
+        def can_transition(self, **_: object) -> bool:
+            raise AssertionError("diagnostic snapshots must not call state permissions")
+
+    guard_calls = 0
+
+    def guarded(**_: object) -> bool:
+        nonlocal guard_calls
+        guard_calls += 1
+        raise AssertionError("diagnostic snapshots must not call guards")
+
+    source = State("source")
+    guarded_target = State("guarded")
+    plain_target = State("plain")
+    machine = StateMachine(source)
+    machine.add_state(guarded_target)
+    machine.add_state(plain_target)
+    machine.add_transition("go", source, guarded_target, condition=guarded, priority=1)
+    machine.add_transition("go", source, plain_target, priority=2)
+
+    subclass_source = PermissionSubclass("subclass")
+    subclass_target = State("subclass-target")
+    subclass_machine = StateMachine(subclass_source)
+    subclass_machine.add_state(subclass_target)
+    subclass_machine.add_transition("go", subclass_source, subclass_target, priority=0)
+
+    snapshot = machine._graph_snapshot()
+    subclass_snapshot = subclass_machine._graph_snapshot()
+
+    assert [row.priority for row in snapshot.transitions] == [1, 2]
+    assert [row.statically_unconditional for row in snapshot.transitions] == [False, True]
+    assert subclass_snapshot.transitions[0].statically_unconditional is False
+    assert guard_calls == 0
+    with pytest.raises((AttributeError, TypeError)):
+        snapshot.transitions[1].statically_unconditional = False
+
+
 def test_clone_shares_candidate_identity_but_not_candidate_tables() -> None:
     """Clones retain immutable entries/references while registrations isolate."""
     from fast_fsm import FuncCondition

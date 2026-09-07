@@ -128,6 +128,48 @@ class TestFSMValidator:
         assert "start" in v.events
         assert v.initial_state == "idle"
 
+    @pytest.mark.parametrize("same_target", [False, True])
+    def test_priority_candidates_remain_ordered_deterministic_and_single_captured(
+        self, monkeypatch, same_target: bool
+    ) -> None:
+        """A valid ordered group is one immutable validator projection."""
+
+        guard_calls = 0
+
+        def guarded(**_: object) -> bool:
+            nonlocal guard_calls
+            guard_calls += 1
+            raise AssertionError("validation must not execute transition guards")
+
+        source = State("source")
+        first_target = State("first")
+        second_target = first_target if same_target else State("second")
+        machine = StateMachine(source)
+        machine.add_state(first_target)
+        if second_target is not first_target:
+            machine.add_state(second_target)
+        machine.add_transition("go", source, first_target, condition=guarded, priority=1)
+        machine.add_transition("go", source, second_target, priority=5)
+
+        captures = 0
+        original_snapshot = StateMachine._graph_snapshot
+
+        def capture_snapshot(instance: StateMachine):
+            nonlocal captures
+            captures += 1
+            return original_snapshot(instance)
+
+        monkeypatch.setattr(StateMachine, "_graph_snapshot", capture_snapshot)
+        validator = FSMValidator(machine)
+        determinism = validator.check_determinism()
+
+        assert captures == 1
+        assert guard_calls == 0
+        assert [edge.priority for edge in validator._diagnostic_graph.edges] == [1, 5]
+        assert [edge.has_guard for edge in validator._diagnostic_graph.edges] == [True, False]
+        assert determinism["is_deterministic"] is True
+        assert determinism["non_deterministic_transitions"] == []
+
     def test_reachable_states_good_fsm(self, well_designed_fsm):
         v = FSMValidator(well_designed_fsm)
         reachable = v.get_reachable_states()
