@@ -226,7 +226,11 @@ class TestFSMValidator:
                 "from_state": "source",
                 "event": "go",
                 "to_state": "second" if reason != "boolean_priority" else "first",
-                "priority": priorities[1] if reason != "boolean_priority" else True,
+                "priority": (
+                    priorities[1]
+                    if reason in {"duplicate_priority", "descending_priority"}
+                    else None
+                ),
                 "reason": reason,
             }
         ]
@@ -239,6 +243,17 @@ class TestFSMValidator:
             )
         assert exhausted.value.status.complete is False
         assert exhausted.value.status.exhausted_stage == "determinism.candidate"
+
+        enhanced = EnhancedFSMValidator(machine)
+        enhanced._snapshot = invalid_snapshot
+        enhanced._diagnostic_graph = _graph_from_snapshot(invalid_snapshot)
+        enhanced.issues.clear()
+        enhanced._analyze_determinism()
+        priority_issues = [
+            issue for issue in enhanced.issues if issue.category == "determinism"
+        ]
+        assert [issue.severity for issue in priority_issues] == ["error"]
+        assert "priority" in priority_issues[0].recommendation.lower()
 
     def test_candidate_shadow_certainty_and_enhanced_issue_severity_are_conservative(
         self,

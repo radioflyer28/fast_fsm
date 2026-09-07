@@ -13,7 +13,7 @@ without adding overhead to the core FSM classes. Includes:
 """
 
 from dataclasses import asdict
-from typing import Dict, Set, List, Tuple, Optional, Any, Callable
+from typing import Dict, Set, List, Tuple, Optional, Any, Callable, cast
 from collections import defaultdict, deque
 import json
 from .core import StateMachine
@@ -404,42 +404,120 @@ class FSMValidator:
         """
         budget = self._operation_budget(limits)
         non_deterministic: List[Tuple[str, str]] = []
+        priority_errors: List[Dict[str, Any]] = []
+        provably_shadowed_candidates: List[Dict[str, int | str]] = []
+        possibly_shadowed_candidates: List[Dict[str, int | str]] = []
         group_key: Tuple[int, str] | None = None
         previous_priority: int | None = None
         group_is_malformed = False
+        group_proved_shadows: List[Dict[str, int | str]] = []
+        group_possible_shadows: List[Dict[str, int | str]] = []
+        proved_shadowing_priority: int | None = None
+        possible_shadowing_priority: int | None = None
+
+        def complete_group() -> None:
+            if group_key is None:
+                return
+            if group_is_malformed:
+                budget.reserve_result(stage="determinism.result")
+                non_deterministic.append(
+                    (self._diagnostic_graph.state_names[group_key[0]], group_key[1])
+                )
+                return
+            for candidate in group_proved_shadows:
+                budget.reserve_result(stage="determinism.proved-shadow")
+                provably_shadowed_candidates.append(candidate)
+            for candidate in group_possible_shadows:
+                budget.reserve_result(stage="determinism.possible-shadow")
+                possibly_shadowed_candidates.append(candidate)
 
         for edge in self._diagnostic_graph.edges:
             current_key = (edge.from_index, edge.trigger)
             if current_key != group_key:
-                if group_key is not None and group_is_malformed:
-                    budget.reserve_result(stage="determinism.result")
-                    non_deterministic.append(
-                        (self._diagnostic_graph.state_names[group_key[0]], group_key[1])
-                    )
+                complete_group()
                 group_key = current_key
                 previous_priority = None
                 group_is_malformed = False
+                group_proved_shadows = []
+                group_possible_shadows = []
+                proved_shadowing_priority = None
+                possible_shadowing_priority = None
 
             budget.reserve_work(stage="determinism.candidate")
             priority: object = edge.priority
+            reason: str | None = None
             if type(priority) is not int:
+                reason = (
+                    "boolean_priority"
+                    if type(priority) is bool
+                    else "non_integer_priority"
+                )
+            elif previous_priority is not None:
+                if priority == previous_priority:
+                    reason = "duplicate_priority"
+                elif priority < previous_priority:
+                    reason = "descending_priority"
+
+            if reason is not None:
                 group_is_malformed = True
                 previous_priority = None
-            elif previous_priority is not None and priority <= previous_priority:
-                group_is_malformed = True
-                previous_priority = priority
-            else:
-                previous_priority = priority
+                budget.reserve_result(stage="determinism.priority-error")
+                priority_errors.append(
+                    {
+                        "from_state": self._diagnostic_graph.state_names[
+                            edge.from_index
+                        ],
+                        "event": edge.trigger,
+                        "to_state": self._diagnostic_graph.state_names[edge.to_index],
+                        "priority": (
+                            cast(int, priority) if type(priority) is int else None
+                        ),
+                        "reason": reason,
+                    }
+                )
+                continue
 
-        if group_key is not None and group_is_malformed:
-            budget.reserve_result(stage="determinism.result")
-            non_deterministic.append(
-                (self._diagnostic_graph.state_names[group_key[0]], group_key[1])
-            )
+            exact_priority = cast(int, priority)
+            if proved_shadowing_priority is not None:
+                group_proved_shadows.append(
+                    {
+                        "from_state": self._diagnostic_graph.state_names[
+                            edge.from_index
+                        ],
+                        "event": edge.trigger,
+                        "to_state": self._diagnostic_graph.state_names[edge.to_index],
+                        "priority": exact_priority,
+                        "shadowing_priority": proved_shadowing_priority,
+                    }
+                )
+            elif possible_shadowing_priority is not None:
+                group_possible_shadows.append(
+                    {
+                        "from_state": self._diagnostic_graph.state_names[
+                            edge.from_index
+                        ],
+                        "event": edge.trigger,
+                        "to_state": self._diagnostic_graph.state_names[edge.to_index],
+                        "priority": exact_priority,
+                        "shadowing_priority": possible_shadowing_priority,
+                    }
+                )
+
+            if edge.statically_unconditional:
+                if proved_shadowing_priority is None:
+                    proved_shadowing_priority = exact_priority
+            elif not edge.has_guard and possible_shadowing_priority is None:
+                possible_shadowing_priority = exact_priority
+            previous_priority = exact_priority
+
+        complete_group()
 
         return {
             "is_deterministic": len(non_deterministic) == 0,
             "non_deterministic_transitions": non_deterministic,
+            "priority_errors": priority_errors,
+            "provably_shadowed_candidates": provably_shadowed_candidates,
+            "possibly_shadowed_candidates": possibly_shadowed_candidates,
         }
 
     def find_cycles(self, *, limits: DiagnosticLimits | None = None) -> List[List[str]]:
@@ -792,17 +870,46 @@ class EnhancedFSMValidator(FSMValidator):
         """Enhanced determinism analysis"""
         determinism = self.check_determinism()
 
-        for state, event in determinism[
-            "non_deterministic_transitions"
-        ]:  # pragma: no cover
-            targets = list(self.transitions[state][event])
+        for error in determinism["priority_errors"]:
+            self.issues.append(
+                ValidationIssue(
+                    "error",
+                    "determinism",
+                    "Invalid candidate priority topology: " + error["reason"],
+                    location=f"{error['from_state']}.{error['event']}",
+                    recommendation=(
+                        "Use an exact integer priority per candidate; priorities "
+                        "must be unique and strictly increasing"
+                    ),
+                )
+            )
+
+        for candidate in determinism["provably_shadowed_candidates"]:
+            self.issues.append(
+                ValidationIssue(
+                    "warning",
+                    "determinism",
+                    "Candidate is provably shadowed by a lower-priority "
+                    "unconditional transition",
+                    location=f"{candidate['from_state']}.{candidate['event']}",
+                    recommendation=(
+                        "Remove the unreachable candidate or revise the "
+                        "higher-priority transition"
+                    ),
+                )
+            )
+
+        for candidate in determinism["possibly_shadowed_candidates"]:
             self.issues.append(
                 ValidationIssue(
                     "info",
                     "determinism",
-                    f"Non-deterministic transition: {state} --[{event}]--> {targets}",
-                    location=f"{state}.{event}",
-                    recommendation="Consider using conditions to make transitions deterministic",
+                    "Candidate may be shadowed by an earlier unguarded transition",
+                    location=f"{candidate['from_state']}.{candidate['event']}",
+                    recommendation=(
+                        "Review source-state permission behavior before removing "
+                        "the later candidate"
+                    ),
                 )
             )
 
