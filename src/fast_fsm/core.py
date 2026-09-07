@@ -630,6 +630,28 @@ class TransitionEntry:
         self.condition_ref: Optional[str] = condition_ref
 
 
+_TransitionRow = Union[
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+    ],
+]
+
+
 @dataclass(frozen=True, slots=True)
 class _TransitionGroup:
     """Private immutable, ascending-priority candidates for one slot."""
@@ -998,13 +1020,7 @@ class StateMachine:
     def quick_build(
         cls,
         initial_state: Union[str, State],
-        transitions: Sequence[
-            Tuple[
-                str,
-                Union[str, State, List[Union[str, State]]],
-                Union[str, State],
-            ]
-        ],
+        transitions: Sequence[_TransitionRow],
         states: Optional[List[Union[str, State]]] = None,
         name: str = "FSM",
     ) -> "StateMachine":
@@ -1013,9 +1029,9 @@ class StateMachine:
 
         Args:
             initial_state: Initial state name or State object
-            transitions: List of (trigger, from_state, to_state) tuples. State
-                endpoints may be strings or State objects; from_state may also
-                be a list of either form.
+            transitions: 3-, 4-, or 5-field transition rows accepted by
+                :meth:`add_transitions`. State endpoints may be strings or State
+                objects; from_state may also be a list of either form.
             states: Optional additional states to add
             name: Name for the state machine
 
@@ -1063,7 +1079,11 @@ class StateMachine:
         else:
             register_supplied_state(initial_state)
 
-        for trigger, from_state, to_state in transitions:
+        transition_rows = list(transitions)
+        for entry in transition_rows:
+            if len(entry) not in (3, 4, 5):
+                raise ValueError("each transition entry must contain 3, 4, or 5 items")
+            trigger, from_state, to_state = entry[:3]
             if isinstance(from_state, list):
                 for source_state in from_state:
                     collect_state(source_state)
@@ -1106,9 +1126,9 @@ class StateMachine:
             if state_obj is not initial_obj:
                 fsm.add_state(state_obj)
 
-        # Add transitions
-        for trigger, from_state, to_state in transitions:
-            fsm.add_transition(trigger, from_state, to_state)
+        # Replay the full adapter input through the one canonical registrar.
+        # The candidate remains local until its complete topology validates.
+        fsm.add_transitions(transition_rows)
 
         return fsm
 
@@ -1757,26 +1777,7 @@ class StateMachine:
 
     def add_transitions(
         self,
-        transitions: List[
-            Union[
-                Tuple[
-                    str, Union[str, State, List[Union[str, State]]], Union[str, State]
-                ],
-                Tuple[
-                    str,
-                    Union[str, State, List[Union[str, State]]],
-                    Union[str, State],
-                    Optional[Union[Condition, GuardCallable]],
-                ],
-                Tuple[
-                    str,
-                    Union[str, State, List[Union[str, State]]],
-                    Union[str, State],
-                    Optional[Union[Condition, GuardCallable]],
-                    object,
-                ],
-            ]
-        ],
+        transitions: List[_TransitionRow],
     ) -> None:
         """
         Add multiple transitions at once.
@@ -1809,26 +1810,7 @@ class StateMachine:
 
     def _add_transitions_owned(
         self,
-        transitions: List[
-            Union[
-                Tuple[
-                    str, Union[str, State, List[Union[str, State]]], Union[str, State]
-                ],
-                Tuple[
-                    str,
-                    Union[str, State, List[Union[str, State]]],
-                    Union[str, State],
-                    Optional[Union[Condition, GuardCallable]],
-                ],
-                Tuple[
-                    str,
-                    Union[str, State, List[Union[str, State]]],
-                    Union[str, State],
-                    Optional[Union[Condition, GuardCallable]],
-                    object,
-                ],
-            ]
-        ],
+        transitions: List[_TransitionRow],
     ) -> None:
         """Validate and commit a complete batch while the caller owns it."""
         prepared: List[_PreparedTransition] = []
@@ -5886,14 +5868,15 @@ def simple_fsm(
 
 
 def quick_fsm(
-    initial_state: str, transitions: List[Tuple[str, str, str]], name: str = "FSM"
+    initial_state: str, transitions: List[_TransitionRow], name: str = "FSM"
 ) -> StateMachine:
     """
     Quickly create an FSM from a transition list.
 
     Args:
         initial_state: Initial state name
-        transitions: List of (trigger, from_state, to_state) tuples
+        transitions: List of 3-, 4-, or 5-field transition rows accepted by
+            :meth:`StateMachine.add_transitions`
         name: FSM name
 
     Returns:
