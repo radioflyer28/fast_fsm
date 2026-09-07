@@ -6005,7 +6005,10 @@ def _write_release_baseline_guarded(
     try:
         _validate_release_baseline_refresh(snapshot, manifest)
     except EvidenceError:
-        assert baseline_path.read_bytes() == original_bytes
+        if baseline_path.read_bytes() != original_bytes:
+            raise EvidenceError(
+                "Release baseline bytes changed during rejected refresh validation."
+            )
         raise
     _write_manifest(baseline_path, manifest)
     return dict(manifest)
