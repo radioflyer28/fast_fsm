@@ -22,9 +22,9 @@ environment-labeled benchmark observations are recorded in the tracked
 Regenerate or verify that evidence with the commands in the developer testing
 guide; do not treat a historical local benchmark as a universal result.
 
-## v0.3.0 Installed-Artifact Release Proof
+## v0.4.0 Installed-Artifact Release Proof
 
-v0.3.0 requires a complete installed-artifact proof matrix: pure, compiled, and
+v0.4.0 requires a complete installed-artifact proof matrix: pure, compiled, and
 source-derived artifacts must be verified from fresh environments before a
 release can be authorized. The local matrix is an explicitly non-authorizing
 projection for development; only the complete hosted release matrix can

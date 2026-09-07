@@ -1,11 +1,11 @@
-name: Release v0.3.0
+name: Release v0.4.0
 
 # This is deliberately the only workflow that can publish. Evidence collection
 # lives in release-evidence.yml, which is callable/manual but read-only.
 on:
   push:
     tags:
-      - "v0.3.0"
+      - "v0.4.0"
 
 permissions:
   contents: read
@@ -16,10 +16,10 @@ jobs:
     uses: ./.github/workflows/release-evidence.yml
     with:
       ref: ${{ github.ref }}
-      tag: v0.3.0
+      tag: v0.4.0
 
   tag_identity:
-    name: Bind v0.3.0 tag to accepted aggregate
+    name: Bind v0.4.0 tag to accepted aggregate
     needs: [release_evidence]
     runs-on: ubuntu-latest
     env:
@@ -44,7 +44,7 @@ jobs:
           # aggregate_conclusion is the reusable terminal aggregate output.
           test "$AGGREGATE_CONCLUSION" = success
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$(git rev-parse v0.3.0^{})" = "$HEAD_SHA"
+          test "$(git rev-parse v0.4.0^{})" = "$HEAD_SHA"
           uv sync --locked --all-groups
           uv run python - <<'PY'
           import json
@@ -59,13 +59,13 @@ jobs:
           if aggregate.get("release_identity", {}).get("commit") != os.environ["HEAD_SHA"]:
               raise SystemExit("aggregate commit differs from resolved checkout")
           Path("installed-identity.json").write_text(
-              '{"distribution_version":"0.3.0","package_version":"0.3.0"}',
+              '{"distribution_version":"0.4.0","package_version":"0.4.0"}',
               encoding="utf-8",
           )
           PY
           uv run python tools/release_evidence.py verify-release-identity \
             --installed-identity installed-identity.json \
-            --aggregate evidence/release-manifest.json --tag-ref v0.3.0 --json
+            --aggregate evidence/release-manifest.json --tag-ref v0.4.0 --json
 
   github_release:
     name: Create GitHub Release

@@ -75,7 +75,7 @@ jobs:
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
   static_identity:
-    name: Static v0.3.0 identity
+    name: Static v0.4.0 identity
     needs: resolve_ref
     runs-on: ubuntu-latest
     env:
@@ -107,12 +107,12 @@ jobs:
 
           head_sha = os.environ["HEAD_SHA"]
           installed = {
-              "distribution_version": "0.3.0",
+              "distribution_version": "0.4.0",
               "package_version": __version__,
           }
           aggregate = {
               "package": "fast_fsm",
-              "distribution_version": "0.3.0",
+              "distribution_version": "0.4.0",
               "commit": head_sha,
               "tag": "unreleased",
               "suite_sha256": _suite_sha256(),
@@ -338,7 +338,7 @@ jobs:
               "artifact": release_evidence.matrix_artifact_evidence(artifact),
               "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": raw["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
+              "provenance": {"release_version": "0.4.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": None,
               "parent_sdist": None,
@@ -470,7 +470,7 @@ jobs:
               "artifact": release_evidence.matrix_artifact_evidence(artifact),
               "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": raw["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
+              "provenance": {"release_version": "0.4.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": raw["performance"],
               "parent_sdist": None,
@@ -601,7 +601,7 @@ jobs:
               "artifact": release_evidence.matrix_artifact_evidence(artifact),
               "runtime": release_evidence.matrix_runtime_evidence(runtime),
               "conformance": child["conformance"],
-              "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
+              "provenance": {"release_version": "0.4.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
               "origin_verified": True,
               "performance": child["performance"] if mode == "compiled" else None,
               "parent_sdist": {"filename": archive["filename"], "sha256": archive["sha256"]},
@@ -626,7 +626,7 @@ jobs:
                   "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "wheel_tags": [], "classified_mode": "sdist", "build_intent": "sdist"},
                   "runtime": None,
                   "conformance": None,
-                  "provenance": {"release_version": "0.3.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
+                  "provenance": {"release_version": "0.4.0", "commit": os.environ["HEAD_SHA"], "tag": os.environ["EVIDENCE_TAG"]},
                   "origin_verified": False,
                   "performance": None,
                   "parent_sdist": None,

@@ -136,7 +136,7 @@ def _write_wheel(
     filename_tag: str,
     wheel_tags: Iterable[str],
     native_members: Iterable[str] = (),
-    version: str = "0.3.0",
+    version: str = "0.4.0",
     filename_name: str = "fast_fsm",
     dist_info_name: str = "fast_fsm",
     dist_info_version: str | None = None,
@@ -252,7 +252,7 @@ def test_private_artifact_snapshot_survives_caller_path_replacement(
     tmp_path: Path,
 ) -> None:
     """The install candidate is a private descriptor-derived copy, never the source path."""
-    original = tmp_path / "fast_fsm-0.3.0-py3-none-any.whl"
+    original = tmp_path / "fast_fsm-0.4.0-py3-none-any.whl"
     original.write_bytes(b"reviewed-bytes")
 
     snapshot, digest = release_evidence._snapshot_artifact(
@@ -322,8 +322,8 @@ def test_installed_command_timeout_kills_pipe_holding_descendants(
 CANONICAL_V023_CORRECTION = (
     "Version 0.2.3 was shipped with defective 0.2.2 package metadata. "
     "It remains a shipped release: the existing v0.2.3 tag and published "
-    "artifacts are immutable and unchanged. Corrected metadata will be "
-    "published in v0.3.0."
+    "artifacts are immutable and unchanged. Corrected metadata is published "
+    "in v0.4.0."
 )
 
 
@@ -503,7 +503,7 @@ def test_verify_wheel_classifies_universal_wheel_without_native_members(
     assert artifact["filename_tags"] == ["py3-none-any"]
     assert artifact["wheel_tags"] == ["py3-none-any"]
     assert artifact["native_members"] == []
-    assert artifact["metadata_version"] == "0.3.0"
+    assert artifact["metadata_version"] == "0.4.0"
 
 
 @pytest.mark.parametrize(
@@ -2341,7 +2341,7 @@ def test_manifest_records_source_conformance_via_shared_contract(
         source_root=ROOT / "src",
         source={
             "core_origin": "src/fast_fsm/core.py",
-            "distribution_version": "0.3.0",
+            "distribution_version": "0.4.0",
         },
         environment={},
         wheel_paths=(),
@@ -3105,7 +3105,7 @@ def test_clean_workflow_jobs_sync_then_immediately_preflight_in_pure_mode() -> N
 def test_release_workflow_is_tag_only_evidence_caller() -> None:
     """The write-capable caller builds nothing and delegates all proof read-only."""
     workflow = _workflow_text(RELEASE_WORKFLOW)
-    assert 'tags:\n      - "v0.3.0"' in workflow
+    assert 'tags:\n      - "v0.4.0"' in workflow
     assert "workflow_dispatch:" not in workflow
     assert "workflow_call:" not in workflow
     assert "uses: ./.github/workflows/release-evidence.yml" in workflow
@@ -3404,7 +3404,7 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
     text = _workflow_text(RELEASE_WORKFLOW)
     assert "workflow_dispatch:" not in text
     assert "workflow_call:" not in text
-    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\.3\.0\"", text)
+    assert re.search(r"push:\s*\n\s+tags:\s*\n\s+- \"v0\.4\.0\"", text)
     assert workflow.get("permissions") == {"contents": "read"}
     assert set(jobs) == {"release_evidence", "tag_identity", "github_release"}
 
@@ -3413,7 +3413,7 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
     inputs = evidence.get("with")
     assert isinstance(inputs, dict)
     assert inputs.get("ref") == "${{ github.ref }}"
-    assert inputs.get("tag") == "v0.3.0"
+    assert inputs.get("tag") == "v0.4.0"
     assert "permissions" not in evidence
 
     tag_identity = jobs["tag_identity"]
@@ -3429,9 +3429,9 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     )
     assert "verify-release-identity" in tag_runs
-    assert "--tag-ref v0.3.0" in tag_runs
+    assert "--tag-ref v0.4.0" in tag_runs
     assert "aggregate_conclusion" in tag_runs
-    assert "git rev-parse v0.3.0^{}" in tag_runs
+    assert "git rev-parse v0.4.0^{}" in tag_runs
 
     release = jobs["github_release"]
     assert _workflow_needs(release) == {"release_evidence", "tag_identity"}
@@ -3501,9 +3501,9 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
 
 def _release_asset_aggregate(payloads: Mapping[str, bytes]) -> dict[str, object]:
     """Build a minimal aggregate fixture with direct, archive, and derived records."""
-    direct_name = "fast_fsm-0.3.0-py3-none-any.whl"
-    archive_name = "fast_fsm-0.3.0.tar.gz"
-    child_name = "fast_fsm-0.3.0-derived.whl"
+    direct_name = "fast_fsm-0.4.0-py3-none-any.whl"
+    archive_name = "fast_fsm-0.4.0.tar.gz"
+    child_name = "fast_fsm-0.4.0-derived.whl"
     return {
         "profile": "release",
         "authorizes_release": True,
@@ -3538,15 +3538,15 @@ def test_stage_release_assets_publishes_only_direct_and_sdist_archive(
 ) -> None:
     """The allowlist includes the source archive but excludes derived sdist children."""
     payloads = {
-        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
-        "fast_fsm-0.3.0.tar.gz": b"source-archive",
-        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+        "fast_fsm-0.4.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.4.0.tar.gz": b"source-archive",
+        "fast_fsm-0.4.0-derived.whl": b"derived-wheel",
     }
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()
     for filename in (
-        "fast_fsm-0.3.0-py3-none-any.whl",
-        "fast_fsm-0.3.0.tar.gz",
+        "fast_fsm-0.4.0-py3-none-any.whl",
+        "fast_fsm-0.4.0.tar.gz",
     ):
         (downloaded / filename).write_bytes(payloads[filename])
 
@@ -3557,8 +3557,8 @@ def test_stage_release_assets_publishes_only_direct_and_sdist_archive(
     )
 
     assert staged == (
-        "fast_fsm-0.3.0-py3-none-any.whl",
-        "fast_fsm-0.3.0.tar.gz",
+        "fast_fsm-0.4.0-py3-none-any.whl",
+        "fast_fsm-0.4.0.tar.gz",
     )
     assert sorted(path.name for path in (tmp_path / "staging").iterdir()) == list(
         staged
@@ -3579,29 +3579,29 @@ def test_stage_release_assets_rejects_unapproved_or_substituted_downloads(
 ) -> None:
     """Extra, altered, linked, or derived bytes never reach the publish staging dir."""
     payloads = {
-        "fast_fsm-0.3.0-py3-none-any.whl": b"pure-wheel",
-        "fast_fsm-0.3.0.tar.gz": b"source-archive",
-        "fast_fsm-0.3.0-derived.whl": b"derived-wheel",
+        "fast_fsm-0.4.0-py3-none-any.whl": b"pure-wheel",
+        "fast_fsm-0.4.0.tar.gz": b"source-archive",
+        "fast_fsm-0.4.0-derived.whl": b"derived-wheel",
     }
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()
     for filename in (
-        "fast_fsm-0.3.0-py3-none-any.whl",
-        "fast_fsm-0.3.0.tar.gz",
+        "fast_fsm-0.4.0-py3-none-any.whl",
+        "fast_fsm-0.4.0.tar.gz",
     ):
         (downloaded / filename).write_bytes(payloads[filename])
     if mutation == "extra":
         (downloaded / "unexpected.bin").write_bytes(b"extra")
     elif mutation == "altered-sdist":
-        (downloaded / "fast_fsm-0.3.0.tar.gz").write_bytes(b"substituted")
+        (downloaded / "fast_fsm-0.4.0.tar.gz").write_bytes(b"substituted")
     elif mutation == "symlink":
         target = downloaded / "target.whl"
-        target.write_bytes(payloads["fast_fsm-0.3.0-py3-none-any.whl"])
-        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").unlink()
-        (downloaded / "fast_fsm-0.3.0-py3-none-any.whl").symlink_to(target.name)
+        target.write_bytes(payloads["fast_fsm-0.4.0-py3-none-any.whl"])
+        (downloaded / "fast_fsm-0.4.0-py3-none-any.whl").unlink()
+        (downloaded / "fast_fsm-0.4.0-py3-none-any.whl").symlink_to(target.name)
     else:
-        (downloaded / "fast_fsm-0.3.0-derived.whl").write_bytes(
-            payloads["fast_fsm-0.3.0-derived.whl"]
+        (downloaded / "fast_fsm-0.4.0-derived.whl").write_bytes(
+            payloads["fast_fsm-0.4.0-derived.whl"]
         )
 
     with pytest.raises(EvidenceError, match=expected):
@@ -3643,7 +3643,7 @@ def test_tag_release_workflow_rejects_needs_permission_and_condition_bypasses() 
         _validate_tag_release_workflow(local_input)
 
 
-def test_ci_keeps_static_v030_identity_as_an_ordinary_non_tag_gate() -> None:
+def test_ci_keeps_static_v040_identity_as_an_ordinary_non_tag_gate() -> None:
     """Pull-request CI validates release identity without needing a tag or release call."""
     ci = _workflow_data(CI_WORKFLOW)
     jobs = _workflow_jobs(ci)
@@ -4015,15 +4015,15 @@ def _matrix_artifact_name(cell: object) -> str:
     """Return a stable filename fixture while sharing universal artifact identities."""
     assert isinstance(cell, release_evidence.MatrixCell)
     if cell.identifier == "sdist-archive":
-        return "fast_fsm-0.3.0.tar.gz"
+        return "fast_fsm-0.4.0.tar.gz"
     if cell.identifier.startswith("sdist-pure-"):
         build = f"1sdist{cell.cpython_minor.replace('.', '')}{cell.os}{cell.machine}"
-        return f"fast_fsm-0.3.0-{build}-py3-none-any.whl"
+        return f"fast_fsm-0.4.0-{build}-py3-none-any.whl"
     if cell.identifier.startswith("pure-wheel-"):
-        return "fast_fsm-0.3.0-py3-none-any.whl"
+        return "fast_fsm-0.4.0-py3-none-any.whl"
     if "universal2" in cell.identifier:
         minor = cell.cpython_minor.replace(".", "")
-        return f"fast_fsm-0.3.0-cp{minor}-cp{minor}-macosx_10_15_universal2.whl"
+        return f"fast_fsm-0.4.0-cp{minor}-cp{minor}-macosx_10_15_universal2.whl"
     minor = cell.cpython_minor.replace(".", "")
     platform_tag = {
         ("linux", "x86_64"): "manylinux_2_17_x86_64",
@@ -4033,7 +4033,7 @@ def _matrix_artifact_name(cell: object) -> str:
         ("windows", "amd64"): "win_amd64",
     }[(cell.os, cell.machine)]
     build_tag = "-1sdist" if cell.identifier.startswith("sdist-") else ""
-    return f"fast_fsm-0.3.0{build_tag}-cp{minor}-cp{minor}-{platform_tag}.whl"
+    return f"fast_fsm-0.4.0{build_tag}-cp{minor}-cp{minor}-{platform_tag}.whl"
 
 
 def _matrix_core_origin(cell: object) -> str:
@@ -4102,8 +4102,8 @@ def _matrix_record(
             "python_version": f"{cell.cpython_minor}.1",
             "platform": runtime_platform,
             "machine": runtime_machine,
-            "distribution_version": "0.3.0",
-            "package_version": "0.3.0",
+            "distribution_version": "0.4.0",
+            "package_version": "0.4.0",
             "package_origin": _matrix_package_origin(cell),
             "core_origin": _matrix_core_origin(cell),
             "core_loader": (
@@ -4116,7 +4116,7 @@ def _matrix_record(
         if cell.identifier == "sdist-archive"
         else deepcopy(conformance),
         "provenance": {
-            "release_version": "0.3.0",
+            "release_version": "0.4.0",
             "commit": "a" * 40,
             "tag": "unreleased",
         },
@@ -4149,8 +4149,8 @@ def _matrix_record(
         "parent_sdist": None
         if cell.sdist_parent is None
         else {
-            "filename": "fast_fsm-0.3.0.tar.gz",
-            "sha256": hashlib.sha256(b"fast_fsm-0.3.0.tar.gz").hexdigest(),
+            "filename": "fast_fsm-0.4.0.tar.gz",
+            "sha256": hashlib.sha256(b"fast_fsm-0.4.0.tar.gz").hexdigest(),
         },
     }
     return record
@@ -4207,8 +4207,8 @@ def test_matrix_evidence_normalizes_fresh_environment_provenance() -> None:
         "python_version": "3.12.1",
         "platform": "macos",
         "machine": "arm64",
-        "distribution_version": "0.3.0",
-        "package_version": "0.3.0",
+        "distribution_version": "0.4.0",
+        "package_version": "0.4.0",
         "package_origin": "/private/tmp/one/site-packages/fast_fsm/__init__.py",
         "core_origin": "/private/tmp/one/site-packages/fast_fsm/core.abi3.so",
         "core_loader": "ExtensionFileLoader",
@@ -4275,7 +4275,7 @@ def test_aggregate_matrix_records_accepts_complete_release_performance_proof() -
 def test_aggregate_matrix_accepts_reproducible_sdist_pure_wheel_reuse() -> None:
     """Equivalent pure wheels from one sdist may share bytes across derivations."""
     records = _complete_matrix_records("release")
-    filename = "fast_fsm-0.3.0-py3-none-any.whl"
+    filename = "fast_fsm-0.4.0-py3-none-any.whl"
     digest = hashlib.sha256(b"reproducible-sdist-pure-wheel").hexdigest()
     tags = _matrix_wheel_tags(filename)
     for record in records:
@@ -4413,12 +4413,12 @@ def test_matrix_record_reader_rejects_ambiguous_or_malformed_json(
 
 
 def _phase20_baseline_static_fixture() -> dict[str, object]:
-    """Return the generator's static v0.3.0 baseline envelope without measurements."""
+    """Return the generator's static v0.4.0 baseline envelope without measurements."""
     return {
         "schema_version": 2,
         "release_identity": {
             "package": "fast_fsm",
-            "distribution_version": "0.3.0",
+            "distribution_version": "0.4.0",
         },
         "matrix_profile": {
             "profile": "local",
@@ -4450,23 +4450,23 @@ def _phase20_baseline_static_fixture() -> dict[str, object]:
 def _write_release_identity_fixture(
     root: Path, *, changelog_date: str = "UNRELEASED"
 ) -> None:
-    """Create complete v0.3.0 static surfaces without creating a Git tag."""
+    """Create complete v0.4.0 static surfaces without creating a Git tag."""
     (root / "docs").mkdir()
     (root / "evidence").mkdir()
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "fast_fsm"\nversion = "0.3.0"\n',
+        '[project]\nname = "fast_fsm"\nversion = "0.4.0"\n',
         encoding="utf-8",
     )
     (root / "docs" / "conf.py").write_text(
-        'project = "Fast FSM"\nversion = "0.3"\nrelease = "0.3.0"\n',
+        'project = "Fast FSM"\nversion = "0.4"\nrelease = "0.4.0"\n',
         encoding="utf-8",
     )
     (root / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## [0.3.0] — {changelog_date}\n\nRelease proof.\n",
+        f"# Changelog\n\n## [0.4.0] — {changelog_date}\n\nRelease proof.\n",
         encoding="utf-8",
     )
     (root / "README.md").write_text(
-        "Fast FSM v0.3.0 provides installed-artifact release proof. "
+        "Fast FSM v0.4.0 provides installed-artifact release proof. "
         "SHA-256 binds exact bytes, not publisher authenticity.\n",
         encoding="utf-8",
     )
@@ -4516,10 +4516,10 @@ def test_phase20_baseline_static_contract_rejects_stale_identity_and_schema(
 def _identity_inputs() -> tuple[dict[str, str], dict[str, str]]:
     """Return installed and aggregate values that bind one static identity."""
     return (
-        {"distribution_version": "0.3.0", "package_version": "0.3.0"},
+        {"distribution_version": "0.4.0", "package_version": "0.4.0"},
         {
             "package": "fast_fsm",
-            "distribution_version": "0.3.0",
+            "distribution_version": "0.4.0",
             "commit": "a" * 40,
             "tag": "unreleased",
             "suite_sha256": "b" * 64,
@@ -4527,8 +4527,8 @@ def _identity_inputs() -> tuple[dict[str, str], dict[str, str]]:
     )
 
 
-def test_static_release_identity_requires_every_v030_surface(tmp_path: Path) -> None:
-    """PR-time validation accepts v0.3.0 without assuming its public tag exists."""
+def test_static_release_identity_requires_every_v040_surface(tmp_path: Path) -> None:
+    """PR-time validation accepts v0.4.0 without assuming its public tag exists."""
     _write_release_identity_fixture(tmp_path)
     installed, aggregate = _identity_inputs()
 
@@ -4539,7 +4539,7 @@ def test_static_release_identity_requires_every_v030_surface(tmp_path: Path) -> 
         checked_out_commit="a" * 40,
     )
 
-    assert identity["version"] == "0.3.0"
+    assert identity["version"] == "0.4.0"
     assert identity["tag_status"] == "not-required"
     assert identity["changelog_status"] == "unreleased"
 
@@ -4553,13 +4553,31 @@ def test_static_release_identity_requires_every_v030_surface(tmp_path: Path) -> 
         )
 
 
+def test_static_release_identity_accepts_dated_pre_tag_candidate(
+    tmp_path: Path,
+) -> None:
+    """Hosted pre-tag evidence can verify the same dated commit later tagged."""
+    _write_release_identity_fixture(tmp_path, changelog_date="2026-09-07")
+    installed, aggregate = _identity_inputs()
+
+    identity = release_evidence.validate_release_identity(
+        repository_root=tmp_path,
+        installed_identity=installed,
+        aggregate_identity=aggregate,
+        checked_out_commit="a" * 40,
+    )
+
+    assert identity["tag_status"] == "not-required"
+    assert identity["changelog_status"] == "dated"
+
+
 def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Tag mode compares an already-created tag; it never creates or moves one."""
     _write_release_identity_fixture(tmp_path, changelog_date="2026-09-05")
     installed, aggregate = _identity_inputs()
-    aggregate["tag"] = "v0.3.0"
+    aggregate["tag"] = "v0.4.0"
     monkeypatch.setattr(
         release_evidence,
         "_peeled_release_tag_commit",
@@ -4571,7 +4589,7 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
         installed_identity=installed,
         aggregate_identity=aggregate,
         checked_out_commit="a" * 40,
-        tag_ref="v0.3.0",
+        tag_ref="v0.4.0",
     )
 
     assert identity["tag_status"] == "verified"
@@ -4587,7 +4605,7 @@ def test_tag_identity_is_non_mutating_and_requires_the_peeled_verified_commit(
             installed_identity=installed,
             aggregate_identity=aggregate,
             checked_out_commit="a" * 40,
-            tag_ref="v0.3.0",
+            tag_ref="v0.4.0",
         )
 
 

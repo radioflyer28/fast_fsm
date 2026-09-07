@@ -86,7 +86,7 @@ task release-history-check
 Version 0.2.3 shipped with defective 0.2.2 package metadata. The existing tag
 and published artifacts stay unchanged; the additive correction record is
 [`v0.2.3.md`](../release-corrections/v0.2.3.md). Correct metadata is released
-with v0.3.0, not by rewriting historical identity.
+with v0.4.0, not by rewriting historical identity.
 
 Local evidence does not replace hosted proof. After pushing the exact reviewed
 SHA, wait for the independent GitHub Actions jobs, including the supported
@@ -132,7 +132,7 @@ Do not infer native-runner availability from workflow YAML or a local result.
 Before any tag operation, an authorized maintainer must manually run the
 read-only **Release Evidence** workflow for one reviewed full SHA, then obtain
 its run ID from GitHub Actions. Its `ref` input must be that SHA and its `tag`
-input must be `v0.3.0`; the workflow itself has read-only contents permission
+input must be `v0.4.0`; the workflow itself has read-only contents permission
 and contains no release job.
 
 After the run is terminal and successful, inspect it without mutation:
@@ -151,7 +151,7 @@ runner, a queued/cancelled/non-evidence run, wrong head SHA, or a detached
 record fails closed. This repository has not treated that external checkpoint
 as passed merely because its local workflow contract tests pass.
 
-Only after that inspection passes may a separately authorized `v0.3.0` tag be
+Only after that inspection passes may a separately authorized `v0.4.0` tag be
 created. The tag-only release workflow then independently peels the tag and
 requires it, the checkout, and the aggregate commit to be identical before its
 sole `contents: write` GitHub-release job can run. The evidence workflow and

@@ -62,7 +62,7 @@ _RELEASE_BASELINE_RAW_REFRESH_PATHS = (
     ("pure_source_performance", "observations"),
 )
 
-_RELEASE_VERSION = "0.3.0"
+_RELEASE_VERSION = "0.4.0"
 _SUPPORTED_CPYTHON_MINORS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 _DIRECT_NATIVE_TARGETS = (
     ("linux", "x86_64"),
@@ -103,7 +103,7 @@ _RELEASE_HISTORY_FACTS = (
     "defective 0.2.2 package metadata",
     "remains a shipped release",
     "existing v0.2.3 tag and published artifacts are immutable and unchanged",
-    "v0.3.0",
+    "v0.4.0",
 )
 _BASELINE_TOP_LEVEL_FIELDS = frozenset(
     {
@@ -834,7 +834,7 @@ def _validate_matrix_record(
         )
         if _matrix_filename(
             parent["filename"], field="parent_sdist"
-        ) != "fast_fsm-0.3.0.tar.gz" or not _is_sha256(parent["sha256"]):
+        ) != "fast_fsm-0.4.0.tar.gz" or not _is_sha256(parent["sha256"]):
             raise EvidenceError("matrix evidence sdist lineage is malformed.")
 
     conformance, _suite = _matrix_conformance_matches(
@@ -1451,7 +1451,7 @@ def validate_release_identity(
     checked_out_commit: str,
     tag_ref: str | None = None,
 ) -> dict[str, str]:
-    """Validate static v0.3.0 identity, with optional non-mutating tag equality."""
+    """Validate static v0.4.0 identity, with optional non-mutating tag equality."""
     root = repository_root.resolve()
     try:
         pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -1507,9 +1507,9 @@ def validate_release_identity(
         ("aggregate.distribution_version", aggregate_checked["distribution_version"]),
     )
     for field, value in expected_values:
-        if value not in {_RELEASE_VERSION, "0.3", PACKAGE_NAME}:
+        if value not in {_RELEASE_VERSION, "0.4", PACKAGE_NAME}:
             raise EvidenceError(f"release identity {field} is not {_RELEASE_VERSION}.")
-    if docs_identity["version"] != "0.3" or any(
+    if docs_identity["version"] != "0.4" or any(
         value != _RELEASE_VERSION
         for field, value in expected_values
         if field
@@ -1535,7 +1535,7 @@ def validate_release_identity(
             "release identity changelog section is missing or ambiguous."
         )
     required_claims = (
-        "v0.3.0",
+        "v0.4.0",
         "installed-artifact",
         "SHA-256 binds exact bytes",
         "not publisher authenticity",
@@ -1545,15 +1545,14 @@ def validate_release_identity(
         raise EvidenceError("release identity README durable claims are incomplete.")
 
     if tag_ref is None:
-        if (
-            aggregate_checked["tag"] != "unreleased"
-            or changelog_matches[0] != "UNRELEASED"
-        ):
+        if aggregate_checked["tag"] != "unreleased":
             raise EvidenceError(
-                "release identity static mode requires unreleased tag state."
+                "release identity static mode requires unreleased aggregate tag state."
             )
         tag_status = "not-required"
-        changelog_status = "unreleased"
+        changelog_status = (
+            "unreleased" if changelog_matches[0] == "UNRELEASED" else "dated"
+        )
     else:
         if aggregate_checked["tag"] != tag_ref:
             raise EvidenceError(
@@ -2726,7 +2725,16 @@ def _run_installed_command(
         """Wake reader threads even if a descendant held a copied pipe open."""
         for stream in (process.stdout, process.stderr):
             try:
-                stream.close()
+                descriptor = stream.fileno()
+            except (OSError, ValueError):
+                continue
+            try:
+                # BufferedReader.close() acquires the same lock held by a
+                # thread blocked in read(), so it can itself wait for an
+                # inherited descendant pipe. Closing the descriptor directly
+                # preserves the verifier's hard deadline; the daemon reader
+                # exits through its existing OSError path.
+                os.close(descriptor)
             except OSError:
                 pass
 
@@ -6146,7 +6154,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     identity_parser = commands.add_parser(
         "verify-release-identity",
-        help="validate static v0.3.0 identity and optional tag-to-commit equality",
+        help="validate static v0.4.0 identity and optional tag-to-commit equality",
     )
     identity_parser.add_argument(
         "--installed-identity",
@@ -6162,7 +6170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     identity_parser.add_argument(
         "--tag-ref",
-        help="existing v0.3.0 tag to peel and compare (omitted for static mode)",
+        help="existing v0.4.0 tag to peel and compare (omitted for static mode)",
     )
     identity_parser.add_argument("--json", action="store_true")
 

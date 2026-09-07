@@ -333,21 +333,21 @@
           "py3-none-any"
         ],
         "classified_mode": "pure",
-        "dist_info_directory": "fast_fsm-0.3.0.dist-info",
+        "dist_info_directory": "fast_fsm-0.4.0.dist-info",
         "dist_info_package": "fast-fsm",
-        "dist_info_version": "0.3.0",
-        "filename": "fast_fsm-0.3.0-py3-none-any.whl",
+        "dist_info_version": "0.4.0",
+        "filename": "fast_fsm-0.4.0-py3-none-any.whl",
         "filename_package": "fast-fsm",
         "filename_tags": [
           "py3-none-any"
         ],
-        "filename_version": "0.3.0",
+        "filename_version": "0.4.0",
         "metadata_name": "fast-fsm",
-        "metadata_version": "0.3.0",
+        "metadata_version": "0.4.0",
         "mode": "pure",
         "native_core_members": [],
         "native_members": [],
-        "normalized_basename": "fast_fsm-0.3.0-py3-none-any.whl",
+        "normalized_basename": "fast_fsm-0.4.0-py3-none-any.whl",
         "wheel_tags": [
           "py3-none-any"
         ]
@@ -674,7 +674,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.091648,
+      "elapsed_seconds": 0.089751,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -684,7 +684,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 436450.73,
+      "ops_per_second": 445676.04,
       "warmup_operations": 2000
     }
   },
@@ -692,7 +692,7 @@
     "observations": [
       {
         "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-        "elapsed_seconds": 0.091648,
+        "elapsed_seconds": 0.089751,
         "environment": {
           "implementation": "cpython",
           "machine": "arm64",
@@ -702,7 +702,7 @@
         "metric": "StateMachine.trigger operations per second",
         "mode": "pure",
         "operations": 40000,
-        "ops_per_second": 436450.73,
+        "ops_per_second": 445676.04,
         "warmup_operations": 2000
       }
     ],
@@ -718,15 +718,15 @@
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1812,
+      "collected": 1813,
       "errors": 0,
       "failed": 0,
-      "passed": 1806,
+      "passed": 1807,
       "skipped": 6
     }
   },
   "release_identity": {
-    "distribution_version": "0.3.0",
+    "distribution_version": "0.4.0",
     "package": "fast_fsm"
   },
   "schema_version": 2,

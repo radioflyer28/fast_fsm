@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   static_release_identity:
-    name: Static v0.3.0 identity
+    name: Static v0.4.0 identity
     runs-on: ubuntu-latest
     env:
       FAST_FSM_BUILD_MODE: pure
@@ -41,7 +41,7 @@ jobs:
           ).strip()
           with open("installed-identity.json", "w", encoding="utf-8") as output:
               json.dump(
-                  {"distribution_version": "0.3.0", "package_version": __version__},
+                  {"distribution_version": "0.4.0", "package_version": __version__},
                   output,
                   sort_keys=True,
               )
@@ -49,7 +49,7 @@ jobs:
               json.dump(
                   {
                       "package": "fast_fsm",
-                      "distribution_version": "0.3.0",
+                      "distribution_version": "0.4.0",
                       "commit": head_sha,
                       "tag": "unreleased",
                       "suite_sha256": _suite_sha256(),

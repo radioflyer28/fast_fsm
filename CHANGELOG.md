@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [0.4.0] — 2026-09-07
+
 ### Added
 
 - Deterministic priority-aware guarded transition candidates. Multiple
@@ -17,19 +21,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   event resolved entirely by FSM guards and priorities, with committed state
   entry invoking a replaceable aircraft command adapter.
 
+- Installed-artifact parity and exact release-matrix evidence for pure, compiled,
+  and source-derived builds.
+
 ### Changed
 
 - Local release evidence now treats the version of `uv` as recorded metadata,
   not an exact-version gate. Dependency reproducibility remains governed by
   the checked-in `uv.lock` and `uv sync --locked`.
-
-## [0.3.0] — UNRELEASED
-
-### Added
-
-- Installed-artifact parity and exact release-matrix evidence for pure, compiled,
-  and source-derived builds. Release publication remains blocked until the
-  separately authorized tag-time identity gate supplies the actual release date.
 
 ## [0.2.3] — 2026-04-05
 
@@ -45,7 +44,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Version 0.2.3 was shipped with defective 0.2.2 package metadata. It remains a
 shipped release: the existing v0.2.3 tag and published artifacts are immutable
-and unchanged. Corrected metadata will be published in v0.3.0.
+and unchanged. Corrected metadata is published in v0.4.0.
 
 ## [0.2.2] — 2026-04-04
 

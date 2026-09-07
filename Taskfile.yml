@@ -269,7 +269,7 @@ tasks:
   # ─────────────────────────────────────────────
 
   release-identity-check:
-    desc: Validate static v0.3.0 identity without creating a tag
+    desc: Validate static v0.4.0 identity without creating a tag
     env:
       FAST_FSM_BUILD_MODE: pure
     cmds:
@@ -288,8 +288,8 @@ tasks:
               head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
               installed = root / "installed-identity.json"
               aggregate = root / "static-aggregate.json"
-              installed.write_text(json.dumps({"distribution_version": "0.3.0", "package_version": __version__}), encoding="utf-8")
-              aggregate.write_text(json.dumps({"package": "fast_fsm", "distribution_version": "0.3.0", "commit": head_sha, "tag": "unreleased", "suite_sha256": _suite_sha256()}), encoding="utf-8")
+              installed.write_text(json.dumps({"distribution_version": "0.4.0", "package_version": __version__}), encoding="utf-8")
+              aggregate.write_text(json.dumps({"package": "fast_fsm", "distribution_version": "0.4.0", "commit": head_sha, "tag": "unreleased", "suite_sha256": _suite_sha256()}), encoding="utf-8")
               subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-release-identity", "--installed-identity", str(installed), "--aggregate", str(aggregate), "--json"], check=True)
           PY
 
@@ -398,7 +398,7 @@ tasks:
                   "artifact": release_evidence.matrix_artifact_evidence(artifact),
                   "runtime": release_evidence.matrix_runtime_evidence(runtime_record),
                   "conformance": proof["conformance"],
-                  "provenance": {"release_version": "0.3.0", "commit": head_sha, "tag": "unreleased"},
+                  "provenance": {"release_version": "0.4.0", "commit": head_sha, "tag": "unreleased"},
                   "origin_verified": True,
                   "performance": proof["performance"] if cell.requires_performance else None,
                   "parent_sdist": parent_sdist,
@@ -451,7 +451,7 @@ tasks:
                   "artifact": {"filename": archive["filename"], "sha256": archive["sha256"], "wheel_tags": [], "classified_mode": "sdist", "build_intent": "sdist"},
                   "runtime": None,
                   "conformance": None,
-                  "provenance": {"release_version": "0.3.0", "commit": head_sha, "tag": "unreleased"},
+                  "provenance": {"release_version": "0.4.0", "commit": head_sha, "tag": "unreleased"},
                   "origin_verified": False,
                   "performance": None,
                   "parent_sdist": None,
