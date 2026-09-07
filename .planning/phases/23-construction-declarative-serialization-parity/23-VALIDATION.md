@@ -1,0 +1,56 @@
+---
+phase: 23
+slug: construction-declarative-serialization-parity
+status: draft
+nyquist_compliant: false
+wave_0_complete: false
+created: 2026-09-07
+---
+
+# Phase 23 — Validation Strategy
+
+## Test Infrastructure
+
+| Property | Value |
+|---|---|
+| Framework | pytest 8.4.1 with pytest-asyncio |
+| Config file | `pyproject.toml` |
+| Quick run command | `uv run pytest tests/test_builder.py tests/test_graph_invariants.py tests/test_state_machine_utils.py tests/test_advanced_functionality.py::TestFromDict tests/test_advanced_functionality.py::TestToDict tests/test_advanced_functionality.py::TestFromDictConditions tests/test_priority_selection.py -x -q` |
+| Full suite command | `uv run pytest tests/ -x -q` |
+| Estimated runtime | under 30 seconds for focused checks |
+
+## Sampling Rate
+
+- **After every task commit:** Run the directly modified focused tests.
+- **After every plan wave:** Run the focused construction/parity suite.
+- **Before verification:** Run pure full suite, Ruff, mypy, ty, slots policy, compiled build/import, and focused compiled parity suite.
+- **Max feedback latency:** 30 seconds for task-scoped tests.
+
+## Per-Task Verification Map
+
+| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
+|---|---|---|---|---|---|---|---|---|---|
+| 23-01-01 | 01 | 1 | PAR-01 | T-23-01 | Builders/factories publish no partial candidate topology | integration | `uv run pytest tests/test_builder.py tests/test_async.py -k 'priority or declarative or quick or retry' -x -q` | ✅ | pending |
+| 23-02-01 | 02 | 2 | PAR-02 | T-23-02 | Queries, snapshots, and clones preserve every candidate without mutation | integration | `uv run pytest tests/test_graph_invariants.py tests/test_state_machine_utils.py tests/test_transition_lifecycle.py tests/test_priority_selection.py -k 'priority or candidate or clone or snapshot or reachable or transition_exists' -x -q` | ✅ | pending |
+| 23-03-01 | 03 | 3 | PAR-03 | T-23-03 | Explicit guard references cannot attach ambiguously or serialize callables | integration | `uv run pytest tests/test_advanced_functionality.py -k 'FromDict or ToDict or condition_ref or priority' -x -q` | ✅ | pending |
+
+## Wave 0 Requirements
+
+Existing infrastructure covers all phase requirements. Add focused cases in the
+existing builder, async, graph, utility, lifecycle, serialization, priority,
+and mypyc test modules before their corresponding implementation turns green.
+
+## Manual-Only Verifications
+
+All phase behaviors have automated verification.
+
+## Validation Sign-Off
+
+- [ ] All tasks have automated verification.
+- [ ] Sampling continuity: no three consecutive tasks without focused checks.
+- [ ] Wave 0 additions cover every parity seam.
+- [ ] No watch-mode flags.
+- [ ] Feedback latency is under 30 seconds.
+- [ ] `nyquist_compliant: true` set after execution validation.
+
+**Approval:** pending
