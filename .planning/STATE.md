@@ -5,16 +5,16 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 25
 current_phase_name: Performance, Artifact Proof & Drone Guidance
 status: executing
-stopped_at: Completed 25-01-PLAN.md
-last_updated: "2026-09-07T05:51:17.121Z"
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-09-07T06:35:50.823Z"
 last_activity: 2026-09-07
 last_activity_desc: Phase 25 execution started
-state_head: 89eaaca8446e7f9f456113e4561e3dd9b83b4c1e
+state_head: b4160ac85931e4e22c5de08d9ed730b112d4565c
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
   percent: 80
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 ## Current Position
 
 Phase: 25 (Performance, Artifact Proof & Drone Guidance) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-09-07 — Phase 25 execution started
 
@@ -89,6 +89,7 @@ Last activity: 2026-09-07 — Phase 25 execution started
 | Phase 22 P02 | 6m | 2 tasks | 4 files |
 | Phase 22 P03 | 15 min | 2 tasks | 6 files |
 | Phase 25 P01 | 14m | 2 tasks | 6 files |
+| Phase 25 P02 | 37m | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -162,6 +163,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 22]: Phase 22: Use AST and counted-operation tests to lock direct singleton lookup and local candidate-group work.
 - [Phase 25]: Use one forward local scan and one immutable tuple splice for grouped priority registration.
 - [Phase 25]: Keep priority-group timings environment-labelled; only installed compiled singleton dispatch has a throughput floor.
+- [Phase 25]: Priority selection uses six independent exact-value scenarios without changing conformance schema version 1.
+- [Phase 25]: Canonical installed-child JSON must pass exact-key validation before parent reconstruction of contract declaration order.
 
 ### Pending Todos
 
@@ -182,8 +185,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T05:51:17.033Z
-Stopped at: Completed 25-01-PLAN.md
+Last session: 2026-09-07T06:35:50.734Z
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
 
 ## Rebuild Log

@@ -70,7 +70,7 @@ research synthesis.
   singleton dispatch; grouped selection and local group mutation are documented
   and measured as O(k) without unrelated-graph scans or dispatch-time sorting.
 
-- [ ] **PERF-02**: Source, pure-wheel, and compiled-wheel artifacts prove the
+- [x] **PERF-02**: Source, pure-wheel, and compiled-wheel artifacts prove the
   same priority winner, evaluation order, result/history metadata, and failure
   semantics; compiled singleton dispatch remains ≥200,000 ops/sec.
 
@@ -137,7 +137,7 @@ research synthesis.
 | DIAG-01 | Phase 24 | Complete |
 | DIAG-02 | Phase 24 | Complete |
 | PERF-01 | Phase 25 | Complete |
-| PERF-02 | Phase 25 | Pending |
+| PERF-02 | Phase 25 | Complete |
 | DOC-01 | Phase 25 | Pending |
 
 **Coverage:**
