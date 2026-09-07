@@ -2526,8 +2526,8 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-def _expected_conformance_suite_sha256() -> str:
-    """Load only the copied-probe definition seam and bind child suite identity."""
+def _load_conformance_contract() -> Any:
+    """Load the copied-probe contract without importing the installed artifact."""
     probe_path = Path(__file__).with_name("artifact_conformance.py")
     spec = util.spec_from_file_location("_artifact_conformance_contract", probe_path)
     if spec is None or spec.loader is None:
@@ -2536,6 +2536,12 @@ def _expected_conformance_suite_sha256() -> str:
         )
     module = util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _expected_conformance_suite_sha256() -> str:
+    """Bind child suite identity to the copied-probe definition seam."""
+    module = _load_conformance_contract()
     suite = getattr(module, "_suite_sha256", None)
     if not callable(suite):
         raise EvidenceError("Installed artifact conformance contract is incomplete.")
@@ -3267,6 +3273,15 @@ def _validate_child_conformance(
         raise EvidenceError(
             "Installed artifact conformance semantic digest is invalid."
         )
+    validator = getattr(_load_conformance_contract(), "validate_conformance", None)
+    if not callable(validator):
+        raise EvidenceError("Installed artifact conformance contract is incomplete.")
+    try:
+        validator(value)
+    except Exception as error:
+        raise EvidenceError(
+            "Installed artifact conformance contradicts required contract."
+        ) from error
     return dict(value)
 
 

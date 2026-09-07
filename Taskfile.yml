@@ -292,7 +292,9 @@ tasks:
           PY
 
   release-installed-artifacts-check:
-    desc: Build direct pure and compiled wheels in temporary output and prove installed parity
+    desc: Capture clean source then prove direct pure and compiled installed parity
+    deps:
+      - task: pure-source-check
     cmds:
       - |
           uv run python - <<'PY'
@@ -300,18 +302,31 @@ tasks:
           import subprocess
           import tempfile
           from pathlib import Path
+          from tools import artifact_conformance, release_evidence
 
           with tempfile.TemporaryDirectory(prefix="fast-fsm-direct-artifacts-") as temporary:
-              root = Path(temporary)
+              root = Path(temporary).resolve()
+              release_evidence.verify_source()
+              source_conformance = artifact_conformance.collect_conformance()
               for intent in ("pure", "compiled"):
                   output = root / intent
                   environment = dict(os.environ, FAST_FSM_BUILD_MODE=intent)
                   environment.pop("FAST_FSM_PURE_PYTHON", None)
-                  subprocess.run(["uv", "build", "--wheel", "--out-dir", str(output)], check=True, env=environment)
+                  subprocess.run(["uv", "build", "--offline", "--wheel", "--out-dir", str(output)], check=True, env=environment)
                   wheels = sorted(output.glob("*.whl"))
                   if len(wheels) != 1:
                       raise SystemExit(f"expected one {intent} wheel, got {wheels!r}")
-                  subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-installed-wheel", "--wheel", str(wheels[0]), "--expected-mode", intent, "--build-intent", intent, "--json"], check=True)
+                  record = release_evidence.verify_installed_wheel(
+                      wheels[0].resolve(), expected_mode=intent, build_intent=intent
+                  )
+                  differences = artifact_conformance.compare_conformance(
+                      source_conformance, record["conformance"]
+                  )
+                  if differences:
+                      raise SystemExit(
+                          "installed conformance differs from clean source: "
+                          + ", ".join(differences)
+                      )
           PY
 
   release-sdist-check:
