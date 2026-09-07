@@ -7,6 +7,7 @@ rendering it.
 """
 
 import copy
+import inspect
 
 import pytest
 
@@ -103,31 +104,37 @@ class TestToMermaidBasic:
 
     def test_renderer_docstrings_snapshot_opaque_id_output(self):
         """Public examples stay synchronized with the rendered ID-based format."""
-        mermaid_snapshot = """stateDiagram-v2
-            state "idle" as s0
-            state "running" as s1
-            [*] --> s0
-            s0 --> s1 : start [priority 0]
-            s1 --> s0 : stop [priority 0]"""
-        plantuml_snapshot = """@startuml
-        state "idle" as s0
-        state "running" as s1
-        [*] --> s0
-        s0 --> s1 : start [priority 0]
-        s1 --> s0 : stop [priority 0]
-        @enduml"""
-        fenced_snapshot = """        ```mermaid
-        stateDiagram-v2
-            state "idle" as s0
-            state "running" as s1
-            [*] --> s0
-            s0 --> s1 : start [priority 0]
-            s1 --> s0 : stop [priority 0]
-        ```"""
+        mermaid_snapshot = (
+            "stateDiagram-v2\n"
+            '        state "idle" as s0\n'
+            '        state "running" as s1\n'
+            "        [*] --> s0\n"
+            "        s0 --> s1 : start [priority 0]\n"
+            "        s1 --> s0 : stop [priority 0]"
+        )
+        plantuml_snapshot = (
+            "@startuml\n"
+            '    state "idle" as s0\n'
+            '    state "running" as s1\n'
+            "    [*] --> s0\n"
+            "    s0 --> s1 : start [priority 0]\n"
+            "    s1 --> s0 : stop [priority 0]\n"
+            "    @enduml"
+        )
+        fenced_snapshot = (
+            "```mermaid\n"
+            "    stateDiagram-v2\n"
+            '        state "idle" as s0\n'
+            '        state "running" as s1\n'
+            "        [*] --> s0\n"
+            "        s0 --> s1 : start [priority 0]\n"
+            "        s1 --> s0 : stop [priority 0]\n"
+            "    ```"
+        )
 
-        assert mermaid_snapshot in to_mermaid.__doc__
-        assert plantuml_snapshot in to_plantuml.__doc__
-        assert fenced_snapshot in to_mermaid_fenced.__doc__
+        assert mermaid_snapshot in inspect.cleandoc(to_mermaid.__doc__ or "")
+        assert plantuml_snapshot in inspect.cleandoc(to_plantuml.__doc__ or "")
+        assert fenced_snapshot in inspect.cleandoc(to_mermaid_fenced.__doc__ or "")
 
 
 # ---------------------------------------------------------------------------

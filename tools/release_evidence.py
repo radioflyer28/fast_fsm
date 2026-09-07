@@ -2785,6 +2785,13 @@ def _run_installed_command(
             close_streams()
             for reader in readers:
                 reader.join(timeout=0.1)
+        for stream in (process.stdout, process.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                # The descriptor may already be closed after waking a reader
+                # blocked behind a descendant's inherited pipe.
+                pass
         if process.poll() is None:
             stop_process_tree()
             try:

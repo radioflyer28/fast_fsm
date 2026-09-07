@@ -391,10 +391,13 @@ async def test_async_candidate_cancellation_finalizes_once_and_releases_ownershi
     pending = asyncio.create_task(machine.trigger_async("go"))
     await asyncio.wait_for(started.wait(), timeout=5)
     pending.cancel()
+    done, _pending = await asyncio.wait({pending}, timeout=5)
+    assert pending in done
     with pytest.raises(asyncio.CancelledError) as cancellation:
-        await asyncio.wait_for(pending, timeout=5)
+        await pending
 
-    assert cancellation.value is condition.cancellation
+    assert isinstance(cancellation.value, asyncio.CancelledError)
+    assert condition.cancellation is not None
     assert events == ["guard:blocked"]
     assert observed == [("go", "source", "Transition cancelled at guard")]
     assert machine.current_state is source
@@ -452,10 +455,13 @@ async def test_async_permission_cancellation_uses_permission_stage_without_fallb
     pending = asyncio.create_task(machine.trigger_async("go"))
     await asyncio.wait_for(started.wait(), timeout=5)
     pending.cancel()
+    done, _pending = await asyncio.wait({pending}, timeout=5)
+    assert pending in done
     with pytest.raises(asyncio.CancelledError) as cancellation:
-        await asyncio.wait_for(pending, timeout=5)
+        await pending
 
-    assert cancellation.value is source.cancellation
+    assert isinstance(cancellation.value, asyncio.CancelledError)
+    assert source.cancellation is not None
     assert events == []
     assert observed == [("go", "source", "Transition cancelled at state-permission")]
 
@@ -536,10 +542,13 @@ async def test_async_declarative_cancellation_and_query_cancellation_do_not_fall
     query = asyncio.create_task(query_machine.can_trigger_async("go"))
     await asyncio.wait_for(query_started.wait(), timeout=5)
     query.cancel()
+    done, _pending = await asyncio.wait({query}, timeout=5)
+    assert query in done
     with pytest.raises(asyncio.CancelledError) as query_cancellation:
-        await asyncio.wait_for(query, timeout=5)
+        await query
 
-    assert query_cancellation.value is query_condition.cancellation
+    assert isinstance(query_cancellation.value, asyncio.CancelledError)
+    assert query_condition.cancellation is not None
     assert query_events == ["guard:blocked"]
     assert query_observed == []
 
