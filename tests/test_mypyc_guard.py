@@ -483,6 +483,244 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
     }
 
 
+def test_phase24_diagnostic_projection_stays_scalar_and_cold() -> None:
+    """Candidate diagnostics remain outside core dispatch and caller policy."""
+    core_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    repository_root = Path(__file__).parent.parent
+    diagnostics_path = repository_root / "src" / "fast_fsm" / "_diagnostics.py"
+    diagnostics_tree = ast.parse(
+        diagnostics_path.read_text(encoding="utf-8"), filename=str(diagnostics_path)
+    )
+
+    diagnostic_edge = next(
+        node
+        for node in diagnostics_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_DiagnosticEdge"
+    )
+    diagnostic_fields = {
+        node.target.id
+        for node in diagnostic_edge.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert diagnostic_fields == {
+        "from_index",
+        "trigger",
+        "to_index",
+        "condition_name",
+        "priority",
+        "has_guard",
+        "statically_unconditional",
+    }
+    diagnostic_decorator = next(
+        node
+        for node in diagnostic_edge.decorator_list
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "dataclass"
+    )
+    diagnostic_keywords = {
+        keyword.arg: keyword.value.value
+        for keyword in diagnostic_decorator.keywords
+        if keyword.arg is not None and isinstance(keyword.value, ast.Constant)
+    }
+    assert diagnostic_keywords["frozen"] is True
+    assert diagnostic_keywords["slots"] is True
+
+    core_source = CORE_PY.read_text(encoding="utf-8")
+    assert "_diagnostics" not in core_source
+    graph_snapshot_owned = next(
+        node
+        for node in ast.walk(core_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_graph_snapshot_owned"
+    )
+    snapshot_source = ast.unparse(graph_snapshot_owned)
+    assert "entry.condition is None and type(source_state) is State" in snapshot_source
+
+    graph_from_snapshot = next(
+        node
+        for node in diagnostics_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_graph_from_snapshot"
+    )
+    projection_source = ast.unparse(graph_from_snapshot)
+    assert "sorted(" not in projection_source
+    assert "transition.priority" in projection_source
+    assert "transition.condition is not None" in projection_source
+    assert "transition.statically_unconditional" in projection_source
+
+    validation_path = repository_root / "src" / "fast_fsm" / "validation.py"
+    validation_tree = ast.parse(
+        validation_path.read_text(encoding="utf-8"), filename=str(validation_path)
+    )
+    determinism = next(
+        node
+        for node in ast.walk(validation_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "check_determinism"
+    )
+    determinism_source = ast.unparse(determinism)
+    assert ".check(" not in determinism_source
+    assert ".can_transition(" not in determinism_source
+
+
+def test_phase24_candidate_diagnostic_oracle_is_mode_invariant() -> None:
+    """One real candidate topology has the same pure/native diagnostic meaning."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if os.environ.get("FAST_FSM_BUILD_MODE") == "compiled":
+        assert spec.origin.endswith((".so", ".pyd"))
+
+    from fast_fsm._diagnostics import DiagnosticBudgetExceeded, DiagnosticLimits
+    from fast_fsm.conditions import FuncCondition
+    from fast_fsm.core import State, StateMachine
+    from fast_fsm.validation import EnhancedFSMValidator, FSMValidator
+    from fast_fsm.visualization import (
+        to_json,
+        to_mermaid,
+        to_mermaid_document,
+        to_plantuml,
+    )
+
+    class ConservativeState(State):
+        __slots__ = ()
+
+        def can_transition(self, trigger, to_state, *args, **kwargs):
+            raise AssertionError("candidate diagnostics must not evaluate permissions")
+
+    guard_calls: list[object] = []
+
+    def guarded(*args, **kwargs):
+        guard_calls.append((args, kwargs))
+        return True
+
+    source = State("source\\n<label>")
+    conservative = ConservativeState("maybe")
+    target = State("target|cell")
+    alternate = State("alternate")
+    machine = StateMachine(source)
+    for state in (conservative, target, alternate):
+        machine.add_state(state)
+    machine.add_transition("go\\n<event>", source, target, priority=-5)
+    machine.add_transition(
+        "go\\n<event>",
+        source,
+        target,
+        FuncCondition(guarded, name="guard\\n<label>"),
+        priority=10,
+    )
+    machine.add_transition("return", conservative, target, priority=1)
+    machine.add_transition("return", conservative, alternate, priority=2)
+
+    snapshot = machine._graph_snapshot()
+    by_group = {
+        (row.from_state_name, row.trigger): [
+            (
+                candidate.to_state_name,
+                candidate.priority,
+                candidate.statically_unconditional,
+            )
+            for candidate in snapshot.transitions
+            if (candidate.from_state_name, candidate.trigger)
+            == (row.from_state_name, row.trigger)
+        ]
+        for row in snapshot.transitions
+    }
+    assert by_group[(source.name, "go\\n<event>")] == [
+        (target.name, -5, True),
+        (target.name, 10, False),
+    ]
+    assert by_group[(conservative.name, "return")] == [
+        (target.name, 1, False),
+        (alternate.name, 2, False),
+    ]
+
+    validator = FSMValidator(machine)
+    determinism = validator.check_determinism()
+    assert determinism["is_deterministic"] is True
+    assert determinism["priority_errors"] == []
+    assert determinism["provably_shadowed_candidates"] == [
+        {
+            "from_state": source.name,
+            "event": "go\\n<event>",
+            "to_state": target.name,
+            "priority": 10,
+            "shadowing_priority": -5,
+        }
+    ]
+    assert determinism["possibly_shadowed_candidates"] == [
+        {
+            "from_state": conservative.name,
+            "event": "return",
+            "to_state": alternate.name,
+            "priority": 2,
+            "shadowing_priority": 1,
+        }
+    ]
+
+    adjacency = validator.get_adjacency_matrix()
+    source_rows = [
+        row
+        for row in adjacency["transitions"]
+        if row["from_state"] == source.name and row["event"] == "go\\n<event>"
+    ]
+    assert [(row["to_state"], row["priority"]) for row in source_rows] == [
+        (target.name, -5),
+        (target.name, 10),
+    ]
+    assert validator.generate_test_paths(max_length=1, max_paths=2) == [
+        [(source.name, "go\\n<event>", target.name, -5)],
+        [(source.name, "go\\n<event>", target.name, 10)],
+    ]
+
+    payload = to_json(machine, include_adjacency=True)
+    topology = payload["topology"]
+    assert isinstance(topology, dict)
+    transitions = topology["transitions"]
+    assert isinstance(transitions, list)
+    assert [
+        (row["from"], row["trigger"], row["to"], row["priority"]) for row in transitions
+    ] == [
+        ("maybe", "return", target.name, 1),
+        ("maybe", "return", alternate.name, 2),
+        (source.name, "go\\n<event>", target.name, -5),
+        (source.name, "go\\n<event>", target.name, 10),
+    ]
+    assert "[priority -5]" in to_mermaid(machine, show_conditions=False)
+    assert "[priority 10]" in to_plantuml(machine, show_conditions=False)
+    document = to_mermaid_document(machine, adjacency_matrix=adjacency)
+    assert "| # | From | Event | To | Priority |" in document
+    assert r"source&#x005C;n&#x003C;label&#x003E" in document
+    assert r"target&#x007C;cell | -5 |" in document
+    report = EnhancedFSMValidator(machine).export_report(format="markdown")
+    assert "Priority" in report
+    assert "-5" in report
+
+    required_results = payload["analysis"]["diagnostic_status"]["result_count"]
+    assert isinstance(required_results, int)
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        to_json(
+            machine,
+            include_adjacency=True,
+            limits=DiagnosticLimits(max_results=required_results - 1),
+        )
+    assert str(raised.value) == "diagnostic budget exhausted"
+    assert raised.value.status.complete is False
+
+    callback_priorities: list[object] = []
+    machine.on_enter(
+        target.name,
+        lambda from_state, trigger, **kwargs: callback_priorities.append(
+            kwargs["priority"]
+        ),
+    )
+    machine.enable_history()
+    result = machine.trigger("go\\n<event>", priority="caller-owned")
+    assert (result.success, result.priority) == (True, -5)
+    assert callback_priorities == ["caller-owned"]
+    assert [(entry.to_state, entry.priority) for entry in machine.history] == [
+        (target.name, -5)
+    ]
+    assert guard_calls == []
+
+
 def test_priority_normalization_keeps_an_object_typed_compiled_boundary() -> None:
     """Exact priority validation must run before mypyc can coerce a value."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
