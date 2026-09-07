@@ -25,7 +25,7 @@ research synthesis.
 
 ### Deterministic Resolution
 
-- [ ] **SEL-01**: A synchronous machine selects the first candidate that passes
+- [x] **SEL-01**: A synchronous machine selects the first candidate that passes
   its transition guard, declarative guard, and target-state permission in
   ascending priority order.
 
@@ -33,11 +33,11 @@ research synthesis.
   awaiting candidates sequentially; ordinary rejection falls through while
   exceptions and cancellation fail closed.
 
-- [ ] **SEL-03**: Candidate selection completes before lifecycle callbacks;
+- [x] **SEL-03**: Candidate selection completes before lifecycle callbacks;
   exactly one selected candidate can enter lifecycle work, history, and success
   observers.
 
-- [ ] **SEL-04**: Group exhaustion returns one truthful, uncommitted selection
+- [x] **SEL-04**: Group exhaustion returns one truthful, uncommitted selection
   failure and notifies failure observers once, while missing-trigger resolution
   failures retain their existing meaning.
 
@@ -127,10 +127,10 @@ research synthesis.
 | PRIO-01 | Phase 21 | Complete |
 | PRIO-02 | Phase 21 | Complete |
 | PRIO-03 | Phase 21 | Complete |
-| SEL-01 | Phase 22 | Pending |
+| SEL-01 | Phase 22 | Complete |
 | SEL-02 | Phase 22 | Pending |
-| SEL-03 | Phase 22 | Pending |
-| SEL-04 | Phase 22 | Pending |
+| SEL-03 | Phase 22 | Complete |
+| SEL-04 | Phase 22 | Complete |
 | PAR-01 | Phase 23 | Pending |
 | PAR-02 | Phase 23 | Pending |
 | PAR-03 | Phase 23 | Pending |
