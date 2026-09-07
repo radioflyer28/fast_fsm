@@ -127,6 +127,186 @@ _SCENARIO_DEFINITIONS = (
         ),
     },
     {
+        "id": "priority.sync.winner",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "state",
+            "target",
+            "guard_order",
+            "result_priority",
+            "history_priority",
+            "history_count",
+            "lower_candidate_suppressed",
+            "redacted",
+        ),
+        "required_values": {
+            "success": True,
+            "committed": True,
+            "state": "winner",
+            "target": "winner",
+            "guard_order": ["rejected", "winner"],
+            "result_priority": 3,
+            "history_priority": 3,
+            "history_count": 1,
+            "lower_candidate_suppressed": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "priority.sync.exhaustion",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "stage",
+            "state",
+            "guard_order",
+            "result_priority",
+            "history_count",
+            "observer_count",
+            "all_candidates_evaluated",
+            "redacted",
+        ),
+        "required_values": {
+            "success": False,
+            "committed": False,
+            "stage": "selection",
+            "state": "source",
+            "guard_order": ["first", "second"],
+            "result_priority": None,
+            "history_count": 0,
+            "observer_count": 1,
+            "all_candidates_evaluated": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "priority.sync.guard_exception",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "stage",
+            "state",
+            "guard_order",
+            "active_priority",
+            "history_count",
+            "lower_candidate_suppressed",
+            "observer_count",
+            "redacted",
+        ),
+        "required_values": {
+            "success": False,
+            "committed": False,
+            "stage": "guard",
+            "state": "source",
+            "guard_order": ["raising"],
+            "active_priority": -3,
+            "history_count": 0,
+            "lower_candidate_suppressed": True,
+            "observer_count": 1,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "priority.async.winner",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "state",
+            "target",
+            "guard_order",
+            "result_priority",
+            "history_priority",
+            "history_count",
+            "lower_candidate_suppressed",
+            "redacted",
+        ),
+        "required_values": {
+            "success": True,
+            "committed": True,
+            "state": "winner",
+            "target": "winner",
+            "guard_order": ["rejected", "winner"],
+            "result_priority": 3,
+            "history_priority": 3,
+            "history_count": 1,
+            "lower_candidate_suppressed": True,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "priority.async.guard_exception",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "stage",
+            "state",
+            "guard_order",
+            "active_priority",
+            "history_count",
+            "lower_candidate_suppressed",
+            "observer_count",
+            "redacted",
+        ),
+        "required_values": {
+            "success": False,
+            "committed": False,
+            "stage": "guard",
+            "state": "source",
+            "guard_order": ["raising"],
+            "active_priority": -3,
+            "history_count": 0,
+            "lower_candidate_suppressed": True,
+            "observer_count": 1,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "priority.async.cancellation",
+        "family": "priority-selection",
+        "fields": (
+            "id",
+            "family",
+            "cancelled",
+            "stage",
+            "active_priority",
+            "state",
+            "guard_order",
+            "history_count",
+            "lower_candidate_suppressed",
+            "observer_count",
+            "post_cancellation_reuse",
+            "redacted",
+        ),
+        "required_values": {
+            "cancelled": True,
+            "stage": "guard",
+            "active_priority": -3,
+            "state": "source",
+            "guard_order": ["blocked"],
+            "history_count": 0,
+            "lower_candidate_suppressed": True,
+            "observer_count": 1,
+            "post_cancellation_reuse": True,
+            "redacted": True,
+        },
+    },
+    {
         "id": "output.grammar-containment",
         "family": "output-containment",
         "fields": (
@@ -1264,6 +1444,370 @@ def _logging_metadata_redaction() -> dict[str, Any]:
     }
 
 
+def _priority_sync_winner() -> dict[str, Any]:
+    """Prove a lower numeric eligible priority wins without probing later guards."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    guard_order: list[str] = []
+    source = core.State("source")
+    rejected = core.State("rejected")
+    winner = core.State("winner")
+    later = core.State("later")
+    machine = core.StateMachine(source, name="artifact-conformance-priority-sync")
+    for state in (rejected, winner, later):
+        machine.add_state(state)
+
+    def guard(label: str, outcome: bool) -> Callable[..., bool]:
+        def evaluate(*_args: object, **_kwargs: object) -> bool:
+            guard_order.append(label)
+            return outcome
+
+        return evaluate
+
+    machine.add_transition("advance", source, later, guard("later", True), priority=9)
+    machine.add_transition("advance", source, winner, guard("winner", True), priority=3)
+    machine.add_transition(
+        "advance", source, rejected, guard("rejected", False), priority=-2
+    )
+    machine.enable_history()
+    result = machine.trigger("advance", payload="caller-secret")
+    history = machine.history
+    return {
+        "id": "priority.sync.winner",
+        "family": "priority-selection",
+        "success": result.success,
+        "committed": result.committed,
+        "state": machine.current_state.name,
+        "target": result.to_state,
+        "guard_order": guard_order,
+        "result_priority": result.priority,
+        "history_priority": history[0].priority if history else None,
+        "history_count": len(history),
+        "lower_candidate_suppressed": "later" not in guard_order,
+        "redacted": "caller-secret" not in repr(result),
+    }
+
+
+def _priority_sync_exhaustion() -> dict[str, Any]:
+    """Record one observer-visible selection failure after every candidate rejects."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    guard_order: list[str] = []
+    observer_count = 0
+    source = core.State("source")
+    first = core.State("first")
+    second = core.State("second")
+    machine = core.StateMachine(source, name="artifact-conformance-priority-exhaustion")
+    machine.add_state(first)
+    machine.add_state(second)
+
+    def rejected(label: str) -> Callable[..., bool]:
+        def evaluate(*_args: object, **_kwargs: object) -> bool:
+            guard_order.append(label)
+            return False
+
+        return evaluate
+
+    machine.add_transition("advance", source, second, rejected("second"), priority=3)
+    machine.add_transition("advance", source, first, rejected("first"), priority=-3)
+    machine.enable_history()
+
+    def observer(*_args: object, **_kwargs: object) -> None:
+        nonlocal observer_count
+        observer_count += 1
+
+    machine.on_failed(observer)
+    result = machine.trigger("advance", payload="caller-secret")
+    return {
+        "id": "priority.sync.exhaustion",
+        "family": "priority-selection",
+        "success": result.success,
+        "committed": result.committed,
+        "stage": result.stage,
+        "state": machine.current_state.name,
+        "guard_order": guard_order,
+        "result_priority": result.priority,
+        "history_count": len(machine.history),
+        "observer_count": observer_count,
+        "all_candidates_evaluated": guard_order == ["first", "second"],
+        "redacted": "caller-secret" not in repr(result),
+    }
+
+
+def _priority_sync_guard_exception() -> dict[str, Any]:
+    """Keep an active guard exception terminal at its exact priority."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    guard_order: list[str] = []
+    observer_count = 0
+    source = core.State("source")
+    failed = core.State("failed")
+    later = core.State("later")
+    machine = core.StateMachine(source, name="artifact-conformance-priority-error")
+    machine.add_state(failed)
+    machine.add_state(later)
+
+    def raises(*_args: object, **_kwargs: object) -> bool:
+        guard_order.append("raising")
+        raise RuntimeError("guard-secret")
+
+    def lower(*_args: object, **_kwargs: object) -> bool:
+        guard_order.append("later")
+        return True
+
+    machine.add_transition("advance", source, later, lower, priority=4)
+    machine.add_transition("advance", source, failed, raises, priority=-3)
+    machine.enable_history()
+
+    def observer(*_args: object, **_kwargs: object) -> None:
+        nonlocal observer_count
+        observer_count += 1
+
+    machine.on_failed(observer)
+    result = machine.trigger("advance", payload="caller-secret")
+    return {
+        "id": "priority.sync.guard_exception",
+        "family": "priority-selection",
+        "success": result.success,
+        "committed": result.committed,
+        "stage": result.stage,
+        "state": machine.current_state.name,
+        "guard_order": guard_order,
+        "active_priority": result.priority,
+        "history_count": len(machine.history),
+        "lower_candidate_suppressed": "later" not in guard_order,
+        "observer_count": observer_count,
+        "redacted": all(
+            sentinel not in repr(result)
+            for sentinel in ("caller-secret", "guard-secret")
+        ),
+    }
+
+
+def _priority_async_winner() -> dict[str, Any]:
+    """Await ordered candidates one at a time and commit only the first winner."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    class AsyncGuard(AsyncCondition):
+        __slots__ = ("_guard_order", "_label", "_outcome")
+
+        def __init__(self, guard_order: list[str], label: str, outcome: bool) -> None:
+            super().__init__(label, "artifact priority guard")
+            self._guard_order = guard_order
+            self._label = label
+            self._outcome = outcome
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            self._guard_order.append(self._label)
+            return self._outcome
+
+    async def collect_async() -> dict[str, Any]:
+        guard_order: list[str] = []
+        source = core.State("source")
+        rejected = core.State("rejected")
+        winner = core.State("winner")
+        later = core.State("later")
+        machine = core.AsyncStateMachine(
+            source, name="artifact-conformance-priority-async"
+        )
+        for state in (rejected, winner, later):
+            machine.add_state(state)
+        machine.add_transition(
+            "advance", source, later, AsyncGuard(guard_order, "later", True), priority=9
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            winner,
+            AsyncGuard(guard_order, "winner", True),
+            priority=3,
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            rejected,
+            AsyncGuard(guard_order, "rejected", False),
+            priority=-2,
+        )
+        machine.enable_history()
+        result = await machine.trigger_async("advance", payload="caller-secret")
+        history = machine.history
+        return {
+            "id": "priority.async.winner",
+            "family": "priority-selection",
+            "success": result.success,
+            "committed": result.committed,
+            "state": machine.current_state.name,
+            "target": result.to_state,
+            "guard_order": guard_order,
+            "result_priority": result.priority,
+            "history_priority": history[0].priority if history else None,
+            "history_count": len(history),
+            "lower_candidate_suppressed": "later" not in guard_order,
+            "redacted": "caller-secret" not in repr(result),
+        }
+
+    return asyncio.run(collect_async())
+
+
+def _priority_async_guard_exception() -> dict[str, Any]:
+    """Stop asynchronous selection at the raising candidate without fallback."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    class AsyncGuard(AsyncCondition):
+        __slots__ = ("_guard_order", "_label", "_outcome")
+
+        def __init__(self, guard_order: list[str], label: str, outcome: object) -> None:
+            super().__init__(label, "artifact priority guard")
+            self._guard_order = guard_order
+            self._label = label
+            self._outcome = outcome
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            self._guard_order.append(self._label)
+            if isinstance(self._outcome, BaseException):
+                raise self._outcome
+            return bool(self._outcome)
+
+    async def collect_async() -> dict[str, Any]:
+        guard_order: list[str] = []
+        observer_count = 0
+        source = core.State("source")
+        failed = core.State("failed")
+        later = core.State("later")
+        machine = core.AsyncStateMachine(
+            source, name="artifact-conformance-priority-async-error"
+        )
+        machine.add_state(failed)
+        machine.add_state(later)
+        machine.add_transition(
+            "advance", source, later, AsyncGuard(guard_order, "later", True), priority=4
+        )
+        machine.add_transition(
+            "advance",
+            source,
+            failed,
+            AsyncGuard(guard_order, "raising", RuntimeError("guard-secret")),
+            priority=-3,
+        )
+        machine.enable_history()
+
+        def observer(*_args: object, **_kwargs: object) -> None:
+            nonlocal observer_count
+            observer_count += 1
+
+        machine.on_failed(observer)
+        result = await machine.trigger_async("advance", payload="caller-secret")
+        return {
+            "id": "priority.async.guard_exception",
+            "family": "priority-selection",
+            "success": result.success,
+            "committed": result.committed,
+            "stage": result.stage,
+            "state": machine.current_state.name,
+            "guard_order": guard_order,
+            "active_priority": result.priority,
+            "history_count": len(machine.history),
+            "lower_candidate_suppressed": "later" not in guard_order,
+            "observer_count": observer_count,
+            "redacted": all(
+                sentinel not in repr(result)
+                for sentinel in ("caller-secret", "guard-secret")
+            ),
+        }
+
+    return asyncio.run(collect_async())
+
+
+def _priority_async_cancellation() -> dict[str, Any]:
+    """Re-raise one cancellation, finalize once, and release the machine for reuse."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    class BlockingGuard(AsyncCondition):
+        __slots__ = ("_guard_order", "started")
+
+        def __init__(self, guard_order: list[str], started: asyncio.Event) -> None:
+            super().__init__("blocked", "artifact priority cancellation guard")
+            self._guard_order = guard_order
+            self.started = started
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            self._guard_order.append("blocked")
+            self.started.set()
+            await asyncio.Event().wait()
+            return True
+
+    class LaterGuard(AsyncCondition):
+        __slots__ = ("_guard_order",)
+
+        def __init__(self, guard_order: list[str]) -> None:
+            super().__init__("later", "artifact priority later guard")
+            self._guard_order = guard_order
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            self._guard_order.append("later")
+            return True
+
+    async def collect_async() -> dict[str, Any]:
+        guard_order: list[str] = []
+        observer_count = 0
+        started = asyncio.Event()
+        source = core.State("source")
+        blocked = core.State("blocked")
+        later = core.State("later")
+        recovered = core.State("recovered")
+        machine = core.AsyncStateMachine(
+            source, name="artifact-conformance-priority-cancellation"
+        )
+        for state in (blocked, later, recovered):
+            machine.add_state(state)
+        machine.add_transition(
+            "advance", source, blocked, BlockingGuard(guard_order, started), priority=-3
+        )
+        machine.add_transition(
+            "advance", source, later, LaterGuard(guard_order), priority=4
+        )
+        machine.add_transition("recover", source, recovered)
+        machine.enable_history()
+
+        def observer(*_args: object, **_kwargs: object) -> None:
+            nonlocal observer_count
+            observer_count += 1
+
+        machine.on_failed(observer)
+        pending = asyncio.create_task(
+            machine.trigger_async("advance", payload="caller-secret")
+        )
+        await started.wait()
+        pending.cancel()
+        cancelled = False
+        try:
+            await pending
+        except asyncio.CancelledError:
+            cancelled = True
+        state_after_cancellation = machine.current_state.name
+        history_count = len(machine.history)
+        reused = await machine.trigger_async("recover", payload="caller-secret")
+        return {
+            "id": "priority.async.cancellation",
+            "family": "priority-selection",
+            "cancelled": cancelled,
+            "stage": "guard" if observer_count == 1 else "unexpected",
+            "active_priority": -3,
+            "state": state_after_cancellation,
+            "guard_order": guard_order,
+            "history_count": history_count,
+            "lower_candidate_suppressed": guard_order == ["blocked"],
+            "observer_count": observer_count,
+            "post_cancellation_reuse": reused.success
+            and machine.current_state.name == "recovered",
+            "redacted": all(
+                sentinel not in repr(value)
+                for value in (reused,)
+                for sentinel in _PAYLOAD_SENTINELS
+            ),
+        }
+
+    return asyncio.run(collect_async())
+
+
 def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
     """Return ordered standalone scenario adapters; later families extend this seam."""
     return (
@@ -1276,6 +1820,12 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
         lambda: _diagnostic_boundary("path_expansions"),
         _graph_guard_rejection,
         _logging_metadata_redaction,
+        _priority_sync_winner,
+        _priority_sync_exhaustion,
+        _priority_sync_guard_exception,
+        _priority_async_winner,
+        _priority_async_guard_exception,
+        _priority_async_cancellation,
         _output_grammar_containment,
         _ownership_cancellation_reuse,
         _ownership_reentry_independent_machine,
@@ -1332,6 +1882,56 @@ def _validate_scenarios(scenarios: Sequence[Mapping[str, Any]]) -> None:
             raise ConformanceError(
                 f"Conformance scenario {identifier} has invalid history."
             )
+        if identifier.startswith("priority."):
+            guard_order = record.get("guard_order")
+            if (
+                not isinstance(guard_order, list)
+                or not guard_order
+                or len(guard_order) > 3
+                or not all(isinstance(value, str) for value in guard_order)
+            ):
+                raise ConformanceError(
+                    f"Conformance scenario {identifier} has invalid guard order."
+                )
+            for field in ("state", "stage", "target"):
+                if field in record and not isinstance(record[field], str):
+                    raise ConformanceError(
+                        f"Conformance scenario {identifier} has invalid scalar outcome."
+                    )
+            for field in ("result_priority", "history_priority", "active_priority"):
+                if (
+                    field in record
+                    and record[field] is not None
+                    and (
+                        type(record[field]) is bool
+                        or not isinstance(record[field], int)
+                    )
+                ):
+                    raise ConformanceError(
+                        f"Conformance scenario {identifier} has invalid priority."
+                    )
+            for field in ("history_count", "observer_count"):
+                if field in record and (
+                    type(record[field]) is bool
+                    or not isinstance(record[field], int)
+                    or record[field] < 0
+                    or record[field] > 3
+                ):
+                    raise ConformanceError(
+                        f"Conformance scenario {identifier} has invalid count."
+                    )
+            for field in (
+                "success",
+                "committed",
+                "cancelled",
+                "lower_candidate_suppressed",
+                "all_candidates_evaluated",
+                "post_cancellation_reuse",
+            ):
+                if field in record and not isinstance(record[field], bool):
+                    raise ConformanceError(
+                        f"Conformance scenario {identifier} has invalid boolean outcome."
+                    )
         if "success" in record and not isinstance(record["success"], bool):
             raise ConformanceError(
                 f"Conformance scenario {identifier} has invalid success outcome."

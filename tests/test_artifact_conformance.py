@@ -221,6 +221,45 @@ def test_priority_records_have_independent_required_values() -> None:
     }
 
 
+def test_each_priority_definition_locks_every_observed_fact() -> None:
+    """No priority fact can remain a parity-only or type-coercible observation."""
+    payload = artifact_conformance.collect_conformance()
+    definitions = {
+        definition["id"]: definition
+        for definition in artifact_conformance._SCENARIO_DEFINITIONS
+        if definition["id"].startswith("priority.")
+    }
+    records = {record["id"]: record for record in payload["scenarios"]}
+
+    assert set(definitions) == {
+        "priority.sync.winner",
+        "priority.sync.exhaustion",
+        "priority.sync.guard_exception",
+        "priority.async.winner",
+        "priority.async.guard_exception",
+        "priority.async.cancellation",
+    }
+    for identifier, definition in definitions.items():
+        required_values = definition["required_values"]
+        assert set(required_values) == set(records[identifier]) - {"id", "family"}
+        for field, value in required_values.items():
+            mutated = copy.deepcopy(payload)
+            record = next(
+                item for item in mutated["scenarios"] if item["id"] == identifier
+            )
+            if isinstance(value, bool):
+                record[field] = not value
+            elif isinstance(value, int):
+                record[field] = value + 1
+            elif value is None:
+                record[field] = "wrong-value"
+            else:
+                record[field] = "wrong-value"
+            _rehash(mutated)
+            with pytest.raises(artifact_conformance.ConformanceError):
+                artifact_conformance.validate_conformance(mutated)
+
+
 @pytest.mark.parametrize(("identifier", "field", "value"), _PRIORITY_REQUIRED_VALUES)
 def test_each_priority_required_value_is_immutable_and_fail_closed(
     identifier: str, field: str, value: object
