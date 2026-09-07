@@ -54,6 +54,19 @@ def conditional_fsm():
     return fsm
 
 
+@pytest.fixture
+def priority_candidate_fsm():
+    """Same-target candidates with hostile labels exercise every output sink."""
+    source = State("source\\n|<")
+    destination = State("destination")
+    guarded = FuncCondition(lambda: True, "guard\\n|<")
+    fsm = StateMachine(source, name="priority\\n|<")
+    fsm.add_state(destination)
+    fsm.add_transition("return\\n|<", source, destination, guarded, priority=7)
+    fsm.add_transition("return\\n|<", source, destination, priority=-3)
+    return fsm
+
+
 # ---------------------------------------------------------------------------
 # Basic structure
 # ---------------------------------------------------------------------------
@@ -94,22 +107,22 @@ class TestToMermaidBasic:
             state "idle" as s0
             state "running" as s1
             [*] --> s0
-            s0 --> s1 : start
-            s1 --> s0 : stop"""
+            s0 --> s1 : start [priority 0]
+            s1 --> s0 : stop [priority 0]"""
         plantuml_snapshot = """@startuml
         state "idle" as s0
         state "running" as s1
         [*] --> s0
-        s0 --> s1 : start
-        s1 --> s0 : stop
+        s0 --> s1 : start [priority 0]
+        s1 --> s0 : stop [priority 0]
         @enduml"""
         fenced_snapshot = """        ```mermaid
         stateDiagram-v2
             state "idle" as s0
             state "running" as s1
             [*] --> s0
-            s0 --> s1 : start
-            s1 --> s0 : stop
+            s0 --> s1 : start [priority 0]
+            s1 --> s0 : stop [priority 0]
         ```"""
 
         assert mermaid_snapshot in to_mermaid.__doc__
@@ -159,10 +172,10 @@ class TestToMermaidConditions:
 
     def test_no_brackets_on_transitions_without_conditions(self, simple_fsm):
         out = to_mermaid(simple_fsm)
-        # Condition brackets appear after the colon in "from --> to : label [cond]"
+        # Every candidate label carries its generated priority, not a condition.
         for line in out.splitlines():
             if "-->" in line and ":" in line:
-                assert "[" not in line.split(":", 1)[1]
+                assert line.endswith("[priority 0]")
 
 
 # ---------------------------------------------------------------------------
@@ -537,3 +550,47 @@ class TestToJsonQuality:
         # Must not raise TypeError
         serialised = json.dumps(data)
         assert isinstance(serialised, str)
+
+
+class TestPriorityCandidateOutput:
+    def test_all_visualization_sinks_keep_priority_and_escape_hostile_labels(
+        self, priority_candidate_fsm
+    ):
+        """One same-target candidate record is emitted by every output family."""
+        mermaid = to_mermaid(priority_candidate_fsm, show_conditions=False)
+        plantuml = to_plantuml(priority_candidate_fsm, show_conditions=False)
+        payload = to_json(priority_candidate_fsm, include_adjacency=True)
+        document = to_mermaid_document(priority_candidate_fsm, include_adjacency=True)
+
+        for rendered in (mermaid, plantuml):
+            assert rendered.count("[priority ") == 2
+            assert "[priority -3]" in rendered
+            assert "[priority 7]" in rendered
+            assert "guard" not in rendered
+
+        transitions = payload["topology"]["transitions"]
+        assert [row["priority"] for row in transitions] == [-3, 7]
+        assert [row["has_guard"] for row in transitions] == [False, True]
+        assert [
+            row["priority"]
+            for row in payload["topology"]["adjacency_matrix"]["transitions"]
+        ] == [-3, 7]
+        assert "&#x000A;" in mermaid
+        assert "\\u000A" in plantuml
+        assert "| # | From | Event | To | Priority |" in document
+        assert "[priority -3]" in document
+        assert "[priority 7]" in document
+
+    def test_tampered_adjacency_priority_fails_the_fixed_contract(
+        self, priority_candidate_fsm
+    ):
+        """A valid-looking matrix cannot substitute a different precedence value."""
+        from fast_fsm.validation import FSMValidator
+
+        adjacency = FSMValidator(priority_candidate_fsm).get_adjacency_matrix()
+        adjacency["transitions"][0]["priority"] = 999
+
+        with pytest.raises(
+            ValueError, match="adjacency matrix does not match captured snapshot"
+        ):
+            to_mermaid_document(priority_candidate_fsm, adjacency_matrix=adjacency)

@@ -658,6 +658,25 @@ class TestEnhancedFSMValidator:
         assert "&#x000A;" in markdown
         assert "&#x003C;script&#x003E;" in markdown
 
+    def test_candidate_reports_keep_numeric_priority_in_json_and_markdown(self):
+        """Validation reports expose every same-target candidate independently."""
+        source = State("source\\n|<")
+        destination = State("destination")
+        fsm = StateMachine(source, name="candidate-report")
+        fsm.add_state(destination)
+        fsm.add_transition("return\\n|<", source, destination, priority=7)
+        fsm.add_transition("return\\n|<", source, destination, priority=-3)
+
+        validator = EnhancedFSMValidator(fsm)
+        payload = json.loads(validator.export_report("json"))
+        markdown = validator.export_report("markdown")
+
+        assert [row["priority"] for row in payload["transitions"]] == [-3, 7]
+        assert "| # | From | Event | To | Priority |" in markdown
+        assert "[priority -3]" in markdown
+        assert "[priority 7]" in markdown
+        assert "&#x000A;" in markdown
+
     def test_export_text(self, well_designed_fsm):
         v = EnhancedFSMValidator(well_designed_fsm)
         text = v.export_report("text")
