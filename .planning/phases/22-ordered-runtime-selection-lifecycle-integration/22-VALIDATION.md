@@ -1,8 +1,8 @@
 ---
 phase: 22
 slug: ordered-runtime-selection-lifecycle-integration
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: true
 created: 2026-09-06
 ---
@@ -17,7 +17,7 @@ created: 2026-09-06
 |----------|-------|
 | **Framework** | pytest + pytest-asyncio + Hypothesis |
 | **Config file** | `pyproject.toml` |
-| **Quick run command** | `FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_graph_invariants.py tests/test_transition_lifecycle.py tests/test_async.py -k 'priority or candidate or selection or lifecycle' -x -q` |
+| **Quick run command** | `FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_priority_selection.py tests/test_graph_invariants.py tests/test_transition_lifecycle.py tests/test_async.py -k 'priority or candidate or selection or lifecycle' -x -q` |
 | **Full suite command** | `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q` |
 | **Estimated runtime** | ~10 seconds |
 
@@ -32,10 +32,12 @@ created: 2026-09-06
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 22-01-01 | 01 | 1 | SEL-01, SEL-03 | T-22-01 | Ordered candidate scan stops at first fully eligible sync winner before lifecycle | unit/property | `uv run pytest tests/test_graph_invariants.py tests/test_transition_lifecycle.py -k 'priority or candidate or selection or lifecycle' -x -q` | ✅ | ⬜ pending |
-| 22-01-02 | 01 | 1 | SEL-02 | T-22-02 | Async guard evaluation is sequential; exception/cancellation never evaluates a lower priority | async unit | `uv run pytest tests/test_async.py -k 'priority or candidate or selection or cancellation' -x -q` | ✅ | ⬜ pending |
-| 22-02-01 | 02 | 2 | SEL-03, SEL-04 | T-22-03 | One selected priority reaches result/history/trace; exhaustion sends one truthful failure | lifecycle/unit | `uv run pytest tests/test_transition_lifecycle.py tests/test_listeners.py -k 'selection or priority or failure' -x -q` | ✅ | ⬜ pending |
-| 22-02-02 | 02 | 2 | SEL-01..04 | T-22-04 | Typed singleton/group dispatch remains native-safe and preserves O(1) singleton lookup | native/performance | `FAST_FSM_BUILD_MODE=compiled uv run pytest tests/test_mypyc_guard.py tests/test_performance_benchmarks.py -k 'priority or candidate or selection or constant_lookup' -x -q` | ✅ | ⬜ pending |
+| 22-01-01 | 01 | 1 | SEL-01, SEL-03 | T-22-01, T-22-02 | Ascending sync eligibility resolves one prepared winner before one lifecycle | unit/integration | `uv run pytest tests/test_priority_selection.py tests/test_transition_lifecycle.py -k 'sync and (priority or candidate or selection or lifecycle)' -x -q` | 🆕 planned | ⬜ pending |
+| 22-01-02 | 01 | 1 | SEL-01, SEL-03, SEL-04 | T-22-03, T-22-04 | Rejection, terminal exception, exhaustion, singleton, projection, and can-trigger boundaries stay distinct | unit/integration | `uv run pytest tests/test_priority_selection.py tests/test_graph_invariants.py tests/test_transition_lifecycle.py -k 'priority or candidate or selection or exhaust or exception or singleton or projection' -x -q` | 🆕 planned | ⬜ pending |
+| 22-02-01 | 02 | 2 | SEL-02 | T-22-05, T-22-08 | Async query/dispatch awaits one candidate stage at a time in stored order | async integration | `uv run pytest tests/test_priority_selection.py tests/test_async.py -k 'async and (priority or candidate or selection or can_trigger)' -x -q` | 🆕 planned | ⬜ pending |
+| 22-02-02 | 02 | 2 | SEL-02, SEL-03, SEL-04 | T-22-06, T-22-07 | Exception/cancellation stop lower candidates; trigger finalizes once and query stays observer-free | async/lifecycle | `uv run pytest tests/test_priority_selection.py tests/test_async.py tests/test_transition_lifecycle.py -k 'async and (priority or candidate or selection or exception or cancellation or lifecycle or exhaust)' -x -q` | 🆕 planned | ⬜ pending |
+| 22-03-01 | 03 | 3 | SEL-03, SEL-04 | T-22-09, T-22-12 | Selected/evaluated priority reaches one result/history/trace path without payload disclosure | lifecycle/logging | `uv run pytest tests/test_transition_lifecycle.py tests/test_logging_config.py -k 'priority or selection or history or trace or redactor or lifecycle' -x -q` | ✅ | ⬜ pending |
+| 22-03-02 | 03 | 3 | SEL-01, SEL-02, SEL-03, SEL-04 | T-22-10, T-22-11 | Slotted pure/native selection preserves O(1) singleton and local O(k) group work | native/performance | `FAST_FSM_BUILD_MODE=compiled uv run pytest tests/test_mypyc_guard.py tests/test_priority_selection.py tests/test_transition_lifecycle.py tests/test_async.py tests/test_performance_benchmarks.py -k 'priority or candidate or selection or constant_lookup or group_local_work or lifecycle_success_trigger_throughput' -x -q -s -p no:cov` | ✅ | ⬜ pending |
 
 ## Wave 0 Requirements
 
@@ -48,10 +50,10 @@ All Phase 22 behaviors have automated verification. The Phase 25 drone example r
 ## Validation Sign-Off
 
 - [x] Existing infrastructure covers the required sync, async, lifecycle, native, and performance seams.
-- [ ] Planner task IDs and commands reconciled against the final PLAN.md files.
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify.
+- [x] Planner task IDs and commands reconciled against the final PLAN.md files.
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify.
 - [ ] No watch-mode flags.
 - [x] Feedback latency target is under 60 seconds for focused checks.
-- [ ] `nyquist_compliant: true` set after plan validation.
+- [x] `nyquist_compliant: true` set after plan validation.
 
-**Approval:** draft — awaiting plan-checker reconciliation
+**Approval:** approved — final plan task IDs, threats, waves, and commands reconciled
