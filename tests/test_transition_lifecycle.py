@@ -17,6 +17,7 @@ from fast_fsm.core import (
     State,
     StateMachine,
     TransitionError,
+    TransitionRecord,
     TransitionResult,
     transition,
 )
@@ -308,6 +309,127 @@ async def test_async_group_selection_completes_before_one_lifecycle_failure() ->
     assert machine.history == []
     assert events == ["rejected-guard", "winner-guard", "source-exit"]
     assert observed == ["observer"]
+
+
+def test_priority_metadata_tracks_the_selected_or_evaluated_candidate() -> None:
+    """Runtime records identify one candidate without affecting legacy equality."""
+    source = State("source")
+    rejected = State("rejected")
+    winner = State("winner")
+    later = State("later")
+    machine = StateMachine(source, name="priority-runtime-records")
+    for state in (rejected, winner, later):
+        machine.add_state(state)
+    machine.enable_history()
+    machine.add_transition("advance", source, later, priority=8)
+    machine.add_transition(
+        "advance", source, winner, _ResultCondition(True), priority=2
+    )
+    machine.add_transition(
+        "advance", source, rejected, _ResultCondition(False), priority=-1
+    )
+
+    result = machine.trigger("advance")
+
+    assert result.priority == 2
+    assert [(record.to_state, record.priority) for record in machine.history] == [
+        ("winner", 2)
+    ]
+    assert TransitionResult(True, priority=1) == TransitionResult(True, priority=9)
+    assert TransitionRecord("a", "go", "b", 1.0).priority is None
+    assert TransitionRecord("a", "go", "b", 1.0, priority=4).priority == 4
+
+    failure = RuntimeError("guard-secret")
+    guarded = StateMachine(State("guard-source"), name="priority-guard-failure")
+    guarded.add_state(State("guard-target"))
+    guarded.add_transition(
+        "advance",
+        "guard-source",
+        "guard-target",
+        _ResultCondition(failure),
+        priority=11,
+    )
+    assert guarded.trigger("advance").priority == 11
+
+    exhausted = StateMachine(State("exhausted-source"), name="priority-exhausted")
+    exhausted.add_state(State("first"))
+    exhausted.add_state(State("second"))
+    exhausted.add_transition(
+        "advance", "exhausted-source", "first", _ResultCondition(False), priority=0
+    )
+    exhausted.add_transition(
+        "advance", "exhausted-source", "second", _ResultCondition(False), priority=1
+    )
+    assert exhausted.trigger("advance").priority is None
+    assert exhausted.trigger("missing").priority is None
+
+
+def test_priority_metadata_survives_a_post_selection_lifecycle_failure() -> None:
+    """A selected edge retains its priority after a committed lifecycle failure."""
+    failure = RuntimeError("destination-secret")
+    source = State("source")
+    destination = CallbackState(
+        "destination", on_enter=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure)
+    )
+    machine = StateMachine(source, name="priority-lifecycle-failure")
+    machine.add_state(destination)
+    machine.enable_history()
+    machine.add_transition("advance", source, destination, priority=7)
+
+    result = machine.trigger("advance")
+
+    assert result.success is False
+    assert result.committed is True
+    assert result.cause is failure
+    assert result.priority == 7
+    assert [(record.to_state, record.priority) for record in machine.history] == [
+        ("destination", 7)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_cancellation_reports_the_evaluated_candidate_priority() -> None:
+    """Cancellation inside one awaited candidate retains only that candidate's scalar."""
+
+    class CapturingAsyncMachine(AsyncStateMachine):
+        __slots__ = ("failures",)
+
+        def __init__(self, initial_state: State) -> None:
+            super().__init__(initial_state, name="priority-cancellation")
+            self.failures: list[TransitionResult] = []
+
+        def _finalize_failure(
+            self, result: TransitionResult, kwargs: dict[str, object]
+        ) -> TransitionResult:
+            self.failures.append(result)
+            return super()._finalize_failure(result, kwargs)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    source = State("source")
+    machine = CapturingAsyncMachine(source)
+    machine.add_state(State("first"))
+    machine.add_state(State("later"))
+    machine.add_transition(
+        "advance",
+        source,
+        "first",
+        _BlockingAsyncCondition(started, release),
+        priority=-4,
+    )
+    machine.add_transition("advance", source, "later", priority=2)
+
+    pending = asyncio.create_task(machine.trigger_async("advance"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=_ASYNC_TEST_TIMEOUT)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, timeout=_ASYNC_TEST_TIMEOUT)
+        assert [(result.stage, result.priority) for result in machine.failures] == [
+            ("guard", -4)
+        ]
+    finally:
+        await _cleanup_spawned_tasks(pending)
 
 
 def test_tracer_destination_enter_failure_commits_and_finalizes_once(

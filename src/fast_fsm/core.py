@@ -82,6 +82,13 @@ _async_selection_lifecycle_stage: contextvars.ContextVar[str] = contextvars.Cont
     str
 ]("_async_selection_lifecycle_stage", default="selection")
 
+# The owned async boundary retains only the scalar for the candidate currently
+# being awaited.  That lets cancellation describe the evaluated candidate
+# without inventing a second selector outcome or storing mutable machine state.
+_async_selection_priority: contextvars.ContextVar[Optional[int]] = (
+    contextvars.ContextVar[Optional[int]]("_async_selection_priority", default=None)
+)
+
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a
 # failure result without importing a private implementation type. Every stage
@@ -126,7 +133,9 @@ _FSM_TRACE_LEVEL = logging.DEBUG - 5
 _FSM_TRACE_KEY_LIMIT = 50
 _FSM_TRACE_KEY_LENGTH_LIMIT = 100
 _FSM_TRACE_STRING_LIMIT = 200
-_FSM_TRACE_ALLOWED_OUTPUT_KEYS = frozenset(("operation", "stage", "result", "detail"))
+_FSM_TRACE_ALLOWED_OUTPUT_KEYS = frozenset(
+    ("operation", "stage", "result", "detail", "priority")
+)
 _fsm_logging_generation = 0
 _fsm_logging_configuration_lock = threading.RLock()
 
@@ -148,6 +157,7 @@ class FSMTraceEvent:
     positional_args: Tuple[Any, ...]
     keyword_args: Mapping[str, Any]
     error: Optional[BaseException]
+    priority: Optional[int] = None
 
 
 FSMTraceRedactor = Callable[[FSMTraceEvent], Mapping[str, object] | None]
@@ -267,6 +277,7 @@ def _emit_fsm_trace(
     positional_args: Tuple[Any, ...],
     keyword_args: Mapping[str, Any],
     error: Optional[BaseException],
+    priority: Optional[int],
 ) -> None:
     """Emit metadata-only trace output or an explicitly redacted variant."""
     if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
@@ -278,6 +289,7 @@ def _emit_fsm_trace(
         "trace_result": result,
         "trace_arg_count": len(positional_args),
         "trace_keyword_names": _trace_keyword_names(keyword_args),
+        "trace_priority": priority,
     }
     redactor = _library_trace_redactor(logger)
     if redactor is not None:
@@ -294,6 +306,7 @@ def _emit_fsm_trace(
                         positional_args=positional_args,
                         keyword_args=keyword_args,
                         error=error,
+                        priority=priority,
                     )
                 )
             )
@@ -306,6 +319,7 @@ def _emit_fsm_trace(
                 "trace_result": "failure",
                 "trace_arg_count": 0,
                 "trace_keyword_names": (),
+                "trace_priority": None,
             }
         else:
             for key, value in output.items():
@@ -541,6 +555,7 @@ class TransitionResult:
     committed: bool = field(default=False, compare=False)
     stage: Optional[str] = field(default=None, compare=False)
     cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
+    priority: Optional[int] = field(default=None, compare=False)
 
     def raise_if_failed(self) -> "TransitionResult":
         """Raise :class:`TransitionError` if the transition did not succeed.
@@ -570,15 +585,21 @@ class TransitionRecord:
     via :meth:`StateMachine.enable_history`.
     """
 
-    __slots__ = ("from_state", "trigger", "to_state", "timestamp")
+    __slots__ = ("from_state", "trigger", "to_state", "timestamp", "priority")
 
     def __init__(
-        self, from_state: str, trigger: str, to_state: str, timestamp: float
+        self,
+        from_state: str,
+        trigger: str,
+        to_state: str,
+        timestamp: float,
+        priority: Optional[int] = None,
     ) -> None:
         self.from_state: str = from_state
         self.trigger: str = trigger
         self.to_state: str = to_state
         self.timestamp: float = timestamp
+        self.priority: Optional[int] = priority
 
     def __repr__(self) -> str:
         return (
@@ -2296,6 +2317,7 @@ class StateMachine:
                     "Transition guard raised an exception",
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
+                    priority=entry.priority,
                 )
             if not condition_result:
                 if scan_group:
@@ -2312,6 +2334,7 @@ class StateMachine:
                     trigger,
                     error_msg,
                     stage=_LIFECYCLE_STAGE_GUARD,
+                    priority=entry.priority,
                 )
 
         try:
@@ -2326,6 +2349,7 @@ class StateMachine:
                     "Transition guard raised an exception",
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
+                    priority=entry.priority,
                 )
             _emit_legacy_warning(
                 self._logger,
@@ -2339,6 +2363,7 @@ class StateMachine:
                 "Transition guard raised an exception",
                 stage=_LIFECYCLE_STAGE_GUARD,
                 cause=cause,
+                priority=entry.priority,
             )
         if not declarative_guard_passed:
             if scan_group:
@@ -2350,6 +2375,7 @@ class StateMachine:
                 trigger,
                 error_msg,
                 stage=_LIFECYCLE_STAGE_GUARD,
+                priority=entry.priority,
             )
 
         _emit_legacy_debug(
@@ -2378,6 +2404,7 @@ class StateMachine:
                 "State permission raised an exception",
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 cause=cause,
+                priority=entry.priority,
             )
         if not can_proceed:
             if scan_group:
@@ -2389,6 +2416,7 @@ class StateMachine:
                 trigger,
                 error_msg,
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                priority=entry.priority,
             )
         return prepared
 
@@ -2909,14 +2937,19 @@ class StateMachine:
         return prepared.entry, prepared.current_name
 
     def _commit_transition(
-        self, old_state: State, to_state: State, trigger: str
+        self,
+        old_state: State,
+        to_state: State,
+        trigger: str,
+        *,
+        priority: Optional[int] = None,
     ) -> None:
         """Commit state and optional history without invoking user code."""
         record: Optional[TransitionRecord] = None
         history = self._history
         if history is not None:
             record = TransitionRecord(
-                old_state.name, trigger, to_state.name, time.monotonic()
+                old_state.name, trigger, to_state.name, time.monotonic(), priority
             )
         if record is not None:
             assert history is not None
@@ -2933,6 +2966,7 @@ class StateMachine:
         to_state: Optional[str] = None,
         committed: bool = False,
         cause: Optional[BaseException] = None,
+        priority: Optional[int] = None,
     ) -> TransitionResult:
         """Construct one staged failure without observing it.
 
@@ -2949,6 +2983,7 @@ class StateMachine:
             committed=committed,
             stage=stage,
             cause=cause,
+            priority=priority,
         )
 
     def _build_lifecycle_failure(
@@ -2960,6 +2995,7 @@ class StateMachine:
         cause: BaseException,
         *,
         committed: bool,
+        priority: Optional[int] = None,
     ) -> TransitionResult:
         """Describe one redacted lifecycle failure without observing it."""
         return self._build_failure_result(
@@ -2970,6 +3006,7 @@ class StateMachine:
             to_state=to_state.name if committed else None,
             committed=committed,
             cause=cause,
+            priority=priority,
         )
 
     def _finalize_failure(
@@ -3010,6 +3047,7 @@ class StateMachine:
         to_state = prepared.entry.to_state
         trigger = prepared.trigger
         args = prepared.args
+        priority = prepared.entry.priority
         declarative_handler = prepared.declarative_handler
 
         # Pre-commit: before-transition listeners.
@@ -3025,6 +3063,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_BEFORE_TRANSITION,
                         cause,
                         committed=False,
+                        priority=priority,
                     )
 
         # Log transition start
@@ -3048,6 +3087,7 @@ class StateMachine:
                 _LIFECYCLE_STAGE_SOURCE_EXIT,
                 cause,
                 committed=False,
+                priority=priority,
             )
 
         _exit_cbs = self._state_exit_callbacks.get(old_state.name)
@@ -3063,6 +3103,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK,
                         cause,
                         committed=False,
+                        priority=priority,
                     )
 
         # Pre-commit: machine exit-state listeners.
@@ -3078,12 +3119,13 @@ class StateMachine:
                         _LIFECYCLE_STAGE_EXIT_STATE_LISTENER,
                         cause,
                         committed=False,
+                        priority=priority,
                     )
 
         # Commit: this section invokes no user code, so current state and
         # optional history cannot diverge through a lifecycle callback.
         try:
-            self._commit_transition(old_state, to_state, trigger)
+            self._commit_transition(old_state, to_state, trigger, priority=priority)
         except Exception as cause:
             return self._build_lifecycle_failure(
                 old_state,
@@ -3092,6 +3134,7 @@ class StateMachine:
                 _LIFECYCLE_STAGE_COMMIT,
                 cause,
                 committed=False,
+                priority=priority,
             )
 
         # Post-commit: destination state hook, then registered callbacks.
@@ -3105,6 +3148,7 @@ class StateMachine:
                 _LIFECYCLE_STAGE_DESTINATION_ENTER,
                 cause,
                 committed=True,
+                priority=priority,
             )
 
         _enter_cbs = self._state_enter_callbacks.get(to_state.name)
@@ -3120,6 +3164,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK,
                         cause,
                         committed=True,
+                        priority=priority,
                     )
 
         # Post-commit: machine enter-state listeners.
@@ -3135,6 +3180,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_ENTER_STATE_LISTENER,
                         cause,
                         committed=True,
+                        priority=priority,
                     )
 
         # Post-commit: the selected ordinary declarative handler runs once.
@@ -3151,6 +3197,7 @@ class StateMachine:
                     to_state=to_state.name,
                     committed=True,
                     cause=declarative_result.cause,
+                    priority=priority,
                 )
 
         # Log successful transition (main transition log)
@@ -3177,6 +3224,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
                         cause,
                         committed=True,
+                        priority=priority,
                     )
 
         if self._after_listeners:
@@ -3191,6 +3239,7 @@ class StateMachine:
                         _LIFECYCLE_STAGE_AFTER_TRANSITION,
                         cause,
                         committed=True,
+                        priority=priority,
                     )
 
         return TransitionResult(
@@ -3199,6 +3248,7 @@ class StateMachine:
             to_state=to_state.name,
             trigger=trigger,
             committed=True,
+            priority=priority,
         )
 
     def _execute_control_transition(self, to_state: State, trigger: str) -> None:
@@ -3367,6 +3417,7 @@ class StateMachine:
                     positional_args=args,
                     keyword_args=kwargs,
                     error=trace_result.cause,
+                    priority=trace_result.priority,
                 )
                 return trace_result
             finally:
@@ -3750,6 +3801,7 @@ class AsyncStateMachine(StateMachine):
         trigger: str,
         *args: Any,
         declarative_handler: Optional[Dict[str, Any]] = None,
+        priority: int,
         lifecycle_stage: List[str],
         committed: List[bool],
         **kwargs: Any,
@@ -3775,6 +3827,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=False,
+                    priority=priority,
                 )
 
         _emit_legacy_debug(
@@ -3797,6 +3850,7 @@ class AsyncStateMachine(StateMachine):
                 lifecycle_stage[0],
                 cause,
                 committed=False,
+                priority=priority,
             )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_SOURCE_EXIT_CALLBACK
@@ -3811,6 +3865,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=False,
+                    priority=priority,
                 )
         for fn in self._state_exit_async_callbacks.get(old_state.name, ()):
             try:
@@ -3823,6 +3878,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=False,
+                    priority=priority,
                 )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_EXIT_STATE_LISTENER
@@ -3837,11 +3893,12 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=False,
+                    priority=priority,
                 )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_COMMIT
         try:
-            self._commit_transition(old_state, to_state, trigger)
+            self._commit_transition(old_state, to_state, trigger, priority=priority)
         except Exception as cause:
             return self._build_lifecycle_failure(
                 old_state,
@@ -3850,6 +3907,7 @@ class AsyncStateMachine(StateMachine):
                 lifecycle_stage[0],
                 cause,
                 committed=False,
+                priority=priority,
             )
         committed[0] = True
 
@@ -3864,6 +3922,7 @@ class AsyncStateMachine(StateMachine):
                 lifecycle_stage[0],
                 cause,
                 committed=True,
+                priority=priority,
             )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_DESTINATION_ENTER_CALLBACK
@@ -3878,6 +3937,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=True,
+                    priority=priority,
                 )
         for fn in self._state_enter_async_callbacks.get(to_state.name, ()):
             try:
@@ -3890,6 +3950,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=True,
+                    priority=priority,
                 )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_ENTER_STATE_LISTENER
@@ -3904,6 +3965,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=True,
+                    priority=priority,
                 )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_DECLARATIVE_HANDLER
@@ -3920,6 +3982,7 @@ class AsyncStateMachine(StateMachine):
                     to_state=to_state.name,
                     committed=True,
                     cause=declarative_result.cause,
+                    priority=priority,
                 )
 
         _emit_legacy_debug(
@@ -3943,6 +4006,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=True,
+                    priority=priority,
                 )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_AFTER_TRANSITION
@@ -3957,6 +4021,7 @@ class AsyncStateMachine(StateMachine):
                     lifecycle_stage[0],
                     cause,
                     committed=True,
+                    priority=priority,
                 )
 
         return TransitionResult(
@@ -3965,6 +4030,7 @@ class AsyncStateMachine(StateMachine):
             to_state=to_state.name,
             trigger=trigger,
             committed=True,
+            priority=priority,
         )
 
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
@@ -4051,6 +4117,8 @@ class AsyncStateMachine(StateMachine):
         scan_group: bool,
     ) -> Union[_PreparedDispatch, TransitionResult, None]:
         """Await one candidate, using ``None`` only for group fallthrough."""
+        if not for_query:
+            _async_selection_priority.set(entry.priority)
         declarative_handler = _resolve_declarative_handler(
             source_state, trigger, entry.to_state
         )
@@ -4088,6 +4156,7 @@ class AsyncStateMachine(StateMachine):
                         f"Transition guard rejected trigger '{trigger}' "
                         f"from state '{current_name}'",
                         stage=_LIFECYCLE_STAGE_GUARD,
+                        priority=entry.priority,
                     )
             except Exception as cause:
                 if for_query:
@@ -4098,6 +4167,7 @@ class AsyncStateMachine(StateMachine):
                     "Transition guard raised an exception",
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
+                    priority=entry.priority,
                 )
 
         try:
@@ -4113,6 +4183,7 @@ class AsyncStateMachine(StateMachine):
                 "Transition guard raised an exception",
                 stage=_LIFECYCLE_STAGE_GUARD,
                 cause=cause,
+                priority=entry.priority,
             )
         if not declarative_guard_passed:
             if scan_group:
@@ -4122,6 +4193,7 @@ class AsyncStateMachine(StateMachine):
                 trigger,
                 f"State '{current_name}' rejected transition '{trigger}'",
                 stage=_LIFECYCLE_STAGE_GUARD,
+                priority=entry.priority,
             )
 
         try:
@@ -4139,6 +4211,7 @@ class AsyncStateMachine(StateMachine):
                 "State permission raised an exception",
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 cause=cause,
+                priority=entry.priority,
             )
         if not can_proceed:
             if scan_group:
@@ -4148,6 +4221,7 @@ class AsyncStateMachine(StateMachine):
                 trigger,
                 f"State '{current_name}' rejected transition '{trigger}'",
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                priority=entry.priority,
             )
         return prepared
 
@@ -4201,6 +4275,7 @@ class AsyncStateMachine(StateMachine):
                     positional_args=args,
                     keyword_args=kwargs,
                     error=trace_result.cause,
+                    priority=trace_result.priority,
                 )
                 return trace_result
             finally:
@@ -4224,9 +4299,11 @@ class AsyncStateMachine(StateMachine):
         committed = [False]
         to_state = old_state
         selection_complete = False
+        selected_priority: Optional[int] = None
         selection_token = _async_selection_lifecycle_stage.set(
             _LIFECYCLE_STAGE_SELECTION
         )
+        selection_priority_token = _async_selection_priority.set(None)
 
         try:
             prepared = await self._select_transition_async(
@@ -4236,12 +4313,14 @@ class AsyncStateMachine(StateMachine):
             if isinstance(prepared, TransitionResult):
                 return self._finalize_failure(prepared, kwargs)
             to_state = prepared.entry.to_state
+            selected_priority = prepared.entry.priority
 
             result = await self._execute_transition_async(
                 to_state,
                 trigger,
                 *args,
                 declarative_handler=prepared.declarative_handler,
+                priority=selected_priority,
                 lifecycle_stage=lifecycle_stage,
                 committed=committed,
                 **kwargs,
@@ -4263,11 +4342,17 @@ class AsyncStateMachine(StateMachine):
                 to_state=to_state.name if committed[0] else None,
                 committed=committed[0],
                 cause=cancellation,
+                priority=(
+                    selected_priority
+                    if selection_complete
+                    else _async_selection_priority.get()
+                ),
             )
             self._finalize_failure(cancelled_result, kwargs)
             raise
         finally:
             _async_selection_lifecycle_stage.reset(selection_token)
+            _async_selection_priority.reset(selection_priority_token)
 
 
 # Convenience functions and classes

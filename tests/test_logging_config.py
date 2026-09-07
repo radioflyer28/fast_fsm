@@ -650,6 +650,7 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
             "positional_args",
             "keyword_args",
             "error",
+            "priority",
         )
         return {"operation": "trusted-redaction", "detail": "allowed"}
 
@@ -671,6 +672,65 @@ def test_custom_redactor_receives_only_minimum_event_and_safe_output(
             for _message, _args, record_dict, _formatted in application_handler.records
         )
         handle.restore()
+    finally:
+        logger.removeHandler(application_handler)
+        application_handler.close()
+
+
+def test_trace_priority_is_one_scalar_for_default_and_redacted_attempts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Trace metadata carries only the selected priority, never candidate details."""
+    logger_name = _logger_name("priority")
+    logger = logging.getLogger(logger_name)
+    application_handler = CaptureHandler()
+    logger.addHandler(application_handler)
+    redactor_events: list[FSMTraceEvent] = []
+
+    def build_machine() -> StateMachine:
+        source = State("source")
+        destination = State("destination")
+        machine = StateMachine(source, logger_name=logger_name)
+        machine.add_state(destination)
+        machine.add_transition("advance", source, destination, priority=-8)
+        return machine
+
+    try:
+        default_handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False
+        )
+        assert build_machine().trigger("advance", HostileRepr()).priority == -8
+        default_records = [
+            record_dict
+            for _message, _args, record_dict, _formatted in application_handler.records
+            if record_dict.get("trace_operation") == "trigger"
+        ]
+        assert len(default_records) == 1
+        assert default_records[0]["trace_priority"] == -8
+        default_handle.restore()
+        application_handler.records.clear()
+
+        def redactor(event: FSMTraceEvent) -> dict[str, object]:
+            redactor_events.append(event)
+            return {"priority": event.priority}
+
+        redacted_handle = configure_fsm_logging(
+            TRACE_LEVEL, logger_name, propagate=False, redactor=redactor
+        )
+        hostile_payload = HostileRepr()
+        assert build_machine().trigger("advance", hostile_payload).priority == -8
+        assert [event.priority for event in redactor_events] == [-8]
+        redacted_records = [
+            record_dict
+            for _message, _args, record_dict, _formatted in application_handler.records
+            if record_dict.get("trace_operation") == "trigger"
+        ]
+        assert len(redacted_records) == 1
+        assert redacted_records[0]["trace_priority"] == -8
+        _assert_no_raw_payload(
+            application_handler, hostile_payload, capsys.readouterr().err
+        )
+        redacted_handle.restore()
     finally:
         logger.removeHandler(application_handler)
         application_handler.close()
