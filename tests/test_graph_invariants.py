@@ -402,7 +402,7 @@ def test_priority_rejection_happens_before_topology_or_version_mutation(
     assert machine._graph_version == before_version
 
 
-def test_grouped_runtime_selects_while_projections_remain_fail_closed() -> None:
+def test_grouped_runtime_selects_while_projections_remain_candidate_complete() -> None:
     machine, idle, running = make_machine()
     complete = State("complete")
     machine.add_state(complete)
@@ -413,11 +413,10 @@ def test_grouped_runtime_selects_while_projections_remain_fail_closed() -> None:
     result = machine.trigger("go")
     assert result.success
     assert result.to_state == "complete"
-    with pytest.raises(
-        RuntimeError,
-        match="Priority candidate groups are not supported by this projection",
-    ):
-        machine.to_dict()
+    assert machine.to_dict()["transitions"] == [
+        {"trigger": "go", "from": "idle", "to": "complete", "priority": 0},
+        {"trigger": "go", "from": "idle", "to": "running", "priority": 1},
+    ]
 
 
 def test_exact_duplicate_is_version_neutral_and_preserves_slot_identity() -> None:
