@@ -1272,3 +1272,56 @@ class TestAsyncPriorityCloneParity:
         selector_source = core_source[start:end]
         assert "_transition_entries" not in selector_source
         assert "slot.entries" in selector_source
+
+
+class TestAsyncPriorityAwareDeclarativeCandidates:
+    """Async declarative dispatch uses the same exact candidate identity."""
+
+    @pytest.mark.asyncio
+    async def test_async_plural_handler_uses_selected_priority_not_attribute_order(
+        self,
+    ):
+        calls: list[str] = []
+
+        class Source(AsyncDeclarativeState):
+            @transition("go", from_state="source", to_state="alternate", priority=7)
+            async def z_later_attribute(self, *args, **kwargs):
+                calls.append("alternate")
+
+            @transition("go", from_state="source", to_state="safe", priority=1)
+            async def a_earlier_attribute(self, *args, **kwargs):
+                calls.append("safe")
+
+        source = Source("source")
+        safe = State("safe")
+        alternate = State("alternate")
+        machine = AsyncStateMachine(source)
+        machine.add_state(safe)
+        machine.add_state(alternate)
+        machine.add_transition("go", "source", "alternate", priority=7)
+        machine.add_transition("go", "source", "safe", priority=1)
+
+        result = await machine.trigger_async("go")
+
+        assert result.success
+        assert result.to_state == "safe"
+        assert result.priority == 1
+        assert calls == ["safe"]
+
+    @pytest.mark.asyncio
+    async def test_direct_async_handler_ambiguity_invokes_nothing(self):
+        calls: list[str] = []
+
+        class Source(AsyncDeclarativeState):
+            @transition("go", from_state="source", to_state="one", priority=1)
+            async def first(self):
+                calls.append("first")
+
+            @transition("go", from_state="source", to_state="two", priority=2)
+            async def second(self):
+                calls.append("second")
+
+        result = await Source("source").handle_event_async("go")
+
+        assert result.success is False
+        assert calls == []

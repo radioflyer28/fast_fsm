@@ -563,7 +563,7 @@ class TestAsyncDeclarativeState:
 
         s = MyState("async_s")
         assert "go" in s._handlers
-        assert s._handlers["go"]["is_async"] is True
+        assert s._handlers["go"][0].is_async is True
 
     @pytest.mark.asyncio
     async def test_handle_event_async(self):
@@ -647,6 +647,132 @@ class TestTransitionDecorator:
         assert handler._fsm_from_state is None
         assert handler._fsm_to_state is None
         assert handler._fsm_condition is None
+
+    def test_priority_defaults_to_zero_and_requires_exact_builtin_int(self):
+        @transition("t")
+        def handler():
+            pass
+
+        assert handler._fsm_priority == 0
+
+        with pytest.raises(TypeError, match="exact built-in int"):
+            transition("t", priority=True)
+
+
+class TestPriorityAwareDeclarativeCandidates:
+    """Declarative metadata must retain and resolve every candidate."""
+
+    def test_plural_metadata_uses_priority_not_discovery_order(self):
+        calls: list[tuple[str, int]] = []
+
+        class Source(DeclarativeState):
+            @transition("go", from_state="source", to_state="alternate", priority=9)
+            def z_later_attribute(self, *args, **kwargs):
+                calls.append(("alternate", kwargs["priority"]))
+
+            @transition("go", from_state="source", to_state="safe", priority=1)
+            def a_earlier_attribute(self, *args, **kwargs):
+                calls.append(("safe", kwargs["priority"]))
+
+        source = Source("source")
+        safe = State("safe")
+        alternate = State("alternate")
+        machine = StateMachine(source)
+        machine.add_state(safe)
+        machine.add_state(alternate)
+        machine.add_transition("go", "source", "alternate", priority=9)
+        machine.add_transition("go", "source", "safe", priority=1)
+
+        assert isinstance(source._handlers["go"], tuple)
+        assert len(source._handlers["go"]) == 2
+        result = machine.trigger("go", priority=42)
+
+        assert result.success
+        assert result.to_state == "safe"
+        assert result.priority == 1
+        assert calls == [("safe", 42)]
+
+    def test_direct_handler_ambiguity_invokes_no_declaration(self):
+        calls: list[str] = []
+
+        class Source(DeclarativeState):
+            @transition("go", from_state="source", to_state="one", priority=1)
+            def first(self):
+                calls.append("first")
+
+            @transition("go", from_state="source", to_state="two", priority=2)
+            def second(self):
+                calls.append("second")
+
+        result = Source("source").handle_event("go")
+
+        assert result.success is False
+        assert calls == []
+
+    def test_same_target_candidates_bind_by_priority_and_ambiguous_direct_query_fails(
+        self,
+    ):
+        calls: list[str] = []
+
+        class Source(DeclarativeState):
+            @transition("go", from_state="source", to_state="target", priority=9)
+            def high_priority_number(self):
+                calls.append("high-number")
+
+            @transition("go", from_state="source", to_state="target", priority=1)
+            def low_priority_number(self):
+                calls.append("low-number")
+
+        source = Source("source")
+        target = State("target")
+        machine = StateMachine(source)
+        machine.add_state(target)
+        machine.add_transition("go", "source", "target", priority=9)
+        machine.add_transition("go", "source", "target", priority=1)
+
+        assert not source.can_transition("go", target)
+        assert machine.trigger("go").success
+        assert calls == ["low-number"]
+
+    def test_duplicate_declarative_identity_is_rejected_before_machine_build(self):
+        class Source(DeclarativeState):
+            @transition("go", from_state="source", to_state="target", priority=1)
+            def first(self):
+                pass
+
+            @transition("go", from_state="source", to_state="target", priority=1)
+            def second(self):
+                pass
+
+        with pytest.raises(ValueError, match="duplicate declarative candidate"):
+            Source("source")
+
+    def test_builder_preflight_inspects_later_stacked_declaration(self):
+        async def later_guard(*args, **kwargs):
+            return True
+
+        class Source(DeclarativeState):
+            @transition("go", from_state="source", to_state="target", priority=1)
+            @transition(
+                "go",
+                from_state="source",
+                to_state="target",
+                condition=later_guard,
+                priority=2,
+            )
+            def handle_go(self, *args, **kwargs):
+                return True
+
+        source = Source("source")
+        auto = FSMBuilder(source)
+        explicit_sync = FSMBuilder(source, async_mode=False)
+
+        assert len(source._handlers["go"]) == 2
+        assert auto.machine_type is AsyncStateMachine
+        with pytest.raises(RuntimeError, match="explicit sync.*declarative condition"):
+            explicit_sync.build()
+        assert explicit_sync._machine is None
+        assert explicit_sync._states["source"] is source
 
 
 # ---------------------------------------------------------------------------

@@ -1348,3 +1348,34 @@ async def test_cancellation_observer_registration_starts_with_next_failure() -> 
     finally:
         release.set()
         await _cleanup_spawned_tasks(first_task, second_task)
+
+
+def test_declarative_candidate_lifecycle_invokes_only_the_selected_handler() -> None:
+    """One priority-selected declaration runs in the existing lifecycle slot."""
+    events: list[str] = []
+
+    class Source(DeclarativeState):
+        @transition("advance", from_state="source", to_state="alternate", priority=8)
+        def alternate(self, *args: object, **kwargs: object) -> None:
+            events.append("alternate-handler")
+
+        @transition("advance", from_state="source", to_state="safe", priority=1)
+        def safe(self, *args: object, **kwargs: object) -> None:
+            events.append("safe-handler")
+
+    source = Source("source")
+    safe = State("safe")
+    alternate = State("alternate")
+    machine = StateMachine(source, name="declarative-candidate-lifecycle")
+    machine.add_state(safe)
+    machine.add_state(alternate)
+    machine.add_transition("advance", "source", "alternate", priority=8)
+    machine.add_transition("advance", "source", "safe", priority=1)
+    machine.on_exit("source", lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter("safe", lambda *_args, **_kwargs: events.append("enter"))
+
+    result = machine.trigger("advance")
+
+    assert result.success
+    assert result.priority == 1
+    assert events == ["exit", "enter", "safe-handler"]
