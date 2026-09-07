@@ -76,6 +76,17 @@ def test_telemetry_policy_exposes_facts_without_routing_choices():
         assert not hasattr(policy, forbidden_choice)
 
 
+def test_controller_composes_a_replaceable_aircraft_adapter_not_an_fsm():
+    """The simulated adapter stays outside the FSM inheritance hierarchy."""
+    example = _load_example_module()
+    aircraft = example.SimulatedAircraft()
+    controller = example.DroneController(aircraft)
+
+    assert controller._aircraft is aircraft
+    assert not isinstance(aircraft, example.State)
+    assert not issubclass(example.SimulatedAircraft, example.State)
+
+
 def test_controller_observes_one_sample_and_dispatches_one_telemetry_tick():
     """A telemetry packet reaches the owned FSM once through one event name."""
     example = _load_example_module()
