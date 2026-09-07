@@ -105,7 +105,13 @@ Plans:
   3. `to_dict()` followed by `from_dict()` preserves every candidate and its priority, including multiple candidates with the same source, trigger, and target.
   4. Deserialization can attach guards to a specific candidate without serializing callables, and ambiguous legacy guard keys fail explicitly rather than attaching to the wrong transition.
 
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 23-01-PLAN.md — Promote candidate-complete cold topology and add callable-safe round-trip, snapshot, query, and clone parity.
+- [ ] 23-02-PLAN.md — Preserve plural declarative identity through exact sync/async handler selection and builder preflight.
+- [ ] 23-03-PLAN.md — Complete quick/factory construction parity and lock pure/native compiled-core compatibility.
 
 ### Phase 24: Candidate-Aware Diagnostics & Output
 
