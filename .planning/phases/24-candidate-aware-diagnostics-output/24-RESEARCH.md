@@ -128,7 +128,7 @@ For conservative shadow analysis, capture one additional scalar fact on `_GraphT
 | Extend `_DiagnosticEdge` once | Teach each renderer about `_GraphTransition` or runtime groups | That duplicates projection logic, risks mixed snapshots, and couples interpreted tools to private core storage. [VERIFIED: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md:21-28,113-124] |
 | Static unconditional scalar captured by core | Evaluate guards or call `can_transition()` during validation | Evaluation may mutate user state, raise, depend on telemetry, or disagree with later dispatch; D-02 forbids it. [VERIFIED: src/fast_fsm/core.py:2449-2591; .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md:30-38] |
 | Exact base-`State` proof | Infer from condition name, `AlwaysCondition`, or arbitrary subclass shape | Names are display text, guard implementations are user-extensible, and subclasses may override permission. [VERIFIED: src/fast_fsm/core.py:773-829; src/fast_fsm/conditions.py:205-247] |
-| Existing format-specific encoders | One generic sanitizer | Mermaid, PlantUML, and Markdown have different syntax; existing sinks already isolate their encoders. [VERIFIED: src/fast_fsm/visualization.py:42-81; .specify/decisions/ADR-006-bounded-diagnostics-and-safe-output.md:47-52] |
+| Existing format-specific encoders | One generic sanitizer | Mermaid, PlantUML, and Markdown have different syntax; existing sinks already isolate their encoders. [VERIFIED: src/fast_fsm/visualization.py:42-81; .specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:47-52] |
 | Candidate records/indices in adjacency and paths | Collapse by source/trigger or target | Collapsing loses same-target multiplicity and lets candidate groups evade edge/result budgets. [VERIFIED: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md:40-55; src/fast_fsm/_diagnostics.py:432-574] |
 
 **Installation:** none. Phase 24 uses the existing standard-library runtime and development toolchain. [VERIFIED: pyproject.toml:1-45; .planning/REQUIREMENTS.md:57-65]
@@ -170,7 +170,7 @@ tuple-backed _DiagnosticGraph
                     DiagnosticBudgetExceeded/status
 ```
 
-This preserves the Phase 19 one-capture architecture while making the one scalar edge record the only candidate-aware diagnostic seam. [VERIFIED: .specify/decisions/ADR-006-bounded-diagnostics-and-safe-output.md:21-52,65-72; src/fast_fsm/visualization.py:84-89]
+This preserves the Phase 19 one-capture architecture while making the one scalar edge record the only candidate-aware diagnostic seam. [VERIFIED: .specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:21-52,65-72; src/fast_fsm/visualization.py:84-89]
 
 ### Recommended Project Structure
 
@@ -227,7 +227,7 @@ The legacy dense transition matrix currently stores only target-name strings and
 
 ### Pattern 4: Reserve once for every candidate occurrence
 
-Graph traversal already follows edge indices in `forward`/`reverse`, so preserving one `_DiagnosticEdge` per snapshot candidate naturally charges reachability, SCC, depth, adjacency, and path expansion once per candidate edge. [VERIFIED: src/fast_fsm/_diagnostics.py:207-220,224-424,432-574] Add missing explicit reservations where candidate rows are newly emitted: determinism/group inspection, JSON transition records, validation/report transition rows, and any new shadow/error records. Reserve before appending or formatting, matching the existing ledger discipline. [VERIFIED: src/fast_fsm/_diagnostics.py:104-191; .specify/decisions/ADR-006-bounded-diagnostics-and-safe-output.md:32-37]
+Graph traversal already follows edge indices in `forward`/`reverse`, so preserving one `_DiagnosticEdge` per snapshot candidate naturally charges reachability, SCC, depth, adjacency, and path expansion once per candidate edge. [VERIFIED: src/fast_fsm/_diagnostics.py:207-220,224-424,432-574] Add missing explicit reservations where candidate rows are newly emitted: determinism/group inspection, JSON transition records, validation/report transition rows, and any new shadow/error records. Reserve before appending or formatting, matching the existing ledger discipline. [VERIFIED: src/fast_fsm/_diagnostics.py:104-191; .specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:32-37]
 
 Do not deduplicate edges by target in diagnostic algorithms. Deduplication remains correct only for event-name catalogs and SCC condensation arcs, because those are derived structural sets rather than candidate outputs; both loops must still reserve work for each input edge before deduplication. [VERIFIED: src/fast_fsm/_diagnostics.py:364-385,427-429]
 
@@ -428,7 +428,7 @@ No framework/config/fixture file is missing. Add requirement cases to the existi
 - `src/fast_fsm/_diagnostics.py` — scalar graph, budget ledger, traversal, adjacency, and paths. [VERIFIED: src/fast_fsm/_diagnostics.py:31-221,224-574]
 - `src/fast_fsm/validation.py` — legacy adapters, determinism, metrics, reports, and exports. [VERIFIED: src/fast_fsm/validation.py:99-424,541-1086]
 - `src/fast_fsm/visualization.py` — one-capture renderers, escaping, JSON, adjacency validation, and Markdown. [VERIFIED: src/fast_fsm/visualization.py:42-103,114-330,394-496,573-842]
-- Phase 24 context, roadmap, requirements, ADR-006, ADR-007, and verified Phase 23 boundary. [VERIFIED: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md:6-151; .planning/ROADMAP.md:123-133; .planning/REQUIREMENTS.md:57-65; .specify/decisions/ADR-006-bounded-diagnostics-and-safe-output.md:21-72; .specify/decisions/ADR-007-priority-topology.md:20-39; .planning/phases/23-construction-declarative-serialization-parity/23-VERIFICATION.md:19-44]
+- Phase 24 context, roadmap, requirements, ADR-006, ADR-007, and verified Phase 23 boundary. [VERIFIED: .planning/phases/24-candidate-aware-diagnostics-output/24-CONTEXT.md:6-151; .planning/ROADMAP.md:123-133; .planning/REQUIREMENTS.md:57-65; .specify/decisions/ADR-006-bounded-diagnostics-safe-output.md:21-72; .specify/decisions/ADR-007-priority-topology.md:20-39; .planning/phases/23-construction-declarative-serialization-parity/23-VERIFICATION.md:19-44]
 
 ### Secondary (MEDIUM confidence)
 
