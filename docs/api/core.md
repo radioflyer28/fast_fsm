@@ -28,6 +28,55 @@ The core module provides the primary FSM classes and utilities.
 
 ## State Machine Classes
 
+### Priority-aware guarded candidates
+
+`StateMachine.add_transition()` and `FSMBuilder.add_transition()` accept a
+keyword-only `priority=` argument. Multiple transitions may share a source
+state and trigger as long as every candidate in that slot has a distinct
+priority. Lower integer values are evaluated first; registration order does
+not affect the winner.
+
+```{testcode}
+from fast_fsm import FuncCondition, State, StateMachine
+
+active = State("active")
+fallback = State("fallback")
+halted = State("halted")
+
+fsm = StateMachine(active)
+fsm.add_state(fallback)
+fsm.add_state(halted)
+fsm.add_transition(
+    "tick", "active", "halted",
+    FuncCondition(lambda **data: data.get("fatal", False)),
+    priority=0,
+)
+fsm.add_transition(
+    "tick", "active", "fallback",
+    FuncCondition(lambda **data: data.get("degraded", False)),
+    priority=10,
+)
+
+result = fsm.trigger("tick", fatal=False, degraded=True)
+print(result.to_state, result.priority)
+```
+
+```{testoutput}
+fallback 10
+```
+
+Priority must be an exact built-in `int`; Boolean values, `IntEnum` members,
+integer subclasses, floats, and strings are rejected. A false guard falls
+through to the next candidate. A raised guard exception, asynchronous
+cancellation, or eligible candidate stops selection. If no candidate is
+eligible, the result fails at the `selection` stage with `priority=None` and
+the machine remains in its source state.
+
+The selected priority is available on `TransitionResult` and, when history is
+enabled, `TransitionRecord`. It is also preserved by serialization and shown
+by diagnostics and diagram renderers. `add_transitions()` accepts a five-item
+row `(trigger, source, target, condition, priority)`.
+
 ```{eval-rst}
 .. autoclass:: fast_fsm.StateMachine
    :members:

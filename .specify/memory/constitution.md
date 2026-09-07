@@ -1,17 +1,14 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.2.0 → 1.3.0
-Bump type: MINOR — added mypyc selective compilation as an
-architectural decision with compilation boundary rules.
+Version change: 1.3.0 → 1.3.1
+Bump type: PATCH — reconciled the narrative throughput statement with the
+existing quantitative installed-compiled threshold.
 
-Added sections:
-  - Architecture & Anti-Patterns > Selective mypyc Compilation
-    (which modules compile, inheritance constraint, build commands)
+Added sections: none
 
 Modified sections:
-  - Architecture & Anti-Patterns (new anti-pattern row:
-    "Compiling condition base classes")
+  - Core Principle I (250,000 → 200,000 transitions/second)
 
 Removed sections: none
 
@@ -19,7 +16,7 @@ Templates requiring updates:
   - .specify/templates/plan-template.md ✅ no changes needed (generic)
   - .specify/templates/spec-template.md ✅ no changes needed (generic)
   - .specify/templates/tasks-template.md ✅ no changes needed (generic)
-  - .github/copilot-instructions.md ✅ updated (mypyc gotcha added)
+  - .github/copilot-instructions.md ✅ updated (throughput wording aligned)
 Follow-up TODOs: none
 -->
 
@@ -44,9 +41,9 @@ during registration and ordered candidate selection are explicitly local O(k)
 work: they MUST NOT scan unrelated graph topology or sort during dispatch. All
 classes that participate in the hot path
 MUST use `__slots__` to eliminate `__dict__` overhead. New features
-MUST NOT degrade existing throughput below ~250,000 transitions/sec
-on commodity hardware. Performance claims MUST be verifiable via the
-benchmark suite (`benchmarks/`).
+MUST NOT degrade fresh installed compiled singleton dispatch below 200,000
+transitions/sec. Performance claims MUST be verifiable via the benchmark suite
+(`benchmarks/`) and must identify their execution environment.
 
 **Rationale:** Fast FSM exists specifically to outperform alternatives
 by 5–20×. Losing that advantage removes the library's reason to exist.
@@ -315,4 +312,4 @@ take precedence for mechanics.
   live in Agent Instructions and are updated there without requiring
   a constitution version bump.
 
-**Version**: 1.3.0 | **Ratified**: 2026-03-03 | **Last Amended**: 2026-03-03
+**Version**: 1.3.1 | **Ratified**: 2026-03-03 | **Last Amended**: 2026-09-07

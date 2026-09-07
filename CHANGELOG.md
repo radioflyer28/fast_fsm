@@ -5,7 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Deterministic priority-aware guarded transition candidates. Multiple
+  transitions may share one `(source state, trigger)` slot; the first eligible
+  candidate in ascending integer-priority order is selected by the FSM.
+- Priority parity across synchronous and asynchronous dispatch, builders,
+  declarative transitions, serialization, history/results, diagnostics,
+  visualization, and installed-artifact evidence.
+- A controller-owned drone telemetry simulation showing one `telemetry_tick`
+  event resolved entirely by FSM guards and priorities, with committed state
+  entry invoking a replaceable aircraft command adapter.
+
+### Changed
+
+- Local release evidence now treats the version of `uv` as recorded metadata,
+  not an exact-version gate. Dependency reproducibility remains governed by
+  the checked-in `uv.lock` and `uv sync --locked`.
 
 ## [0.3.0] — UNRELEASED
 

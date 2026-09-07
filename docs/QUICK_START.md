@@ -2,7 +2,9 @@
 
 **Get up and running with Fast FSM in under 5 minutes!**
 
-Fast FSM is a high-performance finite state machine library that's both blazingly fast (250K+ transitions/sec) and easy to use. This guide shows you the quickest path from zero to a working FSM.
+Fast FSM is a high-performance finite state machine library with a fresh
+installed compiled singleton-dispatch floor of 200,000 transitions per second.
+This guide shows you the quickest path from zero to a working FSM.
 
 ## 📦 Installation
 
@@ -104,7 +106,42 @@ result = fsm.trigger('process', item_count=5)
 print(f"Success: {result.success}")  # True
 ```
 
-### Pattern 3: State Callbacks
+### Pattern 3: Priority-Aware Candidates
+
+Let one trigger select among guarded outcomes without writing external
+`if`/`elif` dispatch logic. Lower integer priorities are evaluated first:
+
+```python
+from fast_fsm import FuncCondition, State, StateMachine
+
+normal = State("normal")
+fallback = State("fallback")
+halted = State("halted")
+fsm = StateMachine(normal)
+fsm.add_state(fallback)
+fsm.add_state(halted)
+
+fsm.add_transition(
+    "health_tick", "normal", "halted",
+    FuncCondition(lambda **d: d.get("fatal", False)),
+    priority=0,
+)
+fsm.add_transition(
+    "health_tick", "normal", "fallback",
+    FuncCondition(lambda **d: d.get("degraded", False)),
+    priority=10,
+)
+
+result = fsm.trigger("health_tick", fatal=False, degraded=True)
+assert result.success and result.priority == 10
+assert fsm.is_in("fallback")
+```
+
+Priorities must be unique exact built-in integers within each source/trigger
+slot. A false guard falls through; a guard exception aborts selection. Put
+domain calculations inside guards and use `priority=` only for precedence.
+
+### Pattern 4: State Callbacks
 Run code when entering/exiting states:
 
 ```python
@@ -136,7 +173,7 @@ fsm.trigger('start')   # Prints: 🔄 Started processing...
 fsm.trigger('finish')  # Prints: ✅ Processing complete!
 ```
 
-### Pattern 4: Checking Active State
+### Pattern 5: Checking Active State
 Use `is_in()` to query the current state by name or object:
 
 ```python
@@ -165,7 +202,7 @@ assert not fsm.is_in(idle)
 
 Both forms are O(1).
 
-### Pattern 5: Listeners (Observer Pattern)
+### Pattern 6: Listeners (Observer Pattern)
 Watch transitions without touching FSM logic:
 
 ```python
@@ -233,7 +270,7 @@ fsm.on_failed(lambda t, from_s, err, **kw: print(f"blocked: {t}"))
 fsm.on_trigger("start", lambda src, tgt, t, **kw: print("machine started!"))
 ```
 
-### Pattern 6: Typed Constants with StrEnum *(Python 3.11+)*
+### Pattern 7: Typed Constants with StrEnum *(Python 3.11+)*
 
 Avoid scattered magic strings by defining states and triggers as `StrEnum`
 members. Because `StrEnum` *is* a `str`, every fast_fsm API that accepts a
@@ -279,7 +316,7 @@ paid
 Payment confirmed
 ```
 
-### Pattern 7: Error-handling with `raise_if_failed()`
+### Pattern 8: Error-handling with `raise_if_failed()`
 
 By default `trigger()` returns a `TransitionResult`, including structured
 lifecycle failure information. Use `raise_if_failed()` when you prefer
@@ -318,7 +355,7 @@ in `committed`, and the original exception object in `cause` when there is one.
 `cause` is intentionally absent from result/error representations; do not
 format callback payloads or causes into logs.
 
-### Pattern 8: Runtime State Control
+### Pattern 9: Runtime State Control
 
 `snapshot()`/`restore()` persist current state across sessions. `clone()` spins
 up an independent copy from the same topology. `force_state()`/`reset()` bypass
@@ -561,8 +598,9 @@ Fast FSM is optimized for speed and memory:
 - ~0.2KB memory footprint vs 25-40KB for alternatives
 
 ### Speed Optimization  
-- 250K+ transitions per second
-- O(1) transition lookup
+- Fresh installed compiled singleton dispatch: at least 200,000 transitions per second
+- O(1) source/trigger lookup and direct singleton dispatch
+- Candidate-group selection: local O(k), already ordered without dispatch-time sorting
 - Minimal function call overhead
 - Optional features don't impact performance
 

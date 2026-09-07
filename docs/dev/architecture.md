@@ -37,15 +37,15 @@ or `_diagnostics`; this keeps the runtime core as one mypyc compilation unit.
 ### State Hierarchy
 
 ```text
-State (ABC, __slots__)
+State (__slots__)
 ├── CallbackState          # has _on_enter / _on_exit slots
 ├── DeclarativeState       # @transition decorator support
 │   └── AsyncDeclarativeState
 └── (user subclasses)
 ```
 
-- **`State`** — abstract base with `name`, `on_enter()`, `on_exit()`.
-  Uses `__slots__` — you cannot add arbitrary attributes.
+- **`State`** — directly instantiable state with `name`, `on_enter()`, and
+  `on_exit()`. Uses `__slots__` — you cannot add arbitrary attributes.
 - **`CallbackState`** — when you need callbacks stored *on the state object*,
   use this class instead of fighting `__slots__`.
 - **`DeclarativeState`** / **`AsyncDeclarativeState`** — define transitions
@@ -77,6 +77,22 @@ dispatch does not sort them, and neither path scans unrelated graph topology.
 `_TransitionGroup` is a private storage detail, not public inspection API.
 `add_state()` remains O(1); builder work is a separate one-time pass over its
 staged declarations.
+
+Candidate precedence is part of topology, not caller-side event routing.
+`add_transition(..., priority=...)` accepts only an exact built-in non-Boolean
+integer. Lower values precede higher values, and distinct candidates cannot
+share a priority within one `(source, trigger)` slot. Exact normalized
+duplicates are idempotent. Registration constructs a replacement singleton or
+immutable group off-table and publishes it atomically, so validation failure
+cannot expose a partial group.
+
+The sync and async selectors apply the same pipeline to each candidate: its
+transition guard, any matching declarative guard, and destination-state
+permission. Ordinary ineligibility continues within the local group; an
+exception or cancellation terminates the attempt. Selection itself invokes no
+state callbacks, command adapters, observers, or history writes. Only the
+selected candidate enters the normal pre-commit/commit/post-commit lifecycle,
+and its priority then flows to the result, history, and trace metadata.
 
 ### Canonical Topology and Private Graph Projection
 

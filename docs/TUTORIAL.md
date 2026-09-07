@@ -143,7 +143,48 @@ print(f"Status: {auth.current_state}")  # logged_in
 
 **🎯 Key Concept:** Conditions can be as complex as needed. They're just Python functions.
 
-### Step 2.3: Safe Operations
+### Step 2.3: Deterministic Candidate Priority
+
+Conditions may contain any domain logic you need. When several guarded
+transitions intentionally share one event, keep each condition focused and let
+the FSM define their precedence:
+
+```python
+from fast_fsm import FuncCondition, State, StateMachine
+
+online = State("online")
+degraded = State("degraded")
+offline = State("offline")
+service = StateMachine(online)
+service.add_state(degraded)
+service.add_state(offline)
+
+service.add_transition(
+    "status_tick", "online", "offline",
+    FuncCondition(lambda **s: s.get("fatal", False)),
+    priority=0,
+)
+service.add_transition(
+    "status_tick", "online", "degraded",
+    FuncCondition(lambda **s: s.get("latency_ms", 0) > 500),
+    priority=10,
+)
+
+result = service.trigger("status_tick", fatal=False, latency_ms=900)
+print(result.to_state, result.priority)  # degraded 10
+```
+
+The machine evaluates candidates by ascending priority and commits only the
+first eligible one. Ordinary rejection falls through. Exceptions and async
+cancellation abort selection, because treating an evaluation failure as
+ineligibility could hide a higher-priority fault. Priorities are exact built-in
+integers and must be unique within a source/trigger slot.
+
+**🎯 Key Concept:** Guards decide eligibility; `priority=` makes conflicts
+deterministic without moving transition selection into caller-side dispatch
+logic.
+
+### Step 2.4: Safe Operations
 ```python
 # safe_trigger won't throw exceptions
 result = auth.safe_trigger('invalid_action')
@@ -168,7 +209,7 @@ target = auth.trigger('login', user='alice').raise_if_failed().to_state
 
 **🎯 Key Concept:** Use `safe_trigger()` / `can_trigger()` for result-based flow, or `raise_if_failed()` + `TransitionError` for exception-based flow.
 
-### Step 2.4: Multiple Source States
+### Step 2.5: Multiple Source States
 ```python
 # Emergency transitions from multiple states
 auth.add_transition('emergency_reset', ['logged_in', 'locked'], 'logged_out')

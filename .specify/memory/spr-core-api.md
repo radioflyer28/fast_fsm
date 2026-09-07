@@ -2,7 +2,7 @@
 
 **Category**: core-api  
 **Created**: 2026-03-06  
-**Updated**: 2026-09-05 (measured slots-policy reconciliation)
+**Updated**: 2026-09-07 (priority and release-workflow documentation audit)
 
 - `StateMachine` and other hot-path classes use `__slots__`; dynamic attribute assignment on core objects is prohibited. The recursive `uv run python tools/release_evidence.py slots-policy --json` audit discovers every relevant `src/fast_fsm` class and fails on an unregistered or omitted exception.
 - Exactly three measured registered exceptions are CompiledFuncCondition, TransitionError, and DiagnosticBudgetExceeded. `CompiledFuncCondition` stays interpreted in `conditions.py` to retain the public Python subclass boundary while its narrow invocation bridge lives in compiled `core.py`; `TransitionError` is the ADR-003 `@mypyc_attr(native_class=False)` built-in-exception boundary; and ADR-006 accepts interpreted `DiagnosticBudgetExceeded` because bounded failures carry `DiagnosticStatus`. They are the only accepted instance-`__dict__` exceptions; the registry does not authorize a runtime-layout or compilation-boundary change.

@@ -29,6 +29,7 @@ uv run python benchmarks/benchmark_fast_fsm.py
 tests/
 ├── test_basic_functionality.py     # Core FSM: states, transitions, errors
 ├── test_graph_invariants.py         # Canonical registry, atomicity, snapshots
+├── test_priority_selection.py       # Sync/async ordered candidate resolution
 ├── test_transition_lifecycle.py     # Sync/async lifecycle, result, observer, cancellation matrix
 ├── test_ownership_concurrency.py    # Ownership, reentry, loop, writer, and cleanup matrix
 ├── test_builder.py                  # Builder lifecycle and declarative dispatch
@@ -49,7 +50,7 @@ then the full suite once before merge.
 
 | Source file changed | Primary test files |
 |---------------------|-------------------|
-| `core.py` | `test_basic_functionality.py`, `test_graph_invariants.py`, `test_transition_lifecycle.py`, `test_builder.py`, `test_async.py`, `test_advanced_functionality.py`, `test_mypyc_guard.py` |
+| `core.py` | `test_basic_functionality.py`, `test_graph_invariants.py`, `test_priority_selection.py`, `test_transition_lifecycle.py`, `test_builder.py`, `test_async.py`, `test_advanced_functionality.py`, `test_mypyc_guard.py` |
 | `validation.py` | `test_validation.py` |
 | `conditions.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
 | `condition_templates.py` | `test_safety_kwargs.py`, `test_async.py`, `test_condition_templates.py` |
@@ -160,6 +161,13 @@ task release-baseline-write
 task release-baseline-check
 ```
 
+The Taskfile performs `uv sync --locked --all-groups`; the checked-in
+`uv.lock` is the dependency-resolution authority. The executing `uv` version
+is captured in evidence for review but is not an exact-version local gate.
+Neither `UV_OFFLINE` nor a repository-specific `UV_CACHE_DIR` is required.
+CI may install an explicit uv version to keep hosted runners consistent; that
+does not change the portable local workflow.
+
 Use `FAST_FSM_BUILD_MODE=auto`, `pure`, or `compiled` to make a build intent
 explicit. `FAST_FSM_PURE_PYTHON=1` remains a compatible alias for pure mode.
 Before collecting evidence, select pure mode, run the source preflight, and
@@ -258,7 +266,7 @@ asserted-pure sequential release gate (full tests, formatting/lint, blocking
 mypy, docs, doctests, and read-only baseline freshness). `typecheck-ty` stays
 visible as independent advisory feedback. Exact counts, timing, origin,
 toolchain, and hardware observations are environment-labelled evidence in the
-[Phase 17 performance record](../../.planning/phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md)
+[Phase 17 performance record](../../.planning/milestones/v0.3.0-phases/17-atomic-transition-lifecycle/17-PERFORMANCE-EVIDENCE.md)
 and [`evidence/release-baseline.json`](../../evidence/release-baseline.json),
 not durable prose claims.
 

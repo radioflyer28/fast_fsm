@@ -1,17 +1,22 @@
 # Releasing and Evidence
 
 This runbook separates local source proof from the hosted release proof. Use
-only [uv](https://docs.astral.sh/uv/) commands; Phase 15 requires exactly uv
-`0.12.6`:
+only [uv](https://docs.astral.sh/uv/) commands:
 
 ```bash
 uv --version
 ```
 
-The command must report `uv 0.12.6`. Run the procedure from a clean committed
-checkout, not a developer tree that may contain ignored native build output or
-unrelated changes. Use a disposable Git worktree/archive at the commit being
-reviewed when local artifacts are present.
+The executing version is recorded as evidence for review, but local evidence
+does not require one exact uv release. Reproducible dependency selection is
+governed by the checked-in `uv.lock` and `uv sync --locked`; neither
+`UV_OFFLINE` nor a repository-specific `UV_CACHE_DIR` is required. Hosted
+workflows may pin uv to keep their runner environment stable.
+
+Run the procedure from a clean committed checkout, not a developer tree that
+may contain ignored native build output or unrelated changes. Use a disposable
+Git worktree/archive at the commit being reviewed when local artifacts are
+present.
 
 ## Pure-Source Evidence Procedure
 
@@ -66,8 +71,9 @@ task release-baseline-check
 The baseline records exact test and coverage outcomes, the pure `.py` module
 origin, reviewed toolchain versions, a universal pure-wheel identity, and the
 recursively discovered slots inventory. The only registered instance-`__dict__`
-exceptions are `CompiledFuncCondition` and `TransitionError`; their independent
-measurements and rationales are part of the evidence.
+exceptions are `CompiledFuncCondition`, `TransitionError`, and
+`DiagnosticBudgetExceeded`; their independent measurements and rationales are
+part of the evidence.
 
 ## Release History and Hosted Proof
 

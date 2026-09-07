@@ -148,6 +148,55 @@ fsm.trigger("open", locked=True)   # blocked — is locked
 
 `condition=` and `unless=` are mutually exclusive.
 
+### Priority-Aware Candidates
+
+Register multiple guarded destinations for the same state and trigger when the
+FSM should own both eligibility and precedence. Lower integer values run first:
+
+```python
+from fast_fsm import FuncCondition, State, StateMachine
+
+mission = State("mission")
+return_home = State("return_home")
+emergency = State("emergency_landing")
+
+drone = StateMachine(mission)
+drone.add_state(return_home)
+drone.add_state(emergency)
+
+drone.add_transition(
+    "telemetry_tick", "mission", "emergency_landing",
+    FuncCondition(lambda **t: t.get("critical_fault", False)),
+    priority=0,
+)
+drone.add_transition(
+    "telemetry_tick", "mission", "return_home",
+    FuncCondition(lambda **t: not t.get("link_ok", True)),
+    priority=10,
+)
+drone.add_transition(
+    "telemetry_tick", "mission", "return_home",
+    FuncCondition(lambda **t: t.get("battery_pct", 100) < 25),
+    priority=20,
+)
+
+result = drone.trigger(
+    "telemetry_tick", critical_fault=False, link_ok=True, battery_pct=18
+)
+assert result.success
+assert result.priority == 20
+assert drone.is_in("return_home")
+```
+
+Each priority within one `(source, trigger)` slot must be a unique exact
+built-in `int`; `bool`, `IntEnum`, floats, and integer subclasses are rejected.
+An exact duplicate registration is idempotent, while a different candidate at
+an occupied priority raises `ValueError` without changing the topology. Normal
+guard rejection falls through to the next candidate. A guard exception or
+async cancellation aborts selection rather than silently trying a lower-priority
+candidate. Keep application-specific calculations in guard functions; use
+`priority=` only to make precedence deterministic.
+
 ### Timing Conditions
 
 Built-in time-based guards remove the need for manual clock logic:
@@ -663,6 +712,7 @@ print(v.export_report('json'))
 - **Type Safe** — full type hints, `ty` and `mypy` clean
 - **Clean API** — builder pattern, factory helpers, fluent interface
 - **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
+- **Priority-Aware Candidates** — deterministic first-eligible selection for shared state/trigger slots
 - **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
 - **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`, `to_dict()`
 - **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks

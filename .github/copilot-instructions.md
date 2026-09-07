@@ -73,6 +73,9 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 **Release evidence:**
 - Use only `uv`-based Taskfile/tool commands: `task pure-source-check`,
   `task release-baseline-write`, and `task release-baseline-check`.
+- The Taskfile uses `uv sync --locked --all-groups`; `uv.lock` governs resolved
+  dependencies. Record the executing uv version as evidence, but do not require
+  a particular local uv patch release, `UV_OFFLINE`, or a custom `UV_CACHE_DIR`.
 - Select `FAST_FSM_BUILD_MODE=pure` for a clean evidence collection (the
   `FAST_FSM_PURE_PYTHON=1` alias remains supported), run the non-destructive
   source-origin preflight immediately after setup, and review a write diff.
@@ -331,6 +334,13 @@ than plain fenced code blocks so they are verified on every CI run.
 2. **Argument passing convention.** Every condition `.check()` and state callback (`on_enter`, `on_exit`, `can_transition`) receives `*args, **kwargs`. This MUST be preserved for forward compatibility.
 
 3. **`AsyncStateMachine` vs `StateMachine`.** `AsyncCondition` instances require `AsyncStateMachine` and `trigger_async()`. The sync `StateMachine` will not await async conditions.
+
+3a. **Priority belongs to candidate topology.** Multiple transitions may share
+one `(source, trigger)` slot. Register them through the existing
+`add_transition(..., priority=<int>)` API: lower exact built-in integers are
+evaluated first, equal-priority nonduplicates fail atomically, ordinary
+ineligibility falls through, and guard errors/cancellation abort selection.
+Do not move this precedence into caller-side `if`/`elif` dispatch code.
 
 4. **`FSMBuilder` auto-detects async.** If any condition is an `AsyncCondition`, `FSMBuilder.build()` returns an `AsyncStateMachine` automatically.
 
