@@ -5,16 +5,16 @@ milestone_name: Priority-Aware Guarded Transitions
 current_phase: 22
 current_phase_name: Ordered Runtime Selection & Lifecycle Integration
 status: executing
-stopped_at: Completed 22-01-PLAN.md
-last_updated: "2026-09-07T00:47:18.859Z"
+stopped_at: Completed 22-02-PLAN.md
+last_updated: "2026-09-07T00:58:16.239Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 22 execution started
-state_head: 25717fed4bff39761320ecab9051592f2253adf2
+state_head: aec0731b1d2d02014d22d267dbb5141354ea3131
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 20
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-06)
 ## Current Position
 
 Phase: 22 (Ordered Runtime Selection & Lifecycle Integration) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-09-06 — Phase 22 execution started
 
@@ -83,6 +83,7 @@ Last activity: 2026-09-06 — Phase 22 execution started
 | Phase 21 P01 | 21m | 2 tasks | 7 files |
 | Phase 21-priority-contract-atomic-registration P02 | 48m | 2 tasks | 6 files |
 | Phase 22 P01 | 6m | 2 tasks | 4 files |
+| Phase 22 P02 | 6m | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -151,6 +152,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 21]: Clone captures topology through the owner-aware read boundary while sharing only immutable slots.
 - [Phase 22]: Synchronous selection keeps singleton dispatch direct and scans only frozen priority groups before one lifecycle handoff.
 - [Phase 22]: Group rejection is private scan control; exceptions are terminal and exhaustion is one redacted selection failure.
+- [Phase 22]: Async candidate selection awaits one stored candidate stage at a time and uses a task-local cancellation-stage marker only within the owned trigger boundary.
 
 ### Pending Todos
 
@@ -171,8 +173,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-07T00:47:18.833Z
-Stopped at: Completed 22-01-PLAN.md
+Last session: 2026-09-07T00:58:16.213Z
+Stopped at: Completed 22-02-PLAN.md
 Resume file: None
 
 ## Rebuild Log

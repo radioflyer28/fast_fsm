@@ -29,7 +29,7 @@ research synthesis.
   its transition guard, declarative guard, and target-state permission in
   ascending priority order.
 
-- [ ] **SEL-02**: An asynchronous machine applies the same ordered semantics by
+- [x] **SEL-02**: An asynchronous machine applies the same ordered semantics by
   awaiting candidates sequentially; ordinary rejection falls through while
   exceptions and cancellation fail closed.
 
@@ -128,7 +128,7 @@ research synthesis.
 | PRIO-02 | Phase 21 | Complete |
 | PRIO-03 | Phase 21 | Complete |
 | SEL-01 | Phase 22 | Complete |
-| SEL-02 | Phase 22 | Pending |
+| SEL-02 | Phase 22 | Complete |
 | SEL-03 | Phase 22 | Complete |
 | SEL-04 | Phase 22 | Complete |
 | PAR-01 | Phase 23 | Pending |

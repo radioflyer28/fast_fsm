@@ -85,12 +85,12 @@ Plans:
   3. Selection completes before lifecycle callbacks, and one trigger attempt can produce at most one lifecycle, one committed history record, and one success-observer sequence.
   4. Exhausting a group returns one uncommitted selection-stage failure and notifies failure observers once, while an absent trigger remains a distinct resolution failure.
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
 - [x] 22-01-PLAN.md — Add deterministic synchronous selection, failure boundaries, query parity, and one-lifecycle handoff.
-- [ ] 22-02-PLAN.md — Mirror selection sequentially across async queries/dispatch, exceptions, cancellation, and lifecycle.
+- [x] 22-02-PLAN.md — Mirror selection sequentially across async queries/dispatch, exceptions, cancellation, and lifecycle.
 - [ ] 22-03-PLAN.md — Propagate runtime priority metadata and prove slots, native parity, O(1) singleton, and local O(k) group work.
 
 ### Phase 23: Construction, Declarative & Serialization Parity
@@ -162,7 +162,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
-| 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 1/3 | In Progress|  |
+| 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 2/3 | In Progress|  |
 | 23. Construction, Declarative & Serialization Parity | v0.4.0 | 0/TBD | Not started | — |
 | 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 0/TBD | Not started | — |
 | 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 0/TBD | Not started | — |
