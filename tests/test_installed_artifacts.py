@@ -185,12 +185,22 @@ def tracer_wheels(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     return {mode: _build_wheel(root / mode, mode) for mode in ("pure", "compiled")}
 
 
+@pytest.fixture(scope="module")
+def clean_source_conformance() -> dict[str, object]:
+    """Capture the one clean-source record only after its pure-origin preflight."""
+    source = release_evidence.verify_source()
+    assert source["core_origin"] == "src/fast_fsm/core.py"
+    return artifact_conformance.collect_conformance()
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("mode", ("pure", "compiled"))
-def test_tracer_installs_exact_artifact_and_matches_source_lifecycle(
-    tracer_wheels: dict[str, Path], mode: str
+def test_tracer_installs_exact_artifact_and_matches_clean_source_record(
+    tracer_wheels: dict[str, Path],
+    clean_source_conformance: dict[str, object],
+    mode: str,
 ) -> None:
-    """An absolute artifact path proves the same real lifecycle record in isolation."""
+    """Both exact archives match one source record captured after pure preflight."""
     wheel = tracer_wheels[mode]
     record = release_evidence.verify_installed_wheel(
         wheel,
@@ -205,7 +215,7 @@ def test_tracer_installs_exact_artifact_and_matches_source_lifecycle(
     assert record["conformance"]["payload_leak_free"] is True
     assert (
         artifact_conformance.compare_conformance(
-            artifact_conformance.collect_conformance(), record["conformance"]
+            clean_source_conformance, record["conformance"]
         )
         == []
     )
@@ -216,6 +226,24 @@ def test_tracer_installs_exact_artifact_and_matches_source_lifecycle(
         assert len(performance["samples_ops_per_second"]) >= 3
     else:
         assert record["performance"] is None
+
+
+def test_direct_artifact_task_captures_one_clean_source_record_for_both_wheels() -> (
+    None
+):
+    """The runnable task keeps source/pure/compiled proof in one shared flow."""
+    taskfile = (ROOT / "Taskfile.yml").read_text(encoding="utf-8")
+    target = taskfile.split("  release-installed-artifacts-check:\n", 1)[1].split(
+        "\n  release-sdist-check:", 1
+    )[0]
+
+    assert "- task: pure-source-check" in target
+    assert "source_conformance = artifact_conformance.collect_conformance()" in target
+    assert "release_evidence.verify_source()" in target
+    assert 'for intent in ("pure", "compiled"):' in target
+    assert "record = release_evidence.verify_installed_wheel(" in target
+    assert "artifact_conformance.compare_conformance(" in target
+    assert "release-installed-performance-check" in taskfile
 
 
 def _runtime_probe(
@@ -297,6 +325,35 @@ def test_child_probe_rejects_payloads_resource_abuse_and_parent_identity_drift()
     )
     with pytest.raises(release_evidence.EvidenceError, match="size limit"):
         release_evidence._strict_json_object(oversized, field="child probe")
+
+
+def test_parent_rejects_digest_valid_priority_contract_drift() -> None:
+    """Child hashes cannot substitute for parent validation of required values."""
+    conformance = artifact_conformance.collect_conformance()
+    priority = next(
+        record
+        for record in conformance["scenarios"]
+        if record["id"] == "priority.sync.winner"
+    )
+    priority["target"] = "wrong-target"
+    conformance["semantic_sha256"] = artifact_conformance._sha256(
+        {
+            "schema_version": artifact_conformance.SCHEMA_VERSION,
+            "suite_sha256": conformance["suite_sha256"],
+            "scenarios": conformance["scenarios"],
+        }
+    )
+    child = {
+        "artifact_sha256": "0" * 64,
+        "conformance": conformance,
+        "runtime": _runtime_probe(Path("/environment")),
+    }
+
+    with pytest.raises(release_evidence.EvidenceError, match="required contract"):
+        release_evidence._validate_child_probe(
+            child,
+            expected_artifact_sha256="0" * 64,
+        )
 
 
 def test_compiled_archive_tags_must_match_the_installed_runtime_architecture() -> None:
