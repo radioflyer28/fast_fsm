@@ -3443,6 +3443,8 @@ def _validate_tag_release_workflow(workflow: dict[str, object]) -> None:
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     )
     assert "verify-release-identity" in tag_runs
+    assert 'json.dumps(aggregate["release_identity"]' in tag_runs
+    assert "--aggregate aggregate-identity.json" in tag_runs
     assert "--tag-ref v0.4.0" in tag_runs
     assert "aggregate_conclusion" in tag_runs
     assert "git rev-parse v0.4.0^{}" in tag_runs

@@ -58,6 +58,10 @@ jobs:
               raise SystemExit("aggregate does not authorize release")
           if aggregate.get("release_identity", {}).get("commit") != os.environ["HEAD_SHA"]:
               raise SystemExit("aggregate commit differs from resolved checkout")
+          Path("aggregate-identity.json").write_text(
+              json.dumps(aggregate["release_identity"], sort_keys=True),
+              encoding="utf-8",
+          )
           Path("installed-identity.json").write_text(
               '{"distribution_version":"0.4.0","package_version":"0.4.0"}',
               encoding="utf-8",
@@ -65,7 +69,7 @@ jobs:
           PY
           uv run python tools/release_evidence.py verify-release-identity \
             --installed-identity installed-identity.json \
-            --aggregate evidence/release-manifest.json --tag-ref v0.4.0 --json
+            --aggregate aggregate-identity.json --tag-ref v0.4.0 --json
 
   github_release:
     name: Create GitHub Release
