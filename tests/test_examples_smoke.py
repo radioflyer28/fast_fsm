@@ -1,6 +1,7 @@
 """Smoke tests for every user-facing runnable example."""
 
 from pathlib import Path
+import os
 import subprocess
 import sys
 
@@ -18,6 +19,8 @@ def test_example_runs_to_completion(example: Path) -> None:
         [sys.executable, str(example)],
         cwd=PROJECT_ROOT,
         capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         text=True,
         timeout=30,
         check=False,
