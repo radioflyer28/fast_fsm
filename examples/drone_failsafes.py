@@ -66,24 +66,23 @@ class SimulatedAircraft:
         self._record("command_disarm_motors")
 
 
-class DroneState(State):
-    """Print each modeled state change and issue its post-commit command."""
+def report_state_entry(state_name: str) -> Callable[..., None]:
+    """Create a built-in lifecycle callback that reports one committed entry."""
 
-    __slots__ = ("entry_action",)
-
-    def __init__(
-        self,
-        name: str,
-        entry_action: Callable[[], None] | None = None,
-    ) -> None:
-        super().__init__(name)
-        self.entry_action = entry_action
-
-    def on_enter(self, from_state, trigger, *args, **kwargs):
+    def report(from_state: State | None, trigger: str, **_) -> None:
         source = from_state.name if from_state else "start"
-        print(f"  -> {self.name} ({source} --{trigger}--> {self.name})")
-        if self.entry_action is not None:
-            self.entry_action()
+        print(f"  -> {state_name} ({source} --{trigger}--> {state_name})")
+
+    return report
+
+
+def issue_aircraft_command(command: Callable[[], None]) -> Callable[..., None]:
+    """Adapt a no-argument aircraft command to an FSM entry callback."""
+
+    def issue(_from_state: State | None, _trigger: str, **_) -> None:
+        command()
+
+    return issue
 
 
 @dataclass(frozen=True)
@@ -184,16 +183,16 @@ def touchdown_detected(telemetry_policy: TelemetryPolicy, **_) -> bool:
 
 def create_drone_fsm(aircraft: AircraftCommands):
     """Build the controller's ground, mission, return, and emergency FSM."""
-    pre_arm = DroneState("PreArm")
-    armed = DroneState("Armed", aircraft.command_arm_motors)
-    takeoff = DroneState("Takeoff", aircraft.command_takeoff)
-    mission = DroneState("Mission", aircraft.command_start_mission)
-    return_home = DroneState("ReturnHome", aircraft.command_return_to_home)
-    landing = DroneState("Landing", aircraft.command_begin_landing)
-    emergency_landing = DroneState("EmergencyLanding", aircraft.command_emergency_land)
-    landed = DroneState("Landed", aircraft.command_disarm_motors)
+    pre_arm = State("PreArm")
+    armed = State("Armed")
+    takeoff = State("Takeoff")
+    mission = State("Mission")
+    return_home = State("ReturnHome")
+    landing = State("Landing")
+    emergency_landing = State("EmergencyLanding")
+    landed = State("Landed")
 
-    return (
+    builder = (
         FSMBuilder(pre_arm, name="DroneSafety")
         .add_state(armed)
         .add_state(takeoff)
@@ -257,8 +256,33 @@ def create_drone_fsm(aircraft: AircraftCommands):
             priority=30,
         )
         .add_transition("prepare_next_flight", "Landed", "PreArm")
-        .build()
     )
+
+    entry_commands = {
+        "Armed": aircraft.command_arm_motors,
+        "Takeoff": aircraft.command_takeoff,
+        "Mission": aircraft.command_start_mission,
+        "ReturnHome": aircraft.command_return_to_home,
+        "Landing": aircraft.command_begin_landing,
+        "EmergencyLanding": aircraft.command_emergency_land,
+        "Landed": aircraft.command_disarm_motors,
+    }
+    for state_name in (
+        "PreArm",
+        "Armed",
+        "Takeoff",
+        "Mission",
+        "ReturnHome",
+        "Landing",
+        "EmergencyLanding",
+        "Landed",
+    ):
+        builder.on_enter(state_name, report_state_entry(state_name))
+        command = entry_commands.get(state_name)
+        if command is not None:
+            builder.on_enter(state_name, issue_aircraft_command(command))
+
+    return builder.build()
 
 
 class DroneController:

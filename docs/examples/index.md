@@ -65,8 +65,10 @@ time-derived facts, such as heartbeat age, and own fixed priority: critical
 fault before link loss before low battery, followed by state-local facts such
 as reaching home or touchdown. Telemetry selects no event, transition, state,
 priority, or command. After the selected transition commits, only its bound
-destination-state entry callback invokes the adapter—for example,
-`ReturnHome` calls `aircraft.command_return_to_home()`.
+destination-state callback invokes the adapter—for example, `ReturnHome`
+calls `aircraft.command_return_to_home()`. The example uses ordinary `State`
+objects and registers reporting and command callbacks independently through
+`FSMBuilder.on_enter()`; no custom state subclass is needed.
 
 ```{literalinclude} ../../examples/drone_failsafes.py
 :language: python

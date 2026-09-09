@@ -87,6 +87,26 @@ def test_controller_composes_a_replaceable_aircraft_adapter_not_an_fsm():
     assert not issubclass(example.SimulatedAircraft, example.State)
 
 
+def test_example_uses_builtin_ordered_entry_callbacks_without_state_subclassing():
+    """Plain states delegate reporting and commands to the builder callback API."""
+    example = _load_example_module()
+    controller = example.DroneController(example.SimulatedAircraft())
+    fsm = controller._fsm
+
+    assert all(type(state) is example.State for state in fsm._states.values())
+    assert len(fsm._state_enter_callbacks["PreArm"]) == 1
+    for state_name in (
+        "Armed",
+        "Takeoff",
+        "Mission",
+        "ReturnHome",
+        "Landing",
+        "EmergencyLanding",
+        "Landed",
+    ):
+        assert len(fsm._state_enter_callbacks[state_name]) == 2
+
+
 def test_controller_observes_one_sample_and_dispatches_one_telemetry_tick():
     """A telemetry packet reaches the owned FSM once through one event name."""
     example = _load_example_module()
