@@ -674,7 +674,7 @@
     "measurement": "environment-labeled; exact timing is not a freshness field",
     "observation": {
       "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-      "elapsed_seconds": 0.091546,
+      "elapsed_seconds": 0.090334,
       "environment": {
         "implementation": "cpython",
         "machine": "arm64",
@@ -684,7 +684,7 @@
       "metric": "StateMachine.trigger operations per second",
       "mode": "pure",
       "operations": 40000,
-      "ops_per_second": 436940.8,
+      "ops_per_second": 442798.71,
       "warmup_operations": 2000
     }
   },
@@ -692,7 +692,7 @@
     "observations": [
       {
         "command": "tools/release_evidence.py evidence (StateMachine.trigger alternating-transition microbenchmark)",
-        "elapsed_seconds": 0.091546,
+        "elapsed_seconds": 0.090334,
         "environment": {
           "implementation": "cpython",
           "machine": "arm64",
@@ -702,7 +702,7 @@
         "metric": "StateMachine.trigger operations per second",
         "mode": "pure",
         "operations": 40000,
-        "ops_per_second": 436940.8,
+        "ops_per_second": 442798.71,
         "warmup_operations": 2000
       }
     ],
@@ -711,17 +711,17 @@
   "quality_baseline": {
     "build_mode": "pure",
     "coverage": {
-      "core_percent": 96.15,
-      "total_percent": 97.26
+      "core_percent": 96.28,
+      "total_percent": 97.34
     },
     "source": {
       "core_origin": "src/fast_fsm/core.py"
     },
     "tests": {
-      "collected": 1815,
+      "collected": 1822,
       "errors": 0,
       "failed": 0,
-      "passed": 1809,
+      "passed": 1816,
       "skipped": 6
     }
   },
