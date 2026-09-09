@@ -702,11 +702,11 @@ removes only that configuration generation. `set_fsm_logging_level()` delegates
 to the same ownership-preserving seam.
 
 An optional `FSMTraceRedactor` may translate one ephemeral `FSMTraceEvent`
-into the scalar fields `operation`, `stage`, `result`, and `detail`. Invalid
-output or an ordinary redactor exception fails closed to fixed
-`redaction_failure` metadata. `BaseException` subclasses such as
-`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` are never
-converted.
+into the scalar fields `operation`, `stage`, `result`, and `detail`.
+Invalid output or an ordinary `Exception` fails closed to fixed
+`redaction_failure` metadata. Non-`Exception` `BaseException` subclasses
+such as `KeyboardInterrupt`, `SystemExit`, and
+`asyncio.CancelledError` emit no trace record and are re-raised.
 
 ## Performance and architecture
 
@@ -771,9 +771,9 @@ task release-baseline-check
 ```
 
 For v0.4.0 and later, release authorization requires fresh hosted proof for
-pure, compiled, and source-derived artifacts. A local run is useful development
-evidence but is intentionally non-authorizing. SHA-256 binds exact artifact
-bytes to a record; it does not establish publisher identity.
+the pure, compiled, and source-derived installed-artifact matrix. A local run
+is useful development evidence but is intentionally non-authorizing. SHA-256
+binds exact bytes to the recorded evidence, not publisher authenticity.
 
 See the [testing guide](docs/dev/testing.md) and
 [release guide](docs/dev/releasing.md) for the complete evidence model.
