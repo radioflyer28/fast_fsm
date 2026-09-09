@@ -732,18 +732,24 @@ Runnable scripts live in `examples/`. Run any of them with:
 uv run python examples/<script>.py
 ```
 
-| Script | What it demonstrates |
-|--------|---------------------|
-| `traffic_light.py` | Timer-based transitions, emergency override |
-| `order_processing.py` | Conditional transitions, FSM validation |
-| `async_sensor_example.py` | `AsyncStateMachine`, `AsyncCondition` |
-| `declarative_state_example.py` | `@transition` decorator, async declarative states |
-| `enhanced_builder_example.py` | `FSMBuilder` auto-async detection, fluent API |
-| `cross_fsm_demo.py` | Cross-FSM conditions, coordinated multi-FSM systems |
-| [`drone_failsafes.py`](examples/drone_failsafes.py) | One telemetry tick through FSM-owned failsafe priority; deterministic training simulation only, not flight-control software |
+| Tier | Script | Primary lesson |
+|------|--------|----------------|
+| 1 | `traffic_light.py` | Direct construction, triggers, and `TransitionResult` |
+| 1 | `order_processing.py` | `FSMBuilder`, callbacks, fan-out, and reset |
+| 2 | `condition_toolkit.py` | Reusable, composed, and time-aware conditions |
+| 2 | `declarative_state_example.py` | Sync and async `@transition` handlers |
+| 2 | [`drone_failsafes.py`](examples/drone_failsafes.py) | One telemetry tick resolved by guarded priority candidates |
+| 3 | `async_sensor_example.py` | Deterministic `AsyncCondition` priority resolution |
+| 3 | `enhanced_builder_example.py` | Builder sync, auto-async, and forced-sync modes |
+| 3 | `cross_fsm_demo.py` | Cross-FSM guards and explicit coordination |
+| 4 | `workflow_persistence.py` | History, listeners, snapshots, clones, and topology roundtrip |
+| 4 | `diagnostics_and_visualization.py` | Validation, bounded diagnostics, and renderers |
+| 4 | `async_service_controller.py` | Async lifecycle callbacks and concurrent ownership |
 
 The drone example is educational and deterministic: it neither controls real
 hardware nor provides certified or real-time flight-control guidance.
+See the [tiered examples guide](docs/examples/index.md) for a feature-family map
+and recommended learning order.
 
 ## Running Tests
 

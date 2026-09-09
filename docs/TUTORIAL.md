@@ -655,10 +655,11 @@ memory_demo()
 ## 📚 Additional Resources
 
 - **[QUICK_START.md](QUICK_START.md)** - Fast reference guide
-- **[README.md](README.md)** - Complete API documentation  
-- **[examples/](examples/)** - Real-world examples
-- **[USABILITY_IMPROVEMENTS.md](USABILITY_IMPROVEMENTS.md)** - Advanced features
-- **Run `python verify_readme.py`** - See all examples working
+- **[Tiered examples](examples/index.md)** - Progressive, feature-focused scripts
+- **[Core API](api/core.md)** - Complete class and method reference
+- **[Conditions API](api/conditions.md)** - Guard interfaces and templates
+- **[Validation API](api/validation.md)** - Design-time analysis
+- **[Visualization API](api/visualization.md)** - Mermaid, PlantUML, and JSON
 
 ## 🚀 Go Build Something Amazing!
 

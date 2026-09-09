@@ -695,10 +695,11 @@ fsm = FSMBuilder(state).add_transition('go', 'a', 'b', condition=async_condition
 - ✅ How to validate complex FSMs
 
 **Next Steps:**
-- Browse the [examples/](examples/) directory for more real-world scenarios
-- Check out [README.md](README.md) for complete API documentation
-- Run `python verify_readme.py` to see all examples in action
-- Explore [USABILITY_IMPROVEMENTS.md](USABILITY_IMPROVEMENTS.md) for advanced features
+- Follow the [tiered examples gallery](examples/index.md), from core mechanics
+  through async ownership and diagnostics.
+- Check the [API reference](api/core.md) for complete signatures.
+- Run any gallery script with `uv run python examples/<script>.py` from the
+  repository root.
 
 **Need help?** The library has comprehensive type hints and clear error messages to guide you.
 
