@@ -25,9 +25,8 @@ class TemperatureSensor:
         # Simulate network delay
         await asyncio.sleep(0.1 + random.uniform(0, 0.2))
 
-        # Simulate gradual temperature changes with noise
-        change = random.uniform(-0.5, 0.5)
-        self._last_reading += change
+        # Follow the externally simulated trend with a little measurement drift.
+        self._last_reading = self.base_temp + random.uniform(-0.5, 0.5)
 
         # Add some random noise
         noise = random.uniform(-0.1, 0.1)
@@ -45,9 +44,8 @@ class PressureSensor:
         """Simulate reading pressure"""
         await asyncio.sleep(0.05 + random.uniform(0, 0.1))
 
-        # Simulate pressure variations
-        change = random.uniform(-2, 2)
-        self._last_reading += change
+        # Follow the externally simulated trend with realistic measurement noise.
+        self._last_reading = self.base_pressure + random.uniform(-2, 2)
         return max(900, min(1100, self._last_reading))  # Realistic range
 
 
@@ -114,26 +112,13 @@ class CombinedSensorCondition(AsyncCondition):
 
 
 # Example state machine with sensor conditions
-class EnvironmentState(State):
-    """Base state for environment monitoring system"""
+def report_state_entry(state_name: str):
+    """Create a lifecycle callback without requiring a custom State subclass."""
 
-    def on_enter(self, from_state, trigger, **kwargs):
-        print(f"  🔄 Entering {self.name} state")
+    def report(_from_state, _trigger, *_, **__):
+        print(f"  🔄 Entering {state_name} state")
 
-
-class MonitoringState(EnvironmentState):
-    def __init__(self):
-        super().__init__("Monitoring")
-
-
-class AlertState(EnvironmentState):
-    def __init__(self):
-        super().__init__("Alert")
-
-
-class SafeState(EnvironmentState):
-    def __init__(self):
-        super().__init__("Safe")
+    return report
 
 
 async def demo_async_sensor_conditions():
@@ -147,9 +132,9 @@ async def demo_async_sensor_conditions():
     pressure_sensor = PressureSensor(base_pressure=1020.0)  # Start above threshold
 
     # Create states
-    monitoring = MonitoringState()
-    alert = AlertState()
-    safe = SafeState()
+    monitoring = State("Monitoring")
+    alert = State("Alert")
+    safe = State("Safe")
 
     # Create sensor conditions
     temp_high = TemperatureCondition(temp_sensor, min_temp=25.0)
@@ -162,13 +147,24 @@ async def demo_async_sensor_conditions():
     fsm = AsyncStateMachine(monitoring, name="EnvironmentMonitor")
     fsm.add_state(alert)
     fsm.add_state(safe)
+    for state_name in ("Monitoring", "Alert", "Safe"):
+        fsm.on_enter(state_name, report_state_entry(state_name))
 
-    # Add transitions with async conditions
-    fsm.add_transition("check_alert", "Monitoring", "Alert", condition=temp_high)
+    # One sensor event lets the FSM resolve competing guarded outcomes. Lower
+    # integer priorities win when more than one condition accepts the sample.
     fsm.add_transition(
-        "check_safe", ["Monitoring", "Alert"], "Safe", condition=combined_safe
+        "sensor_tick", "Monitoring", "Alert", condition=temp_high, priority=0
     )
-    fsm.add_transition("check_monitor", "Safe", "Monitoring", condition=temp_safe)
+    fsm.add_transition(
+        "sensor_tick",
+        ["Monitoring", "Alert"],
+        "Safe",
+        condition=combined_safe,
+        priority=10,
+    )
+    fsm.add_transition(
+        "sensor_tick", "Safe", "Monitoring", condition=temp_safe, priority=20
+    )
 
     print(f"Initial state: {fsm.current_state_name}")
 
@@ -182,21 +178,10 @@ async def demo_async_sensor_conditions():
         # Gradually decrease pressure
         pressure_sensor.base_pressure -= 1.5
 
-        # Check various transitions
-        print("Checking alert condition...")
-        result = await fsm.trigger_async("check_alert")
+        print("Evaluating sensor tick...")
+        result = await fsm.trigger_async("sensor_tick")
         if not result.success:
-            print(f"  Alert check: {result.error}")
-
-        print("Checking safe condition...")
-        result = await fsm.trigger_async("check_safe")
-        if not result.success:
-            print(f"  Safe check: {result.error}")
-
-        print("Checking monitor condition...")
-        result = await fsm.trigger_async("check_monitor")
-        if not result.success:
-            print(f"  Monitor check: {result.error}")
+            print(f"  No state change: {result.error}")
 
         print(f"Current state: {fsm.current_state_name}")
 

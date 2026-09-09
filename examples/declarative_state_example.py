@@ -211,10 +211,12 @@ async def demo_async_declarative_state():
     print(f"Result: {result.success}, Current state: {fsm.current_state.name}")
 
     print("\n--- Test 2: Async condition (should succeed) ---")
+    fsm.reset()
     result = await fsm.trigger_async("async_temperature_check", temperature=25.0)
     print(f"Result: {result.success}, Current state: {fsm.current_state.name}")
 
     print("\n--- Test 3: High temperature (should fail sync condition) ---")
+    fsm.reset()
     result = await fsm.trigger_async("temperature_check", temperature=35.0)
     print(f"Result: {result.success}, Error: {result.error}")
 

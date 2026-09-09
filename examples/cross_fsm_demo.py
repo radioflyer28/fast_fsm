@@ -8,28 +8,7 @@ Demonstrates patterns where multiple FSMs depend on each other's states:
 - Coordinated multi-FSM systems (power + cooling + machine)
 """
 
-from fast_fsm import StateMachine, Condition, simple_fsm, condition_builder
-
-
-class CrossFSMCondition(Condition):
-    """Condition that checks the state of another FSM"""
-
-    def __init__(self, other_fsm: StateMachine, required_state: str, name: str = ""):
-        if not name:
-            name = f"{other_fsm.name}_in_{required_state}"
-        super().__init__(
-            name, f"Check if {other_fsm.name} is in state '{required_state}'"
-        )
-        self.other_fsm = other_fsm
-        self.required_state = required_state
-
-    def check(self, *args, **kwargs) -> bool:
-        is_in_state = self.other_fsm.current_state_name == self.required_state
-        print(
-            f"  Checking {self.other_fsm.name} state: "
-            f"{self.other_fsm.current_state_name} == {self.required_state}? {is_in_state}"
-        )
-        return is_in_state
+from fast_fsm import condition_builder, simple_fsm
 
 
 def demo_security_system():
@@ -51,7 +30,18 @@ def demo_security_system():
 
     # Door system FSM — can only open when alarm is disarmed
     door = simple_fsm("closed", "open", initial="closed", name="DoorSystem")
-    alarm_disarmed = CrossFSMCondition(alarm, "disarmed", "alarm_disarmed")
+
+    @condition_builder(
+        name="alarm_disarmed", description="Check whether the alarm is disarmed"
+    )
+    def alarm_disarmed(*args, **kwargs):
+        is_disarmed = alarm.current_state_name == "disarmed"
+        print(
+            f"  Checking {alarm.name} state: "
+            f"{alarm.current_state_name} == disarmed? {is_disarmed}"
+        )
+        return is_disarmed
+
     door.add_transition("open", "closed", "open", condition=alarm_disarmed)
     door.add_transition("close", "open", "closed")
 
@@ -77,9 +67,7 @@ def demo_factory_production():
     print("\n--- Factory Production Demo ---")
 
     # Material supply FSM
-    supply = simple_fsm(
-        "empty", "low", "full", initial="full", name="MaterialSupply"
-    )
+    supply = simple_fsm("empty", "low", "full", initial="full", name="MaterialSupply")
     supply.add_transitions(
         [
             ("consume", "full", "low"),
@@ -169,9 +157,7 @@ def demo_coordinated_system():
         "offline", "ready", "working", "error", initial="offline", name="Machine"
     )
 
-    @condition_builder(
-        name="systems_ready", description="Power on and cooling running"
-    )
+    @condition_builder(name="systems_ready", description="Power on and cooling running")
     def systems_ready(*args, **kwargs):
         power_ok = power.current_state_name == "on"
         cooling_ok = cooling.current_state_name == "running"

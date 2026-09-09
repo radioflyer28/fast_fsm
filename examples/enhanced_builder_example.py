@@ -17,18 +17,12 @@ from fast_fsm import (
     AsyncStateMachine,
     FSMBuilder,
     DeclarativeState,
-    AsyncDeclarativeState,
+    AsyncDeclarativeState as BaseAsyncDeclarativeState,
     transition,
     Condition,
     AsyncCondition,
     configure_fsm_logging,
 )
-
-
-# Regular state
-class RegularState(State):
-    def on_enter(self, from_state, trigger, **kwargs):
-        print(f"📍 Entered regular state: {self.name}")
 
 
 # Sync declarative state
@@ -40,7 +34,7 @@ class SyncDeclarativeState(DeclarativeState):
 
 
 # Async declarative state
-class AsyncDeclarativeState(AsyncDeclarativeState):
+class DemoAsyncDeclarativeState(BaseAsyncDeclarativeState):
     @transition("async_action")
     async def handle_async_action(self, **kwargs):
         await asyncio.sleep(0.1)
@@ -78,8 +72,8 @@ def demo_auto_detection():
     configure_fsm_logging(logging.DEBUG, "fast_fsm")
 
     print("\n--- Test 1: Regular states (should be sync) ---")
-    idle = RegularState("Idle")
-    working = RegularState("Working")
+    idle = State("Idle")
+    working = State("Working")
 
     builder = FSMBuilder(idle, name="RegularFSM")
     builder.add_state(working)
@@ -103,7 +97,7 @@ def demo_auto_detection():
     print(f"Built: {type(fsm2).__name__}")
 
     print("\n--- Test 3: Async declarative state (should become async) ---")
-    async_state = AsyncDeclarativeState("AsyncState")
+    async_state = DemoAsyncDeclarativeState("AsyncState")
 
     builder3 = FSMBuilder(idle, name="AsyncDeclarativeFSM")
     builder3.add_state(async_state)
@@ -134,8 +128,8 @@ def demo_explicit_mode():
     print("\n\n🎯 FSMBuilder Explicit Mode Demo")
     print("=" * 50)
 
-    idle = RegularState("Idle")
-    working = RegularState("Working")
+    idle = State("Idle")
+    working = State("Working")
 
     print("\n--- Test 1: Force async mode ---")
     builder_async = FSMBuilder(idle, async_mode=True, name="ForcedAsyncFSM")
@@ -155,8 +149,8 @@ def demo_explicit_mode():
     fsm_sync = builder_sync.build()
     print(f"Built: {type(fsm_sync).__name__}")
 
-    print("\n--- Test 3: Force sync with async components (warnings expected) ---")
-    async_state = AsyncDeclarativeState("AsyncState")
+    print("\n--- Test 3: Force sync with async components (rejection expected) ---")
+    async_state = DemoAsyncDeclarativeState("AsyncState")
     async_condition = CustomAsyncCondition(5)
 
     builder_mixed = FSMBuilder(idle, async_mode=False, name="MixedFSM")
@@ -166,8 +160,10 @@ def demo_explicit_mode():
     )
 
     print(f"Builder type: {builder_mixed.machine_type.__name__}")
-    fsm_mixed = builder_mixed.build()
-    print(f"Built: {type(fsm_mixed).__name__}")
+    try:
+        builder_mixed.build()
+    except RuntimeError as error:
+        print(f"Build rejected: {error}")
 
 
 def demo_fluent_api():
@@ -177,9 +173,9 @@ def demo_fluent_api():
 
     print("\n--- Test 1: Chained force_async() ---")
     fsm1 = (
-        FSMBuilder(RegularState("Start"), name="ChainedAsync")
-        .add_state(RegularState("Middle"))
-        .add_state(RegularState("End"))
+        FSMBuilder(State("Start"), name="ChainedAsync")
+        .add_state(State("Middle"))
+        .add_state(State("End"))
         .add_transition("next", "Start", "Middle")
         .add_transition("finish", "Middle", "End")
         .force_async()  # Force async mode
@@ -193,9 +189,9 @@ def demo_fluent_api():
     async_condition = CustomAsyncCondition(7)
 
     fsm2 = (
-        FSMBuilder(RegularState("Start"), name="MixedComponents")
+        FSMBuilder(State("Start"), name="MixedComponents")
         .add_state(SyncDeclarativeState("SyncState"))
-        .add_state(AsyncDeclarativeState("AsyncState"))  # This will trigger async
+        .add_state(DemoAsyncDeclarativeState("AsyncState"))  # Triggers async
         .add_transition("to_sync", "Start", "SyncState", condition=sync_condition)
         .add_transition(
             "to_async", "SyncState", "AsyncState", condition=async_condition
@@ -207,8 +203,8 @@ def demo_fluent_api():
 
     print("\n--- Test 3: Builder inspection ---")
     builder = (
-        FSMBuilder(RegularState("Initial"), name="InspectionTest")
-        .add_state(AsyncDeclarativeState("AsyncState"))
+        FSMBuilder(State("Initial"), name="InspectionTest")
+        .add_state(DemoAsyncDeclarativeState("AsyncState"))
         .add_transition("go", "Initial", "AsyncState")
     )
 
@@ -227,8 +223,8 @@ async def demo_async_usage():
     print("=" * 50)
 
     # Build async FSM
-    monitoring = AsyncDeclarativeState("Monitoring")
-    alert = AsyncDeclarativeState("Alert")
+    monitoring = DemoAsyncDeclarativeState("Monitoring")
+    alert = DemoAsyncDeclarativeState("Alert")
 
     fsm = (
         FSMBuilder(monitoring, name="AsyncSensorFSM")
@@ -263,7 +259,7 @@ async def main():
     print("• Enhanced logging and validation")
     print("• Backwards compatibility")
     print("• Fluent API with inspection capabilities")
-    print("• Mixed sync/async component warnings")
+    print("• Mixed sync/async component validation")
 
 
 if __name__ == "__main__":

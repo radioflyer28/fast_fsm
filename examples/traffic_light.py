@@ -8,37 +8,19 @@ Demonstrates a complete traffic light state machine with:
 - Emergency override functionality
 """
 
-from fast_fsm import State, FSMBuilder
+from collections.abc import Callable
+
+from fast_fsm import FSMBuilder, State
 
 
-class TrafficLightState(State):
-    """Base class for traffic light states"""
+def announce_light(symbol: str, label: str) -> Callable[..., None]:
+    """Create an inline callback for :meth:`State.create`."""
 
-    pass
+    def announce(from_state: State | None, _trigger: str, *_, **__) -> None:
+        source = from_state.name if from_state else "start"
+        print(f"{symbol} {label} light ON (from {source})")
 
-
-class RedState(TrafficLightState):
-    def __init__(self):
-        super().__init__("Red")
-
-    def on_enter(self, from_state, trigger, **kwargs):
-        print(f"🔴 Red light ON (from {from_state.name if from_state else 'start'})")
-
-
-class YellowState(TrafficLightState):
-    def __init__(self):
-        super().__init__("Yellow")
-
-    def on_enter(self, from_state, trigger, **kwargs):
-        print(f"🟡 Yellow light ON (from {from_state.name if from_state else 'start'})")
-
-
-class GreenState(TrafficLightState):
-    def __init__(self):
-        super().__init__("Green")
-
-    def on_enter(self, from_state, trigger, **kwargs):
-        print(f"🟢 Green light ON (from {from_state.name if from_state else 'start'})")
+    return announce
 
 
 def main():
@@ -47,9 +29,9 @@ def main():
     print("=" * 50)
 
     # Build the traffic light FSM
-    red = RedState()
-    yellow = YellowState()
-    green = GreenState()
+    red = State.create("Red", on_enter=announce_light("🔴", "Red"))
+    yellow = State.create("Yellow", on_enter=announce_light("🟡", "Yellow"))
+    green = State.create("Green", on_enter=announce_light("🟢", "Green"))
 
     traffic_light = (
         FSMBuilder(red, name="TrafficLight")

@@ -3,39 +3,41 @@
 Order Processing System Example using Fast FSM
 
 Demonstrates an e-commerce order processing workflow with:
-- 5 states: Pending, Processing, Shipped, Delivered, Cancelled
-- Conditional transitions based on payment and inventory
+- 7 states covering payment, fulfillment, cancellation, and refunds
 - FSM validation and analysis
 """
 
 from fast_fsm import State, FSMBuilder, validate_fsm
 
 
-class OrderState(State):
-    """Base class for order processing states"""
+def order_state(name: str) -> State:
+    """Create an order state with an inline entry callback."""
 
-    def on_enter(self, from_state, trigger, **kwargs):
+    def report_entry(from_state, _trigger, *_, **kwargs):
         order_id = kwargs.get("order_id", "UNKNOWN")
         print(
-            f"📦 Order {order_id}: {self.name} (from {from_state.name if from_state else 'start'})"
+            f"📦 Order {order_id}: {name} "
+            f"(from {from_state.name if from_state else 'start'})"
         )
+
+    return State.create(name, on_enter=report_entry)
 
 
 def create_order_processing_fsm():
     """Create an e-commerce order processing FSM"""
 
     # Define order states
-    pending = OrderState("Pending")
-    paid = OrderState("Paid")
-    processing = OrderState("Processing")
-    shipped = OrderState("Shipped")
-    delivered = OrderState("Delivered")
-    cancelled = OrderState("Cancelled")
-    refunded = OrderState("Refunded")
+    pending = order_state("Pending")
+    paid = order_state("Paid")
+    processing = order_state("Processing")
+    shipped = order_state("Shipped")
+    delivered = order_state("Delivered")
+    cancelled = order_state("Cancelled")
+    refunded = order_state("Refunded")
 
     # Build the order FSM
     order_fsm = (
-        FSMBuilder(pending, enable_logging=False)
+        FSMBuilder(pending)
         .add_state(paid)
         .add_state(processing)
         .add_state(shipped)
@@ -100,7 +102,7 @@ def main():
 
     # Reset for cancellation scenario
     print("\n--- Cancellation Scenario for ORD-2025-002 ---")
-    order_fsm._current_state = order_fsm._states["Pending"]  # Reset
+    order_fsm.reset()
     order_id = "ORD-2025-002"
 
     order_fsm.trigger("payment_received", order_id=order_id)
@@ -113,7 +115,7 @@ def main():
 
     for i, path in enumerate(test_paths[:3]):  # Show first 3
         print(f"   Test {i + 1}: Pending", end="")
-        for from_state, event, to_state in path:
+        for from_state, event, to_state, *_metadata in path:
             print(f" --[{event}]--> {to_state}", end="")
         print()
 
