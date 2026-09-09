@@ -1,818 +1,807 @@
-# Fast FSM — High-Performance Finite State Machine Library
+# Fast FSM
 
-A high-performance, memory-efficient finite state machine library for Python
-with a clean, intuitive API.
+A fast, memory-conscious finite state machine library for Python.
 
-**Full documentation:** after installing, run
-`uv run sphinx-build -b html docs docs/_build/html` and open
-`docs/_build/html/index.html`, or browse the Markdown sources under `docs/`.
-
-## Performance Highlights
-
-- **Stable performance contract** — fresh installed compiled singleton
-  `trigger()` throughput is at least 200,000 operations per second.
-- **Memory-conscious design** — direct dictionary lookups and `__slots__` keep
-  the hot path lean.
-- **Production-ready verification** — 700+ tests, optional validation, and
-  optional mypyc compilation.
-
-Exact test, coverage, toolchain, source-origin, artifact-mode, and collected
-environment-labeled benchmark observations are recorded in the tracked
-[`evidence/release-baseline.json`](evidence/release-baseline.json) manifest.
-Regenerate or verify that evidence with the commands in the developer testing
-guide; do not treat a historical local benchmark as a universal result.
-
-## v0.4.0 Installed-Artifact Release Proof
-
-v0.4.0 requires a complete installed-artifact proof matrix: pure, compiled, and
-source-derived artifacts must be verified from fresh environments before a
-release can be authorized. The local matrix is an explicitly non-authorizing
-projection for development; only the complete hosted release matrix can
-authorize publication. SHA-256 binds exact bytes to the recorded evidence, not
-publisher authenticity. Exact artifact records, environment labels, and any
-performance observations remain in the manifest rather than this narrative.
-
-## Requirements
-
-**Python ≥ 3.10** — requires `@dataclass(slots=True)` (PEP 681).
-
-**Runtime dependency:** `mypy-extensions ≥ 1.0` (provides the `@mypyc_attr` decorator).
-
-### Compatibility Matrices
-
-**User — Python × mypy-extensions** (runtime)
-
-| Python | mypy-extensions 1.0.0 (`requires_python ≥3.5`) | mypy-extensions 1.1.0 (`requires_python ≥3.8`) |
-|--------|------------------------------------------------|-------------------------------------------------|
-| 3.10 | ✅ | ✅ |
-| 3.11 | ✅ | ✅ |
-| 3.12 | ✅ | ✅ |
-| 3.13 | ✅ | ✅ |
-| 3.14 | ✅ | ✅ |
-
-**Dev — Python × mypy\[mypyc\]** (build/type-check)
-
-| Python | mypy 1.5–1.14 (`≥3.8`) | mypy 1.15–1.17 (`≥3.9`) | mypy 1.19+ (`≥3.9`) |
-|--------|------------------------|-------------------------|---------------------|
-| 3.10 | ✅ | ✅ | ✅ |
-| 3.11 | ✅ | ✅ | ✅ |
-| 3.12 | ✅ (1.8+) | ✅ | ✅ |
-| 3.13 | ✅ (1.14+) | ✅ | ✅ |
-| 3.14 | ❌ | ✅ (1.17+) | ✅ |
-
-## Quick Start
-
-### Installation
-
-```bash
-git clone <repository-url>
-cd fast_fsm
-uv sync          # install all dependencies
-```
-
-### Basic Usage
+Fast FSM keeps the common path small: define states, connect them with named
+transitions, and send triggers. When a workflow grows, the same model extends
+to guarded priority candidates, lifecycle callbacks, async I/O, persistence,
+validation, and visualization.
 
 ```python
 from fast_fsm import State, StateMachine
 
-idle = State("idle")
-processing = State("processing")
+machine = StateMachine(State("idle"), name="Worker")
+machine.add_state(State("running"))
+machine.add_transition("start", "idle", "running")
 
-fsm = StateMachine(idle, name="demo")
-fsm.add_state(processing)
-fsm.add_transition("start", "idle", "processing")
-fsm.add_transition("complete", "processing", "idle")
-
-result = fsm.trigger("start")   # idle → processing
-print(f"Success: {result.success}")
+result = machine.trigger("start")
+assert result.success
+assert machine.is_in("running")
 ```
 
-### Builder Pattern
+Fast FSM supports Python 3.10 through 3.14. The runtime has one dependency:
+`mypy-extensions`.
+
+- [Quick start](docs/QUICK_START.md)
+- [Tutorial](docs/TUTORIAL.md)
+- [Tiered examples](docs/examples/index.md)
+- [API reference](docs/api/core.md)
+
+## Why Fast FSM?
+
+- **Straightforward core API.** Direct construction, factory helpers, a fluent
+  builder, and declarative states all produce the same machine model.
+- **Deterministic decisions.** Conditions and ordered priority candidates keep
+  transition eligibility and precedence inside the FSM.
+- **Sync and async support.** Async guards and lifecycle callbacks are awaited
+  at their actual transition stage.
+- **Operational visibility.** Structured results, bounded history, listeners,
+  snapshots, validation, and diagram exporters are built in.
+- **Lean runtime.** Direct dictionary lookup and slots-aware hot paths keep the
+  dispatch path focused. Validation and visualization remain opt-in.
+
+**Jump to:** [guards](#put-transition-rules-in-guards) ·
+[priority](#resolve-competing-outcomes-with-priority) ·
+[callbacks](#attach-behavior-to-the-transition-lifecycle) ·
+[async](#use-async-machines-for-io-bound-decisions) ·
+[persistence](#query-control-and-persist-a-machine) ·
+[examples](#follow-the-progressive-examples) ·
+[advanced contracts](#advanced-runtime-contracts)
+
+## Install
+
+Add the published package:
+
+```bash
+uv add fast_fsm
+```
+
+For development from source:
+
+```bash
+git clone https://github.com/radioflyer28/fast_fsm.git
+cd fast_fsm
+uv sync --all-groups
+```
+
+## Start with the core API
+
+A machine has one current state. A trigger selects a transition registered for
+that state and either returns a successful `TransitionResult` or a structured
+failure.
 
 ```python
-from fast_fsm import State, FSMBuilder
+from fast_fsm import State, StateMachine
 
-fsm = (
-    FSMBuilder(State("idle"))
-    .add_state(State("processing"))
-    .add_transition("start", "idle", "processing")
-    .add_transition("complete", "processing", "idle")
-    # Register per-state callbacks in the same fluent chain:
-    .on_enter("processing", lambda from_s, t, **kw: print("→ processing"))
-    .on_exit("processing",  lambda to_s,   t, **kw: print("← processing"))
+order = StateMachine(State("pending"), name="Order")
+order.add_state(State("paid"))
+order.add_state(State("shipped"))
+
+order.add_transition("pay", "pending", "paid")
+order.add_transition("ship", "paid", "shipped")
+
+paid = order.trigger("pay")
+print(paid.success, paid.from_state, paid.to_state)
+
+rejected = order.trigger("pay")
+print(rejected.success, rejected.stage, rejected.error)
+```
+
+`trigger()` does not raise for an ordinary rejected transition. Use
+`result.raise_if_failed()` when exception-based control flow is a better fit:
+
+```python
+order.trigger("ship").raise_if_failed()
+```
+
+## Choose the construction style that fits
+
+All construction styles create ordinary `StateMachine` or
+`AsyncStateMachine` instances. Start with the simplest style that expresses
+the topology clearly.
+
+| Style | Best fit |
+|---|---|
+| `StateMachine` | Explicit construction and maximum local clarity |
+| `simple_fsm()` | A few named states, with transitions added afterward |
+| `quick_fsm()` | A compact transition table |
+| `FSMBuilder` | Fluent setup, callbacks, or automatic async detection |
+| Declarative states | Event handlers that naturally belong to state classes |
+| `from_dict()` | Topology loaded from JSON, YAML, TOML, or another config source |
+
+### Factory helpers
+
+```python
+from fast_fsm import quick_fsm, simple_fsm
+
+connection = simple_fsm(
+    "disconnected",
+    "connected",
+    initial="disconnected",
+    name="Connection",
+)
+connection.add_transition("connect", "disconnected", "connected")
+
+job = quick_fsm(
+    "queued",
+    [
+        ("start", "queued", "running"),
+        ("finish", "running", "done"),
+        ("fail", "running", "failed"),
+    ],
+    name="Job",
+)
+```
+
+### Fluent builder
+
+```python
+from fast_fsm import FSMBuilder, State
+
+worker = (
+    FSMBuilder(State("idle"), name="Worker")
+    .add_state(State("running"))
+    .add_state(State("stopped"))
+    .add_transition("start", "idle", "running")
+    .add_transition("stop", ["idle", "running"], "stopped")
+    .on_enter("running", lambda source, trigger, **_: print("started"))
     .build()
 )
 ```
 
-### Factory Helpers
+Passing a list of source states is shorthand for registering the same
+transition from each source.
+
+## Put transition rules in guards
+
+A condition receives the same arguments as `trigger()`. Use `FuncCondition`
+for ordinary functions or subclass `Condition` when a guard needs reusable
+state.
 
 ```python
-from fast_fsm import simple_fsm
+from fast_fsm import FuncCondition
 
-fsm = simple_fsm("idle", "running", "error", initial="idle", name="QuickFSM")
-fsm.add_transitions([
-    ("start", "idle",    "running"),
-    ("fail",  "running", "error"),
-    ("reset", "error",   "idle"),
-    # Optional 4th element attaches a guard condition:
-    # ("start", "idle", "running", FuncCondition("ready", lambda **kw: kw.get("ready"))),
-])
+has_credit = FuncCondition(
+    lambda *, credit=0, cost=0, **_: credit >= cost,
+    name="has_credit",
+)
+
+checkout.add_transition(
+    "purchase",
+    "basket",
+    "confirmed",
+    condition=has_credit,
+)
+
+checkout.trigger("purchase", credit=20, cost=12)
 ```
 
-## Features
-
-### Conditional Transitions
+Use `unless=` when the negative form reads better:
 
 ```python
-from fast_fsm import FuncCondition, CompiledFuncCondition
-
-enough_energy = FuncCondition("energy", lambda **kw: kw.get("energy", 0) > 5)
-fsm.add_transition("proceed", "waiting", "ready", condition=enough_energy)
-# CompiledFuncCondition is a mypyc-compiled drop-in for hot paths:
-# enough_energy = CompiledFuncCondition(lambda **kw: kw.get("energy", 0) > 5)
-
-fsm.trigger("proceed", energy=10)  # succeeds
-fsm.trigger("proceed", energy=3)   # blocked by condition
+is_locked = FuncCondition(
+    lambda *, locked=False, **_: locked,
+    name="is_locked",
+)
+door.add_transition("open", "closed", "open", unless=is_locked)
 ```
 
-Use `unless=` as a readable negation shorthand — the transition fires when the
-condition is **False**:
+`condition=` and `unless=` are mutually exclusive. Guard signatures should
+accept `*args, **kwargs` or an equivalent flexible keyword shape so callers can
+add context without breaking the condition.
 
-```python
-is_locked = FuncCondition("locked", lambda **kw: kw.get("locked", False))
-fsm.add_transition("open", "closed", "open", unless=is_locked)
+### Reusable and time-aware conditions
 
-fsm.trigger("open", locked=False)  # succeeds — not locked
-fsm.trigger("open", locked=True)   # blocked — is locked
-```
+`fast_fsm.condition_templates` includes key-presence, membership, regex,
+comparison, boolean-composition, and negation conditions. The top-level package
+also exports:
 
-`condition=` and `unless=` are mutually exclusive.
+- `TimeoutCondition(seconds)`: passes until its time window expires.
+- `CooldownCondition(seconds)`: passes immediately, then enforces an interval.
+- `ElapsedCondition(seconds)`: passes after the interval has elapsed.
 
-### Priority-Aware Candidates
+Each timing condition uses `time.monotonic()` and provides `reset()`.
+See [`condition_toolkit.py`](examples/condition_toolkit.py) for composition
+examples.
 
-Register multiple guarded destinations for the same state and trigger when the
-FSM should own both eligibility and precedence. Lower integer values run first:
+## Resolve competing outcomes with priority
+
+Several transitions may share one `(source state, trigger)` slot. Fast FSM
+evaluates eligible candidates from the lowest priority integer upward and
+commits the first match.
 
 ```python
 from fast_fsm import FuncCondition, State, StateMachine
 
-mission = State("mission")
-return_home = State("return_home")
-emergency = State("emergency_landing")
-
-drone = StateMachine(mission)
-drone.add_state(return_home)
-drone.add_state(emergency)
+drone = StateMachine(State("mission"), name="Drone")
+drone.add_state(State("return_home"))
+drone.add_state(State("emergency_landing"))
 
 drone.add_transition(
-    "telemetry_tick", "mission", "emergency_landing",
-    FuncCondition(lambda **t: t.get("critical_fault", False)),
+    "telemetry_tick",
+    "mission",
+    "emergency_landing",
+    condition=FuncCondition(
+        lambda *, critical_fault=False, **_: critical_fault,
+        name="critical_fault",
+    ),
     priority=0,
 )
 drone.add_transition(
-    "telemetry_tick", "mission", "return_home",
-    FuncCondition(lambda **t: not t.get("link_ok", True)),
+    "telemetry_tick",
+    "mission",
+    "return_home",
+    condition=FuncCondition(
+        lambda *, link_ok=True, **_: not link_ok,
+        name="link_lost",
+    ),
     priority=10,
 )
 drone.add_transition(
-    "telemetry_tick", "mission", "return_home",
-    FuncCondition(lambda **t: t.get("battery_pct", 100) < 25),
+    "telemetry_tick",
+    "mission",
+    "return_home",
+    condition=FuncCondition(
+        lambda *, battery_pct=100, **_: battery_pct < 25,
+        name="low_battery",
+    ),
     priority=20,
 )
 
 result = drone.trigger(
-    "telemetry_tick", critical_fault=False, link_ok=True, battery_pct=18
+    "telemetry_tick",
+    critical_fault=False,
+    link_ok=True,
+    battery_pct=18,
 )
 assert result.success
 assert result.priority == 20
 assert drone.is_in("return_home")
 ```
 
-Each priority within one `(source, trigger)` slot must be a unique exact
-built-in `int`; `bool`, `IntEnum`, floats, and integer subclasses are rejected.
-An exact duplicate registration is idempotent, while a different candidate at
-an occupied priority raises `ValueError` without changing the topology. Normal
+Priority belongs to transition topology, not caller-side `if`/`elif` routing.
+Application-specific calculations still belong inside guards.
+
+Priorities are unique exact built-in integers within a shared slot. A normal
 guard rejection falls through to the next candidate. A guard exception or
-async cancellation aborts selection rather than silently trying a lower-priority
-candidate. Keep application-specific calculations in guard functions; use
-`priority=` only to make precedence deterministic.
+async cancellation aborts selection instead of silently trying a lower
+priority. Exact duplicate registration is idempotent; a different candidate at
+an occupied priority is rejected atomically.
 
-### Timing Conditions
+The complete [drone failsafe example](examples/drone_failsafes.py) shows a
+controller feeding one telemetry event into priority candidates and issuing
+simulated aircraft commands only after the selected transition commits. It is
+training software, not flight-control or safety-certified software.
 
-Built-in time-based guards remove the need for manual clock logic:
+## Attach behavior to the transition lifecycle
 
-```python
-from fast_fsm import StateMachine, State, TimeoutCondition, CooldownCondition, ElapsedCondition
+Use state callbacks for behavior owned by one state, machine callbacks for
+behavior attached during composition, and listeners for cross-cutting
+observation.
 
-fsm = StateMachine(State("idle"), name="timed")
-fsm.add_state(State("active"))
-fsm.add_state(State("cooldown"))
-
-# TimeoutCondition — allow a transition only within the first N seconds
-timeout = TimeoutCondition(30.0)          # 30-second window
-fsm.add_transition("activate", "idle", "active", condition=timeout)
-
-# CooldownCondition — enforce a minimum interval between triggers  
-cooldown = CooldownCondition(5.0)         # at least 5 s between fires
-fsm.add_transition("retry", "active", "active", condition=cooldown)
-
-# ElapsedCondition — gate a transition until N seconds have passed
-warmup = ElapsedCondition(10.0)           # wait 10 s before allowing
-fsm.add_transition("ready", "active", "cooldown", condition=warmup)
-
-# All timing conditions use time.monotonic() (immune to NTP jumps)
-# and provide a reset() method to restart their internal clock:
-timeout.reset()
-```
-
-### Multi-Source Transitions
+### State and machine callbacks
 
 ```python
-fsm.add_transition("emergency_reset", ["error", "processing", "waiting"], "idle")
-```
+from fast_fsm import State
 
-### Error Handling
-
-By default `trigger()` returns a `TransitionResult`, including ordinary
-transition failures. Inspect its structured lifecycle fields before deciding
-whether to use exception-based flow:
-
-```python
-from fast_fsm import TransitionError
-
-# `committed` tells you whether the destination/history commit happened.
-result = fsm.trigger("start")
-if not result.success:
-    assert result.stage is not None       # stable lowercase lifecycle stage
-    assert result.cause is None or isinstance(result.cause, BaseException)
-    if result.committed:
-        # A later callback failed; the destination remains current.
-        assert fsm.current_state.name == result.to_state
-
-# Raises TransitionError only when success is False. Its original cause is
-# available through exception chaining; avoid formatting callback payloads or
-# causes into application logs.
-try:
-    result.raise_if_failed()
-except TransitionError as exc:
-    assert exc.result is result
-    print(exc.result.error)       # concise, stage-aware reason
-    print(exc.result.from_state)  # state at time of failure
-
-# Chain directly when you also need the destination
-target = result.raise_if_failed().to_state
-```
-
-`TransitionError.result` holds the original `TransitionResult` for inspection.
-Successful results have `success=True`, `committed=True`, `stage=None`, and
-`cause=None`. Failed pre-commit results preserve the source state with
-`committed=False`; failed post-commit results preserve the destination with
-`committed=True`. `cause` retains the original exception object when one
-exists, but is deliberately omitted from result representations and error text.
-
-### Checking Active State
-
-Use `is_in()` to check whether the machine is currently in a given state.
-Accepts a state name string or a `State` object:
-
-```python
-idle = State("idle")
-fsm = StateMachine(idle)
-fsm.add_state(State("running"))
-fsm.add_transition("start", "idle", "running")
-
-fsm.is_in("idle")    # True
-fsm.is_in(idle)      # True — identity comparison
-fsm.is_in("running") # False
-
-fsm.trigger("start")
-fsm.is_in("running") # True
-fsm.is_in("idle")    # False
-```
-
-`is_in()` is O(1) and works on both `StateMachine` and `AsyncStateMachine`.
-
-### State Lifecycle Hooks
-
-Attach enter/exit callbacks at construction time using `CallbackState` or
-`State.create()`, or add them to any named state after construction with
-`fsm.on_enter()` / `fsm.on_exit()`:
-
-```python
-from fast_fsm import CallbackState
-
-# Option A — CallbackState (constructed before the machine)
-idle = CallbackState(
-    "idle",
-    on_enter=lambda from_state, trigger, **kw: print("Now idle"),
-    on_exit=lambda to_state, trigger, **kw: print("Leaving idle"),
+running = State.create(
+    "running",
+    on_enter=lambda source, trigger, **_: print("state entered"),
+    on_exit=lambda target, trigger, **_: print("state exited"),
 )
 
-# Option B — attach after construction (works on any StateMachine)
-fsm.on_enter("running", lambda from_s, t, **kw: print("→ running"))
-fsm.on_exit("running",  lambda to_s,   t, **kw: print("← running"))
-# Multiple callbacks per state are called in registration order.
+machine.on_enter(
+    "running",
+    lambda source, trigger, **_: metrics.increment("starts"),
+)
+machine.on_exit(
+    "running",
+    lambda target, trigger, **_: metrics.increment("stops"),
+)
+machine.on_trigger(
+    "submit",
+    lambda source, target, trigger, **_: metrics.increment("submissions"),
+)
+machine.after_transition(
+    lambda source, target, trigger, **_: audit.record(trigger),
+)
+machine.on_failed(
+    lambda trigger, from_state, error, **_: audit.reject(trigger, error),
+)
 ```
 
-### State Control
+Multiple callbacks in the same collection run in registration order.
+`CallbackState` is the explicit class equivalent of `State.create()`.
+
+### Listeners
+
+A listener may implement any subset of this duck-typed protocol:
 
 ```python
-# Force the machine into any state, bypassing guards (testing / error recovery)
-fsm.force_state("error")       # full callback chain fires; trigger = "__force__"
-fsm.reset()                    # return to initial_state_name
-
-# Snapshot / restore — JSON and pickle safe
-snap = fsm.snapshot()          # {"state": "running", "version": 1}
-# ... persist snap, restart process, etc. ...
-fsm.restore(snap)              # teleports back; full callback chain fires
-
-# Clone — verbatim copy reset to initial state; callbacks and topology are preserved
-worker = fsm.clone()           # ideal for per-request / per-session instances
-
-# Build from a dict / JSON / YAML config
-config = {
-    "initial": "idle",
-    "transitions": [
-        {"trigger": "start",  "from": "idle",    "to": "running"},
-        {"trigger": "stop",   "from": "running", "to": "idle"},
-        {"trigger": "fail",   "from": ["idle", "running"], "to": "error"},
-    ],
-}
-fsm = StateMachine.from_dict(config, name="MyFSM")
-# Add guard conditions at construction time with conditions=:
-# from fast_fsm import FuncCondition
-# fsm = StateMachine.from_dict(config, conditions={"start": FuncCondition(guard_fn)})
-```
-
-### Listeners (Observer Pattern)
-
-Attach observers without touching FSM code. Each listener is a plain object that
-implements any subset of the duck-typed protocol:
-
-```python
-class TransitionLogger:
+class TransitionListener:
     def before_transition(self, source, target, trigger, **kwargs):
-        print(f"About to leave {source.name}")
+        pass
 
     def on_exit_state(self, source, target, trigger, **kwargs):
-        print(f"Leaving {source.name}")
+        pass
 
     def on_enter_state(self, target, source, trigger, **kwargs):
-        print(f"Entering {target.name}")
+        pass
 
     def after_transition(self, source, target, trigger, **kwargs):
-        print(f"{source.name} --[{trigger}]--> {target.name}")
+        print(f"{source.name} --{trigger}--> {target.name}")
 
-fsm.add_listener(TransitionLogger())
+
+machine.add_listener(TransitionListener())
 ```
 
-All four methods are optional — omit any you don't need. Multiple callbacks in
-every collection preserve registration order. An ordinary lifecycle callback
-failure is fail-fast: it stops the remaining lifecycle suffix, produces a
-failed `TransitionResult`, and never rolls back a completed commit. The
-empty-list guards keep the no-listener path lean.
+Listeners observe transitions without coupling the state classes to logging,
+metrics, or auditing concerns.
 
-**Ordinary trigger lifecycle order:**
+## Use async machines for I/O-bound decisions
 
-| Stage | Ordered work |
-|---|---|
-| Pre-commit | `before_transition` listeners → source `State.on_exit` → registered source `on_exit` callbacks → `on_exit_state` listeners |
-| Commit | Update the current state and append one optional history record together; no user callback or async await occurs here. |
-| Post-commit | destination `State.on_enter` → registered destination `on_enter` callbacks → `on_enter_state` listeners → selected declarative handler → trigger-specific callbacks → `after_transition` listeners |
-
-The stable result stages identify the failing slot, including
-`before-transition`, `source-exit`, `source-exit-callback`,
-`exit-state-listener`, `destination-enter`, `destination-enter-callback`,
-`enter-state-listener`, `declarative-handler`, `trigger-callback`, and
-`after-transition` (with `resolution`, `guard`, and `state-permission` for
-pre-lifecycle failures).
-
-`on_failed(trigger, from_state, error, **kwargs)` keeps its existing
-signature. Each failed trigger invokes registered failure observers exactly
-once in registration order. An observer failure cannot replace the original
-result/cause or prevent the remaining observers from receiving their one call.
-
-**Common pattern — application-side transition history:**
-
-```python
-class History:
-    def __init__(self): self.log = []
-    def after_transition(self, source, target, trigger, **kwargs):
-        self.log.append((source.name, trigger, target.name))
-
-hist = History()
-fsm.add_listener(hist)
-# hist.log → [("idle", "start", "running"), ...]
-```
-
-**Inline convenience methods** (no listener class required):
-
-```python
-# Fires after every successful transition
-fsm.after_transition(lambda src, tgt, t, **kw: print(f"{src.name} → {tgt.name}"))
-
-# Fires once whenever a trigger attempt fails (wrong state, condition blocked,
-# lifecycle callback, or cancellation observation)
-fsm.on_failed(lambda t, from_s, err, **kw: print(f"BLOCKED: {t} from {from_s} — {err}"))
-
-# Fires after every successful "submit" trigger specifically
-fsm.on_trigger("submit", lambda src, tgt, t, **kw: metrics.record(t))
-```
-
-`clone()` copies all callbacks and listeners (shallow copy). Adding new callbacks
-to the clone after cloning does not affect the original.
-
-Listeners work identically on `AsyncStateMachine` through the paired async
-lifecycle runner. Synchronous callbacks still run inline; Fast FSM never
-automatically offloads them to a worker.
-
-### Async Support
+`AsyncCondition`, async declarative handlers, or async lifecycle callbacks
+require `AsyncStateMachine` and `trigger_async()`. `FSMBuilder` automatically
+selects an async machine when staged components require one.
 
 ```python
 import asyncio
-from fast_fsm import State, AsyncStateMachine, AsyncCondition
 
-class HighTemp(AsyncCondition):
-    def __init__(self, sensor, threshold):
-        super().__init__("high_temp", f"Temp >= {threshold}")
-        self.sensor = sensor
-        self.threshold = threshold
+from fast_fsm import AsyncCondition, AsyncStateMachine, State
 
-    async def check_async(self, *args, **kwargs) -> bool:
-        temp = await self.sensor.read()
-        return temp >= self.threshold
 
-monitoring = State("monitoring")
-alert = State("alert")
+class ServiceReady(AsyncCondition):
+    __slots__ = ("client",)
 
-fsm = AsyncStateMachine(monitoring, name="SensorMonitor")
-fsm.add_state(alert)
-fsm.add_transition("overheat", "monitoring", "alert",
-                    condition=HighTemp(my_sensor, threshold=80.0))
+    def __init__(self, client):
+        super().__init__("service_ready")
+        self.client = client
+
+    async def check_async(self, **kwargs) -> bool:
+        return await self.client.is_ready()
+
+
+machine = AsyncStateMachine(State("waiting"), name="Service")
+machine.add_state(State("ready"))
+machine.add_transition(
+    "poll",
+    "waiting",
+    "ready",
+    condition=ServiceReady(client),
+)
+
 
 async def main():
-    result = await fsm.trigger_async("overheat")
-    print(f"State: {fsm.current_state.name}")
+    result = await machine.trigger_async("poll")
+    print(result.success)
+
 
 asyncio.run(main())
 ```
 
-Register `async` per-state callbacks with `on_enter_async()`/`on_exit_async()`.
-They are awaited at the matching source-exit or destination-enter slot,
-immediately after that slot's synchronous callbacks—not as an async tail after
-the whole transition:
+Async entry and exit callbacks are awaited at their matching lifecycle slot:
 
 ```python
-async def log_alert(from_s, trigger, **kw):
-    await db.record(f"{from_s.name} → alert")
+async def announce_ready(source, trigger, **kwargs):
+    await event_bus.publish("service.ready")
 
-fsm.on_enter_async("alert", log_alert)
+
+machine.on_enter_async("ready", announce_ready)
 ```
 
-If an awaited lifecycle operation is cancelled, `trigger_async()` invokes the
-registered failure observers once for the reached stage and re-raises the same
-`asyncio.CancelledError`. It does not shield work, roll back a completed
-transition, or invoke later lifecycle callbacks. Cancellation before commit
-leaves the source/history untouched; cancellation after commit leaves the
-destination and its one history record intact.
+Fast FSM does not automatically move synchronous callbacks to a worker thread.
+Keep blocking work out of callbacks running on an event-loop thread.
+`can_trigger_async()` is also available for advisory eligibility checks; the
+actual trigger evaluates its guard again at dispatch time.
 
-### Ownership, Concurrency, and Reentry
+## Use declarative states for state-local handlers
 
-Fast FSM serializes **each machine independently**. This is an ownership
-contract for public writes, not a global scheduler:
-
-- `trigger()`, `safe_trigger()`, `force_state()`, `reset()`, `restore()`, graph
-  mutators, history enable/disable, and listener/callback/failure-observer
-  registration all share the same per-machine ownership policy. Reads remain
-  available, but do not promise a cross-field topology or diagnostic snapshot.
-- On `StateMachine`, independent threads serialize one complete write at a
-  time. A same-thread call made from an owned callback (or another owned write)
-  raises a redacted `RuntimeError` before validation, preparation, a guard,
-  callback, or mutation runs. Ownership is released after every result,
-  ordinary exception, and `BaseException` without altering the existing
-  state/history commit boundary.
-- On `AsyncStateMachine`, the first async control operation permanently binds
-  the machine to its running event loop. Independent tasks on that loop wait
-  with an asyncio-native per-machine lock, so the event loop remains
-  responsive. A foreign loop/thread, a direct reentry, or a child task created
-  by an owned callback raises `RuntimeError` before lock acquisition; child
-  tasks inherit the causal ownership root rather than waiting behind their
-  parent. Cancellation while waiting propagates unchanged and never installs
-  ownership; cancellation while owning follows the lifecycle's `finally`
-  cleanup and Phase 17 state/history rules.
-- `safe_trigger()` performs ownership, loop, causal-root, foreign-thread, and
-  busy preconditions **before** its ordinary exception-conversion catch, so
-  misuse raises `RuntimeError`. Ordinary post-admission `Exception` failures
-  still return the usual value result. Ownership messages use stable operation
-  categories only; they never contain trigger arguments, callback payloads,
-  causes, or arbitrary exception text.
-- Synchronous callbacks on an async machine run inline on its event-loop
-  thread. Registered async callbacks are awaited at their matching lifecycle
-  slots. Fast FSM does not infer blocking work or automatically offload a
-  callback to a worker.
-
-This contract intentionally makes **no** fairness, timeout, queue-order,
-loop-transfer, automatic-offload, cross-field-snapshot, or installed-artifact
-promise. Queueing reentry, loop transfer, and worker offload are future design
-work; stable diagnostic snapshots are Phase 19, and installed-wheel/sdist
-parity is Phase 20.
-
-### Visualization
-
-Generate Mermaid state diagrams, PlantUML diagrams, and self-contained Markdown documents:
+The `@transition` decorator associates a handler—and optionally its
+condition—with an event handled by a state class.
 
 ```python
-from fast_fsm import to_mermaid, to_mermaid_fenced, to_mermaid_document, to_plantuml
+from fast_fsm import DeclarativeState, StateMachine, transition
 
-# Raw Mermaid diagram string
-print(to_mermaid(fsm))
 
-# Fenced block for embedding in .md files
-print(to_mermaid_fenced(fsm))
+class Locked(DeclarativeState):
+    @transition("unlock", condition=lambda *, pin="", **_: pin == "1234")
+    def unlock(self, **kwargs):
+        print("authorized")
+        return True
 
-# Full document: diagram + adjacency matrix + transitions table
-from fast_fsm.validation import FSMValidator
-adj = FSMValidator(fsm).get_adjacency_matrix()
-doc = to_mermaid_document(fsm, adjacency_matrix=adj)
-print(doc)   # or save to a .md file
 
-# PlantUML output
-print(to_plantuml(fsm))
+class Unlocked(DeclarativeState):
+    @transition("lock")
+    def lock(self, **kwargs):
+        return True
+
+
+door = StateMachine(Locked("locked"), name="Door")
+door.add_state(Unlocked("unlocked"))
+door.add_transition("unlock", "locked", "unlocked")
+door.add_transition("lock", "unlocked", "locked")
 ```
 
-### Bounded Diagnostics and Safe Output
+`AsyncDeclarativeState` supports async conditions and handlers with an
+`AsyncStateMachine`. Use declarative states when colocating event behavior
+improves the domain model; use ordinary states plus callbacks when composition
+should own the behavior.
 
-Diagnostics are opt-in design-time work. They preserve O(1) source/trigger
-lookup, direct singleton dispatch, and `add_state()` work, while immutable
-candidate-group insertion and ordered selection remain local O(k). Importing
-or using diagnostic APIs adds no runtime dependency and never puts graph
-traversal on either dispatch path. Each top-level validator, comparison, JSON export, or renderer
-captures one immutable private graph view and shares one budget through its
-nested analysis. Structural reachability always begins at the machine's
-declared initial state. The captured current state is reported separately; it
-does not change the answer.
+## Query, control, and persist a machine
 
-Use a keyword-only `DiagnosticLimits` override when the default ceilings are
-too small for a known diagnostic job:
+### State queries and direct control
 
-| Limit | Default | Counted before the operation |
+```python
+machine.is_in("running")
+machine.can_trigger("stop")
+
+machine.force_state("error")  # bypass guards; runs the lifecycle
+machine.reset()               # force the declared initial state
+```
+
+`is_in()` accepts a state name or a `State` object and is O(1).
+`force_state()`, `reset()`, and `restore()` use the synthetic `"__force__"`
+trigger and run the normal callback chain.
+
+### Current-state snapshots
+
+```python
+snapshot = machine.snapshot()
+# {"state": "running", "version": 1}
+
+serialized = json.dumps(snapshot)
+machine.restore(json.loads(serialized))
+```
+
+Snapshots capture current runtime state, not topology.
+
+### Topology serialization
+
+```python
+config = machine.to_dict()
+rebuilt = StateMachine.from_dict(config)  # unguarded topology
+```
+
+Callable guards are not serialized. Give guarded rows an opaque
+`condition_ref` and provide the live implementation during reconstruction:
+
+```python
+config = {
+    "name": "Publish",
+    "initial": "review",
+    "states": ["review", "published"],
+    "transitions": [
+        {
+            "trigger": "publish",
+            "from": "review",
+            "to": "published",
+            "condition_ref": "approved",
+        }
+    ],
+}
+
+machine = StateMachine.from_dict(
+    config,
+    conditions={"approved": lambda *, approved=False, **_: approved},
+)
+```
+
+### Clones and transition history
+
+```python
+worker = machine.clone()  # same topology/callbacks, reset to initial state
+
+machine.enable_history(max_entries=100)
+machine.trigger("start")
+for record in machine.history:
+    print(record.from_state, record.trigger, record.to_state, record.priority)
+machine.disable_history()
+```
+
+History records successful commits in a bounded buffer. A pre-commit failure
+adds nothing; a later callback failure retains the already committed record.
+History is disabled by default.
+
+## Compose multiple machines
+
+Separate FSMs remain easier to test and replace than one machine that absorbs
+every subsystem. A guard may read another machine's public state:
+
+```python
+from fast_fsm import condition_builder
+
+
+@condition_builder(name="utilities_ready")
+def utilities_ready(**kwargs):
+    return power.is_in("on") and cooling.is_in("on")
+
+
+production.add_transition(
+    "prepare",
+    "offline",
+    "ready",
+    condition=utilities_ready,
+)
+```
+
+Keep deliberate cascades—such as stopping production before cooling—at the
+controller or system boundary. See
+[`cross_fsm_demo.py`](examples/cross_fsm_demo.py) and the
+[FSM linking guide](docs/FSM_LINKING_TECHNIQUES.md).
+
+## Follow the progressive examples
+
+Every script is deterministic, requires no network or hardware, and is covered
+by a cross-platform smoke test.
+
+| Tier | Example | Primary lesson |
+|---:|---|---|
+| 1 | [`traffic_light.py`](examples/traffic_light.py) | Direct construction, triggers, and results |
+| 1 | [`order_processing.py`](examples/order_processing.py) | Builder, callbacks, fan-out, and reset |
+| 2 | [`condition_toolkit.py`](examples/condition_toolkit.py) | Reusable, composed, and timed guards |
+| 2 | [`declarative_state_example.py`](examples/declarative_state_example.py) | Sync and async declarative handlers |
+| 2 | [`drone_failsafes.py`](examples/drone_failsafes.py) | FSM-owned priority and command callbacks |
+| 3 | [`async_sensor_example.py`](examples/async_sensor_example.py) | Deterministic async guards |
+| 3 | [`enhanced_builder_example.py`](examples/enhanced_builder_example.py) | Builder sync and async modes |
+| 3 | [`cross_fsm_demo.py`](examples/cross_fsm_demo.py) | Cross-machine composition |
+| 4 | [`workflow_persistence.py`](examples/workflow_persistence.py) | History, observation, and serialization |
+| 4 | [`diagnostics_and_visualization.py`](examples/diagnostics_and_visualization.py) | Validation and renderers |
+| 4 | [`async_service_controller.py`](examples/async_service_controller.py) | Async lifecycle ownership |
+
+Run one from the repository root:
+
+```bash
+uv run python examples/drone_failsafes.py
+```
+
+The [examples guide](docs/examples/index.md) maps each major feature family to
+its best starting point.
+
+## Validate and visualize topology
+
+Validation and visualization are design-time tools. They capture a stable graph
+view and do not add graph traversal to transition dispatch.
+
+```python
+from fast_fsm import (
+    compare_fsms,
+    quick_health_check,
+    to_json,
+    to_mermaid,
+    to_mermaid_document,
+    to_plantuml,
+    validate_and_score,
+)
+
+print(quick_health_check(machine))
+print(validate_and_score(machine))
+print(compare_fsms(machine, rebuilt)["best_fsm"])
+
+print(to_mermaid(machine))
+print(to_plantuml(machine))
+markdown = to_mermaid_document(machine, include_adjacency=True)
+payload = to_json(machine, include_adjacency=True)
+```
+
+`to_json()` includes topology plus reachability, cycle, and quality analysis
+for programmatic consumers. Mermaid and PlantUML use opaque node IDs so display
+labels remain distinct and safely encoded.
+
+For deeper analysis, `FSMValidator` and `EnhancedFSMValidator` provide
+completeness checks, paths, cycles, adjacency representations, scoring, lint
+output, and Markdown or JSON reports. Sparse structural analysis is the
+default; dense matrices are explicit compatibility outputs.
+
+## Advanced runtime contracts
+
+The following details matter when callbacks can fail, machines are shared
+between execution contexts, or diagnostic inputs are large.
+
+### Transition results and commit boundaries
+
+`TransitionResult` exposes:
+
+| Field | Meaning |
+|---|---|
+| `success` | The complete transition lifecycle succeeded |
+| `from_state`, `to_state`, `trigger` | Selected transition identity |
+| `priority` | Selected candidate priority, when applicable |
+| `committed` | Current state/history commit already occurred |
+| `stage` | Stable lifecycle stage for a failure |
+| `error` | Concise stage-aware reason |
+| `cause` | Original exception object, omitted from representations and error text |
+
+A failed pre-commit result preserves the source state. A failed post-commit
+result preserves the destination state and history record; Fast FSM does not
+roll back an already committed transition.
+
+`raise_if_failed()` raises `TransitionError`. The exception's `result`
+attribute is the original object, and an original cause is available through
+normal exception chaining.
+
+### Lifecycle order
+
+| Boundary | Ordered work |
+|---|---|
+| Pre-commit | `before_transition` listeners → source state exit → registered source exit callbacks → exit listeners |
+| Commit | Update current state and append the optional history record |
+| Post-commit | destination state entry → registered destination entry callbacks → enter listeners → declarative handler → trigger callback → `after_transition` listeners |
+
+Lifecycle callback failures are fail-fast. Remaining callbacks in that
+transition suffix do not run. Failure observers still receive the original
+failure once each; an observer failure cannot replace it.
+
+Stable stages include `resolution`, `guard`, `state-permission`,
+`before-transition`, `source-exit`, `source-exit-callback`,
+`exit-state-listener`, `destination-enter`, `destination-enter-callback`,
+`enter-state-listener`, `declarative-handler`, `trigger-callback`, and
+`after-transition`.
+
+### Ownership, concurrency, and reentry
+
+Each machine serializes its own writes; there is no global scheduler.
+
+- A synchronous `StateMachine` serializes independent threads. Reentering the
+  same machine from one of its owned callbacks raises `RuntimeError` before a
+  second write begins.
+- An `AsyncStateMachine` binds permanently to the first running event loop that
+  performs async control work. Independent tasks on that loop wait on a
+  per-machine async lock.
+- A foreign loop or thread, direct callback reentry, or child task inheriting
+  an owned callback's causal root raises `RuntimeError` before lock acquisition.
+- Cancellation while waiting does not acquire ownership. Cancellation during
+  a transition preserves the lifecycle's observed commit boundary and always
+  releases ownership.
+- `safe_trigger()` converts ordinary admitted exceptions into result values,
+  but ownership and loop misuse still raise `RuntimeError`.
+
+The contract does not promise queue fairness, timeouts, automatic worker
+offload, loop transfer, or queued reentry.
+
+### Bounded diagnostics
+
+Every diagnostic operation has finite defaults:
+
+| Limit | Default | Protects |
 |---|---:|---|
-| `max_work` | 50,000 | graph visits, edge examinations, and other analysis work |
-| `max_results` | 10,000 | published diagnostic rows, components, paths, and similar results |
-| `max_dense_cells` | 200,000 | a requested dense matrix's complete cell allocation |
-| `max_path_expansions` | 20,000 | followed edges during generated-path exploration |
-
-These are finite operation counters, not elapsed-time limits. `DiagnosticStatus`
-is the structured completion record: `complete`, `exhausted_dimension`,
-`exhausted_stage`, `work_count`, `result_count`, `dense_cell_count`, and
-`path_expansion_count`. Structured validation, comparison, batch, report, and
-JSON output expose it. A legacy set, list, scalar, printed report, diagram, or
-dense-matrix shape cannot safely carry partial metadata, so it raises
-`DiagnosticBudgetExceeded` with the fixed message `diagnostic budget exhausted`
-instead of returning hidden partial output.
-
-`compare_fsms(*fsms, limits=None)` and
-`batch_validate(*fsms, show_summary=True, limits=None)` preserve every input
-by zero-based `position`, even when labels are empty or duplicated. Comparison
-entries are `{position, name, score, metrics, issue_count, diagnostic_status}`;
-rankings are `{position, name, score}` records sorted by descending score then
-ascending position, and `best_fsm` is `{position, name}`. Batch entries are
-`{position, name, validator, diagnostic_status}`. Names are display labels,
-never dictionary keys. Comparing zero machines returns empty `entries` and
-`rankings`, `best_fsm=None`, `count=0`, `total_issues=0`, and
-`avg_score=score_range=None`—the zero-machine numeric aggregates are `None`,
-not invented zeroes.
-
-Cycle membership is complete strongly connected component (SCC) membership:
-self-loops and every member of longer cycles appear once in deterministic
-snapshot order. A DAG reports `dag_longest_path`; a cyclic graph reports the
-longest depth of its SCC condensation DAG as `condensation_dag_depth`. This is
-not an exact longest-simple-path claim inside a cycle. Sparse state/event/edge
-rows are the default `O(V + E)` representation. Dense `V × events` transition
-and `V²` adjacency matrices are explicit compatibility outputs that preflight
-their full counted allocation before construction. Generated paths use
-iterative traversal and are bounded independently by requested length/path
-caps and the shared expansion, work, and result budgets.
-
-Diagram identity and text are separate. Mermaid and PlantUML use opaque,
-snapshot-position node IDs (`s0`, `s1`, ...) rather than labels, so labels that
-sanitize alike remain collision-free. Mermaid text, PlantUML text, and Markdown
-headings/table cells each use their own grammar-specific, one-line encoding
-boundary for titles, state labels, triggers, and condition names. JSON and
-documents preserve snapshot order; dense JSON/document output is opt-in. A
-caller-supplied adjacency matrix must exactly match the captured states,
-events, transitions, and every cell or fails with
-`ValueError("adjacency matrix does not match captured snapshot")`.
-
-### Safe Trace Logging
-
-Trace output is metadata-only by default. At `logging.DEBUG - 5` it records
-fixed operation/stage/result categories, `trace_arg_count`, and capped,
-sanitized `trace_keyword_names`; it never puts trigger/state names, argument
-or keyword values, exception payloads, object representations, or raw values
-in a `LogRecord`, its arguments, `extra`, or formatted output. The disabled
-trace guard runs before event allocation, value traversal, handler lookup, or
-redactor work.
-
-An explicit `FSMTraceRedactor` receives one ephemeral frozen `FSMTraceEvent`
-with exactly `operation`, `stage`, `result`, `trigger`, `source_state`,
-`destination_state`, `positional_args`, `keyword_args`, and `error`. It may
-return only the scalar keys `operation`, `stage`, `result`, and `detail`; text
-is capped at 200 characters. An ordinary `Exception` raised by a redactor,
-`None`/non-mapping result, forbidden key, non-scalar value, or oversized
-string fails closed by emitting only the fixed `redaction_failure`
-metadata—never a raw fallback. Non-`Exception` `BaseException` subclasses
-(including `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError`) are
-not converted: they emit no trace record and are re-raised. This is a
-fail-closed boundary, not best-effort formatting.
-
-`configure_fsm_logging(level=logging.WARNING, logger_name="fast_fsm",
-format_string="%(message)s", *, propagate=None, redactor=None)` returns an
-`FSMLoggingHandle`. It preserves application-owned handlers, filters,
-formatters, ordering, and open state; repeated library configuration replaces
-only its marked library handler. `propagate=None` preserves the application's
-existing setting, while a Boolean is a deliberate library choice.
-`FSMLoggingHandle.restore()` is idempotent and generation-scoped: it removes
-only its own library handler and restores a previous level/propagation value
-only when a newer configuration or application change has not superseded it.
-`set_fsm_logging_level(verbosity, logger_name="fast_fsm", *, propagate=None,
-redactor=None)` validates its verbosity name and delegates to the same
-ownership-preserving configuration seam. No logging backend is introduced.
-
-### Serialization & Introspection
-
-Round-trip topology snapshots and machine-readable JSON export for agents:
+| `max_work` | 50,000 | Graph visits and analysis work |
+| `max_results` | 10,000 | Published rows, paths, and components |
+| `max_dense_cells` | 200,000 | Complete dense-matrix allocation |
+| `max_path_expansions` | 20,000 | Followed edges during path generation |
 
 ```python
-# Serialize topology to a plain dict (JSON-safe)
-d = fsm.to_dict()
-rebuilt = StateMachine.from_dict(d)   # lossless roundtrip (guards excluded)
+from fast_fsm import DiagnosticLimits, to_json
 
-# Machine-readable JSON for coding agents
-from fast_fsm import to_json
-data = to_json(fsm)
-data["topology"]["states"]              # sorted state names
-data["analysis"]["reachability"]        # reachable / unreachable / terminal
-data["analysis"]["cycles"]             # has_cycles, states_in_cycles
-data["analysis"]["quality"]            # overall_score, grade, issues
+payload = to_json(
+    machine,
+    limits=DiagnosticLimits(max_work=100_000, max_results=20_000),
+)
 ```
 
-### Transition History
+These are operation counters, not time limits. Structured APIs expose a
+`DiagnosticStatus`. An output shape that cannot safely carry partial metadata
+raises `DiagnosticBudgetExceeded("diagnostic budget exhausted")` instead of
+returning hidden partial data.
 
-Opt-in bounded recording of committed transitions — zero cost when disabled.
-The machine appends each record at the internal commit point, so a pre-commit
-failure or cancellation records nothing while a later failure retains the
-already committed record:
+Comparisons and batches identify inputs by position rather than display name,
+so duplicate or empty machine names remain distinct. Cycle results report
+complete strongly connected component membership. On cyclic graphs, reported
+depth is the SCC condensation DAG depth—not an exact longest simple path
+inside a cycle.
 
-```python
-fsm.enable_history(max_entries=1000)
-fsm.trigger("start")
-fsm.trigger("stop")
-for rec in fsm.history:
-    print(f"{rec.from_state} --{rec.trigger}--> {rec.to_state} @ {rec.timestamp}")
-fsm.disable_history()   # clears buffer and stops recording
-```
+### Safe trace logging
 
-### Validation (Design-Time)
+Trace logging is metadata-only by default. It records fixed operation, stage,
+and result categories plus capped argument counts and sanitized keyword names.
+It never places trigger/state names, values, exception payloads, or object
+representations into default trace records.
 
-Comprehensive analysis with zero runtime overhead:
+`configure_fsm_logging()` installs one library-owned handler without replacing
+application handlers. It returns an `FSMLoggingHandle` whose `restore()` method
+removes only that configuration generation. `set_fsm_logging_level()` delegates
+to the same ownership-preserving seam.
 
-```python
-from fast_fsm import validate_fsm, quick_health_check, validate_and_score
+An optional `FSMTraceRedactor` may translate one ephemeral `FSMTraceEvent`
+into the scalar fields `operation`, `stage`, `result`, and `detail`. Invalid
+output or an ordinary redactor exception fails closed to fixed
+`redaction_failure` metadata. `BaseException` subclasses such as
+`KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` are never
+converted.
 
-# Quick one-liner
-print(quick_health_check(fsm))          # "healthy" | "issues" | "critical"
+## Performance and architecture
 
-# Full validator
-validator = validate_fsm(fsm)
-report = validator.validate_completeness()
-print(f"Complete: {report['is_complete']}")
-print(f"Unreachable states: {report['unreachable_states']}")
+The durable performance contract is deliberately narrow: fresh installed
+compiled singleton `trigger()` throughput must remain at least 200,000
+operations per second. Exact timings are environment-specific evidence, not
+universal promises.
 
-# Scored report — structural vs. completeness split
-# Intentionally sparse FSMs score against structural health only;
-# missing-transition info is reported separately in completeness_score.
-from fast_fsm import EnhancedFSMValidator
-v = EnhancedFSMValidator(fsm)
-score = v.get_validation_score()
-print(f"Design style: {score['design_style']}")
-print(f"Structural:   {score['structural_score']}/100 (Grade: {score['grade']})")
-print(f"Completeness: {score['completeness_score']}/100")
+| Operation | Complexity |
+|---|---|
+| Current-state and trigger lookup | O(1) |
+| Singleton transition dispatch | O(1) direct selection |
+| Priority candidate selection | Local O(k), first eligible in stored order |
+| `add_state()` | O(1) |
+| Singleton transition registration | O(1) |
+| Candidate-group insertion | Local O(k) |
+| Bounded history append | O(1) |
+| Builder work | One-time work over staged declarations |
 
-# Export reports
-print(v.export_report('markdown'))
-print(v.export_report('json'))
-```
+Candidate groups are stored in priority order and are not sorted during
+dispatch. Dispatch never scans unrelated graph topology.
 
-## Key Capabilities
+The package is intentionally split around the runtime boundary:
 
-- **Ultra-High Performance** — fresh installed compiled singleton `trigger()`
-  contract ≥200,000 ops/sec; other timings are environment-labeled observations
-- **Memory Efficient** — direct dictionary lookups and slots-aware hot paths
-- **Type Safe** — full type hints, `ty` and `mypy` clean
-- **Clean API** — builder pattern, factory helpers, fluent interface
-- **Conditional Transitions** — `FuncCondition`, `CompiledFuncCondition`, `unless=` negation
-- **Priority-Aware Candidates** — deterministic first-eligible selection for shared state/trigger slots
-- **Error Handling** — `raise_if_failed()` / `TransitionError` for exception-based flow
-- **State Control** — `force_state()`, `reset()`, `snapshot()`/`restore()`, `clone()`, `from_dict()`, `to_dict()`
-- **Lifecycle Hooks** — `CallbackState`, `fsm.on_enter()`, `fsm.on_exit()`, async `on_enter_async()`/`on_exit_async()`, listeners, `before_transition`/`on_failed`/`on_trigger` inline callbacks
-- **Async Support** — `AsyncStateMachine`, `AsyncCondition`, `trigger_async()`, fluent async callbacks via `FSMBuilder`
-- **Declarative States** — `@transition` decorator for inline state definitions
-- **Transition History** — opt-in `enable_history()` / `disable_history()` with a bounded `TransitionRecord` buffer and environment-labeled performance evidence
-- **Optional Validation** — scoring (structural + completeness), tunable thresholds, batch comparison, lint, export
-- **Visualization** — Mermaid diagrams, PlantUML output, fenced blocks, full Markdown documents with adjacency matrix
-- **Agent Tooling** — `to_json()` exports topology + reachability + cycles + quality for programmatic consumption
-- **mypyc Compiled** — `core.py` optionally compiled; `CompiledFuncCondition` for hot condition paths
-
-## Examples
-
-Runnable scripts live in `examples/`. Run any of them with:
-
-```bash
-uv run python examples/<script>.py
-```
-
-| Tier | Script | Primary lesson |
-|------|--------|----------------|
-| 1 | `traffic_light.py` | Direct construction, triggers, and `TransitionResult` |
-| 1 | `order_processing.py` | `FSMBuilder`, callbacks, fan-out, and reset |
-| 2 | `condition_toolkit.py` | Reusable, composed, and time-aware conditions |
-| 2 | `declarative_state_example.py` | Sync and async `@transition` handlers |
-| 2 | [`drone_failsafes.py`](examples/drone_failsafes.py) | One telemetry tick resolved by guarded priority candidates |
-| 3 | `async_sensor_example.py` | Deterministic `AsyncCondition` priority resolution |
-| 3 | `enhanced_builder_example.py` | Builder sync, auto-async, and forced-sync modes |
-| 3 | `cross_fsm_demo.py` | Cross-FSM guards and explicit coordination |
-| 4 | `workflow_persistence.py` | History, listeners, snapshots, clones, and topology roundtrip |
-| 4 | `diagnostics_and_visualization.py` | Validation, bounded diagnostics, and renderers |
-| 4 | `async_service_controller.py` | Async lifecycle callbacks and concurrent ownership |
-
-The drone example is educational and deterministic: it neither controls real
-hardware nor provides certified or real-time flight-control guidance.
-See the [tiered examples guide](docs/examples/index.md) for a feature-family map
-and recommended learning order.
-
-## Running Tests
-
-```bash
-uv run pytest tests/ -x -q     # full suite (700+ tests)
-```
-
-For the authoritative, exact release evidence, use
-[`evidence/release-baseline.json`](evidence/release-baseline.json) with the
-write/check workflow in [`docs/dev/testing.md`](docs/dev/testing.md).
-
-## Architecture
-
-```
+```text
 src/fast_fsm/
-├── core.py               # StateMachine, AsyncStateMachine, State, FSMBuilder, conditions
-├── conditions.py          # Condition, FuncCondition, AsyncCondition base classes
-├── condition_templates.py # Reusable condition builders
-└── validation.py          # FSMValidator, EnhancedFSMValidator, scoring, lint
+├── core.py                 # machines, states, builder, lifecycle
+├── conditions.py           # subclassable condition interfaces
+├── condition_templates.py # reusable guard implementations
+├── validation.py           # opt-in design-time analysis
+├── visualization.py        # Mermaid, PlantUML, Markdown, JSON
+└── _diagnostics.py         # bounded snapshot-backed graph work
 ```
 
-### Design Principles
+`core.py` may be compiled with mypyc. Conditions remain interpreted so users
+can subclass `Condition` normally; `CompiledFuncCondition` delegates
+callable evaluation across that boundary when a hot guard needs it. Hot-path
+production classes use `__slots__` where the runtime boundary allows it. The
+recursive slots policy, measured exceptions, and packaging modes are documented in the
+[architecture guide](docs/dev/architecture.md).
 
-1. **`__slots__` on hot paths** — all relevant production classes are audited
-   recursively; the measured exceptions are documented in the contributor guide
-2. **Direct lookup, local groups** — current-source and trigger lookup plus
-   direct singleton dispatch are O(1); immutable group insertion and
-   first-eligible ordered selection are local O(k), never scan unrelated graph
-   topology, and do not sort during dispatch
-3. **Minimal abstraction** — clean API without unnecessary layers
-4. **Optional features** — validation/logging add zero runtime overhead when unused
-5. **Selective mypyc compilation** — `core.py` compiled, `conditions.py` stays
-   interpreted so users can subclass `Condition` freely
+## Compatibility and release evidence
 
-### Performance Characteristics
+Fast FSM requires Python 3.10 or newer and `mypy-extensions >= 1.0`.
+CI exercises Python 3.10 through 3.14 on Linux, macOS, and Windows.
 
-| Operation | Complexity | Throughput | Memory |
-|-----------|-----------|------------|--------|
-| `trigger()` / `can_trigger()` with a singleton | O(1) lookup and direct dispatch | fresh installed compiled singleton ≥200,000 ops/sec | implementation-dependent |
-| `trigger()` / `can_trigger()` with a candidate group | local O(k) first-eligible ordered selection | environment-labeled observation | implementation-dependent |
-| `trigger()` + history | dispatch path above plus O(1) bounded append | environment-labeled observation | implementation-dependent |
-| `add_state()` | O(1) | implementation-dependent | implementation-dependent |
-| `add_transition()` singleton | O(1) | implementation-dependent | implementation-dependent |
-| `add_transition()` into an immutable candidate group | local O(k) insertion | environment-labeled observation | implementation-dependent |
-| `FSMBuilder.build()` | one-time builder work over staged declarations | environment-labeled observation | implementation-dependent |
+| Python | Runtime support | Current mypy/mypyc toolchain |
+|---:|:---:|:---:|
+| 3.10 | Yes | Yes |
+| 3.11 | Yes | Yes |
+| 3.12 | Yes | Yes |
+| 3.13 | Yes | Yes |
+| 3.14 | Yes | Yes |
 
-Stored candidate groups are already priority ordered, so their dispatch path does
-not sort them. Neither path scans unrelated graph topology. Exact benchmark
-timings are environment-specific observations; the durable throughput floor
-applies only to fresh installed compiled singleton dispatch. See the [release
-evidence manifest](evidence/release-baseline.json) for reviewed observations.
-
-## Contributing
-
-See `docs/dev/contributing.md` for the full guide: branching model, quality
-gates, coding standards, and mypyc compilation instructions.
+The tracked
+[`evidence/release-baseline.json`](evidence/release-baseline.json) records
+exact test counts, coverage, toolchain versions, source origin, artifact mode,
+and environment-labeled benchmark observations. Verify it with:
 
 ```bash
-uv sync                    # install deps
-uv run pytest tests/ -x -q # run tests
-task quality               # lint + type-check
+task release-baseline-check
 ```
+
+For v0.4.0 and later, release authorization requires fresh hosted proof for
+pure, compiled, and source-derived artifacts. A local run is useful development
+evidence but is intentionally non-authorizing. SHA-256 binds exact artifact
+bytes to a record; it does not establish publisher identity.
+
+See the [testing guide](docs/dev/testing.md) and
+[release guide](docs/dev/releasing.md) for the complete evidence model.
+
+## Development
+
+```bash
+uv sync --locked --all-groups
+uv run pytest tests/ -x -q
+uv run ruff format --check .
+uv run ruff check .
+task typecheck-mypy
+task docs-test
+```
+
+Useful documentation:
+
+- [Architecture](docs/dev/architecture.md)
+- [Testing and evidence](docs/dev/testing.md)
+- [Contributing](docs/dev/contributing.md)
+- [Releasing](docs/dev/releasing.md)
+
+Contributions should preserve callback and condition compatibility with
+`*args, **kwargs`, the documented ownership and commit boundaries, the
+optional nature of diagnostics, and the hot-path complexity contract.
 
 ## License
 
-Open source — feel free to use, modify, and learn from this implementation.
+This repository does not currently include a license file. Do not assume
+permission to copy, modify, or redistribute the project beyond rights provided
+by applicable law.
