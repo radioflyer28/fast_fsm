@@ -75,6 +75,33 @@ class AvoidanceCommand:
     heading_deg: float | None = None
 
 
+@dataclass(frozen=True)
+class CollisionDecisionFacts:
+    """Immutable facts consumed by every transition guard for one control tick.
+
+    ``TelemetryPolicy`` owns measurements and temporal state.  This snapshot is
+    deliberately free of transition decisions so the same pure guard functions
+    can be exercised exhaustively without constructing telemetry histories.
+    """
+
+    flight_mode: FlightMode
+    drone_heartbeat_fresh: bool
+    collision_heartbeat_fresh: bool
+    collision_data_fresh: bool
+    collision_ready_stable: bool
+    collision_switch_enabled: bool
+    altitude_within_limits: bool
+    any_failsafe: bool
+    landing: bool
+    on_ground: bool
+    alert_at_or_above_threshold: bool
+    command_available: bool
+    command_is_new: bool
+    guided_retry_ready: bool
+    awaiting_guided_confirmation: bool
+    guided_confirmation_failed: bool
+
+
 class AircraftCommands(Protocol):
     """Seam implemented by a simulated aircraft or real MAVLink adapter."""
 
@@ -329,34 +356,6 @@ class TelemetryPolicy:
             telemetry.critical_battery or telemetry.low_battery or telemetry.lost_link
         )
 
-    def base_eligibility(self) -> bool:
-        if not (
-            self.drone_heartbeat_fresh()
-            and self.collision_heartbeat_fresh()
-            and self.collision_data_fresh()
-            and self.collision_ready_stable()
-        ):
-            return False
-        telemetry = self.drone
-        return (
-            telemetry.collision_switch_enabled
-            and self.altitude_within_limits()
-            and not self.any_failsafe()
-            and not telemetry.landing
-            and not telemetry.on_ground
-        )
-
-    def alert_requires_avoidance(self) -> bool:
-        return self._alert_level >= self._threshold and self._command is not None
-
-    def confirmed_clear(self) -> bool:
-        return (
-            self.collision_heartbeat_fresh()
-            and self.collision_data_fresh()
-            and self.collision_ready_stable()
-            and self._alert_level < self._threshold
-        )
-
     def command_is_new(self) -> bool:
         return (
             self._command is not None
@@ -388,6 +387,33 @@ class TelemetryPolicy:
             > self._guided_request_timeout_s
         )
 
+    def decision_facts(self) -> CollisionDecisionFacts:
+        """Freeze all guard inputs once for a consistent control-tick decision."""
+        telemetry = self._drone
+        flight_mode = FlightMode.OTHER if telemetry is None else telemetry.flight_mode
+        return CollisionDecisionFacts(
+            flight_mode=flight_mode,
+            drone_heartbeat_fresh=self.drone_heartbeat_fresh(),
+            collision_heartbeat_fresh=self.collision_heartbeat_fresh(),
+            collision_data_fresh=self.collision_data_fresh(),
+            collision_ready_stable=self.collision_ready_stable(),
+            collision_switch_enabled=(
+                False if telemetry is None else telemetry.collision_switch_enabled
+            ),
+            altitude_within_limits=(
+                False if telemetry is None else self.altitude_within_limits()
+            ),
+            any_failsafe=False if telemetry is None else self.any_failsafe(),
+            landing=False if telemetry is None else telemetry.landing,
+            on_ground=False if telemetry is None else telemetry.on_ground,
+            alert_at_or_above_threshold=self._alert_level >= self._threshold,
+            command_available=self._command is not None,
+            command_is_new=self.command_is_new(),
+            guided_retry_ready=self.guided_retry_ready(),
+            awaiting_guided_confirmation=self.awaiting_guided_confirmation(),
+            guided_confirmation_failed=self.guided_confirmation_failed(),
+        )
+
     def note_initial_command_dispatched(self) -> None:
         self._guided_request_started_at = self._clock()
         self._guided_request_ack = CommandAck.PENDING
@@ -411,48 +437,145 @@ class TelemetryPolicy:
         return timestamp is not None and self._clock() - timestamp <= limit_s
 
 
-def activation_ready(telemetry_policy: TelemetryPolicy, **_) -> bool:
+def base_eligible(facts: CollisionDecisionFacts) -> bool:
+    """Return whether common liveness and safety prerequisites hold."""
     return (
-        telemetry_policy.base_eligibility()
-        and telemetry_policy.drone.flight_mode is FlightMode.AUTO
+        facts.drone_heartbeat_fresh
+        and facts.collision_heartbeat_fresh
+        and facts.collision_data_fresh
+        and facts.collision_ready_stable
+        and facts.collision_switch_enabled
+        and facts.altitude_within_limits
+        and not facts.any_failsafe
+        and not facts.landing
+        and not facts.on_ground
     )
 
 
-def active_inhibited(telemetry_policy: TelemetryPolicy, **_) -> bool:
-    return not activation_ready(telemetry_policy)
-
-
-def avoidance_requested(telemetry_policy: TelemetryPolicy, **_) -> bool:
-    return (
-        activation_ready(telemetry_policy)
-        and telemetry_policy.guided_retry_ready()
-        and telemetry_policy.alert_requires_avoidance()
-        and telemetry_policy.command_is_new()
+def activation_ready(decision_facts: CollisionDecisionFacts, **_) -> bool:
+    return base_eligible(decision_facts) and (
+        decision_facts.flight_mode is FlightMode.AUTO
     )
 
 
-def avoid_inhibited(telemetry_policy: TelemetryPolicy, **_) -> bool:
-    if not telemetry_policy.base_eligibility():
+def active_inhibited(decision_facts: CollisionDecisionFacts, **_) -> bool:
+    return not activation_ready(decision_facts)
+
+
+def avoidance_requested(decision_facts: CollisionDecisionFacts, **_) -> bool:
+    return (
+        activation_ready(decision_facts)
+        and decision_facts.guided_retry_ready
+        and decision_facts.alert_at_or_above_threshold
+        and decision_facts.command_available
+        and decision_facts.command_is_new
+    )
+
+
+def avoid_inhibited(decision_facts: CollisionDecisionFacts, **_) -> bool:
+    if not base_eligible(decision_facts):
         return True
-    if telemetry_policy.guided_confirmation_failed():
+    if decision_facts.guided_confirmation_failed:
         return True
-    mode = telemetry_policy.drone.flight_mode
+    mode = decision_facts.flight_mode
     return mode is not FlightMode.GUIDED and not (
-        mode is FlightMode.AUTO and telemetry_policy.awaiting_guided_confirmation()
+        mode is FlightMode.AUTO and decision_facts.awaiting_guided_confirmation
     )
 
 
-def guided_update_ready(telemetry_policy: TelemetryPolicy, **_) -> bool:
+def guided_update_ready(decision_facts: CollisionDecisionFacts, **_) -> bool:
     return (
-        telemetry_policy.base_eligibility()
-        and telemetry_policy.drone.flight_mode is FlightMode.GUIDED
-        and telemetry_policy.alert_requires_avoidance()
-        and telemetry_policy.command_is_new()
+        base_eligible(decision_facts)
+        and decision_facts.flight_mode is FlightMode.GUIDED
+        and decision_facts.alert_at_or_above_threshold
+        and decision_facts.command_available
+        and decision_facts.command_is_new
     )
 
 
-def traffic_confirmed_clear(telemetry_policy: TelemetryPolicy, **_) -> bool:
-    return telemetry_policy.confirmed_clear()
+def traffic_confirmed_clear(decision_facts: CollisionDecisionFacts, **_) -> bool:
+    return (
+        decision_facts.collision_heartbeat_fresh
+        and decision_facts.collision_data_fresh
+        and decision_facts.collision_ready_stable
+        and not decision_facts.alert_at_or_above_threshold
+    )
+
+
+class TransitionEffect(str, Enum):
+    """Externally relevant effect associated with a selected transition."""
+
+    NONE = "none"
+    BEGIN_AVOIDANCE = "begin_avoidance"
+    UPDATE_AVOIDANCE = "update_avoidance"
+    FINISH_AVOIDANCE = "finish_avoidance"
+
+
+@dataclass(frozen=True)
+class CollisionTransitionRule:
+    """One auditable transition candidate and its externally relevant effect."""
+
+    source: str
+    destination: str
+    priority: int
+    name: str
+    guard: Callable[..., bool]
+    effect: TransitionEffect = TransitionEffect.NONE
+
+
+COLLISION_TRANSITION_RULES = (
+    CollisionTransitionRule(
+        "Inactive", "Active", 10, "activation_ready", activation_ready
+    ),
+    CollisionTransitionRule(
+        "Active", "Inactive", 0, "active_inhibited", active_inhibited
+    ),
+    CollisionTransitionRule(
+        "Active",
+        "Avoid",
+        10,
+        "avoidance_requested",
+        avoidance_requested,
+        TransitionEffect.BEGIN_AVOIDANCE,
+    ),
+    CollisionTransitionRule(
+        "Avoid",
+        "Inactive",
+        0,
+        "avoid_inhibited",
+        avoid_inhibited,
+        TransitionEffect.FINISH_AVOIDANCE,
+    ),
+    CollisionTransitionRule(
+        "Avoid",
+        "Avoid",
+        10,
+        "guided_update_ready",
+        guided_update_ready,
+        TransitionEffect.UPDATE_AVOIDANCE,
+    ),
+    CollisionTransitionRule(
+        "Avoid",
+        "Inactive",
+        20,
+        "traffic_confirmed_clear",
+        traffic_confirmed_clear,
+        TransitionEffect.FINISH_AVOIDANCE,
+    ),
+)
+
+
+def select_collision_rule(
+    state: str,
+    decision_facts: CollisionDecisionFacts,
+) -> CollisionTransitionRule | None:
+    """Resolve the same ordered candidate set without executing callbacks."""
+    eligible = (
+        rule
+        for rule in COLLISION_TRANSITION_RULES
+        if rule.source == state and rule.guard(decision_facts=decision_facts)
+    )
+    return min(eligible, key=lambda rule: rule.priority, default=None)
 
 
 def report_state_entry(state_name: str) -> Callable[..., None]:
@@ -469,56 +592,16 @@ def create_collision_fsm(handler: GuidedCommandHandler):
     active = State("Active")
     avoid = State("Avoid")
 
-    builder = (
-        FSMBuilder(inactive, name="ArduCopterCollisionAvoidance")
-        .add_state(active)
-        .add_state(avoid)
-        .add_transition(
+    builder = FSMBuilder(inactive, name="ArduCopterCollisionAvoidance")
+    builder.add_state(active).add_state(avoid)
+    for rule in COLLISION_TRANSITION_RULES:
+        builder.add_transition(
             "control_tick",
-            "Inactive",
-            "Active",
-            condition=FuncCondition(activation_ready, name="activation_ready"),
-            priority=10,
+            rule.source,
+            rule.destination,
+            condition=FuncCondition(rule.guard, name=rule.name),
+            priority=rule.priority,
         )
-        .add_transition(
-            "control_tick",
-            "Active",
-            "Inactive",
-            condition=FuncCondition(active_inhibited, name="active_inhibited"),
-            priority=0,
-        )
-        .add_transition(
-            "control_tick",
-            "Active",
-            "Avoid",
-            condition=FuncCondition(avoidance_requested, name="avoidance_requested"),
-            priority=10,
-        )
-        .add_transition(
-            "control_tick",
-            "Avoid",
-            "Inactive",
-            condition=FuncCondition(avoid_inhibited, name="avoid_inhibited"),
-            priority=0,
-        )
-        .add_transition(
-            "control_tick",
-            "Avoid",
-            "Avoid",
-            condition=FuncCondition(guided_update_ready, name="guided_update_ready"),
-            priority=10,
-        )
-        .add_transition(
-            "control_tick",
-            "Avoid",
-            "Inactive",
-            condition=FuncCondition(
-                traffic_confirmed_clear,
-                name="traffic_confirmed_clear",
-            ),
-            priority=20,
-        )
-    )
 
     for state_name in ("Inactive", "Active", "Avoid"):
         builder.on_enter(state_name, report_state_entry(state_name))
@@ -532,14 +615,19 @@ def create_collision_fsm(handler: GuidedCommandHandler):
     ) -> None:
         if from_state is None:
             return
-        if from_state.name == "Active":
+        effect = next(
+            rule.effect
+            for rule in COLLISION_TRANSITION_RULES
+            if rule.source == from_state.name and rule.destination == "Avoid"
+        )
+        if effect is TransitionEffect.BEGIN_AVOIDANCE:
             telemetry_policy.note_initial_command_dispatched()
             try:
                 handler.begin_avoidance(telemetry_policy.command)
             except BaseException:
                 telemetry_policy.observe_guided_ack(accepted=False)
                 raise
-        elif from_state.name == "Avoid":
+        elif effect is TransitionEffect.UPDATE_AVOIDANCE:
             handler.update_avoidance(telemetry_policy.command)
             telemetry_policy.note_update_dispatched()
 
@@ -595,7 +683,11 @@ class DroneController:
 
     def tick(self) -> TransitionResult:
         """Evaluate one periodic control tick, even if no input just arrived."""
-        result = self._fsm.trigger("control_tick", telemetry_policy=self._policy)
+        result = self._fsm.trigger(
+            "control_tick",
+            telemetry_policy=self._policy,
+            decision_facts=self._policy.decision_facts(),
+        )
         if not result.success:
             print(f"  state: {self.state} (no transition)")
         return result
