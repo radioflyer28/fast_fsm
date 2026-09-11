@@ -4,12 +4,13 @@ Collection of common TransitionCondition patterns for real-world usage
 """
 
 import time
+import warnings
 
 from .conditions import (
+    AndCondition,
     Condition,
-    GuardResult,
-    _check_compound_conditions,
-    _negate_guard_result,
+    NotCondition,
+    OrCondition,
 )
 from typing import Any, Set
 import re
@@ -21,6 +22,12 @@ class AlwaysCondition(Condition):
     __slots__ = ()
 
     def __init__(self):
+        warnings.warn(
+            "AlwaysCondition is deprecated; omit condition= for an unconditional "
+            "transition.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__("always", "Always allows transition")
 
     def check(self, *args, **kwargs) -> bool:
@@ -33,6 +40,12 @@ class NeverCondition(Condition):
     __slots__ = ()
 
     def __init__(self):
+        warnings.warn(
+            "NeverCondition is deprecated; use an explicit false FuncCondition or "
+            "omit the transition registration.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__("never", "Never allows transition")
 
     def check(self, *args, **kwargs) -> bool:
@@ -45,6 +58,12 @@ class KeyExistsCondition(Condition):
     __slots__ = ("required_keys",)
 
     def __init__(self, *required_keys: str):
+        warnings.warn(
+            "KeyExistsCondition is deprecated; implement the domain rule with a "
+            "custom Condition or FuncCondition.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         keys_str = ", ".join(required_keys)
         super().__init__(
             f"keys_exist_{len(required_keys)}", f"Requires keys: {keys_str}"
@@ -61,6 +80,12 @@ class ValueInSetCondition(Condition):
     __slots__ = ("key", "valid_values")
 
     def __init__(self, key: str, valid_values: Set[Any]):
+        warnings.warn(
+            "ValueInSetCondition is deprecated; implement the domain rule with a "
+            "custom Condition or FuncCondition.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         values_str = ", ".join(str(v) for v in sorted(valid_values))
         super().__init__(f"{key}_in_set", f"{key} must be one of: {values_str}")
         self.key = key
@@ -76,6 +101,12 @@ class RegexCondition(Condition):
     __slots__ = ("key", "pattern", "_compiled_regex")
 
     def __init__(self, key: str, pattern: str):
+        warnings.warn(
+            "RegexCondition is deprecated; implement the domain rule with a "
+            "custom Condition or FuncCondition.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(f"{key}_regex", f"{key} must match pattern: {pattern}")
         self.key = key
         self.pattern = pattern
@@ -92,6 +123,12 @@ class ComparisonCondition(Condition):
     __slots__ = ("key", "operator", "target_value")
 
     def __init__(self, key: str, operator: str, target_value: Any):
+        warnings.warn(
+            "ComparisonCondition is deprecated; implement the domain rule with a "
+            "custom Condition or FuncCondition.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             f"{key}_{operator}_{target_value}", f"{key} {operator} {target_value}"
         )
@@ -120,67 +157,18 @@ class ComparisonCondition(Condition):
             raise ValueError(f"Unsupported operator: {self.operator}")
 
 
-class AndCondition(Condition):
-    """Condition that requires ALL sub-conditions to be true"""
-
-    __slots__ = ("conditions",)
-
-    def __init__(self, *conditions: Condition):
-        condition_names = [str(c) for c in conditions]
-        super().__init__(
-            f"and_{len(conditions)}", f"ALL of: {', '.join(condition_names)}"
-        )
-        self.conditions = conditions
-
-    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
-        return _check_compound_conditions(
-            self.conditions,
-            args,
-            kwargs,
-            short_circuit_result=False,
-        )
-
-
-class OrCondition(Condition):
-    """Logical OR of multiple conditions"""
-
-    __slots__ = ("conditions",)
-
-    def __init__(self, *conditions: Condition):
-        condition_names = [str(c) for c in conditions]
-        super().__init__(
-            f"or_{len(conditions)}", f"ANY of: {', '.join(condition_names)}"
-        )
-        self.conditions = conditions
-
-    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
-        return _check_compound_conditions(
-            self.conditions,
-            args,
-            kwargs,
-            short_circuit_result=True,
-        )
-
-
-class NotCondition(Condition):
-    """Logical NOT of a condition"""
-
-    __slots__ = ("condition",)
-
-    def __init__(self, condition: Condition):
-        super().__init__(f"not_{condition.name}", f"NOT {condition.description}")
-        self.condition = condition
-
-    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
-        return _negate_guard_result(self.condition.check(*args, **kwargs))
-
-
 class TimeoutCondition(Condition):
     """Allows transitions until a timeout expires. Returns True before timeout, False after."""
 
     __slots__ = ("seconds", "_ref")
 
     def __init__(self, seconds: float):
+        warnings.warn(
+            "TimeoutCondition is deprecated; use transition after=/within= timing "
+            "instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(f"timeout_{seconds}", f"Blocks after {seconds}s")
         self.seconds = seconds
         self._ref = time.monotonic()
@@ -198,6 +186,13 @@ class CooldownCondition(Condition):
     __slots__ = ("seconds", "_last_success")
 
     def __init__(self, seconds: float):
+        warnings.warn(
+            "CooldownCondition is deprecated because checks consume mutable state; "
+            "use transition after=/within= timing or an explicit application "
+            "lifecycle policy.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(f"cooldown_{seconds}", f"Minimum {seconds}s between successes")
         self.seconds = seconds
         self._last_success: float = 0.0
@@ -219,6 +214,12 @@ class ElapsedCondition(Condition):
     __slots__ = ("seconds", "_ref")
 
     def __init__(self, seconds: float):
+        warnings.warn(
+            "ElapsedCondition is deprecated; use transition after=/within= timing "
+            "instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(f"elapsed_{seconds}", f"Passes after {seconds}s elapsed")
         self.seconds = seconds
         self._ref = time.monotonic()

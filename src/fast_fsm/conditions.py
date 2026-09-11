@@ -6,7 +6,8 @@ from interpreted Python code while still allowing the core FSM logic to be compi
 """
 
 import asyncio
-from abc import ABC, abstractmethod
+import warnings
+from abc import ABC, ABCMeta, abstractmethod
 from collections import abc as collections_abc
 import types
 from typing import (
@@ -246,6 +247,71 @@ class Condition(ABC):
         """Developer representation with class and name"""
         return f"{self.__class__.__name__}('{self.name}')"
 
+    def __and__(self, other: object) -> Any:
+        """Compose this guard with another guard using logical AND."""
+        if not isinstance(other, Condition):
+            return NotImplemented
+        return AndCondition(self, other)
+
+    def __or__(self, other: object) -> Any:
+        """Compose this guard with another guard using logical OR."""
+        if not isinstance(other, Condition):
+            return NotImplemented
+        return OrCondition(self, other)
+
+    def __invert__(self) -> "NotCondition":
+        """Return the canonical logical negation of this guard."""
+        return NotCondition(self)
+
+
+class AndCondition(Condition):
+    """Condition that requires every child to pass, left to right."""
+
+    __slots__ = ("conditions",)
+
+    def __init__(self, *conditions: Condition) -> None:
+        condition_names = [str(condition) for condition in conditions]
+        super().__init__(
+            f"and_{len(conditions)}", f"ALL of: {', '.join(condition_names)}"
+        )
+        self.conditions = conditions
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions, args, kwargs, short_circuit_result=False
+        )
+
+
+class OrCondition(Condition):
+    """Condition that requires at least one child to pass, left to right."""
+
+    __slots__ = ("conditions",)
+
+    def __init__(self, *conditions: Condition) -> None:
+        condition_names = [str(condition) for condition in conditions]
+        super().__init__(
+            f"or_{len(conditions)}", f"ANY of: {', '.join(condition_names)}"
+        )
+        self.conditions = conditions
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _check_compound_conditions(
+            self.conditions, args, kwargs, short_circuit_result=True
+        )
+
+
+class NotCondition(Condition):
+    """Canonical logical negation of one condition."""
+
+    __slots__ = ("condition",)
+
+    def __init__(self, condition: Condition) -> None:
+        super().__init__(f"not_{condition.name}", f"NOT {condition.description}")
+        self.condition = condition
+
+    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
+        return _negate_guard_result(self.condition.check(*args, **kwargs))
+
 
 _compiled_func_condition_check: Optional[Callable[..., GuardResult]] = None
 
@@ -318,6 +384,13 @@ class CompiledFuncCondition(Condition):
         name: Optional[str] = None,
         description: str = "",
     ) -> None:
+        warnings.warn(
+            "CompiledFuncCondition is deprecated; use FuncCondition instead. "
+            "The compiled bridge remains available for compatibility until no "
+            "earlier than the next major release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         resolved_name = (
             name if name is not None else getattr(func, "__name__", "compiled_func")
         )
@@ -334,7 +407,16 @@ class CompiledFuncCondition(Condition):
         return checker(self, *args, **kwargs)
 
 
-class NegatedCondition(Condition):
+class _NegatedConditionMeta(ABCMeta):
+    """Preserve the legacy ``isinstance`` seam for canonical negations."""
+
+    def __instancecheck__(cls, instance: object) -> bool:
+        return super().__instancecheck__(instance) or (
+            cls is NegatedCondition and type(instance) is NotCondition
+        )
+
+
+class NegatedCondition(NotCondition, metaclass=_NegatedConditionMeta):
     """Wraps another condition and inverts its result.
 
     Used internally by the ``unless=`` shorthand on
@@ -355,12 +437,16 @@ class NegatedCondition(Condition):
     __slots__ = ("_inner",)
 
     def __init__(self, inner: Condition) -> None:
-        super().__init__(f"not({inner})", f"Negation of: {inner.description}")
+        warnings.warn(
+            "NegatedCondition is deprecated; use NotCondition instead. "
+            "It remains available for compatibility until no earlier than the "
+            "next major release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        Condition.__init__(self, f"not({inner})", f"Negation of: {inner.description}")
+        self.condition = inner
         self._inner = inner
-
-    def check(self, *args: Any, **kwargs: Any) -> GuardResult:
-        """Return the inverse of the wrapped condition's result."""
-        return _negate_guard_result(self._inner.check(*args, **kwargs))
 
 
 class AsyncCondition(Condition):

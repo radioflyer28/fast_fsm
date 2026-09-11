@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from fast_fsm import (
@@ -40,7 +42,7 @@ class FakeClock:
 
 
 class AsyncLeaf(AsyncCondition):
-    __slots__ = ()
+    __slots__ = ("_result",)
 
     def __init__(self, result: bool) -> None:
         super().__init__("async-leaf")
@@ -52,8 +54,17 @@ class AsyncLeaf(AsyncCondition):
 
 def test_operators_construct_canonical_wrappers_and_short_circuit() -> None:
     calls: list[str] = []
-    false = FuncCondition(lambda: calls.append("false") and False)
-    true = FuncCondition(lambda: calls.append("true") and True)
+
+    def record_false() -> bool:
+        calls.append("false")
+        return False
+
+    def record_true() -> bool:
+        calls.append("true")
+        return True
+
+    false = FuncCondition(record_false)
+    true = FuncCondition(record_true)
 
     combined_and = false & true
     combined_or = false | true
@@ -77,7 +88,8 @@ def test_unless_stores_canonical_not_condition_without_warning() -> None:
     machine.add_state(State("target"))
     locked = FuncCondition(lambda *, locked=False: locked)
 
-    with pytest.warns(None) as record:
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
         machine.add_transition("go", "source", "target", unless=locked)
 
     entry = machine._transitions["source"]["go"]
@@ -91,7 +103,7 @@ def test_unless_stores_canonical_not_condition_without_warning() -> None:
     [
         (lambda: NegatedCondition(FuncCondition(lambda: True)), "NotCondition"),
         (lambda: CompiledFuncCondition(lambda: True), "FuncCondition"),
-        (AlwaysCondition, "omitted registration"),
+        (AlwaysCondition, "omit condition"),
         (NeverCondition, "FuncCondition"),
         (lambda: KeyExistsCondition("payload"), "custom Condition"),
         (lambda: ValueInSetCondition("mode", {"safe"}), "custom Condition"),
@@ -102,7 +114,9 @@ def test_unless_stores_canonical_not_condition_without_warning() -> None:
         (lambda: ElapsedCondition(1.0), "after="),
     ],
 )
-def test_legacy_conditions_warn_but_remain_constructible(factory, replacement: str) -> None:
+def test_legacy_conditions_warn_but_remain_constructible(
+    factory, replacement: str
+) -> None:
     with pytest.warns(DeprecationWarning, match=replacement):
         condition = factory()
     assert isinstance(condition, Condition)

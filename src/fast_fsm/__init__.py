@@ -30,7 +30,14 @@ from .core import (
     quick_fsm,
     condition_builder,
 )
-from .conditions import CompiledFuncCondition, GuardCallable, GuardResult
+from .conditions import (
+    AndCondition,
+    CompiledFuncCondition,
+    GuardCallable,
+    GuardResult,
+    NotCondition,
+    OrCondition,
+)
 from .condition_templates import TimeoutCondition, CooldownCondition, ElapsedCondition
 from ._diagnostics import (
     DiagnosticLimits,
@@ -82,6 +89,9 @@ __all__ = [
     "GuardCallable",
     "GuardResult",
     "AsyncCondition",
+    "AndCondition",
+    "OrCondition",
+    "NotCondition",
     "NegatedCondition",
     # Advanced state handling
     "DeclarativeState",

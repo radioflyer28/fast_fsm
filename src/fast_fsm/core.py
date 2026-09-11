@@ -13,6 +13,7 @@ Key design principles:
 """
 
 import logging
+import math
 import time
 import threading
 import contextvars
@@ -34,6 +35,7 @@ from dataclasses import dataclass, field
 import asyncio
 from mypy_extensions import mypyc_attr
 from .conditions import (
+    AndCondition as AndCondition,
     AsyncCondition as AsyncCondition,
     CompiledFuncCondition as CompiledFuncCondition,
     Condition as Condition,
@@ -41,6 +43,8 @@ from .conditions import (
     GuardCallable as GuardCallable,
     GuardResult as GuardResult,
     NegatedCondition as NegatedCondition,
+    NotCondition as NotCondition,
+    OrCondition as OrCondition,
     _bind_compiled_func_condition_check,
     _is_awaitable_result,
 )
@@ -439,8 +443,6 @@ async def _evaluate_condition_async_iteratively(
     condition graphs do not consume the Python call stack, and leaves may
     return either an awaitable or an ordinary truthy result.
     """
-    from .condition_templates import AndCondition, NotCondition, OrCondition
-
     active: set[int] = set()
     entered: set[int] = set()
     stack: List[Tuple[str, Condition, int]] = [("evaluate", condition, 0)]
@@ -615,7 +617,7 @@ class TransitionEntry:
     it replaces, while giving attribute access and type safety.
     """
 
-    __slots__ = ("to_state", "condition", "priority", "condition_ref")
+    __slots__ = ("to_state", "condition", "priority", "condition_ref", "after")
 
     def __init__(
         self,
@@ -623,11 +625,13 @@ class TransitionEntry:
         condition: Optional[Condition] = None,
         priority: int = 0,
         condition_ref: Optional[str] = None,
+        after: Optional[float] = None,
     ) -> None:
         self.to_state: "State" = to_state
         self.condition: Optional[Condition] = condition
         self.priority: int = priority
         self.condition_ref: Optional[str] = condition_ref
+        self.after: Optional[float] = after
 
 
 _TransitionRow = Union[
@@ -733,6 +737,7 @@ class _PreparedTransition:
     condition: Optional[Condition]
     priority: int
     condition_ref: Optional[str] = None
+    after: Optional[float] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -899,6 +904,8 @@ class StateMachine:
         "_history_max",
         "_sync_ownership_lock",
         "_sync_owner_thread_id",
+        "_clock",
+        "_state_entered_at",
     )
 
     def __init__(
@@ -907,6 +914,7 @@ class StateMachine:
         *,
         name: str = "FSM",
         logger_name: Optional[str] = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         """
         Initialize the state machine.
@@ -925,6 +933,10 @@ class StateMachine:
                 f"got {type(initial_state).__name__}"
             )
         self._name = name
+        if not callable(clock):
+            raise TypeError("clock must be callable")
+        self._clock = clock
+        self._state_entered_at = self._validate_clock_value(clock())
         self._initial_state = initial_state
         self._current_state = initial_state
         self._states: Dict[str, State] = {}
@@ -963,6 +975,37 @@ class StateMachine:
 
         # Register the initial state
         self._register_state(initial_state)
+
+    @staticmethod
+    def _validate_duration(value: object, *, name: str) -> Optional[float]:
+        """Validate one optional finite non-negative timing value."""
+        if value is None:
+            return None
+        if type(value) not in (int, float):
+            raise TypeError(f"{name} must be a finite built-in int or float")
+        number = cast(Union[int, float], value)
+        if not math.isfinite(number):
+            raise TypeError(f"{name} must be a finite built-in int or float")
+        if number < 0:
+            raise ValueError(f"{name} must be non-negative")
+        return float(number)
+
+    @staticmethod
+    def _validate_clock_value(value: object) -> float:
+        """Return one trusted monotonic clock observation without leaking values."""
+        if type(value) not in (int, float):
+            raise TypeError("clock must return a finite built-in int or float")
+        number = cast(Union[int, float], value)
+        if not math.isfinite(number):
+            raise TypeError("clock must return a finite built-in int or float")
+        return float(number)
+
+    def _read_clock(self) -> float:
+        """Read one non-regressing monotonic timestamp for this machine."""
+        now = self._validate_clock_value(self._clock())
+        if now < self._state_entered_at:
+            raise ValueError("clock cannot precede the committed state entry")
+        return now
 
     def _acquire_sync_ownership(self, operation: str) -> int:
         """Enter one synchronous public-write envelope for this machine."""
@@ -1602,9 +1645,11 @@ class StateMachine:
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
         condition_ref: Optional[str] = None,
+        after: object = None,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
         normalized_priority = _normalize_priority(priority)
+        normalized_after = self._validate_duration(after, name="after")
         if condition_ref is not None and (
             not isinstance(condition_ref, str) or not condition_ref
         ):
@@ -1648,9 +1693,9 @@ class StateMachine:
                 )
         if unless is not None:
             if isinstance(unless, Condition):
-                condition = NegatedCondition(unless)
+                condition = NotCondition(unless)
             elif callable(unless):
-                condition = NegatedCondition(FuncCondition(unless))
+                condition = NotCondition(FuncCondition(unless))
             else:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
@@ -1682,6 +1727,7 @@ class StateMachine:
             normalized_condition,
             normalized_priority,
             condition_ref,
+            normalized_after,
         )
 
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
@@ -1715,7 +1761,11 @@ class StateMachine:
     ) -> _TransitionSlot:
         """Build one replacement slot without mutating a published value."""
         candidate = TransitionEntry(
-            plan.target, plan.condition, plan.priority, plan.condition_ref
+            plan.target,
+            plan.condition,
+            plan.priority,
+            plan.condition_ref,
+            plan.after,
         )
         if existing is None:
             return candidate
@@ -1730,6 +1780,7 @@ class StateMachine:
                     entry.to_state is candidate.to_state
                     and entry.condition is candidate.condition
                     and entry.condition_ref == candidate.condition_ref
+                    and entry.after == candidate.after
                 ):
                     return existing
                 raise ValueError(
@@ -1752,6 +1803,7 @@ class StateMachine:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        after: object = None,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
         owner_thread_id = self._acquire_sync_ownership("add_transition")
@@ -1763,6 +1815,7 @@ class StateMachine:
                 condition,
                 unless=unless,
                 priority=priority,
+                after=after,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1776,10 +1829,17 @@ class StateMachine:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        after: object = None,
     ) -> None:
         """Validate and commit one transition while the caller owns this machine."""
         prepared = self._normalize_transition_request(
-            trigger, from_state, to_state, condition, unless=unless, priority=priority
+            trigger,
+            from_state,
+            to_state,
+            condition,
+            unless=unless,
+            priority=priority,
+            after=after,
         )
         self._commit_transition_plan((prepared,))
 
@@ -2389,6 +2449,11 @@ class StateMachine:
             )
 
         if isinstance(slot, _TransitionGroup):
+            selection_now = (
+                self._read_clock()
+                if any(entry.after is not None for entry in slot.entries)
+                else None
+            )
             for entry in slot.entries:
                 selected = self._select_sync_candidate(
                     entry,
@@ -2399,6 +2464,7 @@ class StateMachine:
                     kwargs,
                     for_query=for_query,
                     scan_group=True,
+                    now=selection_now,
                 )
                 if selected is not None:
                     return selected
@@ -2409,8 +2475,9 @@ class StateMachine:
                 stage=_LIFECYCLE_STAGE_SELECTION,
             )
 
+        singleton = cast(TransitionEntry, slot)
         selected_singleton = self._select_sync_candidate(
-            cast(TransitionEntry, slot),
+            singleton,
             source_state,
             current_name,
             trigger,
@@ -2418,6 +2485,7 @@ class StateMachine:
             kwargs,
             for_query=for_query,
             scan_group=False,
+            now=self._read_clock() if singleton.after is not None else None,
         )
         assert selected_singleton is not None
         return selected_singleton
@@ -2433,8 +2501,21 @@ class StateMachine:
         *,
         for_query: bool,
         scan_group: bool,
+        now: Optional[float],
     ) -> Union[_PreparedDispatch, TransitionResult, None]:
         """Evaluate one candidate, using ``None`` only for group fallthrough."""
+        if entry.after is not None:
+            assert now is not None
+            if now - self._state_entered_at < entry.after:
+                if scan_group:
+                    return None
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition timing rejected trigger",
+                    stage=_LIFECYCLE_STAGE_SELECTION,
+                    priority=entry.priority,
+                )
         declarative_handler = _resolve_declarative_handler(
             source_state, trigger, entry.to_state, entry.priority
         )
@@ -2770,8 +2851,6 @@ class StateMachine:
     @staticmethod
     def _condition_children(condition: Condition) -> Tuple[Condition, ...]:
         """Return only the supported private built-in wrapper child edges."""
-        from .condition_templates import AndCondition, NotCondition, OrCondition
-
         condition_type = type(condition)
         if condition_type is NegatedCondition:
             return (cast(NegatedCondition, condition)._inner,)
@@ -2840,8 +2919,6 @@ class StateMachine:
         completed: Optional[set[int]] = None,
     ) -> bool:
         """Evaluate supported wrappers synchronously without hiding async leaves."""
-        from .condition_templates import AndCondition, NotCondition, OrCondition
-
         if active is None:
             active = set()
         if completed is None:
@@ -3125,16 +3202,18 @@ class StateMachine:
         priority: Optional[int] = None,
     ) -> None:
         """Commit state and optional history without invoking user code."""
+        timestamp = self._read_clock()
         record: Optional[TransitionRecord] = None
         history = self._history
         if history is not None:
             record = TransitionRecord(
-                old_state.name, trigger, to_state.name, time.monotonic(), priority
+                old_state.name, trigger, to_state.name, timestamp, priority
             )
         if record is not None:
             assert history is not None
             history.append(record)
         self._current_state = to_state
+        self._state_entered_at = timestamp
 
     @staticmethod
     def _build_failure_result(
@@ -5292,9 +5371,9 @@ class FSMBuilder:
             )
         if unless is not None:
             if isinstance(unless, Condition):
-                condition = NegatedCondition(unless)
+                condition = NotCondition(unless)
             elif callable(unless):
-                condition = NegatedCondition(FuncCondition(unless))
+                condition = NotCondition(FuncCondition(unless))
             else:
                 raise TypeError(
                     f"'unless' must be a Condition or callable, got {type(unless)}"
