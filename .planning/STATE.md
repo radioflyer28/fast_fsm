@@ -7,7 +7,7 @@ stopped_at: Awaiting next milestone definition
 last_updated: "2026-09-12T00:22:24Z"
 last_activity: 2026-09-11
 last_activity_desc: "Completed quick task 260911-ra8: condition interface redesign"
-state_head: f9306967ece9d317bb464a95f02e3481966c1493
+state_head: 34ff0648be74d5fa3562dfeba499c47ca381e912
 progress:
   total_phases: 5
   completed_phases: 5
@@ -184,7 +184,7 @@ None yet.
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260911-ra8 | Implement complete condition interface redesign | 2026-09-11 | f930696 | [260911-ra8-implement-the-complete-condition-interfa](./quick/260911-ra8-implement-the-complete-condition-interfa/) |
+| 260911-ra8 | Implement complete condition interface redesign | 2026-09-11 | 34ff064 | [260911-ra8-implement-the-complete-condition-interfa](./quick/260911-ra8-implement-the-complete-condition-interfa/) |
 
 ## Deferred Items
 

@@ -12,7 +12,7 @@ affects: [conditions, transition-selection, async-dispatch, serialization, docum
 actuals:
   tokens: 23801.25
   tasks: 3
-  commits: 7
+  commits: 8
 tech-stack:
   added: []
   patterns:
@@ -100,6 +100,8 @@ status: complete
    - `c88447f` `docs(260911-ra8-01): guide focused condition design`
    - `d306420` `docs(260911-ra8-01): add condition migration table`
    - `f930696` `docs(260911-ra8-01): clarify condition timing guidance`
+4. **Hosted CI correction: Preserve strict typed compatibility imports**
+   - `34ff064` `fix: explicitly re-export condition combinators`
 
 ## Files Created/Modified
 
@@ -166,8 +168,9 @@ status: complete
 
 ## Issues Encountered
 
-- The Beads Dolt server could not accept connections. Its pre-commit export hook reported a warning on every commit, but Git commits completed normally. Per task constraint, no tracker command was attempted and this did not block implementation.
+- During execution, the Beads Dolt server could not accept connections because a two-day-old orphan process retained its configured database port. The orchestrator verified and terminated that process, restarted Dolt, and recorded the completed work as closed issue `fast_fsm-b1j`.
 - The pure-source gate intentionally fails closed when native core artifacts shadow `core.py`. Generated artifacts were moved recoverably to `/private/tmp` for pure checks, then the current extension was rebuilt and the pre-existing CPython 3.10 artifacts were restored.
+- The first exact-SHA hosted matrix found that the legacy `fast_fsm.condition_templates` combinator imports were implicit after canonicalization. Clean strict-mypy clients therefore rejected `AndCondition`, `OrCondition`, and `NotCondition` even though runtime imports worked. Commit `34ff064` changed them to explicit self-alias re-exports; the exact failing downstream test, Ruff, and blocking mypy gate then passed locally before the replacement push.
 
 ## User Setup Required
 
