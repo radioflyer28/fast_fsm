@@ -223,6 +223,11 @@ checkout.add_transition(
 )
 ```
 
+The reference timestamp is captured at the no-user-code commit boundary:
+`can_trigger()` only observes it, destination callbacks see the newly committed
+entry time, and asynchronous selection captures its one timing sample before
+awaiting any guard.
+
 Older `condition_templates` imports, `NegatedCondition`, and
 `CompiledFuncCondition` remain as deprecated compatibility shims until no
 earlier than the next major release. See

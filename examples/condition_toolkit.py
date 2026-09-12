@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Tier 2: compose focused conditions, priorities, and transition timing."""
 
-from fast_fsm import FuncCondition, State, StateMachine
+from fast_fsm import (
+    AndCondition,
+    FuncCondition,
+    NotCondition,
+    OrCondition,
+    State,
+    StateMachine,
+)
 
 
 class FakeClock:
@@ -35,8 +42,8 @@ def main() -> None:
         lambda *, status="", **_: status == "blocked",
         name="is_blocked",
     )
-    eligible = has_identity & adult & known_role & ~is_blocked
-    needs_review = is_blocked | ~adult
+    eligible = AndCondition(has_identity, adult) & known_role & NotCondition(is_blocked)
+    needs_review = OrCondition(is_blocked, ~adult)
 
     approvals.add_transition(
         "approve",
