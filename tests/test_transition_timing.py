@@ -15,7 +15,7 @@ from fast_fsm import (
     StateMachine,
     transition,
 )
-from fast_fsm.core import DeclarativeState
+from fast_fsm.core import AsyncDeclarativeState, DeclarativeState, TransitionResult
 
 
 class FakeClock:
@@ -95,6 +95,94 @@ def test_untimed_singleton_does_not_read_the_clock_during_selection() -> None:
 
     assert machine.can_trigger("go")
     assert clock.calls == before_query
+
+
+def test_legacy_transition_preparation_preserves_resolution_and_guard_context() -> None:
+    """The compatibility lookup keeps failures and sanitized guard context distinct."""
+    source = State("source")
+    machine = StateMachine(source)
+    target = State("target")
+    alternate = State("alternate")
+    machine.add_state(target)
+    machine.add_state(alternate)
+
+    missing = machine._resolve_trigger("missing")
+    assert isinstance(missing, TransitionResult)
+    assert missing.stage == "resolution"
+
+    condition = FuncCondition(lambda **kwargs: bool(kwargs))
+    machine.add_transition("guarded", source, target, condition)
+    prepared = machine._prepare_transition(
+        "guarded", (), {"visible": "yes", "_private": "hidden"}
+    )
+    assert not isinstance(prepared, TransitionResult)
+    assert prepared.condition_kwargs == {"visible": "yes"}
+    resolved_entry, resolved_source = machine._resolve_trigger("guarded")
+    assert resolved_entry is prepared.entry
+    assert resolved_source == "source"
+
+    machine.add_transition("ranked", source, target, priority=0)
+    machine.add_transition("ranked", source, alternate, priority=1)
+    grouped = machine._resolve_trigger("ranked")
+    assert isinstance(grouped, TransitionResult)
+    assert grouped.stage == "resolution"
+
+
+def test_sync_declarative_guard_seam_contains_legacy_query_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Direct compatibility queries get a safe false result and redacted warning."""
+
+    def exploding_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError("guard-secret")
+
+    class Source(DeclarativeState):
+        @transition("advance", to_state="target", condition=exploding_guard)
+        def handle_advance(self) -> None:
+            pass
+
+    source = Source("source")
+    machine = StateMachine(source)
+    machine.add_state(State("target"))
+    machine.add_transition("advance", source, "target")
+    prepared = machine._prepare_transition("advance", (), {})
+    assert not isinstance(prepared, TransitionResult)
+
+    with caplog.at_level("WARNING"):
+        assert not machine._evaluate_declarative_condition_sync(prepared)
+
+    assert "Condition evaluation failed" in caplog.text
+    assert "type=ValueError" in caplog.text
+    assert "guard-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_declarative_guard_seam_contains_legacy_query_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Async direct compatibility queries get the same safe, redacted false result."""
+
+    async def exploding_guard(*_args: object, **_kwargs: object) -> bool:
+        raise ValueError("async-guard-secret")
+
+    class Source(AsyncDeclarativeState):
+        @transition("advance", to_state="target", condition=exploding_guard)
+        async def handle_advance(self) -> None:
+            pass
+
+    source = Source("source")
+    machine = AsyncStateMachine(source)
+    machine.add_state(State("target"))
+    machine.add_transition("advance", source, "target")
+    prepared = machine._prepare_transition("advance", (), {})
+    assert not isinstance(prepared, TransitionResult)
+
+    with caplog.at_level("WARNING"):
+        assert not await machine._evaluate_declarative_condition_async(prepared)
+
+    assert "Async condition evaluation failed" in caplog.text
+    assert "type=ValueError" in caplog.text
+    assert "async-guard-secret" not in caplog.text
 
 
 def test_commit_resets_entry_time_before_destination_callback_failure() -> None:

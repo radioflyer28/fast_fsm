@@ -80,6 +80,22 @@ def test_operators_construct_canonical_wrappers_and_short_circuit() -> None:
     assert negated.check()
     with pytest.raises(TypeError):
         _ = false & object()  # type: ignore[operator]
+    with pytest.raises(TypeError):
+        _ = false | object()  # type: ignore[operator]
+
+
+@pytest.mark.asyncio
+async def test_deferred_compound_guard_result_has_single_await_ownership() -> None:
+    """A composed async guard must not re-run its first awaitable on reuse."""
+
+    async def async_true() -> bool:
+        return True
+
+    deferred = (FuncCondition(async_true) & FuncCondition(lambda: True)).check()
+
+    assert await deferred
+    with pytest.raises(RuntimeError, match="cannot reuse an awaited guard result"):
+        await deferred
 
 
 def test_unless_stores_canonical_not_condition_without_warning() -> None:
