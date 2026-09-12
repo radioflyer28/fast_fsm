@@ -26,10 +26,17 @@ transition, multiple entry callbacks, `reset()`, and `raise_if_failed()`.
 
 These examples move domain rules and event handling into Fast FSM.
 
-### `condition_toolkit.py` — reusable guards
+### `condition_toolkit.py` — focused conditions and entry timing
 
-Compose key, set-membership, comparison, negation, cooldown, and elapsed-time
-conditions. This is the focused guide to reusable condition objects.
+Compose named `FuncCondition` rules with `&`, `|`, and `~`, route two distinct
+priority outcomes, then use a fake clock to demonstrate `after=` and
+`within=`. It is deterministic and never sleeps.
+
+### `custom_conditions.py` — small domain rules
+
+Implement four reusable `Condition` subclasses with explicit input behavior:
+battery level, heartbeat age with an injected clock, payload matching, and
+inventory availability. Each rule is used by a real machine transition.
 
 ### `declarative_state_example.py` — state-local handlers
 
@@ -96,7 +103,8 @@ own example.
 |---|---|---|
 | States, transitions, triggers, results | `traffic_light.py` | `order_processing.py` |
 | Builder, callbacks, reset, bulk sources | `order_processing.py` | `enhanced_builder_example.py` |
-| Reusable and composed conditions | `condition_toolkit.py` | `drone_failsafes.py` |
+| Reusable, composed, and custom conditions | `condition_toolkit.py` | `custom_conditions.py` |
+| Entry-relative transition timing | `condition_toolkit.py` | `workflow_persistence.py` |
 | Ordered priority candidates | `drone_failsafes.py` | `async_sensor_example.py` |
 | Declarative handlers | `declarative_state_example.py` | — |
 | Async guards and dispatch | `async_sensor_example.py` | `enhanced_builder_example.py` |

@@ -190,19 +190,45 @@ door.add_transition("open", "closed", "open", unless=is_locked)
 accept `*args, **kwargs` or an equivalent flexible keyword shape so callers can
 add context without breaking the condition.
 
-### Reusable and time-aware conditions
+### Compose named rules; put timing on transitions
 
-`fast_fsm.condition_templates` includes key-presence, membership, regex,
-comparison, boolean-composition, and negation conditions. The top-level package
-also exports:
+New code needs only `Condition`, `FuncCondition`, `AsyncCondition`,
+`AndCondition`, `OrCondition`, and `NotCondition`. The `&`, `|`, and `~`
+operators compose named rules with normal short-circuit behavior:
 
-- `TimeoutCondition(seconds)`: passes until its time window expires.
-- `CooldownCondition(seconds)`: passes immediately, then enforces an interval.
-- `ElapsedCondition(seconds)`: passes after the interval has elapsed.
+```python
+has_identity = FuncCondition(
+    lambda *, user_id=None, **_: user_id is not None,
+    name="has_identity",
+)
+has_credit = FuncCondition(
+    lambda *, credit=0, cost=0, **_: credit >= cost,
+    name="has_credit",
+)
+eligible = has_identity & has_credit
+```
 
-Each timing condition uses `time.monotonic()` and provides `reset()`.
-See [`condition_toolkit.py`](examples/condition_toolkit.py) for composition
-examples.
+Put temporal policy on the transition entry. `after=` delays eligibility from
+the current state's entry; `within=` sets an exclusive deadline. Together they
+form `[after, within)` and use a machine-owned injectable monotonic clock:
+
+```python
+checkout.add_transition(
+    "release",
+    "pending",
+    "ready",
+    condition=eligible,
+    after=5.0,
+    within=30.0,
+)
+```
+
+Older `condition_templates` imports, `NegatedCondition`, and
+`CompiledFuncCondition` remain as deprecated compatibility shims until no
+earlier than the next major release. See
+[`condition_toolkit.py`](examples/condition_toolkit.py) for the focused
+interface and [`custom_conditions.py`](examples/custom_conditions.py) for
+domain-specific subclasses.
 
 ## Resolve competing outcomes with priority
 
@@ -538,7 +564,8 @@ by a cross-platform smoke test.
 |---:|---|---|
 | 1 | [`traffic_light.py`](examples/traffic_light.py) | Direct construction, triggers, and results |
 | 1 | [`order_processing.py`](examples/order_processing.py) | Builder, callbacks, fan-out, and reset |
-| 2 | [`condition_toolkit.py`](examples/condition_toolkit.py) | Reusable, composed, and timed guards |
+| 2 | [`condition_toolkit.py`](examples/condition_toolkit.py) | Named composition, priority, and entry timing |
+| 2 | [`custom_conditions.py`](examples/custom_conditions.py) | Small domain-specific `Condition` subclasses |
 | 2 | [`declarative_state_example.py`](examples/declarative_state_example.py) | Sync and async declarative handlers |
 | 2 | [`drone_failsafes.py`](examples/drone_failsafes.py) | FSM-owned priority and command callbacks |
 | 3 | [`async_sensor_example.py`](examples/async_sensor_example.py) | Deterministic async guards |
