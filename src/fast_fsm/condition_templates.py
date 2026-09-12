@@ -7,10 +7,10 @@ import time
 import warnings
 
 from .conditions import (
-    AndCondition,
+    AndCondition as AndCondition,
     Condition,
-    NotCondition,
-    OrCondition,
+    NotCondition as NotCondition,
+    OrCondition as OrCondition,
 )
 from typing import Any, Set
 import re
