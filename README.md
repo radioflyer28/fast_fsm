@@ -230,6 +230,16 @@ earlier than the next major release. See
 interface and [`custom_conditions.py`](examples/custom_conditions.py) for
 domain-specific subclasses.
 
+| Deprecated symbol | Use in new code |
+|---|---|
+| `NegatedCondition` | `NotCondition(rule)` or `~rule` |
+| `CompiledFuncCondition` | `FuncCondition(predicate, name="...")` |
+| `AlwaysCondition` | Omit `condition=` for an unconditional transition |
+| `NeverCondition` | Omit the transition or use an explicit false `FuncCondition` |
+| `KeyExistsCondition`, `ValueInSetCondition`, `RegexCondition`, `ComparisonCondition` | A small domain `Condition` or named `FuncCondition` |
+| `TimeoutCondition`, `ElapsedCondition` | Entry-relative `after=` and/or `within=` metadata |
+| `CooldownCondition` | Entry-relative timing or an explicit application lifecycle policy |
+
 ## Resolve competing outcomes with priority
 
 Several transitions may share one `(source state, trigger)` slot. Fast FSM
