@@ -12,7 +12,7 @@ affects: [conditions, transition-selection, async-dispatch, serialization, docum
 actuals:
   tokens: 23801.25
   tasks: 3
-  commits: 8
+  commits: 12
 tech-stack:
   added: []
   patterns:
@@ -102,6 +102,11 @@ status: complete
    - `f930696` `docs(260911-ra8-01): clarify condition timing guidance`
 4. **Hosted CI correction: Preserve strict typed compatibility imports**
    - `34ff064` `fix: explicitly re-export condition combinators`
+5. **Hosted and release-gate corrections: Preserve lifecycle fault coverage and durable evidence**
+   - `6cab2a9` `test: cover timing-aware commit failure paths`
+   - `c7abec4` `test: preserve safe trigger internal fault coverage`
+   - `5bb881f` `test: cover condition and timing compatibility seams`
+   - `2c0361b` `test: refresh condition redesign evidence`
 
 ## Files Created/Modified
 
@@ -157,7 +162,7 @@ status: complete
 - `uv run pytest tests/test_condition_interface.py -q` — pass (14 tests).
 - Targeted timing, condition, async, priority, builder, template, and utility regressions — pass.
 - `task pure-source-check` — pass after temporarily relocating generated extension artifacts; source resolved to `src/fast_fsm/core.py`.
-- `task test` — pass, full pure-source suite reached 100% with exit code 0.
+- `task test` — pass; the full pure-source suite completed with exit code 0.
 - `task typecheck-mypy` — pass.
 - `task typecheck-ty` — pass (advisory).
 - `uv run python tools/release_evidence.py slots-policy --json` — pass.
@@ -165,12 +170,14 @@ status: complete
 - `task build-check` — pass; rebuilt mypyc extension and completed compiled smoke test.
 - Direct deterministic runs of `examples/condition_toolkit.py` and `examples/custom_conditions.py`, plus `tests/test_examples_smoke.py` — pass.
 - Final README/example audit: `uv run pytest tests/test_readme_examples.py tests/test_examples_smoke.py -q` — pass (23 tests).
+- `task release-baseline-check` — pass; 1,857/1,863 tests passed (6 skipped), total coverage 97.81%, and `core.py` coverage 97.00%.
 
 ## Issues Encountered
 
 - During execution, the Beads Dolt server could not accept connections because a two-day-old orphan process retained its configured database port. The orchestrator verified and terminated that process, restarted Dolt, and recorded the completed work as closed issue `fast_fsm-b1j`.
 - The pure-source gate intentionally fails closed when native core artifacts shadow `core.py`. Generated artifacts were moved recoverably to `/private/tmp` for pure checks, then the current extension was rebuilt and the pre-existing CPython 3.10 artifacts were restored.
 - The first exact-SHA hosted matrix found that the legacy `fast_fsm.condition_templates` combinator imports were implicit after canonicalization. Clean strict-mypy clients therefore rejected `AndCondition`, `OrCondition`, and `NotCondition` even though runtime imports worked. Commit `34ff064` changed them to explicit self-alias re-exports; the exact failing downstream test, Ruff, and blocking mypy gate then passed locally before the replacement push.
+- The replacement matrix exposed two stale fault-injection tests: private transition records gained timing fields, and machines now capture their injected clock at construction. Commits `6cab2a9` and `c7abec4` updated those tests to exercise the intended lifecycle boundaries directly. Commit `5bb881f` then added focused coverage for compatibility and timing seams, preserving the existing coverage floor before the release evidence was refreshed.
 
 ## User Setup Required
 
@@ -178,12 +185,12 @@ None — no external service configuration required.
 
 ## Next Phase Readiness
 
-The focused public condition vocabulary, deterministic timing model, migration guides, and runnable examples are ready for review. The planning documents remain intentionally uncommitted for the orchestrator to own.
+The focused public condition vocabulary, deterministic timing model, migration guides, runnable examples, and release evidence are ready for hosted verification.
 
 ## Self-Check: PASSED
 
 - Confirmed created ADR, example, and focused test files exist.
-- Confirmed all seven task commits exist in the repository history.
+- Confirmed all twelve implementation, documentation, correction, and evidence commits exist in the repository history.
 
 ---
 *Phase: 260911-ra8*
