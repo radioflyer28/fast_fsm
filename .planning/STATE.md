@@ -4,10 +4,10 @@ milestone: v0.4.0
 milestone_name: Priority-Aware Guarded Transitions
 status: Awaiting next milestone
 stopped_at: Awaiting next milestone definition
-last_updated: "2026-09-07T22:00:00Z"
-last_activity: 2026-09-07
-last_activity_desc: Milestone v0.4.0 completed and archived
-state_head: 9315845b8d6d5c441d9d46c6136b9305cfb594c1
+last_updated: "2026-09-12T00:22:24Z"
+last_activity: 2026-09-11
+last_activity_desc: "Completed quick task 260911-ra8: condition interface redesign"
+state_head: f9306967ece9d317bb464a95f02e3481966c1493
 progress:
   total_phases: 5
   completed_phases: 5
@@ -32,7 +32,7 @@ See: .planning/PROJECT.md (updated 2026-09-07)
 Phase: Milestone v0.4.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-09-07 — Milestone v0.4.0 completed and archived
+Last activity: 2026-09-11 — Completed quick task 260911-ra8: condition interface redesign
 
 ## Performance Metrics
 
@@ -179,6 +179,12 @@ None yet.
 ### Blockers/Concerns
 
 - v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260911-ra8 | Implement complete condition interface redesign | 2026-09-11 | f930696 | [260911-ra8-implement-the-complete-condition-interfa](./quick/260911-ra8-implement-the-complete-condition-interfa/) |
 
 ## Deferred Items
 
