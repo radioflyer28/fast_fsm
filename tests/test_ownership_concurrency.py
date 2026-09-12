@@ -446,13 +446,19 @@ async def test_safe_trigger_rejects_busy_async_machine_before_conversion() -> No
 
 def test_safe_trigger_converts_ordinary_post_admission_exception_without_secret_log(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The compatibility barrier stays inside the already-admitted operation."""
 
     machine = StateMachine(State("source"), name="safe-trigger-conversion")
-    # Reach a true post-admission internal fault without subclassing the mypyc
-    # native class; compiled and pure origins then exercise the same barrier.
-    machine._transitions["source"] = {"advance": object()}  # type: ignore[dict-item]
+
+    def fail_after_admission(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("ordinary-cause-secret")
+
+    # Inject at the owned body, which runs after safe_trigger() has admitted
+    # the caller. This exercises the compatibility barrier without corrupting
+    # timing-aware private transition storage.
+    monkeypatch.setattr(StateMachine, "_trigger_owned", fail_after_admission)
 
     result = machine.safe_trigger(
         "advance", "argument-secret", payload="payload-secret"
