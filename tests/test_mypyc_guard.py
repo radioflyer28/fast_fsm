@@ -398,6 +398,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "condition_name",
             "priority",
             "condition_ref",
+            "after",
+            "within",
             "statically_unconditional",
         },
         "_GraphSnapshot": {
@@ -417,6 +419,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "condition",
             "priority",
             "condition_ref",
+            "after",
+            "within",
         },
         "_TransitionGroup": {"entries"},
         "_DeclarativeHandlerMetadata": {
@@ -425,6 +429,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "to_state",
             "condition",
             "priority",
+            "after",
+            "within",
         },
         "_DeclarativeHandler": {
             "method",
@@ -433,6 +439,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "condition",
             "is_async",
             "priority",
+            "after",
+            "within",
         },
     }.items():
         node = classes.get(name)
@@ -480,6 +488,8 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         "condition",
         "priority",
         "condition_ref",
+        "after",
+        "within",
     }
 
 

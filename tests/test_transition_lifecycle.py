@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 import asyncio
 import logging
-import time
 
 import pytest
 
@@ -692,25 +691,26 @@ def test_uncaught_safe_trigger_reentry_uses_the_outer_lifecycle_stage() -> None:
     assert "nested-secret" not in str(result.cause)
 
 
-def test_sync_commit_failure_is_precommit_and_finalized_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A clock fault cannot mutate state or history before commit succeeds."""
+def test_sync_commit_failure_is_precommit_and_finalized_once() -> None:
+    """An injected clock fault cannot mutate state or history before commit."""
     source = State("source")
     destination = State("destination")
-    machine = StateMachine(source, name="sync-commit-failure")
+    failure = OSError("clock-secret")
+    fail_commit = False
+
+    def clock() -> float:
+        if fail_commit:
+            raise failure
+        return 0.0
+
+    machine = StateMachine(source, name="sync-commit-failure", clock=clock)
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination")
     machine.enable_history()
     observed: list[str] = []
     machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
-    failure = OSError("clock-secret")
 
-    def fail_clock() -> float:
-        raise failure
-
-    monkeypatch.setattr("fast_fsm.core.time.monotonic", fail_clock)
-
+    fail_commit = True
     result = machine.trigger("advance")
 
     assert result.success is False
@@ -796,37 +796,26 @@ async def test_async_precommit_failures_match_the_result_finalizer_contract(
 
 
 @pytest.mark.asyncio
-async def test_async_commit_failure_is_precommit_and_finalized_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Async dispatch shares the non-mutating ordinary commit-failure path."""
+async def test_async_commit_failure_is_precommit_and_finalized_once() -> None:
+    """Async dispatch shares the injected-clock precommit failure path."""
     source = State("source")
     destination = State("destination")
-    machine = AsyncStateMachine(source, name="async-commit-failure")
+    failure = OSError("async-clock-secret")
+    fail_commit = False
+
+    def clock() -> float:
+        if fail_commit:
+            raise failure
+        return 0.0
+
+    machine = AsyncStateMachine(source, name="async-commit-failure", clock=clock)
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination")
     machine.enable_history()
     observed: list[str] = []
     machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
-    failure = OSError("async-clock-secret")
 
-    original_monotonic = time.monotonic
-    fail_next_clock_read = True
-
-    def fail_clock_once() -> float:
-        nonlocal fail_next_clock_read
-        if fail_next_clock_read:
-            fail_next_clock_read = False
-            raise failure
-        return original_monotonic()
-
-    def install_clock_fault(*_args: object, **_kwargs: object) -> None:
-        # This synchronous source callback is the final user callback before
-        # the no-await commit seam, so the next clock read belongs to commit.
-        monkeypatch.setattr("fast_fsm.core.time.monotonic", fail_clock_once)
-
-    machine.on_exit("source", install_clock_fault)
-
+    fail_commit = True
     result = await machine.trigger_async("advance")
 
     assert result.success is False
@@ -836,7 +825,6 @@ async def test_async_commit_failure_is_precommit_and_finalized_once(
     assert machine.current_state is source
     assert machine.history == []
     assert observed == ["observer"]
-    assert fail_next_clock_read is False
 
 
 def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order() -> (

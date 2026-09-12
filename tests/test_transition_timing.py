@@ -125,6 +125,45 @@ def test_commit_resets_entry_time_before_destination_callback_failure() -> None:
     assert machine._state_entered_at == 4
 
 
+@pytest.mark.parametrize("control", ("force_state", "reset", "restore"))
+def test_direct_controls_leave_state_and_history_unchanged_on_clock_failure(
+    control: str,
+) -> None:
+    """Every direct-control commit reads the injected clock before mutation."""
+    failure = OSError("direct-control-clock-failure")
+    fail_commit = False
+
+    def clock() -> float:
+        if fail_commit:
+            raise failure
+        return 0.0
+
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, clock=clock)
+    machine.add_state(destination)
+    machine.enable_history()
+
+    if control == "reset":
+        machine.add_transition("advance", "source", "destination")
+        assert machine.trigger("advance").success
+    state_before = machine.current_state
+    history_before = machine.history
+    fail_commit = True
+
+    with pytest.raises(OSError) as raised:
+        if control == "force_state":
+            machine.force_state("destination")
+        elif control == "reset":
+            machine.reset()
+        else:
+            machine.restore({"state": "destination", "version": 1})
+
+    assert raised.value is failure
+    assert machine.current_state is state_before
+    assert machine.history == history_before
+
+
 def test_timing_is_checked_before_guards_and_one_clock_sample_serves_group() -> None:
     clock = FakeClock()
     machine = StateMachine(State("source"), clock=clock)
