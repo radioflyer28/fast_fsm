@@ -1406,6 +1406,26 @@ def test_runtime_slots_layout_audit_catches_dynamic_base_mutation(
         validate_runtime_slots_layouts(declarations, source_root)
 
 
+def test_runtime_auditability_allows_only_safe_coroutine_inspection(
+    tmp_path: Path,
+) -> None:
+    """Coroutine classification may not expose inspect's reflective surface."""
+    source_root = tmp_path / "src"
+    package_root = source_root / "fast_fsm"
+    package_root.mkdir(parents=True)
+    module = package_root / "candidate.py"
+    module.write_text(
+        "from inspect import iscoroutinefunction\n",
+        encoding="utf-8",
+    )
+
+    release_evidence.validate_runtime_auditability(source_root)
+
+    module.write_text("import inspect\n", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="frame/native introspection import"):
+        release_evidence.validate_runtime_auditability(source_root)
+
+
 def test_runtime_slots_layout_audit_preserves_registered_exceptions(
     tmp_path: Path,
 ) -> None:

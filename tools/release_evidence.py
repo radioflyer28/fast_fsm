@@ -4319,6 +4319,7 @@ def validate_slots_inventory(
 
 _RUNTIME_AUDIT_DENIED_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
 _RUNTIME_AUDIT_DENIED_MODULES = frozenset({"ctypes", "inspect"})
+_RUNTIME_AUDIT_ALLOWED_INSPECT_IMPORTS = frozenset({"iscoroutinefunction"})
 
 
 def validate_runtime_auditability(source_root: Path) -> None:
@@ -4366,6 +4367,14 @@ def validate_runtime_auditability(source_root: Path) -> None:
                 if (
                     node.module
                     and node.module.split(".", 1)[0] in _RUNTIME_AUDIT_DENIED_MODULES
+                    and not (
+                        node.module == "inspect"
+                        and node.level == 0
+                        and all(
+                            alias.name in _RUNTIME_AUDIT_ALLOWED_INSPECT_IMPORTS
+                            for alias in node.names
+                        )
+                    )
                 ):
                     denied = "frame/native introspection import"
                 elif node.module == "sys" and any(

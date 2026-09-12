@@ -33,7 +33,7 @@ from typing import (
 )
 from dataclasses import dataclass, field
 import asyncio
-import inspect
+from inspect import iscoroutinefunction
 from mypy_extensions import mypyc_attr
 from .conditions import (
     AndCondition as AndCondition,
@@ -412,7 +412,7 @@ def _is_awaitable(value: Any) -> bool:
 
 def _is_async_callable(value: Any) -> bool:
     """Classify a callable or its effective ``__call__`` hook without invoking it."""
-    return inspect.iscoroutinefunction(value) or inspect.iscoroutinefunction(
+    return iscoroutinefunction(value) or iscoroutinefunction(
         getattr(value, "__call__", None)
     )
 
