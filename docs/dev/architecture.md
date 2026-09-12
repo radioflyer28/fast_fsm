@@ -197,6 +197,31 @@ safe insertion-ordered keys. Built-in `NegatedCondition`, `AndCondition`,
 `OrCondition`, and `NotCondition` propagate that prepared context unchanged
 and preserve their normal short-circuit semantics.
 
+The focused public vocabulary is `Condition`, `FuncCondition`,
+`AsyncCondition`, `AndCondition`, `OrCondition`, and `NotCondition`.
+`&`, `|`, and `~` create the compositional forms, with canonical negation
+represented by `NotCondition`. `NegatedCondition`, `CompiledFuncCondition`,
+and the validation/timer templates remain deprecated compatibility imports;
+new application payload policy belongs in a small domain condition instead.
+
+### Transition-entry timing
+
+`add_transition(..., after=..., within=...)` stores immutable eligibility
+metadata beside the candidate. The interval is `[after, within)`: `after` is
+inclusive, `within` is exclusive, and both values are finite non-negative exact
+built-in numbers (not bool), with `after < within` when both are present. A
+machine accepts an injectable monotonic `clock`, records its own committed
+state-entry timestamp, and samples the clock once before examining a timed
+singleton or local priority group. Timing rejects before caller guards, so a
+timing-ineligible candidate falls through only to a later local priority.
+
+Queries are observational: `can_trigger()` and `can_trigger_async()` do not
+advance entry time or consume mutable timer state. The commit seam validates one
+timestamp before updating history/current state and before destination callbacks,
+so post-commit callback failures retain the destination's entry time. Untimed
+singletons keep the existing direct O(1) selection path without a selection-time
+clock read; timed singleton selection is O(1), and groups remain local O(k).
+
 The private wrapper classifier recognises only those built-in edges. It is
 used by both runtime evaluation and builder preflight, recursively awaits
 async leaves in the async evaluator, rejects active wrapper cycles, and

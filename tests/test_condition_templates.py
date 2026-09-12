@@ -1169,7 +1169,7 @@ class TestUnlessShorthand:
         fsm = self._make_fsm()
         fsm.add_transition("go", "a", "b", unless=cond)
         entry = fsm._transitions["a"]["go"]
-        assert isinstance(entry.condition, NegatedCondition)
+        assert type(entry.condition) is NotCondition
 
 
 # ---------------------------------------------------------------------------

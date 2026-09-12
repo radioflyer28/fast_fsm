@@ -7,7 +7,7 @@ from interpreted Python code while still allowing the core FSM logic to be compi
 
 import asyncio
 import warnings
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from collections import abc as collections_abc
 import types
 from typing import (
@@ -407,16 +407,7 @@ class CompiledFuncCondition(Condition):
         return checker(self, *args, **kwargs)
 
 
-class _NegatedConditionMeta(ABCMeta):
-    """Preserve the legacy ``isinstance`` seam for canonical negations."""
-
-    def __instancecheck__(cls, instance: object) -> bool:
-        return super().__instancecheck__(instance) or (
-            cls is NegatedCondition and type(instance) is NotCondition
-        )
-
-
-class NegatedCondition(NotCondition, metaclass=_NegatedConditionMeta):
+class NegatedCondition(NotCondition):
     """Wraps another condition and inverts its result.
 
     Used internally by the ``unless=`` shorthand on

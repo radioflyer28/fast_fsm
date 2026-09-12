@@ -617,7 +617,14 @@ class TransitionEntry:
     it replaces, while giving attribute access and type safety.
     """
 
-    __slots__ = ("to_state", "condition", "priority", "condition_ref", "after")
+    __slots__ = (
+        "to_state",
+        "condition",
+        "priority",
+        "condition_ref",
+        "after",
+        "within",
+    )
 
     def __init__(
         self,
@@ -626,12 +633,14 @@ class TransitionEntry:
         priority: int = 0,
         condition_ref: Optional[str] = None,
         after: Optional[float] = None,
+        within: Optional[float] = None,
     ) -> None:
         self.to_state: "State" = to_state
         self.condition: Optional[Condition] = condition
         self.priority: int = priority
         self.condition_ref: Optional[str] = condition_ref
         self.after: Optional[float] = after
+        self.within: Optional[float] = within
 
 
 _TransitionRow = Union[
@@ -651,6 +660,23 @@ _TransitionRow = Union[
         Union[str, "State", List[Union[str, "State"]]],
         Union[str, "State"],
         Optional[Union[Condition, GuardCallable]],
+        object,
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
         object,
     ],
 ]
@@ -705,6 +731,8 @@ class _GraphTransition:
     condition_name: Optional[str]
     priority: int
     condition_ref: Optional[str] = None
+    after: Optional[float] = None
+    within: Optional[float] = None
     statically_unconditional: bool = False
 
 
@@ -738,6 +766,7 @@ class _PreparedTransition:
     priority: int
     condition_ref: Optional[str] = None
     after: Optional[float] = None
+    within: Optional[float] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -749,6 +778,8 @@ class _DeclarativeHandlerMetadata:
     to_state: Optional[str]
     condition: Optional[Any]
     priority: int
+    after: Optional[float]
+    within: Optional[float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -761,6 +792,8 @@ class _DeclarativeHandler:
     condition: Optional[Any]
     is_async: bool
     priority: int
+    after: Optional[float]
+    within: Optional[float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -990,6 +1023,21 @@ class StateMachine:
             raise ValueError(f"{name} must be non-negative")
         return float(number)
 
+    @classmethod
+    def _normalize_timing(
+        cls, after: object, within: object
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """Validate one immutable entry-relative half-open timing window."""
+        normalized_after = cls._validate_duration(after, name="after")
+        normalized_within = cls._validate_duration(within, name="within")
+        if (
+            normalized_after is not None
+            and normalized_within is not None
+            and normalized_after >= normalized_within
+        ):
+            raise ValueError("after must be less than within")
+        return normalized_after, normalized_within
+
     @staticmethod
     def _validate_clock_value(value: object) -> float:
         """Return one trusted monotonic clock observation without leaking values."""
@@ -1025,7 +1073,11 @@ class StateMachine:
 
     @classmethod
     def from_states(
-        cls, *state_names: str, initial: Optional[str] = None, name: str = "FSM"
+        cls,
+        *state_names: str,
+        initial: Optional[str] = None,
+        name: str = "FSM",
+        clock: Callable[[], float] = time.monotonic,
     ) -> "StateMachine":
         """
         Factory method to quickly create a StateMachine from state names.
@@ -1053,7 +1105,7 @@ class StateMachine:
         )
 
         # Create FSM
-        fsm = cls(initial_state, name=name)
+        fsm = cls(initial_state, name=name, clock=clock)
         for state in states:
             if state != initial_state:
                 fsm.add_state(state)
@@ -1067,6 +1119,7 @@ class StateMachine:
         transitions: Sequence[_TransitionRow],
         states: Optional[List[Union[str, State]]] = None,
         name: str = "FSM",
+        clock: Callable[[], float] = time.monotonic,
     ) -> "StateMachine":
         """
         Factory method for rapid FSM construction from transition list.
@@ -1125,8 +1178,10 @@ class StateMachine:
 
         transition_rows = list(transitions)
         for entry in transition_rows:
-            if len(entry) not in (3, 4, 5):
-                raise ValueError("each transition entry must contain 3, 4, or 5 items")
+            if len(entry) not in (3, 4, 5, 6, 7):
+                raise ValueError(
+                    "each transition entry must contain 3, 4, 5, 6, or 7 items"
+                )
             trigger, from_state, to_state = entry[:3]
             if isinstance(from_state, list):
                 for source_state in from_state:
@@ -1165,7 +1220,7 @@ class StateMachine:
             initial_obj = initial_state
 
         # Create FSM
-        fsm = cls(initial_obj, name=name)
+        fsm = cls(initial_obj, name=name, clock=clock)
         for state_obj in state_objects.values():
             if state_obj is not initial_obj:
                 fsm.add_state(state_obj)
@@ -1183,6 +1238,7 @@ class StateMachine:
         *,
         name: Optional[str] = None,
         conditions: Optional[Dict[str, Union[Condition, GuardCallable]]] = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> "StateMachine":
         """Build a :class:`StateMachine` from a plain dictionary description.
 
@@ -1288,6 +1344,8 @@ class StateMachine:
                 str,
                 int,
                 Optional[str],
+                Optional[float],
+                Optional[float],
             ]
         ] = []
         expanded_candidate_counts: Dict[str, int] = {}
@@ -1340,6 +1398,14 @@ class StateMachine:
                 raise TypeError(
                     f"from_dict: transition[{index}] field 'priority' {error}"
                 ) from None
+            try:
+                after, within = cls._normalize_timing(
+                    entry.get("after"), entry.get("within")
+                )
+            except (TypeError, ValueError) as error:
+                raise type(error)(
+                    f"from_dict: transition[{index}] timing {error}"
+                ) from None
             condition_ref = entry.get("condition_ref")
             if condition_ref is not None and (
                 not isinstance(condition_ref, str) or not condition_ref
@@ -1349,14 +1415,23 @@ class StateMachine:
                 )
 
             parsed_rows.append(
-                (index, trigger, sources, target, priority, condition_ref)
+                (
+                    index,
+                    trigger,
+                    sources,
+                    target,
+                    priority,
+                    condition_ref,
+                    after,
+                    within,
+                )
             )
             expanded_candidate_counts[trigger] = (
                 expanded_candidate_counts.get(trigger, 0) + expanded_count
             )
             all_state_names.add(target)
 
-        for index, trigger, _, _, _, condition_ref in parsed_rows:
+        for index, trigger, _, _, _, condition_ref, _, _ in parsed_rows:
             if condition_ref is not None and condition_ref not in registry:
                 raise ValueError(
                     f"from_dict: transition[{index}] field 'condition_ref' references an unknown condition"
@@ -1370,7 +1445,9 @@ class StateMachine:
                     f"from_dict: conditions key {trigger!r} is ambiguous for priority candidates"
                 )
 
-        fsm = cls.from_states(*all_state_names, initial=initial, name=fsm_name)
+        fsm = cls.from_states(
+            *all_state_names, initial=initial, name=fsm_name, clock=clock
+        )
         normalized_registry: Dict[str, Condition] = {}
 
         def resolve_condition(reference: str, index: int) -> Condition:
@@ -1396,7 +1473,16 @@ class StateMachine:
             return normalized
 
         plans: List[_PreparedTransition] = []
-        for index, trigger, sources, target, priority, condition_ref in parsed_rows:
+        for (
+            index,
+            trigger,
+            sources,
+            target,
+            priority,
+            condition_ref,
+            after,
+            within,
+        ) in parsed_rows:
             resolved_reference = condition_ref
             if resolved_reference is None and trigger in registry:
                 resolved_reference = trigger
@@ -1414,6 +1500,8 @@ class StateMachine:
                         condition,
                         priority=priority,
                         condition_ref=condition_ref,
+                        after=after,
+                        within=within,
                     )
                 )
             except (TypeError, ValueError) as error:
@@ -1451,6 +1539,10 @@ class StateMachine:
                     }
                     if entry.condition_ref is not None:
                         record["condition_ref"] = entry.condition_ref
+                    if entry.after is not None:
+                        record["after"] = entry.after
+                    if entry.within is not None:
+                        record["within"] = entry.within
                     transitions.append(record)
         return {
             "name": self._name,
@@ -1597,6 +1689,8 @@ class StateMachine:
                             else None,
                             entry.priority,
                             entry.condition_ref,
+                            entry.after,
+                            entry.within,
                             entry.condition is None and type(source_state) is State,
                         )
                     )
@@ -1646,10 +1740,10 @@ class StateMachine:
         priority: object = 0,
         condition_ref: Optional[str] = None,
         after: object = None,
+        within: object = None,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
         normalized_priority = _normalize_priority(priority)
-        normalized_after = self._validate_duration(after, name="after")
         if condition_ref is not None and (
             not isinstance(condition_ref, str) or not condition_ref
         ):
@@ -1673,6 +1767,14 @@ class StateMachine:
             source_names.add(source.name)
             sources.append(source)
         target = self._resolve_canonical_state(to_state, role="target")
+        if after is None and within is None and len(sources) == 1:
+            declarative_handler = _resolve_declarative_handler(
+                sources[0], trigger, target, normalized_priority
+            )
+            if declarative_handler is not None:
+                after = declarative_handler.after
+                within = declarative_handler.within
+        normalized_after, normalized_within = self._normalize_timing(after, within)
 
         if condition is not None and unless is not None:
             raise ValueError(
@@ -1728,6 +1830,7 @@ class StateMachine:
             normalized_priority,
             condition_ref,
             normalized_after,
+            normalized_within,
         )
 
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
@@ -1766,6 +1869,7 @@ class StateMachine:
             plan.priority,
             plan.condition_ref,
             plan.after,
+            plan.within,
         )
         if existing is None:
             return candidate
@@ -1781,6 +1885,7 @@ class StateMachine:
                     and entry.condition is candidate.condition
                     and entry.condition_ref == candidate.condition_ref
                     and entry.after == candidate.after
+                    and entry.within == candidate.within
                 ):
                     return existing
                 raise ValueError(
@@ -1804,6 +1909,7 @@ class StateMachine:
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
         after: object = None,
+        within: object = None,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
         owner_thread_id = self._acquire_sync_ownership("add_transition")
@@ -1816,6 +1922,7 @@ class StateMachine:
                 unless=unless,
                 priority=priority,
                 after=after,
+                within=within,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1830,6 +1937,7 @@ class StateMachine:
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
         after: object = None,
+        within: object = None,
     ) -> None:
         """Validate and commit one transition while the caller owns this machine."""
         prepared = self._normalize_transition_request(
@@ -1840,6 +1948,7 @@ class StateMachine:
             unless=unless,
             priority=priority,
             after=after,
+            within=within,
         )
         self._commit_transition_plan((prepared,))
 
@@ -1883,8 +1992,10 @@ class StateMachine:
         """Validate and commit a complete batch while the caller owns it."""
         prepared: List[_PreparedTransition] = []
         for entry in transitions:
-            if len(entry) not in (3, 4, 5):
-                raise ValueError("each transition entry must contain 3, 4, or 5 items")
+            if len(entry) not in (3, 4, 5, 6, 7):
+                raise ValueError(
+                    "each transition entry must contain 3, 4, 5, 6, or 7 items"
+                )
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
             condition: Optional[Union[Condition, GuardCallable]]
             if not rest or rest[0] is None:
@@ -1895,10 +2006,18 @@ class StateMachine:
                 raise TypeError(
                     f"Condition must be Condition or callable, got {type(rest[0])}"
                 )
-            priority: object = rest[1] if len(rest) == 2 else 0
+            priority: object = rest[1] if len(rest) >= 2 else 0
+            after: object = rest[2] if len(rest) >= 3 else None
+            within: object = rest[3] if len(rest) >= 4 else None
             prepared.append(
                 self._normalize_transition_request(
-                    trigger, from_state, to_state, condition, priority=priority
+                    trigger,
+                    from_state,
+                    to_state,
+                    condition,
+                    priority=priority,
+                    after=after,
+                    within=within,
                 )
             )
         self._commit_transition_plan(tuple(prepared))
@@ -1916,6 +2035,10 @@ class StateMachine:
         unless2: Optional[Union[Condition, GuardCallable]] = None,
         priority1: object = 0,
         priority2: object = 0,
+        after1: object = None,
+        within1: object = None,
+        after2: object = None,
+        within2: object = None,
     ) -> None:
         """
         Add transitions in both directions between two states.
@@ -1953,6 +2076,10 @@ class StateMachine:
                 unless2=unless2,
                 priority1=priority1,
                 priority2=priority2,
+                after1=after1,
+                within1=within1,
+                after2=after2,
+                within2=within2,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -1970,13 +2097,31 @@ class StateMachine:
         unless2: Optional[Union[Condition, GuardCallable]] = None,
         priority1: object = 0,
         priority2: object = 0,
+        after1: object = None,
+        within1: object = None,
+        after2: object = None,
+        within2: object = None,
     ) -> None:
         """Validate and commit both directions while the caller owns it."""
         first = self._normalize_transition_request(
-            trigger1, state1, state2, condition1, unless=unless1, priority=priority1
+            trigger1,
+            state1,
+            state2,
+            condition1,
+            unless=unless1,
+            priority=priority1,
+            after=after1,
+            within=within1,
         )
         second = self._normalize_transition_request(
-            trigger2, state2, state1, condition2, unless=unless2, priority=priority2
+            trigger2,
+            state2,
+            state1,
+            condition2,
+            unless=unless2,
+            priority=priority2,
+            after=after2,
+            within=within2,
         )
         self._commit_transition_plan((first, second))
 
@@ -1988,6 +2133,8 @@ class StateMachine:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        after: object = None,
+        within: object = None,
     ) -> None:
         """
         Add an emergency transition from all states to a specific state.
@@ -2011,7 +2158,13 @@ class StateMachine:
         owner_thread_id = self._acquire_sync_ownership("add_emergency_transition")
         try:
             self._add_emergency_transition_owned(
-                trigger, to_state, condition, unless=unless, priority=priority
+                trigger,
+                to_state,
+                condition,
+                unless=unless,
+                priority=priority,
+                after=after,
+                within=within,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -2024,6 +2177,8 @@ class StateMachine:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        after: object = None,
+        within: object = None,
     ) -> None:
         """Validate and commit an all-state transition while the caller owns it."""
         prepared = self._normalize_transition_request(
@@ -2033,6 +2188,8 @@ class StateMachine:
             condition,
             unless=unless,
             priority=priority,
+            after=after,
+            within=within,
         )
         self._commit_transition_plan((prepared,))
 
@@ -2418,6 +2575,20 @@ class StateMachine:
             declarative_handler,
         )
 
+    @staticmethod
+    def _slot_has_timing(slot: _TransitionSlot) -> bool:
+        """Return whether a direct entry or local group requires time sampling."""
+        if isinstance(slot, _TransitionGroup):
+            return any(
+                entry.after is not None or entry.within is not None
+                for entry in slot.entries
+            )
+        return slot.after is not None or slot.within is not None
+
+    def _selection_clock_for_slot(self, slot: _TransitionSlot) -> Optional[float]:
+        """Capture one timing snapshot for an entire selection attempt when needed."""
+        return self._read_clock() if self._slot_has_timing(slot) else None
+
     def _select_transition_sync(
         self,
         trigger: str,
@@ -2448,12 +2619,20 @@ class StateMachine:
                 stage=_LIFECYCLE_STAGE_RESOLUTION,
             )
 
-        if isinstance(slot, _TransitionGroup):
-            selection_now = (
-                self._read_clock()
-                if any(entry.after is not None for entry in slot.entries)
-                else None
+        try:
+            selection_now = self._selection_clock_for_slot(slot)
+        except Exception as cause:
+            if for_query:
+                raise
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "Transition timing is unavailable",
+                stage=_LIFECYCLE_STAGE_SELECTION,
+                cause=cause,
             )
+
+        if isinstance(slot, _TransitionGroup):
             for entry in slot.entries:
                 selected = self._select_sync_candidate(
                     entry,
@@ -2485,7 +2664,7 @@ class StateMachine:
             kwargs,
             for_query=for_query,
             scan_group=False,
-            now=self._read_clock() if singleton.after is not None else None,
+            now=selection_now,
         )
         assert selected_singleton is not None
         return selected_singleton
@@ -2504,9 +2683,12 @@ class StateMachine:
         now: Optional[float],
     ) -> Union[_PreparedDispatch, TransitionResult, None]:
         """Evaluate one candidate, using ``None`` only for group fallthrough."""
-        if entry.after is not None:
+        if entry.after is not None or entry.within is not None:
             assert now is not None
-            if now - self._state_entered_at < entry.after:
+            elapsed = now - self._state_entered_at
+            if (entry.after is not None and elapsed < entry.after) or (
+                entry.within is not None and elapsed >= entry.within
+            ):
                 if scan_group:
                     return None
                 return self._build_failure_result(
@@ -3144,7 +3326,9 @@ class StateMachine:
 
     def _clone_owned(self) -> "StateMachine":
         """Copy one coherent topology while the caller owns its read boundary."""
-        new_fsm: "StateMachine" = self.__class__(self._initial_state, name=self._name)
+        new_fsm: "StateMachine" = self.__class__(
+            self._initial_state, name=self._name, clock=self._clock
+        )
         # Replace the minimal state/transition tables __init__ created with
         # full shallow copies of our own tables (same State objects, independent
         # inner transition dicts so additions to one don't bleed into the other).
@@ -3847,8 +4031,9 @@ class AsyncStateMachine(StateMachine):
         *,
         name: str = "FSM",
         logger_name: Optional[str] = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        super().__init__(initial_state, name=name, logger_name=logger_name)
+        super().__init__(initial_state, name=name, logger_name=logger_name, clock=clock)
         self._state_enter_async_callbacks: Dict[str, List[Any]] = {}
         self._state_exit_async_callbacks: Dict[str, List[Any]] = {}
         # ``asyncio.Lock`` is deliberately per machine and is touched only
@@ -4335,6 +4520,19 @@ class AsyncStateMachine(StateMachine):
                 stage=_LIFECYCLE_STAGE_RESOLUTION,
             )
 
+        try:
+            selection_now = self._selection_clock_for_slot(slot)
+        except Exception as cause:
+            if for_query:
+                raise
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "Transition timing is unavailable",
+                stage=_LIFECYCLE_STAGE_SELECTION,
+                cause=cause,
+            )
+
         if isinstance(slot, _TransitionGroup):
             for entry in slot.entries:
                 selected = await self._select_async_candidate(
@@ -4346,6 +4544,7 @@ class AsyncStateMachine(StateMachine):
                     kwargs,
                     for_query=for_query,
                     scan_group=True,
+                    now=selection_now,
                 )
                 if selected is not None:
                     return selected
@@ -4356,8 +4555,9 @@ class AsyncStateMachine(StateMachine):
                 stage=_LIFECYCLE_STAGE_SELECTION,
             )
 
+        singleton = cast(TransitionEntry, slot)
         selected_singleton = await self._select_async_candidate(
-            cast(TransitionEntry, slot),
+            singleton,
             source_state,
             current_name,
             trigger,
@@ -4365,6 +4565,7 @@ class AsyncStateMachine(StateMachine):
             kwargs,
             for_query=for_query,
             scan_group=False,
+            now=selection_now,
         )
         assert selected_singleton is not None
         return selected_singleton
@@ -4380,10 +4581,26 @@ class AsyncStateMachine(StateMachine):
         *,
         for_query: bool,
         scan_group: bool,
+        now: Optional[float],
     ) -> Union[_PreparedDispatch, TransitionResult, None]:
         """Await one candidate, using ``None`` only for group fallthrough."""
         if not for_query:
             _async_selection_priority.set(entry.priority)
+        if entry.after is not None or entry.within is not None:
+            assert now is not None
+            elapsed = now - self._state_entered_at
+            if (entry.after is not None and elapsed < entry.after) or (
+                entry.within is not None and elapsed >= entry.within
+            ):
+                if scan_group:
+                    return None
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition timing rejected trigger",
+                    stage=_LIFECYCLE_STAGE_SELECTION,
+                    priority=entry.priority,
+                )
         declarative_handler = _resolve_declarative_handler(
             source_state, trigger, entry.to_state, entry.priority
         )
@@ -4635,6 +4852,8 @@ def transition(
     condition: Optional[Any] = None,
     *,
     priority: object = 0,
+    after: object = None,
+    within: object = None,
 ):
     """
     Decorator to mark methods as transition handlers.
@@ -4649,12 +4868,19 @@ def transition(
         priority: Exact integer candidate priority; lower values are selected first
     """
     normalized_priority = _normalize_priority(priority)
+    normalized_after, normalized_within = StateMachine._normalize_timing(after, within)
 
     def decorator(func):
         declarations = tuple(getattr(func, "_fsm_declarations", ()))
         declarations += (
             _DeclarativeHandlerMetadata(
-                trigger, from_state, to_state, condition, normalized_priority
+                trigger,
+                from_state,
+                to_state,
+                condition,
+                normalized_priority,
+                normalized_after,
+                normalized_within,
             ),
         )
         func._fsm_declarations = declarations
@@ -4663,6 +4889,8 @@ def transition(
         func._fsm_to_state = to_state
         func._fsm_condition = condition
         func._fsm_priority = normalized_priority
+        func._fsm_after = normalized_after
+        func._fsm_within = normalized_within
         return func
 
     return decorator
@@ -4962,6 +5190,8 @@ class DeclarativeState(State):
                                 getattr(attr, "_fsm_to_state", None),
                                 getattr(attr, "_fsm_condition", None),
                                 getattr(attr, "_fsm_priority", 0),
+                                getattr(attr, "_fsm_after", None),
+                                getattr(attr, "_fsm_within", None),
                             ),
                         )
                     for metadata in metadata_items:
@@ -4981,6 +5211,8 @@ class DeclarativeState(State):
                             metadata.condition,
                             _is_async_callable(attr),
                             metadata.priority,
+                            metadata.after,
+                            metadata.within,
                         )
                         discovered.setdefault(metadata.trigger, []).append(handler_info)
                         _emit_legacy_debug(
@@ -5352,6 +5584,8 @@ class FSMBuilder:
         *,
         unless: Optional[Union[Condition, GuardCallable]] = None,
         priority: object = 0,
+        after: object = None,
+        within: object = None,
     ) -> "FSMBuilder":
         """Add a transition to the builder with async detection.
 
@@ -5365,6 +5599,9 @@ class FSMBuilder:
         """
         self._ensure_mutable()
         normalized_priority = _normalize_priority(priority)
+        normalized_after, normalized_within = StateMachine._normalize_timing(
+            after, within
+        )
         if condition is not None and unless is not None:
             raise ValueError(
                 "'condition' and 'unless' are mutually exclusive — use one or the other."
@@ -5392,7 +5629,15 @@ class FSMBuilder:
         # Keep the builder staging area atomic: graph validation must succeed
         # before either the transition or the auto-detected machine type lands.
         self._transitions.append(
-            (trigger, from_state, to_state, condition, normalized_priority)
+            (
+                trigger,
+                from_state,
+                to_state,
+                condition,
+                normalized_priority,
+                normalized_after,
+                normalized_within,
+            )
         )
         if required_type != self._machine_type:
             self._machine_type = required_type
@@ -5534,7 +5779,8 @@ class FSMBuilder:
                                     f"declarative condition for trigger '{trigger}'"
                                 )
 
-        for trigger, _, _, condition, _ in self._transitions:
+        for staged in self._transitions:
+            trigger, _, _, condition, _ = staged[:5]
             if isinstance(
                 condition, Condition
             ) and StateMachine._contains_async_requirement(condition):
@@ -5586,18 +5832,11 @@ class FSMBuilder:
 
         # Normalize every staged row before one batch registration call. The
         # candidate remains private until this complete topology commit succeeds.
-        transition_rows: List[
-            Union[
-                Tuple[
-                    str,
-                    Union[str, State, List[Union[str, State]]],
-                    Union[str, State],
-                    Optional[Union[Condition, GuardCallable]],
-                    object,
-                ]
-            ]
-        ] = []
-        for trigger, from_state, to_state, condition, priority in self._transitions:
+        transition_rows: List[_TransitionRow] = []
+        for staged in self._transitions:
+            trigger, from_state, to_state, condition, priority = staged[:5]
+            after = staged[5] if len(staged) >= 6 else None
+            within = staged[6] if len(staged) >= 7 else None
             to_state_obj = (
                 self._states[to_state] if to_state in self._states else to_state
             )
@@ -5609,7 +5848,15 @@ class FSMBuilder:
                     for name in from_state
                 ]
                 transition_rows.append(
-                    (trigger, from_state_list, to_state_obj, condition, priority)
+                    (
+                        trigger,
+                        from_state_list,
+                        to_state_obj,
+                        condition,
+                        priority,
+                        after,
+                        within,
+                    )
                 )
             else:
                 from_state_single = (
@@ -5618,7 +5865,15 @@ class FSMBuilder:
                     else from_state
                 )
                 transition_rows.append(
-                    (trigger, from_state_single, to_state_obj, condition, priority)
+                    (
+                        trigger,
+                        from_state_single,
+                        to_state_obj,
+                        condition,
+                        priority,
+                        after,
+                        within,
+                    )
                 )
         candidate.add_transitions(transition_rows)
 
@@ -5948,7 +6203,10 @@ def set_fsm_logging_level(
 
 
 def simple_fsm(
-    *state_names: str, initial: Optional[str] = None, name: str = "FSM"
+    *state_names: str,
+    initial: Optional[str] = None,
+    name: str = "FSM",
+    clock: Callable[[], float] = time.monotonic,
 ) -> StateMachine:
     """
     Create a simple FSM with basic states.
@@ -5957,6 +6215,7 @@ def simple_fsm(
         *state_names: Names of states to create
         initial: Initial state name (defaults to first)
         name: FSM name
+        clock: Injected monotonic clock used for transition timing
 
     Returns:
         StateMachine instance
@@ -5964,20 +6223,27 @@ def simple_fsm(
     Example:
         fsm = simple_fsm('idle', 'running', 'error', initial='idle')
     """
-    return StateMachine.from_states(*state_names, initial=initial, name=name)
+    return StateMachine.from_states(
+        *state_names, initial=initial, name=name, clock=clock
+    )
 
 
 def quick_fsm(
-    initial_state: str, transitions: List[_TransitionRow], name: str = "FSM"
+    initial_state: str,
+    transitions: List[_TransitionRow],
+    name: str = "FSM",
+    *,
+    clock: Callable[[], float] = time.monotonic,
 ) -> StateMachine:
     """
     Quickly create an FSM from a transition list.
 
     Args:
         initial_state: Initial state name
-        transitions: List of 3-, 4-, or 5-field transition rows accepted by
+        transitions: List of 3- through 7-field transition rows accepted by
             :meth:`StateMachine.add_transitions`
         name: FSM name
+        clock: Injected monotonic clock used for transition timing
 
     Returns:
         Configured StateMachine
@@ -5992,7 +6258,7 @@ def quick_fsm(
             ],
         )
     """
-    return StateMachine.quick_build(initial_state, transitions, name=name)
+    return StateMachine.quick_build(initial_state, transitions, name=name, clock=clock)
 
 
 @overload
