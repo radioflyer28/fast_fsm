@@ -1,0 +1,1 @@
+{"id":"int-326a661b","kind":"field_change","created_at":"2026-09-12T00:26:48.545102Z","actor":"radioflyer28","issue_id":"fast_fsm-b1j","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Completed in GSD quick 260911-ra8; implementation commits 36bbf4d through f930696, planning/state commit f5834c3."}}
