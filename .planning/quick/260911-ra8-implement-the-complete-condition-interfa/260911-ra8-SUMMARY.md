@@ -12,7 +12,7 @@ affects: [conditions, transition-selection, async-dispatch, serialization, docum
 actuals:
   tokens: 23801.25
   tasks: 3
-  commits: 12
+  commits: 15
 tech-stack:
   added: []
   patterns:
@@ -107,6 +107,10 @@ status: complete
    - `c7abec4` `test: preserve safe trigger internal fault coverage`
    - `5bb881f` `test: cover condition and timing compatibility seams`
    - `2c0361b` `test: refresh condition redesign evidence`
+6. **Python 3.14 correction: Use the supported coroutine classifier within the audited import boundary**
+   - `a7410a7` `fix: use supported async callable inspection`
+   - `170f36b` `fix: constrain coroutine inspection surface`
+   - `e495a1c` `test: refresh Python 3.14 compatibility evidence`
 
 ## Files Created/Modified
 
@@ -170,7 +174,7 @@ status: complete
 - `task build-check` — pass; rebuilt mypyc extension and completed compiled smoke test.
 - Direct deterministic runs of `examples/condition_toolkit.py` and `examples/custom_conditions.py`, plus `tests/test_examples_smoke.py` — pass.
 - Final README/example audit: `uv run pytest tests/test_readme_examples.py tests/test_examples_smoke.py -q` — pass (23 tests).
-- `task release-baseline-check` — pass; 1,857/1,863 tests passed (6 skipped), total coverage 97.81%, and `core.py` coverage 97.00%.
+- `task release-baseline-check` — pass; 1,858/1,864 tests passed (6 skipped), total coverage 97.81%, and `core.py` coverage 97.01%.
 
 ## Issues Encountered
 
@@ -178,6 +182,7 @@ status: complete
 - The pure-source gate intentionally fails closed when native core artifacts shadow `core.py`. Generated artifacts were moved recoverably to `/private/tmp` for pure checks, then the current extension was rebuilt and the pre-existing CPython 3.10 artifacts were restored.
 - The first exact-SHA hosted matrix found that the legacy `fast_fsm.condition_templates` combinator imports were implicit after canonicalization. Clean strict-mypy clients therefore rejected `AndCondition`, `OrCondition`, and `NotCondition` even though runtime imports worked. Commit `34ff064` changed them to explicit self-alias re-exports; the exact failing downstream test, Ruff, and blocking mypy gate then passed locally before the replacement push.
 - The replacement matrix exposed two stale fault-injection tests: private transition records gained timing fields, and machines now capture their injected clock at construction. Commits `6cab2a9` and `c7abec4` updated those tests to exercise the intended lifecycle boundaries directly. Commit `5bb881f` then added focused coverage for compatibility and timing seams, preserving the existing coverage floor before the release evidence was refreshed.
+- The next hosted matrix exposed Python 3.14's deprecation of `asyncio.iscoroutinefunction()`. The correction imports only `inspect.iscoroutinefunction` and explicitly allowlists that one non-reflective helper in the runtime auditability preflight; the broader `inspect` module remains denied. The exact Python 3.14 warning assertion and audit-boundary regression test pass.
 
 ## User Setup Required
 
@@ -190,7 +195,7 @@ The focused public condition vocabulary, deterministic timing model, migration g
 ## Self-Check: PASSED
 
 - Confirmed created ADR, example, and focused test files exist.
-- Confirmed all twelve implementation, documentation, correction, and evidence commits exist in the repository history.
+- Confirmed all fifteen implementation, documentation, correction, and evidence commits exist in the repository history.
 
 ---
 *Phase: 260911-ra8*
