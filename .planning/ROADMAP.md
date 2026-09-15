@@ -80,7 +80,20 @@ Plans:
   3. Entering a final state makes termination visible at commit, and later entry, observer, or async cancellation failure does not undo the committed state or finality.
   4. Reset, restore, clone, and deserialization preserve the distinction between explicit finality and topology dead ends.
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 27-01-PLAN.md — add immutable explicit final metadata and an O(1) termination query across State construction surfaces.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 27-02-PLAN.md — reject outgoing final-source topology once at the canonical construction seam and prove adapter atomicity.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 27-03-PLAN.md — preserve finality through lifecycle, control, clone, and persistence operations and close native/pure-source validation.
 
 ### Phase 28: Same-State Transition Modes
 
