@@ -12,9 +12,9 @@ provides:
   - Interruption, concurrency, and runtime-path isolation proofs
 affects: [phase-27, phase-28, phase-29, phase-30, builder, persistence]
 actuals:
-  tokens: 4744
+  tokens: 4752
   tasks: 2
-  commits: 3
+  commits: 4
 tech-stack:
   added: []
   patterns:
@@ -91,6 +91,7 @@ status: complete
 1. **RED: Define canonical request behavior** — `e9344f7` (test)
 2. **GREEN: Implement the request transaction** — `f1c3f28` (feat)
 3. **Task 2: Prove construction invariants and update the SPR** — `37d00c4` (test)
+4. **Artifact regression: Preserve compiled carrier import** — `60af630` (fix)
 
 **Plan metadata:** this summary commit
 
@@ -118,15 +119,25 @@ status: complete
 - **Verification:** `uv run python tools/release_evidence.py slots-policy --json` passes and reports `_TransitionRequest` as slot-protected.
 - **Committed in:** `37d00c4`
 
+**2. [Rule 1 - Bug] Corrected mypyc-incompatible raw dataclass annotations**
+
+- **Found during:** Post-plan full-suite artifact gate
+- **Issue:** The compiled sdist child raised `KeyError: 'object'` while materializing `_TransitionRequest` fields annotated as `object`.
+- **Fix:** Annotated the three deliberately unnormalized raw fields as `Any`; exact priority and timing validation remains unchanged in `_normalize_transition_request()`.
+- **Files modified:** `src/fast_fsm/core.py`
+- **Verification:** `uv run pytest tests/test_build_modes.py::test_sdist_derivation_reuses_installed_wheel_verification -q` passes for both compiled and pure sdist children.
+- **Committed in:** `60af630`
+
 ---
 
-**Total deviations:** 1 auto-fixed (1 blocking runtime-audit constraint).
-**Impact on plan:** The corrected implementation matches the research-prescribed adapter boundary and preserves all requested semantics without scope expansion.
+**Total deviations:** 2 auto-fixed (1 blocking runtime-audit constraint, 1 compiled-artifact bug).
+**Impact on plan:** Both corrections preserve the research-prescribed boundary and requested semantics without scope expansion.
 
 ## Issues Encountered
 
 - The initial concurrency assertion attempted to take the public snapshot ownership lock while intentionally pausing a writer. The test was corrected to inspect the private table/version directly at that synchronization point, which is precisely the non-blocking observation the proof requires.
 - Stale local compiled extensions initially shadowed `core.py`; the six reviewed untracked build artifacts were moved to `/private/tmp/fast-fsm-phase26-native.hUNbbb` before source verification.
+- The full-suite artifact gate exposed a compiled-only dataclass annotation failure; its exact sdist regression now passes after the narrow annotation correction.
 
 ## User Setup Required
 
@@ -141,6 +152,7 @@ None — no external service configuration required.
 
 - All 39 graph invariant tests pass.
 - Ruff formatting/checking, mypy, ty, and the recursive slots-policy audit pass.
+- The exact compiled-and-pure sdist derivation regression passes.
 - Beads item `fast_fsm-qj4` remains claimed and in progress.
 
 ---
