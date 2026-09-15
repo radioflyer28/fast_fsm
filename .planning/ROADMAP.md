@@ -48,12 +48,12 @@ Completed milestone details are archived under `.planning/milestones/` and summa
   3. Maintainers can run semantically preflighted comparison scenarios against exact isolated `python-statemachine` 2.5.0 and 3.2.1 installations, with versions, origins, and unsupported cells reported explicitly.
   4. Competitor results remain labelled manual or scheduled evidence and ordinary CI succeeds without installing or timing competitor packages.
 
-**Plans**: 5 plans
+**Plans**: 1/5 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 26-01-PLAN.md — establish the single Phase 26 Beads item, then trace direct and batch registration through one immutable canonical construction transaction.
+- [x] 26-01-PLAN.md — establish the single Phase 26 Beads item, then trace direct and batch registration through one immutable canonical construction transaction.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -184,7 +184,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 26. Canonical Construction & Evidence Contract | v0.5.0 | 0/TBD | Not started | - |
+| 26. Canonical Construction & Evidence Contract | v0.5.0 | 1/5 | In Progress|  |
 | 27. Explicit Final States | v0.5.0 | 0/TBD | Not started | - |
 | 28. Same-State Transition Modes | v0.5.0 | 0/TBD | Not started | - |
 | 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |

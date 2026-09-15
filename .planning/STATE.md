@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 26
 current_phase_name: Canonical Construction & Evidence Contract
 status: executing
-stopped_at: v0.5.0 roadmap created; Phase 26 ready to plan
-last_updated: "2026-09-15T17:37:51.463Z"
+stopped_at: Completed 26-01-PLAN.md
+last_updated: "2026-09-15T17:58:59.202Z"
 last_activity: 2026-09-15
-last_activity_desc: Approved requirements mapped into a seven-phase v0.5.0 roadmap
-state_head: 17a52a6470692e1b64f9a159583188b80c8fa78b
+last_activity_desc: Phase 26 execution started
+state_head: a5413d3d8c9afd61681cd8fce8cccb3df1d12402
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 26 (Canonical Construction & Evidence Contract) — READY TO EXECUTE
-Plan: 0 of TBD in current phase
-Status: Ready to execute
-Last activity: 2026-09-15 — Approved requirements mapped into a seven-phase v0.5.0 roadmap
+Phase: 26 (Canonical Construction & Evidence Contract) — EXECUTING
+Plan: 2 of 5
+Status: Executing plan 2 of 5
+Last activity: 2026-09-15 — Phase 26 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -51,6 +51,11 @@ Progress: [░░░░░░░░░░] 0%
 | 26–32 | 0 | TBD | — |
 
 **Recent Trend:** v0.4.0 shipped all five phases; v0.5.0 is ready for Phase 26 planning.
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 26 P01 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -63,6 +68,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - Preserve one direct singleton entry and feature-local costs; no unrelated dispatch scans, reflection, or allocation.
 - Make `FSMBuilder` primary, direct machine construction advanced, and `from_dict` the persistence adapter.
 - Deprecate `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` through a compatibility cycle rather than removing them immediately.
+- [Phase 26]: Copy mutable public source lists at the adapter edge so the request carrier remains frozen and slotted without forbidden dynamic assignment. — Matches the canonicalization boundary established by Phase 26 research and passes runtime audit policy.
+- [Phase 26]: Keep construction ownership on existing public envelopes and keep runtime selectors and lifecycle runners unaware of the request carrier. — Preserves atomic serialization and the O(1) direct singleton dispatch boundary.
 
 ### Pending Todos
 
@@ -84,8 +91,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15
-Stopped at: v0.5.0 roadmap created; Phase 26 ready to plan
+Last session: 2026-09-15T17:58:40.395Z
+Stopped at: Completed 26-01-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
