@@ -126,6 +126,11 @@ slots.
 - `from_dict()` (lines 1236-1510) may retain transition-indexed schema errors,
   condition-reference parsing, and dictionary context, but should emit the same
   private request representation/transaction rather than a second registrar.
+- `_clone_owned()` (around lines 3298-3365) should flatten already-canonical
+  singleton/group entries into requests bound to the clone's canonical State
+  objects and publish them through the same transaction. Preserve shallow State,
+  Condition, callback, and listener identity semantics while replacing transition
+  slot/entry objects; clone failure returns no clone and cannot mutate the source.
 
 Do not route `trigger()`, `can_trigger()`, selectors, callback lifecycle, or
 history through this cold construction machinery. Preserve the direct
@@ -272,7 +277,10 @@ labels = {
 }
 ```
 
-Use equivalent flat scenarios shared with both competitor children. Run an
+Use the required `flat-alternating-cycle` and `false-guard-no-transition`
+scenarios shared with both competitor children. The false-guard preflight proves
+exactly one guard evaluation, unchanged state, and zero transition callbacks; it
+is not prioritized-candidate fallthrough. Run an
 untimed semantic preflight first, then warm up and measure only supported
 scenarios with `time.perf_counter_ns()`/`statistics.median`. Emit one strict
 JSON record on stdout and keep repository output clean by default. Record exact
@@ -313,8 +321,11 @@ acceptance, especially `_run_installed_command()` (around lines 2680-2750),
 `validate_installed_compiled_performance()` (lines 2965-3051), and the
 parent acceptance order described in research.
 
-The parent must never import `statemachine`. Construct exact child commands,
-run them in isolated subprocesses, bound output and execution, parse strict
+The parent must never import `statemachine`. Resolve the repository root from
+`Path(__file__).resolve()` and construct the Fast FSM child as an absolute
+`uv run --project <repo-root> python <absolute-runner>` command; competitor
+commands use absolute locked-script paths. Run them in isolated subprocesses
+from a neutral working directory, bound output and execution, parse strict
 JSON, then validate in this order:
 
 ```text

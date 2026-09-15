@@ -48,7 +48,25 @@ Completed milestone details are archived under `.planning/milestones/` and summa
   3. Maintainers can run semantically preflighted comparison scenarios against exact isolated `python-statemachine` 2.5.0 and 3.2.1 installations, with versions, origins, and unsupported cells reported explicitly.
   4. Competitor results remain labelled manual or scheduled evidence and ordinary CI succeeds without installing or timing competitor packages.
 
-**Plans**: TBD
+**Plans**: 5 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 26-01-PLAN.md — establish the single Phase 26 Beads item, then trace direct and batch registration through one immutable canonical construction transaction.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 26-02-PLAN.md — define both required semantic-first comparison cells, exact child adapters, and a neutral-cwd repo-aware parent protocol.
+- [ ] 26-03-PLAN.md — route every retained transition-producing adapter and clone reconstruction through the transaction and prove retryability/parity.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 26-04-PLAN.md — verify exact external package provenance before adjacent lock generation.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 26-05-PLAN.md — generate exact locks, isolate ordinary dependencies/CI, wire the manual observation command, and carry the phase Beads item to verification-only closure.
 
 ### Phase 27: Explicit Final States
 

@@ -128,7 +128,7 @@ The lock/run pattern is documented by uv; the exact filenames are a Phase 26 rec
 
 ```text
 Public construction inputs
-  direct call | batch rows | helpers | quick factory | builder | dictionary
+  direct call | batch rows | helpers | quick factory | builder | dictionary | clone
        |
        v
 Adapter-only parsing
@@ -198,7 +198,7 @@ The comparison directory is new and intentionally outside `tools/release_evidenc
 
 **What:** Add a frozen slotted private request carrier for the common transition fields and a single owned transaction such as `_apply_transition_requests_owned(requests)`. That method maps all requests through `_normalize_transition_request()`, then invokes `_commit_transition_plan()` exactly once. `_PreparedTransition` remains the canonical endpoint/condition/value carrier and `_commit_transition_plan()` remains the only method that writes transition slots. This extends the established deep-module seam rather than adding another public abstraction. `[VERIFIED: src/fast_fsm/core.py:759-771,1733-1901]`
 
-**When to use:** `add_transition`, `add_transitions`, bidirectional and emergency helpers, quick-build replay, builder build, and `from_dict` after adapter-specific parsing.
+**When to use:** `add_transition`, `add_transitions`, bidirectional and emergency helpers, quick-build replay, builder build, `from_dict` after adapter-specific parsing, and clone reconstruction from already-canonical transition entries.
 
 **Why two carriers:** Raw request identity is needed before a machine can resolve string endpoints; prepared identity is needed after canonical state resolution. Collapsing them forces adapters to either mutate early or duplicate canonical resolution.
 
@@ -485,7 +485,7 @@ This ordering mirrors the project's artifact-evidence principle that runtime ide
 **Work:**
 
 1. Define strict shared scenario and child-record contracts.
-2. Create Fast FSM, 2.5.0, and 3.2.1 child adapters; competitor children use exact PEP 723 dependencies.
+2. Create Fast FSM, 2.5.0, and 3.2.1 child adapters; competitor children use exact PEP 723 dependencies, while the Fast FSM command uses an absolute runner path and `uv run --project <repo-root>` so a neutral parent working directory still resolves the intended project distribution/core.
 3. Add untimed semantic preflight and explicit unsupported cells before timing.
 4. Add parent runtime/version/origin/schema validation and bounded environment-labelled output.
 5. Generate adjacent script locks after the package-legitimacy human checkpoint.
@@ -529,22 +529,13 @@ This ordering mirrors the project's artifact-evidence principle that runtime ide
 | A2 | `[ASSUMED]` The manual comparison task can rely on one-time registry access to populate exact script environments. | Environment Availability | MEDIUM — if maintainers require permanently offline comparison, the plan must document cache/bootstrap requirements rather than vendor packages. |
 | A3 | `[ASSUMED]` The legacy `transitions` comparison package can leave the shared benchmark group with the old combined runner. | Architecture Pattern 6 | LOW — if another maintained task still needs it, give that task its own isolated script rather than leaving it in ordinary CI. |
 
-## Open Questions
+## Resolved Research Questions
 
-1. **Should comparison output be persisted by default?**
-   - What we know: Existing `benchmark.py` writes `benchmark_results.json` unconditionally. `[VERIFIED: benchmarks/benchmark.py:583-600]`
-   - What's unclear: No approved durable storage path or retention policy exists for competitor observations.
-   - Recommendation: Print canonical JSON to stdout and accept an explicit `--output` path. Do not commit environment-specific results in Phase 26.
+1. **Comparison output persistence — RESOLVED:** Print canonical JSON to stdout by default and accept an explicit `--output` path. The legacy implicit `benchmark_results.json` write is removed, and environment-specific results are not committed in Phase 26. This resolution is implemented by Plan 26-05.
 
-2. **Which guarded scenario is truly identical across both competitor versions and Fast FSM?**
-   - What we know: 2.5.0 documents `cond` and false-condition rejection, while Fast FSM has ordered priority candidates. `[CITED: https://python-statemachine.readthedocs.io/en/v2.5.0/guards.html]` `[VERIFIED: src/fast_fsm/core.py:1862-1901]`
-   - What's unclear: Declaration-order selection and callback injection can add different work.
-   - Recommendation: Make the two-state alternating singleton the required comparable cell. Admit a guarded-fallthrough cell only if untimed counters prove identical guard count, winning target, and callback count in all three children.
+2. **Cross-version guarded scenario — RESOLVED:** `false-guard-no-transition` is a required shared scenario, distinct from prioritized candidate fallthrough. Official 2.5.0 guard documentation and the current Fast FSM condition API establish that all lanes can express one source, one target, one false guard evaluation, unchanged current state, and zero transition callbacks. Every child must preflight those exact values before timing; a lane that cannot satisfy them is a contradiction/failure, not an unsupported cell. Optional unsupported cells remain available only for explicitly non-required capabilities. This resolution is implemented by Plans 26-02 and 26-05. `[CITED: https://python-statemachine.readthedocs.io/en/v2.5.0/guards.html]` `[VERIFIED: src/fast_fsm/core.py:1862-1901]`
 
-3. **Should a scheduled workflow be added now?**
-   - What we know: PERF-06 allows manual or scheduled observations; it does not require both. `[VERIFIED: .planning/REQUIREMENTS.md:62]`
-   - What's unclear: No cadence or retention policy is approved.
-   - Recommendation: Deliver the manual Taskfile lane only. Defer scheduling until maintainers choose cadence and artifact retention.
+3. **Scheduled workflow — RESOLVED:** Deliver only the manual `task benchmark-compare` lane. PERF-06 permits manual or scheduled evidence, and no cadence or retention policy authorizes a scheduled workflow. Ordinary CI remains comparison-free. This resolution is implemented by Plans 26-02 and 26-05.
 
 ## Environment Availability
 
