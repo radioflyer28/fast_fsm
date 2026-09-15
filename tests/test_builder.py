@@ -149,13 +149,17 @@ def builder_staging_fingerprint(builder):
         tuple((name, id(state)) for name, state in builder._states.items()),
         tuple(
             (
-                trigger,
-                tuple(from_state) if isinstance(from_state, list) else from_state,
-                to_state,
-                id(condition),
-                priority[0] if priority else 0,
+                request.trigger,
+                request.sources,
+                request.to_state,
+                id(request.condition),
+                request.priority,
+                id(request.unless) if request.unless is not None else None,
+                request.condition_ref,
+                request.after,
+                request.within,
             )
-            for trigger, from_state, to_state, condition, *priority in builder._transitions
+            for request in builder._transitions
         ),
         tuple(
             (state_name, id(callback))
@@ -225,9 +229,7 @@ def test_builder_stages_immutable_named_transition_requests() -> None:
 
 def test_builder_build_submits_one_endpoint_bound_request_transaction() -> None:
     """Build binds endpoints without converting staging back to positional rows."""
-    source = (
-        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
-    ).read_text()
+    source = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py").read_text()
     builder_start = source.index("class FSMBuilder:")
     build_start = source.index("    def build(", builder_start)
     build_end = source.index("    @property\n    def machine_type", build_start)
@@ -1142,7 +1144,9 @@ class TestConvenienceFunctions:
 
         assert builder._machine is None
         assert builder_staging_fingerprint(builder) == before
-        builder._transitions[-1] = ("go", "initial", "two", None, 1)
+        builder._transitions[-1] = _TransitionRequest(
+            "go", ("initial",), "two", priority=1
+        )
         repaired = builder.build()
         assert repaired.trigger("go").to_state == "one"
 

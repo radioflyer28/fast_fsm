@@ -5539,7 +5539,7 @@ class FSMBuilder:
         self._initial_state = initial_state
         self._machine_kwargs = machine_kwargs
         self._states: Dict[str, State] = {initial_state.name: initial_state}
-        self._transitions: List[tuple] = []
+        self._transitions: List[_TransitionRequest] = []
 
         # Set up logging
         logger_name = machine_kwargs.get("name", "FSM")
@@ -5713,15 +5713,19 @@ class FSMBuilder:
 
         # Keep the builder staging area atomic: graph validation must succeed
         # before either the transition or the auto-detected machine type lands.
+        staged_sources = cast(
+            Tuple[Union[str, State], ...],
+            tuple(from_state) if isinstance(from_state, list) else (from_state,),
+        )
         self._transitions.append(
-            (
+            _TransitionRequest(
                 trigger,
-                from_state,
+                staged_sources,
                 to_state,
                 condition,
-                normalized_priority,
-                normalized_after,
-                normalized_within,
+                priority=normalized_priority,
+                after=normalized_after,
+                within=normalized_within,
             )
         )
         if required_type != self._machine_type:
@@ -5865,7 +5869,8 @@ class FSMBuilder:
                                 )
 
         for staged in self._transitions:
-            trigger, _, _, condition, _ = staged[:5]
+            trigger = staged.trigger
+            condition = staged.condition
             if isinstance(
                 condition, Condition
             ) and StateMachine._contains_async_requirement(condition):
@@ -5915,52 +5920,37 @@ class FSMBuilder:
             if state is not self._initial_state:  # Initial state already added
                 candidate.add_state(state)
 
-        # Normalize every staged row before one batch registration call. The
-        # candidate remains private until this complete topology commit succeeds.
-        transition_rows: List[_TransitionRow] = []
+        # Bind staged names to the candidate's canonical State objects without
+        # mutating the reusable immutable requests. The candidate remains
+        # private until this complete topology transaction succeeds.
+        bound_requests: List[_TransitionRequest] = []
         for staged in self._transitions:
-            trigger, from_state, to_state, condition, priority = staged[:5]
-            after = staged[5] if len(staged) >= 6 else None
-            within = staged[6] if len(staged) >= 7 else None
-            to_state_obj = (
-                self._states[to_state] if to_state in self._states else to_state
+            bound_sources = tuple(
+                self._states[source]
+                if isinstance(source, str) and source in self._states
+                else source
+                for source in staged.sources
             )
-
-            # Convert string names to state objects for the machine
-            if isinstance(from_state, list):
-                from_state_list = [
-                    self._states[name] if name in self._states else name
-                    for name in from_state
-                ]
-                transition_rows.append(
-                    (
-                        trigger,
-                        from_state_list,
-                        to_state_obj,
-                        condition,
-                        priority,
-                        after,
-                        within,
-                    )
+            target = staged.to_state
+            bound_target = (
+                self._states[target]
+                if isinstance(target, str) and target in self._states
+                else target
+            )
+            bound_requests.append(
+                _TransitionRequest(
+                    staged.trigger,
+                    bound_sources,
+                    bound_target,
+                    staged.condition,
+                    unless=staged.unless,
+                    priority=staged.priority,
+                    condition_ref=staged.condition_ref,
+                    after=staged.after,
+                    within=staged.within,
                 )
-            else:
-                from_state_single = (
-                    self._states[from_state]
-                    if from_state in self._states
-                    else from_state
-                )
-                transition_rows.append(
-                    (
-                        trigger,
-                        from_state_single,
-                        to_state_obj,
-                        condition,
-                        priority,
-                        after,
-                        within,
-                    )
-                )
-        candidate.add_transitions(transition_rows)
+            )
+        candidate._apply_transition_requests_owned(tuple(bound_requests))
 
         # Wire per-state sync callbacks
         for state_name, cb in self._enter_callbacks:
