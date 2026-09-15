@@ -562,6 +562,24 @@ def test_construction_request_batch_publishes_all_slots_once() -> None:
     assert machine._graph_version == before_version + 1
 
 
+def test_construction_request_adapters_delegate_only_to_canonical_apply() -> None:
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    direct_start = core_source.index("    def _add_transition_owned(")
+    direct_end = core_source.index("    def add_transitions(", direct_start)
+    batch_start = core_source.index("    def _add_transitions_owned(")
+    batch_end = core_source.index("    def add_bidirectional_transition(", batch_start)
+
+    for adapter_source in (
+        core_source[direct_start:direct_end],
+        core_source[batch_start:batch_end],
+    ):
+        assert "_apply_transition_requests_owned" in adapter_source
+        assert "_normalize_transition_request" not in adapter_source
+        assert "_commit_transition_plan" not in adapter_source
+
+
 def test_equal_priority_conflict_rolls_back_all_staged_replacements() -> None:
     machine, idle, running = make_machine()
     complete = State("complete")

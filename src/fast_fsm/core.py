@@ -756,6 +756,45 @@ class _GraphSnapshot:
     state_names: Tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True, init=False)
+class _TransitionRequest:
+    """Immutable raw transition request awaiting machine-owned normalization."""
+
+    trigger: str
+    sources: Tuple[Union[str, "State"], ...]
+    to_state: Union[str, "State"]
+    condition: Optional[Union[Condition, GuardCallable]]
+    unless: Optional[Union[Condition, GuardCallable]]
+    priority: object
+    condition_ref: Optional[str]
+    after: object
+    within: object
+
+    def __init__(
+        self,
+        trigger: str,
+        sources: Union[str, "State", List[Union[str, "State"]]],
+        to_state: Union[str, "State"],
+        condition: Optional[Union[Condition, GuardCallable]] = None,
+        *,
+        unless: Optional[Union[Condition, GuardCallable]] = None,
+        priority: object = 0,
+        condition_ref: Optional[str] = None,
+        after: object = None,
+        within: object = None,
+    ) -> None:
+        raw_sources = tuple(sources) if isinstance(sources, list) else (sources,)
+        object.__setattr__(self, "trigger", trigger)
+        object.__setattr__(self, "sources", raw_sources)
+        object.__setattr__(self, "to_state", to_state)
+        object.__setattr__(self, "condition", condition)
+        object.__setattr__(self, "unless", unless)
+        object.__setattr__(self, "priority", priority)
+        object.__setattr__(self, "condition_ref", condition_ref)
+        object.__setattr__(self, "after", after)
+        object.__setattr__(self, "within", within)
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedTransition:
     """Fully validated private transition request awaiting one graph commit."""
@@ -1859,6 +1898,31 @@ class StateMachine:
             self._transitions[source_name][trigger] = replacement
         self._graph_version += 1
 
+    def _apply_transition_requests_owned(
+        self, requests: Optional[Tuple[_TransitionRequest, ...]]
+    ) -> None:
+        """Normalize and publish one complete immutable request collection."""
+        if not isinstance(requests, tuple):
+            raise TypeError("transition request collection must be a tuple")
+        for request in requests:
+            if not isinstance(request, _TransitionRequest):
+                raise TypeError("each transition request must be _TransitionRequest")
+        prepared = tuple(
+            self._normalize_transition_request(
+                request.trigger,
+                list(request.sources),
+                request.to_state,
+                request.condition,
+                unless=request.unless,
+                priority=request.priority,
+                condition_ref=request.condition_ref,
+                after=request.after,
+                within=request.within,
+            )
+            for request in requests
+        )
+        self._commit_transition_plan(prepared)
+
     @staticmethod
     def _merge_transition_slot(
         existing: Optional[_TransitionSlot], plan: _PreparedTransition
@@ -1941,7 +2005,7 @@ class StateMachine:
         within: object = None,
     ) -> None:
         """Validate and commit one transition while the caller owns this machine."""
-        prepared = self._normalize_transition_request(
+        request = _TransitionRequest(
             trigger,
             from_state,
             to_state,
@@ -1951,7 +2015,7 @@ class StateMachine:
             after=after,
             within=within,
         )
-        self._commit_transition_plan((prepared,))
+        self._apply_transition_requests_owned((request,))
 
     def add_transitions(
         self,
@@ -1991,7 +2055,7 @@ class StateMachine:
         transitions: List[_TransitionRow],
     ) -> None:
         """Validate and commit a complete batch while the caller owns it."""
-        prepared: List[_PreparedTransition] = []
+        requests: List[_TransitionRequest] = []
         for entry in transitions:
             if len(entry) not in (3, 4, 5, 6, 7):
                 raise ValueError(
@@ -2010,8 +2074,8 @@ class StateMachine:
             priority: object = rest[1] if len(rest) >= 2 else 0
             after: object = rest[2] if len(rest) >= 3 else None
             within: object = rest[3] if len(rest) >= 4 else None
-            prepared.append(
-                self._normalize_transition_request(
+            requests.append(
+                _TransitionRequest(
                     trigger,
                     from_state,
                     to_state,
@@ -2021,7 +2085,7 @@ class StateMachine:
                     within=within,
                 )
             )
-        self._commit_transition_plan(tuple(prepared))
+        self._apply_transition_requests_owned(tuple(requests))
 
     def add_bidirectional_transition(
         self,
