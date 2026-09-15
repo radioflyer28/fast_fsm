@@ -1822,6 +1822,8 @@ class StateMachine:
         source_names: set[str] = set()
         for raw_source in raw_sources:
             source = self._resolve_canonical_state(raw_source, role="source")
+            if source.final:
+                raise ValueError("final state cannot be a transition source")
             if source.name in source_names:
                 raise ValueError(
                     f"duplicate canonical source state {source.name!r} in one request"

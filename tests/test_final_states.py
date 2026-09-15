@@ -206,7 +206,7 @@ class TestFinalSourceConstructionInvariant:
         assert machine._graph_version == before_version
         assert machine.current_state is before_current
         assert machine._graph_snapshot() == before_snapshot
-        assert machine.get_transition(done, "finish") is None
+        assert "finish" not in machine._transitions[done.name]
 
     def test_registered_final_source_wins_over_same_name_input_forms(self) -> None:
         machine, done, idle = self._machine_with_final_source()
@@ -220,4 +220,4 @@ class TestFinalSourceConstructionInvariant:
             machine.add_transition("finish", foreign_non_final, idle)
 
         assert done.final is True
-        assert machine.get_transition(done, "finish") is None
+        assert "finish" not in machine._transitions[done.name]

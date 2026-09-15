@@ -475,9 +475,7 @@ def test_final_source_mixed_batch_and_multi_source_fail_before_publication() -> 
     machine.add_state(done)
     before = graph_fingerprint(machine)
 
-    with pytest.raises(
-        ValueError, match="^final state cannot be a transition source$"
-    ):
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
         machine.add_transitions(
             [
                 ("first", idle, running),
@@ -487,9 +485,7 @@ def test_final_source_mixed_batch_and_multi_source_fail_before_publication() -> 
         )
     assert graph_fingerprint(machine) == before
 
-    with pytest.raises(
-        ValueError, match="^final state cannot be a transition source$"
-    ):
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
         machine.add_transition("fanout", [idle, done], running)
     assert graph_fingerprint(machine) == before
 
@@ -505,13 +501,13 @@ def test_final_source_validation_lives_only_in_canonical_normalization() -> None
     )
     normalizer = core_source[normalizer_start:normalizer_end]
     selector_start = core_source.index("    def _prepare_transition(")
-    selector_end = core_source.index("    def _run_transition(", selector_start)
+    selector_end = core_source.index("    def _execute_transition(", selector_start)
     selector = core_source[selector_start:selector_end]
 
     assert normalizer.count("final state cannot be a transition source") == 1
-    assert normalizer.index("source = self._resolve_canonical_state") < normalizer.index(
-        "final state cannot be a transition source"
-    )
+    assert normalizer.index(
+        "source = self._resolve_canonical_state"
+    ) < normalizer.index("final state cannot be a transition source")
     assert "final state cannot be a transition source" not in selector
 
 
