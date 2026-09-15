@@ -7,6 +7,7 @@ from fast_fsm.core import (
     AsyncStateMachine,
     CallbackState,
     DeclarativeState,
+    quick_fsm,
     State,
     StateMachine,
 )
@@ -221,3 +222,25 @@ class TestFinalSourceConstructionInvariant:
 
         assert done.final is True
         assert "finish" not in machine._transitions[done.name]
+
+    def test_quick_factories_reject_supplied_final_sources_but_names_stay_non_final(
+        self,
+    ) -> None:
+        done = State("done", final=True)
+        idle = State("idle")
+        rows = [("leave", done, idle)]
+
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            StateMachine.quick_build("done", rows)
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            quick_fsm("done", rows)  # type: ignore[arg-type]
+
+        by_name = StateMachine.quick_build("idle", [("finish", "idle", "done")])
+        from_names = StateMachine.from_states("idle", "done")
+
+        assert by_name._states["done"].final is False
+        assert from_names._states["done"].final is False

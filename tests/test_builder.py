@@ -267,6 +267,27 @@ def test_builder_priority_failure_stays_repairable_until_candidate_publication()
     assert machine._transitions["idle"]["go"].priority == -3
 
 
+def test_builder_final_source_failure_preserves_staging_and_can_be_repaired():
+    """A final staged source rejects only the private candidate build."""
+    idle = State("idle")
+    done = State("done", final=True)
+    builder = FSMBuilder(idle)
+    builder.add_state(done).add_transition("finish", "done", "idle")
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        builder.build()
+
+    assert builder._machine is None
+    assert builder_staging_fingerprint(builder) == before
+    builder._transitions[-1] = _TransitionRequest("finish", ("idle",), "done")
+
+    machine = builder.build()
+    assert machine._states["done"] is done
+    assert machine.trigger("finish").success
+    assert machine.current_state is done
+
+
 def _make_supported_wrapper_cycle(shape):
     """Build one private supported-wrapper cycle for builder rejection tests."""
     if shape == "negated":

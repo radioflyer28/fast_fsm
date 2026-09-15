@@ -511,6 +511,66 @@ def test_final_source_validation_lives_only_in_canonical_normalization() -> None
     assert "final state cannot be a transition source" not in selector
 
 
+def test_final_source_helpers_and_priority_reject_without_a_prefix() -> None:
+    """Helper fanout and candidate registration share the same atomic rule."""
+    idle = State("idle")
+    done = State("done", final=True)
+    safe = State("safe")
+    machine = StateMachine(idle)
+    machine.add_state(done)
+    machine.add_state(safe)
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        machine.add_bidirectional_transition("finish", "restart", idle, done)
+    assert graph_fingerprint(machine) == before
+
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        machine.add_emergency_transition("abort", safe)
+    assert graph_fingerprint(machine) == before
+
+    machine.add_transition("advance", idle, safe, priority=3)
+    before_priority = graph_fingerprint(machine)
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        machine.add_transition("advance", done, safe, priority=-1)
+    assert graph_fingerprint(machine) == before_priority
+
+
+def test_declarative_and_corrupted_clone_final_sources_never_publish() -> None:
+    """Declarative and clone reconstruction remain ordinary canonical clients."""
+    from fast_fsm.core import DeclarativeState
+
+    source = DeclarativeState("done", final=True)
+    target = State("idle")
+    machine = StateMachine(source)
+    machine.add_state(target)
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        machine.add_transition("restart", source, target)
+    assert graph_fingerprint(machine) == before
+
+    valid_source = State("source")
+    valid_final = State("final", final=True)
+    valid = StateMachine(valid_source)
+    valid.add_state(valid_final)
+    valid.add_transition("finish", valid_source, valid_final)
+    clone = valid.clone()
+    assert clone._states["final"] is valid_final
+    assert (
+        clone._transitions["source"]["finish"]
+        is not valid._transitions["source"]["finish"]
+    )
+
+    corrupted = StateMachine(source)
+    corrupted.add_state(target)
+    corrupted._transitions[source.name]["invalid"] = TransitionEntry(target)
+    corrupted_before = graph_fingerprint(corrupted)
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        corrupted.clone()
+    assert graph_fingerprint(corrupted) == corrupted_before
+
+
 def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> None:
     machine, idle, running = make_machine()
     before = graph_fingerprint(machine)

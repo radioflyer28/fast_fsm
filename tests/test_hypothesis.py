@@ -10,6 +10,8 @@ All tests use real FSM components — no mocking.
 
 import string
 
+import pytest
+
 from hypothesis import given, settings, assume, HealthCheck
 from hypothesis import strategies as st
 
@@ -223,6 +225,48 @@ class TestQuickBuildRoundTrip:
         for _, src, dst in transitions:
             assert src in fsm.states
             assert dst in fsm.states
+
+
+class TestFinalSourceTransactionInvariant:
+    """Generated request order cannot create a graph prefix before rejection."""
+
+    @given(order=st.permutations(("before", "invalid", "after")))
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+    def test_final_source_rejects_every_reordered_mixed_batch(self, order):
+        idle = State("idle")
+        running = State("running")
+        done = State("done", final=True)
+        machine = StateMachine(idle)
+        machine.add_state(running)
+        machine.add_state(done)
+        rows = {
+            "before": ("before", idle, running),
+            "invalid": ("invalid", done, idle),
+            "after": ("after", running, idle),
+        }
+        before = (machine._graph_version, machine._graph_snapshot())
+
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            machine.add_transitions([rows[name] for name in order])
+
+        assert (machine._graph_version, machine._graph_snapshot()) == before
+
+    @given(destination_final=st.booleans())
+    @settings(max_examples=10)
+    def test_termination_always_matches_the_current_canonical_marker(
+        self, destination_final: bool
+    ):
+        idle = State("idle")
+        destination = State("destination", final=destination_final)
+        machine = StateMachine(idle)
+        machine.add_state(destination)
+        machine.add_transition("advance", idle, destination)
+
+        assert machine.is_terminated is machine.current_state.final
+        assert machine.trigger("advance").success
+        assert machine.is_terminated is machine.current_state.final
 
 
 class TestStatesPropertyNeverEmpty:

@@ -1284,6 +1284,25 @@ class TestAsyncPriorityCloneParity:
         assert "slot.entries" in selector_source
 
 
+@pytest.mark.asyncio
+async def test_async_registration_rejects_final_sources_without_graph_mutation():
+    """Async machines inherit the construction-only final-source transaction."""
+    done = State("done", final=True)
+    idle = State("idle")
+    machine = AsyncStateMachine(done)
+    machine.add_state(idle)
+    before = (machine._graph_version, machine._graph_snapshot(), machine.current_state)
+
+    with pytest.raises(ValueError, match="^final state cannot be a transition source$"):
+        machine.add_transition("restart", done, idle)
+
+    assert (
+        machine._graph_version,
+        machine._graph_snapshot(),
+        machine.current_state,
+    ) == before
+
+
 class TestAsyncPriorityAwareDeclarativeCandidates:
     """Async declarative dispatch uses the same exact candidate identity."""
 
