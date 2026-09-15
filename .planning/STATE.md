@@ -5,11 +5,11 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 27
 current_phase_name: Explicit Final States
 status: planning
-stopped_at: Phase 26 complete, ready to plan Phase 27
-last_updated: "2026-09-15T21:30:42.741Z"
+stopped_at: Phase 27 context gathered
+last_updated: "2026-09-15T21:34:26.071Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 26 complete, transitioned to Phase 27
-state_head: 57efa76a02e04ad1ef02e911c902f1b9e42d4060
+state_head: 161861a6c77acca02583de4b6adb984e755c944e
 progress:
   total_phases: 7
   completed_phases: 1
@@ -104,9 +104,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T18:17:21.942Z
-Stopped at: Phase 26 complete, ready to plan Phase 27
-Resume file: None
+Last session: 2026-09-15T21:34:26.048Z
+Stopped at: Phase 27 context gathered
+Resume file: .planning/phases/27-explicit-final-states/27-CONTEXT.md
 
 ## Operator Next Steps
 
