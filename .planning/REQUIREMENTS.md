@@ -40,8 +40,8 @@
 - [ ] **BUILD-01**: Users are guided to `FSMBuilder` as the primary construction interface, direct machine construction as the advanced interface, and `from_dict` as the serialization adapter.
 - [ ] **BUILD-02**: Users can author declarative behavior through the canonical construction machinery without a separate topology implementation.
 - [ ] **BUILD-03**: Users of `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` receive documented deprecation guidance and a supported compatibility cycle.
-- [ ] **BUILD-04**: Maintainers can enforce all retained construction semantics through one private normalization and validation seam.
-- [ ] **BUILD-05**: Users can retry or inspect construction after a failed registration, build, or deserialization without partial topology, stale indexes, or corrupted reusable builders.
+- [x] **BUILD-04**: Maintainers can enforce all retained construction semantics through one private normalization and validation seam.
+- [x] **BUILD-05**: Users can retry or inspect construction after a failed registration, build, or deserialization without partial topology, stale indexes, or corrupted reusable builders.
 - [ ] **BUILD-06**: Users receive identical final-state and transition-mode validation through direct, batch, builder, factory, declarative, helper, callback, clone, and deserialization paths.
 - [ ] **BUILD-07**: Users can clone and serialize machines without losing final-state or internal-transition metadata, while older serialized data receives backward-compatible defaults.
 - [ ] **BUILD-08**: Users can continue using snapshot format v1, with termination derived from the receiving machine's current state and topology.
@@ -124,8 +124,8 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | BUILD-01 | Phase 30 | Pending |
 | BUILD-02 | Phase 30 | Pending |
 | BUILD-03 | Phase 30 | Pending |
-| BUILD-04 | Phase 26 | Pending |
-| BUILD-05 | Phase 26 | Pending |
+| BUILD-04 | Phase 26 | Complete |
+| BUILD-05 | Phase 26 | Complete |
 | BUILD-06 | Phase 30 | Pending |
 | BUILD-07 | Phase 30 | Pending |
 | BUILD-08 | Phase 30 | Pending |

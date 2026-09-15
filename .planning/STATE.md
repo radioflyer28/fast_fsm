@@ -4,17 +4,17 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 26
 current_phase_name: Canonical Construction & Evidence Contract
-status: executing
-stopped_at: Completed 26-02-PLAN.md
-last_updated: "2026-09-15T18:17:30.136Z"
+status: awaiting_checkpoint
+stopped_at: Completed 26-03-PLAN.md; awaiting 26-04 provenance approval
+last_updated: "2026-09-15T18:32:39.000Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 26 execution started
-state_head: 9632320e33a07ebc874ed712cd2158ee8775369d
+state_head: 646e78e532520e8a9ad22f7976e75684e2181fdd
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 26 (Canonical Construction & Evidence Contract) — EXECUTING
-Plan: 3 of 5
-Status: Executing plan 3 of 5
-Last activity: 2026-09-15 — Phase 26 execution started
+Plan: 4 of 5
+Status: Awaiting required human provenance checkpoint
+Last activity: 2026-09-15 — Completed Phase 26 plan 03
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -41,8 +41,8 @@ Progress: [░░░░░░░░░░] 0%
 **Velocity:**
 
 - Prior milestone plans completed: 57
-- Current milestone plans completed: 0
-- Current milestone execution time: 0 hours
+- Current milestone plans completed: 3
+- Current milestone execution time: 0.5 hours
 
 **By Phase:**
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 |------|----------|-------|-------|
 | Phase 26 P01 | 12min | 2 tasks | 3 files |
 | Phase 26 P02 | 17min | 2 tasks | 6 files |
+| Phase 26 P03 | 16min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 26]: Keep construction ownership on existing public envelopes and keep runtime selectors and lifecycle runners unaware of the request carrier. — Preserves atomic serialization and the O(1) direct singleton dispatch boundary.
 - [Phase 26]: Required flat-cycle and false-guard scenarios are contradictions when semantics differ; only the optional final-state cell may be unsupported. — Prevents fast-but-wrong behavior from entering comparison evidence.
 - [Phase 26]: The comparison parent imports no FSM implementation and computes ratios only after exact record, identity, origin, and preflight validation. — Preserves process isolation and evidence trust ordering.
+- [Phase 26]: Retained adapters parse their own input language and then publish one immutable request collection through the machine-owned transaction. — Preserves adapter context without duplicating semantic topology rules.
+- [Phase 26]: Clones preserve State and Condition collaborator identity but reconstruct independent transition entries, groups, and tables. — Prevents topology aliasing while retaining shallow collaborator semantics.
+- [Phase 26]: FSMBuilder stages immutable named requests and binds fresh endpoint-aware copies only inside a private build candidate. — Keeps failed builds retryable and avoids positional staging drift.
 
 ### Pending Todos
 
@@ -95,9 +99,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-15T18:17:21.942Z
-Stopped at: Completed 26-02-PLAN.md
+Stopped at: Completed 26-03-PLAN.md; awaiting 26-04 provenance approval
 Resume file: None
 
 ## Operator Next Steps
 
-- Discuss or plan Phase 26: Canonical Construction & Evidence Contract.
+- Complete the Phase 26 plan 04 human provenance checkpoint for exact `python-statemachine` 2.5.0 and 3.2.1 dependencies.
