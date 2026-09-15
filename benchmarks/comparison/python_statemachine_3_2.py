@@ -67,6 +67,7 @@ def _preflight_false_guard() -> tuple[dict[str, object], Callable[[], None]]:
         idle = State(initial=True)
         active = State()
         advance = idle.to(active, cond="deny")
+        reset = active.to(idle)
 
         def __init__(self) -> None:
             self.guard_calls = 0

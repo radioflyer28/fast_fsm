@@ -218,9 +218,9 @@ tasks:
       - uv run python benchmarks/performance_demo.py
 
   benchmark-compare:
-    desc: Run comparison benchmarks against other FSM libraries
+    desc: "Manually collect environment-labelled observational FSM comparisons"
     cmds:
-      - uv run python benchmarks/benchmark.py
+      - uv run python benchmarks/comparison/run_comparison.py {{.CLI_ARGS}}
 
   # ─────────────────────────────────────────────
   # Documentation (Copilot-Instructions § Documentation)
