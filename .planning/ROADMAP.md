@@ -2,7 +2,7 @@
 
 ## Overview
 
-Fast FSM v0.4.0 evolves one source/trigger slot from a singular edge into a finite, priority-ordered guarded candidate group without surrendering the singleton fast path. The work freezes atomic registration first, integrates deterministic sync/async selection with the existing lifecycle second, then carries candidate identity through constructors, tooling, installed-artifact proof, and the drone example.
+Fast FSM v0.5.0 makes completion, same-state lifecycle behavior, and expected domain rejection explicit without widening the library into a statechart runtime. The milestone first establishes one atomic construction seam and fair evidence baselines, then implements final states, internal transitions, and rejection as separate semantic boundaries before carrying them through every supported constructor, persistence format, diagnostic projection, installed artifact, and progressive drone example.
 
 ## Milestones
 
@@ -10,195 +10,169 @@ Fast FSM v0.4.0 evolves one source/trigger slot from a singular edge into a fini
 - ✅ **v0.2.2 Introspection & Agent Tooling** — Phases 7–11.1 (shipped 2026-04-05)
 - ✅ **v0.2.3 Timing Condition Helpers** — Phases 12–14 (shipped 2026-04-05)
 - ✅ **v0.3.0 Reliability & Runtime Hardening** — Phases 15–20 (completed 2026-09-06; untagged and unreleased)
-- ✅ **v0.4.0 Priority-Aware Guarded Transitions** — Phases 21–25 (completed 2026-09-07)
+- ✅ **v0.4.0 Priority-Aware Guarded Transitions** — Phases 21–25 (shipped 2026-09-07)
+- 📋 **v0.5.0 Explicit Flat-FSM Semantics** — Phases 26–32 (planned)
 
 ## Phases
 
 <details>
-<summary>✅ v0.2.1 Code Health & Quality (Phases 1–6) — SHIPPED 2026-04-04</summary>
+<summary>✅ Completed milestones (Phases 1–25)</summary>
 
-Version metadata, exception handling, typing, state inheritance, test triage, and the compiled throughput CI gate. **14/14 requirements satisfied.** Full details: `.planning/milestones/v0.2.1-ROADMAP.md`.
-
-</details>
-
-<details>
-<summary>✅ v0.2.2 Introspection & Agent Tooling (Phases 7–11.1) — SHIPPED 2026-04-05</summary>
-
-Topology serialization, transition history, PlantUML and JSON output, plus performance verification. **21/21 requirements satisfied.** Full details: `.planning/milestones/v0.2.2-ROADMAP.md`.
+Completed milestone details are archived under `.planning/milestones/` and summarized in `.planning/MILESTONES.md`.
 
 </details>
 
-<details>
-<summary>✅ v0.2.3 Timing Condition Helpers (Phases 12–14) — SHIPPED 2026-04-05</summary>
+### 📋 v0.5.0 Explicit Flat-FSM Semantics (Planned)
 
-Timeout, cooldown, and elapsed conditions with integration tests and documentation. **15/15 requirements satisfied.** Full details: `.planning/milestones/v0.2.3-ROADMAP.md`.
+**Milestone Goal:** Make completion, same-state behavior, and expected domain rejection explicit while preserving Fast FSM's decisive speed advantage for flat, deterministic machines.
 
-</details>
-
-<details>
-<summary>✅ v0.3.0 Reliability & Runtime Hardening (Phases 15–20) — COMPLETED 2026-09-06</summary>
-
-Release integrity, canonical graph and dispatch invariants, atomic lifecycle semantics, safe ownership, bounded diagnostics, and installed-artifact proof. **50/50 requirements satisfied.** Full details: `.planning/milestones/v0.3.0-ROADMAP.md`.
-
-</details>
-
-### ✅ v0.4.0 Priority-Aware Guarded Transitions (Completed 2026-09-07)
-
-**Milestone Goal:** Add deterministic, priority-aware guarded transition resolution so one `(state, trigger)` selects among finite ordered candidates without external dispatch logic.
-
-- [x] **Phase 21: Priority Contract & Atomic Registration** — establish the finite candidate topology and deterministic, atomic registration rules. (completed 2026-09-06)
-- [x] **Phase 22: Ordered Runtime Selection & Lifecycle Integration** — select exactly one eligible candidate with matching sync/async failure semantics. (completed 2026-09-06)
-- [x] **Phase 23: Construction, Declarative & Serialization Parity** — preserve candidate identity through every public construction and introspection path. (completed 2026-09-06)
-- [x] **Phase 24: Candidate-Aware Diagnostics & Output** — make validation, graph analysis, and renderers truthful about multiplicity and priority. (completed 2026-09-07)
-- [x] **Phase 25: Performance, Artifact Proof & Drone Guidance** — prove the complexity and installed-artifact contracts and publish the motivating usage pattern. (completed 2026-09-07)
+- [ ] **Phase 26: Canonical Construction & Evidence Contract** — establish one atomic construction seam and exact, non-gating competitor evidence lanes.
+- [ ] **Phase 27: Explicit Final States** — make intentional completion immutable, queryable, and lifecycle-truthful.
+- [ ] **Phase 28: Same-State Transition Modes** — distinguish external re-entry from internal logical commits across sync and async execution.
+- [ ] **Phase 29: Expected Domain Rejection** — expose bounded structured rejection without priority fallthrough or lifecycle ambiguity.
+- [ ] **Phase 30: Builder-First Construction & Persistence Parity** — simplify the public construction story and preserve semantics through every adapter and persisted form.
+- [ ] **Phase 31: Semantic Diagnostics & Visualization** — project finality, transition mode, and rejection truthfully through bounded tooling.
+- [ ] **Phase 32: Performance, Artifact & Progressive Guidance Proof** — prove installed parity, protect the fast path, and teach the complete workflow progressively.
 
 ## Phase Details
 
-### Phase 21: Priority Contract & Atomic Registration
+### Phase 26: Canonical Construction & Evidence Contract
 
-**Goal**: Library consumers can construct immutable, finite, deterministically ordered candidate groups through the existing transition API without partial topology mutation.
-**Depends on**: Phase 20
-**Requirements**: PRIO-01, PRIO-02, PRIO-03
+**Goal**: Maintainers have one atomic topology-construction boundary and reproducible comparison evidence before new runtime semantics depend on either.
+**Depends on**: Phase 25
+**Requirements**: BUILD-04, BUILD-05, PERF-05, PERF-06
 **Success Criteria** (what must be TRUE):
 
-  1. A consumer can use `add_transition(..., priority=...)` repeatedly for one source/trigger, while internal immutable-topology inspection verifies every registered candidate and a one-candidate slot retains the direct singleton representation; supported public candidate inspection is explicitly deferred to Phase 23 and this phase adds no public inspection API.
-  2. Priority accepts exact non-boolean integers, lower values win independent of registration order, conflicting equal priorities reject the whole operation, and exact duplicate registration is an idempotent no-op.
-  3. Batch, multi-source, bidirectional, emergency, and builder-backed registration either publish every affected candidate group or leave topology and graph version unchanged.
-  4. Candidate groups are immutable after publication, remain isolated across clones, and `core.py` continues to pass the native compilation/type boundary.
+  1. Every retained construction adapter can be routed through one private normalization, validation, and publication seam rather than maintaining its own topology rules.
+  2. A failed registration, build, or deserialization leaves topology, graph version, indexes, and reusable builder state unchanged and inspectable.
+  3. Maintainers can run semantically preflighted comparison scenarios against exact isolated `python-statemachine` 2.5.0 and 3.2.1 installations, with versions, origins, and unsupported cells reported explicitly.
+  4. Competitor results remain labelled manual or scheduled evidence and ordinary CI succeeds without installing or timing competitor packages.
 
-**Plans:** 2/2 plans complete
+**Plans**: TBD
 
-Plans:
+### Phase 27: Explicit Final States
 
-- [x] 21-01-PLAN.md — Establish the priority topology contract and atomic same-slot registration.
-- [x] 21-02-PLAN.md — Complete helper/builder transport, clone isolation, and compiled singleton proof.
-
-### Phase 22: Ordered Runtime Selection & Lifecycle Integration
-
-**Goal**: Sync and async machines resolve the first fully eligible candidate in priority order before exactly one transition lifecycle begins.
-**Depends on**: Phase 21
-**Requirements**: SEL-01, SEL-02, SEL-03, SEL-04
+**Goal**: Users can represent intentional completion directly and rely on termination truth across construction, execution, and control operations.
+**Depends on**: Phase 26
+**Requirements**: FINAL-01, FINAL-02, FINAL-03, FINAL-04, FINAL-05, FINAL-06
 **Success Criteria** (what must be TRUE):
 
-  1. Synchronous dispatch evaluates transition guard, declarative guard, and target-state permission in ascending priority order and commits the first candidate for which all three permit transition.
-  2. Asynchronous dispatch awaits candidates sequentially in the same order; ordinary rejection falls through, while exceptions and cancellation abort without evaluating lower-priority candidates or mutating state.
-  3. Selection completes before lifecycle callbacks, and one trigger attempt can produce at most one lifecycle, one committed history record, and one success-observer sequence.
-  4. Exhausting a group returns one uncommitted selection-stage failure and notifies failure observers once, while an absent trigger remains a distinct resolution failure.
+  1. A user can create an immutable `State(..., final=True)` and an initially final machine reports `is_terminated` through an O(1) current-state read.
+  2. Every supported construction path rejects an outgoing transition from a final state atomically, while a non-final sink remains valid and non-terminated.
+  3. Entering a final state makes termination visible at commit, and later entry, observer, or async cancellation failure does not undo the committed state or finality.
+  4. Reset, restore, clone, and deserialization preserve the distinction between explicit finality and topology dead ends.
 
-**Plans:** 3/3 plans complete
+**Plans**: TBD
 
-Plans:
+### Phase 28: Same-State Transition Modes
 
-- [x] 22-01-PLAN.md — Add deterministic synchronous selection, failure boundaries, query parity, and one-lifecycle handoff.
-- [x] 22-02-PLAN.md — Mirror selection sequentially across async queries/dispatch, exceptions, cancellation, and lifecycle.
-- [x] 22-03-PLAN.md — Propagate runtime priority metadata and prove slots, native parity, O(1) singleton, and local O(k) group work.
-
-### Phase 23: Construction, Declarative & Serialization Parity
-
-**Goal**: Every supported construction, declarative, clone, query, and serialization path preserves complete candidate identity and priority-aware behavior.
-**Depends on**: Phase 22
-**Requirements**: PAR-01, PAR-02, PAR-03
+**Goal**: Users can choose whether a self-transition performs external re-entry or an internal logical commit, with identical semantic truth across machine types.
+**Depends on**: Phase 27
+**Requirements**: MODE-01, MODE-02, MODE-03, MODE-04, MODE-05, MODE-06
 **Success Criteria** (what must be TRUE):
 
-  1. Builders, declarative handlers, factories, quick builders, helper APIs, and deserialization construct the same ordered candidate groups as direct registration without trigger-key or handler overwrite.
-  2. `can_trigger*()` selects eligibility consistently without mutation, and results, history, tracing, topology snapshots, cloning, and query helpers identify the selected candidate priority without changing callback signatures.
-  3. `to_dict()` followed by `from_dict()` preserves every candidate and its priority, including multiple candidates with the same source, trigger, and target.
-  4. Deserialization can attach guards to a specific candidate without serializing callables, and ambiguous legacy guard keys fail explicitly rather than attaching to the wrong transition.
+  1. `internal=True` is an exact per-transition choice valid only for a canonical self-target, while omission preserves existing external behavior and invalid registration is atomic.
+  2. An external self-transition runs the complete exit-and-entry lifecycle and resets entry-relative timing.
+  3. An internal transition skips every state exit and entry surface while retaining transition-level behavior, one logical commit, result production, history, and appropriate observers.
+  4. Internal transitions preserve the original state-entry timestamp so residency-based conditions remain uninterrupted.
+  5. Synchronous and asynchronous machines produce matching mode, priority, failure, and cancellation outcomes without collapsing an internal commit into a no-op.
 
-**Plans:** 3/3 plans complete
+**Plans**: TBD
 
-Plans:
-**Wave 1**
+### Phase 29: Expected Domain Rejection
 
-- [x] 23-01-PLAN.md — Promote candidate-complete cold topology and add callable-safe round-trip, snapshot, query, and clone parity.
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 23-02-PLAN.md — Preserve plural declarative identity through exact sync/async handler selection and builder preflight.
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 23-03-PLAN.md — Complete quick/factory construction parity and lock pure/native compiled-core compatibility.
-
-### Phase 24: Candidate-Aware Diagnostics & Output
-
-**Goal**: Diagnostics and structured or human-readable outputs represent each transition candidate exactly once in deterministic priority order under existing safety budgets.
-**Depends on**: Phase 23
-**Requirements**: DIAG-01, DIAG-02
+**Goal**: Applications can reject an otherwise considered transition as an expected domain outcome without hiding defects or selecting a lower-priority behavior.
+**Depends on**: Phase 28
+**Requirements**: REJECT-01, REJECT-02, REJECT-03, REJECT-04, REJECT-05, REJECT-06, REJECT-07, REJECT-08, REJECT-09
 **Success Criteria** (what must be TRUE):
 
-  1. Validation accepts strictly ordered candidate groups as deterministic, rejects malformed equal-priority groups, and distinguishes provably shadowed lower candidates from possible shadowing.
-  2. JSON, Mermaid, PlantUML, Markdown, and adjacency output preserve candidate multiplicity and numeric priority with stable ordering and the established escaping contracts.
-  3. Diagnostic edge counts, work budgets, and generated paths count candidates rather than collapsed source/trigger pairs and retain explicit incomplete-result behavior when a budget is exhausted.
-  4. All diagnostic consumers project from one immutable topology snapshot instead of depending on private singleton/group runtime storage.
+  1. Guards and state permission checks can raise public `TransitionRejected(code)` with a stable, bounded, payload-safe identifier, including through composed conditions.
+  2. Ordinary false eligibility alone falls through a prioritized candidate group; expected rejection and unexpected exceptions stop evaluation before any lower candidate or lifecycle begins.
+  3. A rejected trigger returns an uncommitted result with explicit rejection status and code distinct from unexpected causes, while `can_trigger*()` returns false without mutation or observation.
+  4. Existing failure observers receive one notification for a rejected trigger, with no new listener family and no arbitrary exception detail exposed by default.
+  5. Raising the same signal outside approved pre-commit eligibility seams retains ordinary staged execution-failure and cancellation truth.
 
-**Plans**: 3 plans
+**Plans**: TBD
 
-**Wave 1**
+### Phase 30: Builder-First Construction & Persistence Parity
 
-- [x] 24-01-PLAN.md — Extend the immutable diagnostic projection and implement strict-priority, conservative shadow validation.
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 24-02-PLAN.md — Propagate candidate identity, priority, escaping, and candidate-sized budgets through adjacency, paths, and every output sink.
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 24-03-PLAN.md — Lock pure/native diagnostic parity, source-origin cleanliness, and the living maintainer contract.
-
-### Phase 25: Performance, Artifact Proof & Drone Guidance
-
-**Goal**: Users and maintainers can rely on truthful complexity guidance, equivalent installed pure/native behavior, and an example where the FSM owns telemetry-driven routing.
-**Depends on**: Phase 24
-**Requirements**: PERF-01, PERF-02, DOC-01
+**Goal**: Users encounter one clear construction path while every supported adapter, clone, and persistence operation preserves the new semantics.
+**Depends on**: Phase 29
+**Requirements**: BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08
 **Success Criteria** (what must be TRUE):
 
-  1. Project policy and public documentation state and demonstrate O(1) source/trigger lookup and singleton dispatch, plus O(k) local candidate-group mutation and ordered selection without dispatch-time sorting or unrelated-graph scans.
-  2. Benchmarks characterize groups of representative depths and winner positions, while freshly installed compiled singleton dispatch retains the ≥200,000 operations/sec gate.
-  3. Source, pure-wheel, and compiled-wheel conformance prove identical winner, evaluation order, result/history priority metadata, exhaustion stage, and exception/cancellation semantics.
-  4. The drone example submits one telemetry event to a controller-owned FSM; transition guards own priority decisions, aircraft callbacks issue commands, and telemetry services expose facts such as heartbeat age without selecting transitions.
-  5. Ruff, mypy/mypyc, the full sync/async test suite, documentation builds, and installed-artifact checks pass from clean evidence origins.
+  1. Public guidance presents `FSMBuilder` as the primary interface, direct `StateMachine` or `AsyncStateMachine` construction as advanced usage, and `from_dict` as the serialization adapter.
+  2. Declarative definitions author behavior through the canonical builder/construction machinery instead of maintaining a separate topology implementation.
+  3. Users of `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` receive actionable deprecation guidance while those symbols remain usable for the supported compatibility cycle.
+  4. Direct, batch, builder, factory, declarative, helper, callback, clone, and deserialization paths enforce identical final-state and transition-mode rules without partial publication.
+  5. Clone and dictionary round trips preserve final and internal metadata, legacy dictionaries receive false/default semantics, and state-only snapshot v1 derives termination from the receiving machine.
 
-**Plans:** 5/5 complete
+**Plans**: TBD
 
-- [x] 25-01-PLAN.md
-- [x] 25-02-PLAN.md
-- [x] 25-03-PLAN.md
-- [x] 25-04-PLAN.md
-- [x] 25-05-PLAN.md
+### Phase 31: Semantic Diagnostics & Visualization
+
+**Goal**: Users and maintainers can inspect the new semantics consistently without confusing intentional completion with graph shape or weakening output safeguards.
+**Depends on**: Phase 30
+**Requirements**: DIAG-01, DIAG-02, DIAG-03
+**Success Criteria** (what must be TRUE):
+
+  1. Results, history, validation, tracing, and JSON expose finality, transition mode, and expected rejection wherever each fact affects interpretation.
+  2. Mermaid and PlantUML diagrams distinguish explicit final states, internal transitions, external self-transitions, and non-final sink states.
+  3. Every new diagnostic field and rendering remains deterministic, bounded, escaped, and suitable for logs, tests, and serialized evidence.
+
+**Plans**: TBD
+
+### Phase 32: Performance, Artifact & Progressive Guidance Proof
+
+**Goal**: Users can install any supported artifact, retain Fast FSM's direct-path performance, and learn the complete flat-FSM workflow progressively.
+**Depends on**: Phase 31
+**Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, DOC-01, DOC-02, DOC-03, DOC-04
+**Success Criteria** (what must be TRUE):
+
+  1. Fresh installed compiled singleton dispatch remains direct O(1) and sustains at least 200,000 transitions per second when the new semantics are unused, without unrelated scans, reflection, or per-dispatch allocation.
+  2. Environment-labelled evidence measures final-state, internal/external, and rejection costs separately and proves that unrelated topology does not change local dispatch work.
+  3. Pure source, compiled extension, installed pure wheel, installed compiled wheel, and release artifacts satisfy the same fixed semantic oracle.
+  4. The progressive controller-owned drone tutorial demonstrates prioritized telemetry guards, internal and external self-transitions, explicit landing finals, expected rejection, and committed aircraft commands without hidden scheduling machinery.
+  5. README and Sphinx guidance progress from builder-first construction to advanced direct use, explain the deprecation migration, and clearly distinguish finality, dead ends, rejection, guard ineligibility, and self-transition modes.
+
+**Plans**: TBD
 
 ## Requirement Coverage
 
 | Phase | Requirement IDs | Count |
 |-------|-----------------|-------|
-| 21 | PRIO-01, PRIO-02, PRIO-03 | 3 |
-| 22 | SEL-01, SEL-02, SEL-03, SEL-04 | 4 |
-| 23 | PAR-01, PAR-02, PAR-03 | 3 |
-| 24 | DIAG-01, DIAG-02 | 2 |
-| 25 | PERF-01, PERF-02, DOC-01 | 3 |
-| **Total** | **All v0.4.0 requirements** | **15/15** |
+| 26 | BUILD-04, BUILD-05, PERF-05, PERF-06 | 4 |
+| 27 | FINAL-01, FINAL-02, FINAL-03, FINAL-04, FINAL-05, FINAL-06 | 6 |
+| 28 | MODE-01, MODE-02, MODE-03, MODE-04, MODE-05, MODE-06 | 6 |
+| 29 | REJECT-01, REJECT-02, REJECT-03, REJECT-04, REJECT-05, REJECT-06, REJECT-07, REJECT-08, REJECT-09 | 9 |
+| 30 | BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08 | 6 |
+| 31 | DIAG-01, DIAG-02, DIAG-03 | 3 |
+| 32 | PERF-01, PERF-02, PERF-03, PERF-04, DOC-01, DOC-02, DOC-03, DOC-04 | 8 |
+| **Total** | **All v0.5.0 requirements** | **42/42** |
 
-**Coverage:** 100% — every v0.4.0 requirement is assigned to exactly one phase.
+**Coverage:** 100% — every v0.5.0 requirement is assigned to exactly one phase.
 
 ## Phase Ordering Rationale
 
-- Phase 21 freezes the public priority contract and canonical immutable representation before any runtime or adapter depends on it.
-- Phase 22 proves ordered selection and lifecycle boundaries against that representation before higher-level constructors can replay the behavior.
-- Phase 23 removes singular assumptions from every construction and identity-preserving surface, producing the stable topology projection required by tooling.
-- Phase 24 updates diagnostics and renderers only after candidate identity and snapshot shape are complete.
-- Phase 25 validates the fully integrated system across installed artifacts, then publishes performance claims and the drone example against proven behavior.
+- Phase 26 establishes the shared atomic construction seam and evidence vocabulary before new semantic fields multiply adapter behavior.
+- Phase 27 introduces final-state truth first because termination and final-source invariants affect every later constructor and projection.
+- Phase 28 specializes lifecycle behavior only after state metadata and the canonical registrar are stable.
+- Phase 29 adds rejection after selection and lifecycle boundaries can distinguish pre-commit policy from post-commit failure.
+- Phase 30 consolidates the public construction story and persistence only after all runtime metadata has a canonical representation.
+- Phase 31 updates diagnostics from the settled immutable graph projection instead of duplicating evolving runtime logic.
+- Phase 32 verifies the integrated system in fresh artifacts, protects the performance identity, and publishes guidance only for behavior already proven end to end.
 
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 21. Priority Contract & Atomic Registration | v0.4.0 | 2/2 | Complete    | 2026-09-06 |
-| 22. Ordered Runtime Selection & Lifecycle Integration | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
-| 23. Construction, Declarative & Serialization Parity | v0.4.0 | 3/3 | Complete    | 2026-09-06 |
-| 24. Candidate-Aware Diagnostics & Output | v0.4.0 | 3/3 | Complete    | 2026-09-07 |
-| 25. Performance, Artifact Proof & Drone Guidance | v0.4.0 | 5/5 | Complete | 2026-09-07 |
+| 26. Canonical Construction & Evidence Contract | v0.5.0 | 0/TBD | Not started | - |
+| 27. Explicit Final States | v0.5.0 | 0/TBD | Not started | - |
+| 28. Same-State Transition Modes | v0.5.0 | 0/TBD | Not started | - |
+| 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |
+| 30. Builder-First Construction & Persistence Parity | v0.5.0 | 0/TBD | Not started | - |
+| 31. Semantic Diagnostics & Visualization | v0.5.0 | 0/TBD | Not started | - |
+| 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |
 
 ---
-*Roadmap created: 2026-09-06 for v0.4.0 Priority-Aware Guarded Transitions*
-
-Full archived milestone detail: `.planning/milestones/v0.4.0-ROADMAP.md`.
+*Roadmap created: 2026-09-15 for v0.5.0 Explicit Flat-FSM Semantics*

@@ -96,58 +96,58 @@
 
 ## Traceability
 
-Roadmap phases are populated during roadmap creation. Every v0.5.0 requirement must map to exactly one phase.
+Every v0.5.0 requirement maps to exactly one roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FINAL-01 | TBD | Pending |
-| FINAL-02 | TBD | Pending |
-| FINAL-03 | TBD | Pending |
-| FINAL-04 | TBD | Pending |
-| FINAL-05 | TBD | Pending |
-| FINAL-06 | TBD | Pending |
-| MODE-01 | TBD | Pending |
-| MODE-02 | TBD | Pending |
-| MODE-03 | TBD | Pending |
-| MODE-04 | TBD | Pending |
-| MODE-05 | TBD | Pending |
-| MODE-06 | TBD | Pending |
-| REJECT-01 | TBD | Pending |
-| REJECT-02 | TBD | Pending |
-| REJECT-03 | TBD | Pending |
-| REJECT-04 | TBD | Pending |
-| REJECT-05 | TBD | Pending |
-| REJECT-06 | TBD | Pending |
-| REJECT-07 | TBD | Pending |
-| REJECT-08 | TBD | Pending |
-| REJECT-09 | TBD | Pending |
-| BUILD-01 | TBD | Pending |
-| BUILD-02 | TBD | Pending |
-| BUILD-03 | TBD | Pending |
-| BUILD-04 | TBD | Pending |
-| BUILD-05 | TBD | Pending |
-| BUILD-06 | TBD | Pending |
-| BUILD-07 | TBD | Pending |
-| BUILD-08 | TBD | Pending |
-| DIAG-01 | TBD | Pending |
-| DIAG-02 | TBD | Pending |
-| DIAG-03 | TBD | Pending |
-| PERF-01 | TBD | Pending |
-| PERF-02 | TBD | Pending |
-| PERF-03 | TBD | Pending |
-| PERF-04 | TBD | Pending |
-| PERF-05 | TBD | Pending |
-| PERF-06 | TBD | Pending |
-| DOC-01 | TBD | Pending |
-| DOC-02 | TBD | Pending |
-| DOC-03 | TBD | Pending |
-| DOC-04 | TBD | Pending |
+| FINAL-01 | Phase 27 | Pending |
+| FINAL-02 | Phase 27 | Pending |
+| FINAL-03 | Phase 27 | Pending |
+| FINAL-04 | Phase 27 | Pending |
+| FINAL-05 | Phase 27 | Pending |
+| FINAL-06 | Phase 27 | Pending |
+| MODE-01 | Phase 28 | Pending |
+| MODE-02 | Phase 28 | Pending |
+| MODE-03 | Phase 28 | Pending |
+| MODE-04 | Phase 28 | Pending |
+| MODE-05 | Phase 28 | Pending |
+| MODE-06 | Phase 28 | Pending |
+| REJECT-01 | Phase 29 | Pending |
+| REJECT-02 | Phase 29 | Pending |
+| REJECT-03 | Phase 29 | Pending |
+| REJECT-04 | Phase 29 | Pending |
+| REJECT-05 | Phase 29 | Pending |
+| REJECT-06 | Phase 29 | Pending |
+| REJECT-07 | Phase 29 | Pending |
+| REJECT-08 | Phase 29 | Pending |
+| REJECT-09 | Phase 29 | Pending |
+| BUILD-01 | Phase 30 | Pending |
+| BUILD-02 | Phase 30 | Pending |
+| BUILD-03 | Phase 30 | Pending |
+| BUILD-04 | Phase 26 | Pending |
+| BUILD-05 | Phase 26 | Pending |
+| BUILD-06 | Phase 30 | Pending |
+| BUILD-07 | Phase 30 | Pending |
+| BUILD-08 | Phase 30 | Pending |
+| DIAG-01 | Phase 31 | Pending |
+| DIAG-02 | Phase 31 | Pending |
+| DIAG-03 | Phase 31 | Pending |
+| PERF-01 | Phase 32 | Pending |
+| PERF-02 | Phase 32 | Pending |
+| PERF-03 | Phase 32 | Pending |
+| PERF-04 | Phase 32 | Pending |
+| PERF-05 | Phase 26 | Pending |
+| PERF-06 | Phase 26 | Pending |
+| DOC-01 | Phase 32 | Pending |
+| DOC-02 | Phase 32 | Pending |
+| DOC-03 | Phase 32 | Pending |
+| DOC-04 | Phase 32 | Pending |
 
 **Coverage:**
 - v0.5.0 requirements: 42 total
-- Mapped to phases: 0
-- Unmapped: 42
+- Mapped to phases: 42
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-09-15*
-*Last updated: 2026-09-15 after initial definition*
+*Last updated: 2026-09-15 after roadmap creation*
