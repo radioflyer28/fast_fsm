@@ -222,8 +222,11 @@ def test_exact_version_children_have_distinct_locked_script_commands() -> None:
         str(Path(__file__).parents[1].resolve()),
     ]
     assert Path(fast[5]).name == "fast_fsm_runner.py"
-    for version in ("2_5", "3_2"):
-        command = commands[f"python-statemachine-{version.replace('_', '.')}" ]
+    for version, implementation_id in (
+        ("2_5", "python-statemachine-2.5.0"),
+        ("3_2", "python-statemachine-3.2.1"),
+    ):
+        command = commands[implementation_id]
         assert command[:3] == ["uv", "run", "--locked"]
         assert command[3] == "--script"
         assert Path(command[4]).name == f"python_statemachine_{version}.py"
@@ -315,7 +318,9 @@ def test_run_child_bounds_and_validates_subprocess_output(
         return subprocess.CompletedProcess([], 2, "", "caller secret")
 
     monkeypatch.setattr(subprocess, "run", failed)
-    with pytest.raises(common.ComparisonContractError, match="child process failed") as error:
+    with pytest.raises(
+        common.ComparisonContractError, match="child process failed"
+    ) as error:
         run_comparison.run_child(["fixture-child"])
     assert "caller secret" not in str(error.value)
 
