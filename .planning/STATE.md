@@ -4,9 +4,9 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 26
 current_phase_name: Canonical Construction & Evidence Contract
-status: executing
-stopped_at: Completed 26-04-PLAN.md
-last_updated: "2026-09-15T21:04:48.000Z"
+status: verifying
+stopped_at: Completed 26-05-PLAN.md; phase review and verification pending
+last_updated: "2026-09-15T21:22:00.000Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 26 execution started
 state_head: fc9c1bf00311ca529a706d5ae490719035f10b81
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 26 (Canonical Construction & Evidence Contract) — EXECUTING
+Phase: 26 (Canonical Construction & Evidence Contract) — VERIFYING
 Plan: 5 of 5
-Status: Executing plan 5 of 5
-Last activity: 2026-09-15 — Completed Phase 26 plan 04 provenance checkpoint
+Status: All five plans complete; phase review and goal-backward verification pending
+Last activity: 2026-09-15 — Completed Phase 26 plan 05 exact manual comparison evidence
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -59,6 +59,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 26 P02 | 17min | 2 tasks | 6 files |
 | Phase 26 P03 | 16min | 2 tasks | 6 files |
 | Phase 26 P04 | checkpoint | 1 task | 0 files |
+| Phase 26 P05 | 18min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -79,6 +80,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 26]: Clones preserve State and Condition collaborator identity but reconstruct independent transition entries, groups, and tables. — Prevents topology aliasing while retaining shallow collaborator semantics.
 - [Phase 26]: FSMBuilder stages immutable named requests and binds fresh endpoint-aware copies only inside a private build candidate. — Keeps failed builds retryable and avoids positional staging drift.
 - [Phase 26]: Human approval covers exactly python-statemachine 2.5.0 and 3.2.1 from fgmacedo/python-statemachine for adjacent isolated benchmark locks. — Establishes the external package trust boundary without broadening project dependencies.
+- [Phase 26]: Exact comparator packages live only in adjacent uv script locks; the ordinary dependency lock and required automation remain comparator-free. — Keeps competitor observations reproducible without taxing installation, CI, or release paths.
+- [Phase 26]: Manual comparison children run from neutral directories with hard time/count limits and incremental per-stream output caps. — Prevents the observational tool from becoming an unbounded local resource or disclosure boundary.
 
 ### Pending Todos
 
@@ -101,9 +104,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-15T18:17:21.942Z
-Stopped at: Completed 26-04-PLAN.md
+Stopped at: Completed 26-05-PLAN.md; phase review and verification pending
 Resume file: None
 
 ## Operator Next Steps
 
-- Execute Phase 26 plan 05: generate adjacent locks, wire the manual comparison command, and verify ordinary dependency/CI isolation.
+- Run the Phase 26 code review and goal-backward verifier; close `fast_fsm-qj4` only after every phase gate succeeds.

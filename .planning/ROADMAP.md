@@ -66,7 +66,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 26-05-PLAN.md — generate exact locks, isolate ordinary dependencies/CI, wire the manual observation command, and carry the phase Beads item to verification-only closure.
+- [x] 26-05-PLAN.md — generate exact locks, isolate ordinary dependencies/CI, wire the manual observation command, and carry the phase Beads item to verification-only closure.
 
 ### Phase 27: Explicit Final States
 
