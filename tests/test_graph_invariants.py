@@ -201,7 +201,7 @@ def test_graph_snapshot_captures_only_narrow_static_unconditional_evidence() -> 
 
 
 def test_clone_shares_candidate_identity_but_not_candidate_tables() -> None:
-    """Clones retain immutable entries/references while registrations isolate."""
+    """Clones rebuild entries while retaining canonical collaborator identity."""
     from fast_fsm import FuncCondition
 
     shared = FuncCondition(lambda **kw: True, name="shared")
@@ -230,16 +230,116 @@ def test_clone_shares_candidate_identity_but_not_candidate_tables() -> None:
 
     clone = machine.clone()
     original_slot = machine._transitions["idle"]["go"]
-    assert clone._transitions["idle"]["go"] is original_slot
+    clone_slot = clone._transitions["idle"]["go"]
+    assert clone._transitions is not machine._transitions
+    assert clone._transitions["idle"] is not machine._transitions["idle"]
+    assert clone_slot is not original_slot
+    assert isinstance(clone_slot, _TransitionGroup)
+    assert isinstance(original_slot, _TransitionGroup)
+    assert all(
+        clone_entry is not original_entry
+        for clone_entry, original_entry in zip(
+            clone_slot.entries, original_slot.entries, strict=True
+        )
+    )
+    assert all(
+        clone_entry.to_state is original_entry.to_state
+        for clone_entry, original_entry in zip(
+            clone_slot.entries, original_slot.entries, strict=True
+        )
+    )
     assert tuple(entry.condition_ref for entry in original_slot.entries) == (
         "shared",
         "shared",
     )
-    assert all(entry.condition is shared for entry in original_slot.entries)
+    assert all(entry.condition is shared for entry in clone_slot.entries)
+    assert tuple(
+        (entry.priority, entry.condition_ref, entry.after, entry.within)
+        for entry in clone_slot.entries
+    ) == tuple(
+        (entry.priority, entry.condition_ref, entry.after, entry.within)
+        for entry in original_slot.entries
+    )
 
     clone.add_transition("go", "idle", "alternate", priority=-1)
     assert len(machine._transitions["idle"]["go"].entries) == 2
     assert len(clone._transitions["idle"]["go"].entries) == 3
+
+
+def test_clone_reconstruction_failure_preserves_source_and_retryability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late clone transaction failure cannot mutate the source template."""
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+    machine.add_transition("go", idle, running, priority=1)
+    machine.add_transition("go", idle, complete, priority=2)
+    before = graph_fingerprint(machine)
+    original_apply = StateMachine._apply_transition_requests_owned
+
+    def fail_clone_apply(
+        candidate: StateMachine, requests: tuple[_TransitionRequest, ...] | None
+    ) -> None:
+        if candidate is not machine:
+            raise RuntimeError("injected clone reconstruction failure")
+        original_apply(candidate, requests)
+
+    monkeypatch.setattr(
+        StateMachine, "_apply_transition_requests_owned", fail_clone_apply
+    )
+    with pytest.raises(RuntimeError, match="injected clone reconstruction failure"):
+        machine.clone()
+    assert graph_fingerprint(machine) == before
+
+    monkeypatch.setattr(
+        StateMachine, "_apply_transition_requests_owned", original_apply
+    )
+    clone = machine.clone()
+    assert clone._graph_snapshot() == machine._graph_snapshot()
+    assert clone._transitions["idle"]["go"] is not machine._transitions["idle"]["go"]
+
+
+def test_retained_transition_adapters_use_the_canonical_request_transaction() -> None:
+    """Each retained topology adapter has one request-based publication seam."""
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    regions = (
+        core_source[
+            core_source.index("    def quick_build(") : core_source.index(
+                "    @classmethod\n    def from_dict(",
+                core_source.index("    def quick_build("),
+            )
+        ],
+        core_source[
+            core_source.index("    def from_dict(") : core_source.index(
+                "    def to_dict(", core_source.index("    def from_dict(")
+            )
+        ],
+        core_source[
+            core_source.index("    def _add_bidirectional_transition_owned(") : core_source.index(
+                "    def add_emergency_transition(",
+                core_source.index("    def _add_bidirectional_transition_owned("),
+            )
+        ],
+        core_source[
+            core_source.index("    def _add_emergency_transition_owned(") : core_source.index(
+                "    def can_trigger(",
+                core_source.index("    def _add_emergency_transition_owned("),
+            )
+        ],
+        core_source[
+            core_source.index("    def _clone_owned(") : core_source.index(
+                "    def _resolve_trigger(", core_source.index("    def _clone_owned(")
+            )
+        ],
+    )
+
+    for adapter_source in regions:
+        assert "_TransitionRequest" in adapter_source
+        assert adapter_source.count("_apply_transition_requests_owned") == 1
+        assert "_commit_transition_plan" not in adapter_source
 
 
 def test_priority_selectors_do_not_call_the_cold_projection_helper() -> None:

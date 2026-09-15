@@ -25,6 +25,7 @@ from fast_fsm.core import (
     State,
     StateMachine,
     TransitionResult,
+    _TransitionGroup,
     transition,
 )
 
@@ -1254,8 +1255,17 @@ class TestAsyncPriorityCloneParity:
 
         clone = machine.clone()
         original_slot = machine._transitions["idle"]["go"]
-        assert clone._transitions["idle"]["go"] is original_slot
-        assert all(entry.condition is shared for entry in original_slot.entries)
+        clone_slot = clone._transitions["idle"]["go"]
+        assert clone_slot is not original_slot
+        assert isinstance(clone_slot, _TransitionGroup)
+        assert isinstance(original_slot, _TransitionGroup)
+        assert all(
+            clone_entry is not original_entry
+            for clone_entry, original_entry in zip(
+                clone_slot.entries, original_slot.entries, strict=True
+            )
+        )
+        assert all(entry.condition is shared for entry in clone_slot.entries)
         assert set(clone.get_reachable_states("idle")) == {"safe", "alternate"}
         assert await clone.can_trigger_async("go")
 
