@@ -15,9 +15,25 @@ environment-labeled observations.
 ## Current State
 
 v0.4.0 Priority-Aware Guarded Transitions is complete: 15/15 requirements,
-five verified phases, and a passing cross-phase milestone audit. The milestone
-is a completed development/planning cycle; no package release, publication, or
-version bump has been performed. Next work starts with a new milestone.
+five verified phases, and a passing cross-phase milestone audit. v0.5.0 is now
+being defined around explicit flat-FSM semantics that deepen the current model
+without adopting a general-purpose statechart runtime.
+
+## Current Milestone: v0.5.0 Explicit Flat-FSM Semantics
+
+**Goal:** Make completion, same-state behavior, and expected domain rejection
+explicit while preserving Fast FSM's decisive speed advantage for flat,
+deterministic machines.
+
+**Target features:**
+
+- Explicit final states and termination queries
+- Per-transition internal versus external self-transition semantics
+- Structured expected domain rejection distinct from guard ineligibility and
+  unexpected execution failure
+- Construction, runtime, serialization, diagnostic, and sync/async parity
+- Historical and current competitor benchmarks, installed-artifact proof, and
+  a progressive drone tutorial
 
 ## Completed: v0.2.3 Timing Condition Helpers (shipped 2026-04-05)
 
@@ -97,7 +113,21 @@ artifact proof, and the controller-owned drone example preserve that contract.
 
 ### Active
 
-(None — define the next milestone before adding active requirements.)
+- [ ] Users can declare final states and query termination without inferring
+  domain intent from missing outgoing edges.
+- [ ] Users can choose internal or external lifecycle semantics for same-state
+  transitions.
+- [ ] Applications can report expected domain rejection distinctly from a
+  false guard or unexpected execution failure.
+- [ ] Every supported construction, execution, persistence, diagnostic, and
+  visualization path preserves the new semantics across synchronous, async,
+  pure-Python, and compiled artifacts.
+- [ ] The untouched compiled singleton path remains direct O(1) and at least
+  200,000 operations per second, with feature-local costs measured separately
+  and contemporary competitor comparisons labelled accurately.
+- [ ] Users can learn the semantics progressively through the controller-owned
+  drone example without introducing statechart, scheduler, or task-supervision
+  machinery.
 
 ### Out of Scope
 
@@ -153,6 +183,7 @@ artifact proof, and the controller-owned drone example preserve that contract.
 | Separate O(1) singleton work from local O(k) group work in guidance | Keep performance claims truthful without exposing private group storage as API | ✓ Phase 25 documented and verified |
 | Route each drone sample through one FSM-owned `telemetry_tick` | Keep failsafe precedence in fixed guards and aircraft effects at committed state entry | ✓ Phase 25 example documented and verified |
 | Use `uv.lock` plus `uv sync --locked` for release dependency resolution | Avoid environment-specific uv/cache gates while retaining guarded baseline refresh validation | ✓ Phase 25 release evidence verified |
+| Limit v0.5.0 to high/medium recommendations that deepen the flat FSM | Preserve Fast FSM's performance identity; defer queued processing, lazy event context, state-store adapters, and statechart features to separate future decisions | — Pending |
 
 ## Evolution
 
@@ -172,4 +203,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-07 after v0.4.0 milestone completion*
+*Last updated: 2026-09-15 after starting v0.5.0 milestone definition*

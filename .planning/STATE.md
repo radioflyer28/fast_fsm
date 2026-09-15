@@ -1,38 +1,33 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.4.0
-milestone_name: Priority-Aware Guarded Transitions
-status: Awaiting next milestone
-stopped_at: Awaiting next milestone definition
-last_updated: "2026-09-12T00:22:24Z"
-last_activity: 2026-09-11
-last_activity_desc: "Completed quick task 260911-ra8: condition interface redesign"
-state_head: e495a1c6c5f904679a81e7024c46cbb2d2298eac
+milestone: v0.5.0
+milestone_name: Explicit Flat-FSM Semantics
+status: planning
+last_updated: "2026-09-15T14:10:26.429Z"
+last_activity: 2026-09-15
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 16
-  completed_plans: 16
-  percent: 100
-current_phase: null
-current_phase_name: null
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: Fast FSM
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-07)
+See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Preserve ≥200,000 ops/sec singleton dispatch while finite guarded candidate groups resolve deterministically with explicit local O(k) cost.
-**Current focus:** Planning the next milestone
+**Current focus:** Defining v0.5.0 Explicit Flat-FSM Semantics
 
 ## Current Position
 
-Phase: Milestone v0.4.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-11 — Completed quick task 260911-ra8: condition interface redesign
+Status: Defining requirements
+Last activity: 2026-09-15 — Milestone v0.5.0 started
 
 ## Performance Metrics
 
