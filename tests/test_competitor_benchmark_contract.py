@@ -314,6 +314,14 @@ def test_run_child_bounds_and_validates_subprocess_output(
     with pytest.raises(common.ComparisonContractError, match="stdout"):
         run_comparison.run_child(["fixture-child"])
 
+    def excessive(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        output = "x" * (run_comparison.MAX_CHILD_OUTPUT_BYTES + 1)
+        return subprocess.CompletedProcess([], 0, output, "")
+
+    monkeypatch.setattr(subprocess, "run", excessive)
+    with pytest.raises(common.ComparisonContractError, match="stdout"):
+        run_comparison.run_child(["fixture-child"])
+
     def failed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], 2, "", "caller secret")
 
