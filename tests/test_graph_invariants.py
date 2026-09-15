@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from fast_fsm import State, StateMachine, TransitionEntry
-from fast_fsm.core import _TransitionGroup
+from fast_fsm.core import _TransitionGroup, _TransitionRequest
 
 
 def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
@@ -484,6 +484,82 @@ def test_exact_duplicate_is_version_neutral_and_preserves_slot_identity() -> Non
 
     assert machine._transitions[idle.name]["go"] is first
     assert machine._graph_version == before_version
+
+
+def test_construction_request_copies_sources_and_is_immutable() -> None:
+    machine, idle, running = make_machine()
+    raw_sources = [idle]
+
+    request = _TransitionRequest("go", raw_sources, running)
+    raw_sources.append(running)
+
+    assert request.sources == (idle,)
+    assert request.sources[0] is idle
+    assert request.to_state is running
+    with pytest.raises((AttributeError, TypeError)):
+        request.trigger = "changed"  # type: ignore[misc]
+
+
+def test_construction_request_direct_and_batch_share_canonical_transaction() -> None:
+    direct, direct_idle, direct_running = make_machine()
+    batch, batch_idle, batch_running = make_machine()
+
+    direct.add_transition("go", direct_idle, direct_running, priority=-3)
+    batch.add_transitions([("go", batch_idle, batch_running, None, -3)])
+
+    direct_row = direct._graph_snapshot().transitions[0]
+    batch_row = batch._graph_snapshot().transitions[0]
+    assert (
+        direct_row.trigger,
+        direct_row.from_state_name,
+        direct_row.to_state_name,
+        direct_row.priority,
+    ) == (
+        batch_row.trigger,
+        batch_row.from_state_name,
+        batch_row.to_state_name,
+        batch_row.priority,
+    )
+    assert direct._graph_version == batch._graph_version
+
+
+def test_construction_request_collection_rejects_before_publication() -> None:
+    machine, idle, running = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(TypeError, match="request collection"):
+        machine._apply_transition_requests_owned(None)  # type: ignore[arg-type]
+    assert graph_fingerprint(machine) == before
+
+    with pytest.raises(TypeError, match="transition request"):
+        machine._apply_transition_requests_owned(
+            (_TransitionRequest("go", idle, running), object())  # type: ignore[arg-type]
+        )
+    assert graph_fingerprint(machine) == before
+
+    machine._apply_transition_requests_owned(())
+    assert graph_fingerprint(machine) == before
+
+
+def test_construction_request_batch_publishes_all_slots_once() -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+    before_version = machine._graph_version
+
+    machine.add_transitions(
+        [
+            ("go", idle, running, None, 5),
+            ("go", idle, complete, None, -2),
+            ("finish", running, complete),
+        ]
+    )
+
+    group = machine._transitions[idle.name]["go"]
+    assert isinstance(group, _TransitionGroup)
+    assert tuple(entry.priority for entry in group.entries) == (-2, 5)
+    assert machine._transitions[running.name]["finish"].to_state is complete
+    assert machine._graph_version == before_version + 1
 
 
 def test_equal_priority_conflict_rolls_back_all_staged_replacements() -> None:
