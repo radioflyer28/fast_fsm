@@ -454,12 +454,12 @@ Legacy omission defaults all states to non-final, while the additive field carri
 |---|-------|---------|---------------|
 | — | None. Locked semantics come from CONTEXT.md; codebase claims were read from source; the `final_states` spelling is a recommendation within delegated discretion, not an external factual assumption. | — | — |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does the getter-only `_final` property compile identically under mypyc on all supported interpreters?**
+1. **Does the getter-only `_final` property compile identically under mypyc on all supported interpreters? — RESOLVED as a mandatory execution-time validation requirement.**
    - What we know: `State` is compiled and explicitly allows interpreted subclasses; the project already requires native proof for core changes. [VERIFIED: `src/fast_fsm/core.py:838-839`; `setup.py:16-39`]
    - What's unclear: Source inspection cannot prove generated native behavior.
-   - Recommendation: Treat `task build-check` plus compiled Phase 27 behavioral tests as a phase gate, not as optional follow-up.
+   - Planning resolution: Plan 27-03 Task 2 must run `task build-check`, assert a native `fast_fsm.core` origin, execute focused compiled Phase 27 behavioral tests, restore pure-source import resolution through constrained recoverable relocation of only the exact preflight-reported shadows, and rerun the full source suite. Any failure in this native parity sequence blocks Phase 27 acceptance.
 
 No user decision is required before planning; all semantic choices are locked or delegated.
 
