@@ -12,6 +12,7 @@ import tomllib
 from typing import Any
 
 import pytest
+import yaml
 
 BENCHMARK_ROOT = Path(__file__).parents[1] / "benchmarks"
 REPOSITORY_ROOT = Path(__file__).parents[1]
@@ -303,26 +304,37 @@ def test_parent_builds_ratios_only_after_identity_and_required_semantics() -> No
     report = run_comparison.build_comparison_report(records)
 
     assert report["observation_only"] is True
-    assert {ratio["scenario_id"] for ratio in report["ratios"]} == {
+    comparisons = {
+        comparison["scenario_id"]: comparison
+        for comparison in report["scenario_comparisons"]
+    }
+    assert set(comparisons) == {
         "flat-alternating-cycle",
         "false-guard-no-transition",
+        "final-state-rejection",
     }
-    assert all(
-        ratio["competitor_id"].startswith("python-statemachine-")
-        for ratio in report["ratios"]
-    )
-    assert report["unsupported"] == [
-        {
-            "implementation_id": implementation,
-            "scenario_id": "final-state-rejection",
-            "reason": "api-unavailable",
+    for scenario_id in common.REQUIRED_SCENARIO_IDS:
+        comparison = comparisons[scenario_id]
+        assert comparison["status"] == "supported"
+        assert comparison["unsupported_reason"] is None
+        assert comparison["required_values"] == common.EXPECTED_PREFLIGHTS[scenario_id]
+        assert set(comparison["ratios"]) == {
+            "python-statemachine-2.5.0",
+            "python-statemachine-3.2.1",
         }
+    optional = comparisons["final-state-rejection"]
+    assert optional["status"] == "unsupported"
+    assert optional["ratios"] == {}
+    assert optional["medians_ns"] == {}
+    assert optional["operations_per_second"] == {}
+    assert optional["unsupported_reason"] == {
+        implementation: "api-unavailable"
         for implementation in (
             "fast-fsm",
             "python-statemachine-2.5.0",
             "python-statemachine-3.2.1",
         )
-    ]
+    }
 
 
 def test_parent_rejects_shared_origin_and_required_preflight_contradiction() -> None:
@@ -395,3 +407,100 @@ def test_neutral_cwd_fast_child_smoke_resolves_repository_origin(
     assert Path(str(record["module_origin"])).is_relative_to(
         Path(__file__).parents[1].resolve()
     )
+
+
+def test_stdout_default_and_explicit_output_use_the_same_canonical_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The parent persists nothing unless an output path is explicit."""
+
+    def install_fixture_children() -> None:
+        records = iter(
+            [
+                fixture_record("fast-fsm"),
+                fixture_record("python-statemachine-2.5.0"),
+                fixture_record("python-statemachine-3.2.1"),
+            ]
+        )
+        monkeypatch.setattr(run_comparison, "run_child", lambda _command: next(records))
+
+    monkeypatch.chdir(tmp_path)
+    install_fixture_children()
+    run_comparison.main(["--warmup", "1", "--operations", "2", "--samples", "1"])
+    stdout_only = capsys.readouterr().out
+    report = json.loads(stdout_only)
+    assert set(report) == {
+        "schema_version",
+        "observation_only",
+        "generated_at_utc",
+        "command",
+        "implementations",
+        "scenario_comparisons",
+    }
+    assert list(tmp_path.iterdir()) == []
+
+    output = tmp_path / "explicit-report.json"
+    install_fixture_children()
+    run_comparison.main(
+        [
+            "--warmup",
+            "1",
+            "--operations",
+            "2",
+            "--samples",
+            "1",
+            "--output",
+            str(output),
+        ]
+    )
+    explicit_stdout = capsys.readouterr().out
+    assert output.read_text() == explicit_stdout
+    assert json.loads(explicit_stdout)["observation_only"] is True
+
+
+def test_manual_task_and_compatibility_runner_have_one_comparison_path() -> None:
+    """Only the manual Task entry point reaches the isolated parent."""
+    taskfile = yaml.safe_load((REPOSITORY_ROOT / "Taskfile.yml").read_text())
+    tasks = taskfile["tasks"]
+    comparison = json.dumps(tasks["benchmark-compare"], sort_keys=True)
+    assert "run_comparison.py" in comparison
+    assert "CLI_ARGS" in comparison
+    assert "manual" in comparison.lower()
+    assert "observ" in comparison.lower()
+
+    forbidden = (
+        "benchmark-compare",
+        "run_comparison.py",
+        "python_statemachine_2_5.py",
+        "python_statemachine_3_2.py",
+    )
+    for task_name, definition in tasks.items():
+        if task_name == "benchmark-compare":
+            continue
+        serialized = json.dumps(definition, sort_keys=True)
+        assert all(token not in serialized for token in forbidden)
+
+    wrapper = (BENCHMARK_ROOT / "benchmark.py").read_text()
+    assert "comparison.run_comparison import main" in wrapper
+    assert "benchmark_results.json" not in wrapper
+    assert "benchmark_py_fsm" not in wrapper
+    assert "benchmark_transitions_fsm" not in wrapper
+
+
+def test_ordinary_ci_and_release_paths_exclude_comparison_execution() -> None:
+    """Required CI/release graphs contain no comparator execution edge."""
+    ordinary_sources = [
+        (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(),
+        (REPOSITORY_ROOT / "tools" / "release_evidence.py").read_text(),
+    ]
+    forbidden = (
+        "benchmark-compare",
+        "run_comparison.py",
+        "python_statemachine_2_5.py",
+        "python_statemachine_3_2.py",
+        "fast_over_competitor",
+    )
+    for source in ordinary_sources:
+        assert all(token not in source for token in forbidden)
