@@ -849,6 +849,12 @@ class State:
     __slots__ = ("name", "_final")
 
     def __init__(self, name: str, *, final: bool = False):
+        """Initialize a state with explicit immutable completion intent.
+
+        Args:
+            name: State name.
+            final: Whether this state explicitly represents termination.
+        """
         if type(final) is not bool:
             raise TypeError("final must be an exact built-in bool")
         self.name = name
@@ -865,6 +871,8 @@ class State:
         name: str,
         on_enter: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
+        *,
+        final: bool = False,
     ) -> "CallbackState":
         """
         Factory method to create a state with inline callbacks.
@@ -875,6 +883,7 @@ class State:
                 ``*args`` and ``**kwargs``.
             on_exit: Optional callback for exiting the state. It receives
                 ``*args`` and ``**kwargs``.
+            final: Whether this state explicitly represents termination.
 
         Returns:
             CallbackState instance with configured callbacks
@@ -887,7 +896,7 @@ class State:
                 on_exit=lambda *args, **kwargs: print("Processing finished"),
             )
         """
-        return CallbackState(name, on_enter, on_exit)
+        return CallbackState(name, on_enter, on_exit, final=final)
 
     def on_enter(
         self, from_state: Optional["State"], trigger: str, *args, **kwargs
@@ -931,8 +940,18 @@ class CallbackState(State):
         name: str,
         on_enter: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
+        *,
+        final: bool = False,
     ):
-        super().__init__(name)
+        """Initialize callbacks and optional explicit completion intent.
+
+        Args:
+            name: State name.
+            on_enter: Optional callback for entering the state.
+            on_exit: Optional callback for exiting the state.
+            final: Whether this state explicitly represents termination.
+        """
+        super().__init__(name, final=final)
         self._on_enter = on_enter
         self._on_exit = on_exit
 
@@ -5284,8 +5303,21 @@ class DeclarativeState(State):
 
     __slots__ = ("_handlers", "_logger")
 
-    def __init__(self, name: str, logger_name: Optional[str] = None):
-        super().__init__(name)
+    def __init__(
+        self,
+        name: str,
+        logger_name: Optional[str] = None,
+        *,
+        final: bool = False,
+    ):
+        """Initialize declarative handlers and explicit completion intent.
+
+        Args:
+            name: State name.
+            logger_name: Optional logger name for declarative diagnostics.
+            final: Whether this state explicitly represents termination.
+        """
+        super().__init__(name, final=final)
         self._handlers: Dict[str, Tuple[_DeclarativeHandler, ...]] = {}
 
         # Set up logging (aligned with StateMachine pattern)

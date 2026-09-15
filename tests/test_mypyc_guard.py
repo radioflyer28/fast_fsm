@@ -1019,6 +1019,7 @@ def test_final_state_metadata_and_termination_query_keep_one_truth_source() -> N
     state = classes["State"]
     state_machine = classes["StateMachine"]
     async_declarative = classes["AsyncDeclarativeState"]
+    async_machine = classes["AsyncStateMachine"]
 
     state_slots = next(
         node.value
@@ -1088,7 +1089,9 @@ def test_final_state_metadata_and_termination_query_keep_one_truth_source() -> N
             for decorator in node.decorator_list
         )
     )
-    query_return = next(node.value for node in query.body if isinstance(node, ast.Return))
+    query_return = next(
+        node.value for node in query.body if isinstance(node, ast.Return)
+    )
     assert isinstance(query_return, ast.Attribute)
     assert query_return.attr == "final"
     assert isinstance(query_return.value, ast.Attribute)
@@ -1097,8 +1100,13 @@ def test_final_state_metadata_and_termination_query_keep_one_truth_source() -> N
     assert query_return.value.attr == "_current_state"
     assert not any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "is_terminated"
+        and node.name == "__init__"
         for node in async_declarative.body
+    )
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "is_terminated"
+        for node in async_machine.body
     )
 
 

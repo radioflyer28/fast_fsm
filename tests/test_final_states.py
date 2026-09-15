@@ -80,10 +80,14 @@ class TestFinalConstructionSurfaces:
     def test_state_create_preserves_callbacks_and_final_metadata(self) -> None:
         events: list[tuple[str, str, int, str]] = []
 
-        def on_enter(_from_state: State | None, trigger: str, value: int, *, tag: str) -> None:
+        def on_enter(
+            _from_state: State | None, trigger: str, value: int, *, tag: str
+        ) -> None:
             events.append(("enter", trigger, value, tag))
 
-        def on_exit(_to_state: State | None, trigger: str, value: int, *, tag: str) -> None:
+        def on_exit(
+            _to_state: State | None, trigger: str, value: int, *, tag: str
+        ) -> None:
             events.append(("exit", trigger, value, tag))
 
         state = State.create("done", on_enter, on_exit, final=True)
@@ -118,7 +122,9 @@ class TestFinalConstructionSurfaces:
 
     def test_declarative_state_surfaces_forward_final_metadata(self) -> None:
         declarative = DeclarativeState("done", "test.final", final=True)
-        async_declarative = AsyncDeclarativeState("async-done", "test.final", final=True)
+        async_declarative = AsyncDeclarativeState(
+            "async-done", "test.final", final=True
+        )
 
         assert declarative.final is True
         assert async_declarative.final is True
