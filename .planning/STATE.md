@@ -4,17 +4,17 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 26
 current_phase_name: Canonical Construction & Evidence Contract
-status: awaiting_checkpoint
-stopped_at: Completed 26-03-PLAN.md; awaiting 26-04 provenance approval
-last_updated: "2026-09-15T18:32:39.000Z"
+status: executing
+stopped_at: Completed 26-04-PLAN.md
+last_updated: "2026-09-15T21:04:48.000Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 26 execution started
-state_head: 646e78e532520e8a9ad22f7976e75684e2181fdd
+state_head: fc9c1bf00311ca529a706d5ae490719035f10b81
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -30,9 +30,9 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 26 (Canonical Construction & Evidence Contract) — EXECUTING
-Plan: 4 of 5
-Status: Awaiting required human provenance checkpoint
-Last activity: 2026-09-15 — Completed Phase 26 plan 03
+Plan: 5 of 5
+Status: Executing plan 5 of 5
+Last activity: 2026-09-15 — Completed Phase 26 plan 04 provenance checkpoint
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -41,7 +41,7 @@ Progress: [░░░░░░░░░░] 0%
 **Velocity:**
 
 - Prior milestone plans completed: 57
-- Current milestone plans completed: 3
+- Current milestone plans completed: 4
 - Current milestone execution time: 0.5 hours
 
 **By Phase:**
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 26 P01 | 12min | 2 tasks | 3 files |
 | Phase 26 P02 | 17min | 2 tasks | 6 files |
 | Phase 26 P03 | 16min | 2 tasks | 6 files |
+| Phase 26 P04 | checkpoint | 1 task | 0 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,7 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 26]: Retained adapters parse their own input language and then publish one immutable request collection through the machine-owned transaction. — Preserves adapter context without duplicating semantic topology rules.
 - [Phase 26]: Clones preserve State and Condition collaborator identity but reconstruct independent transition entries, groups, and tables. — Prevents topology aliasing while retaining shallow collaborator semantics.
 - [Phase 26]: FSMBuilder stages immutable named requests and binds fresh endpoint-aware copies only inside a private build candidate. — Keeps failed builds retryable and avoids positional staging drift.
+- [Phase 26]: Human approval covers exactly python-statemachine 2.5.0 and 3.2.1 from fgmacedo/python-statemachine for adjacent isolated benchmark locks. — Establishes the external package trust boundary without broadening project dependencies.
 
 ### Pending Todos
 
@@ -99,9 +101,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-15T18:17:21.942Z
-Stopped at: Completed 26-03-PLAN.md; awaiting 26-04 provenance approval
+Stopped at: Completed 26-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
-- Complete the Phase 26 plan 04 human provenance checkpoint for exact `python-statemachine` 2.5.0 and 3.2.1 dependencies.
+- Execute Phase 26 plan 05: generate adjacent locks, wire the manual comparison command, and verify ordinary dependency/CI isolation.
