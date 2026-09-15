@@ -8,6 +8,7 @@ tool snapshot without turning any of those details into public API.
 
 from __future__ import annotations
 
+import importlib.util
 import threading
 from enum import IntEnum
 from pathlib import Path
@@ -270,6 +271,11 @@ def test_clone_reconstruction_failure_preserves_source_and_retryability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A late clone transaction failure cannot mutate the source template."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if spec.origin.endswith((".so", ".pyd")):
+        pytest.skip("private monkeypatch injection requires the pure Python core")
+
     machine, idle, running = make_machine()
     complete = State("complete")
     machine.add_state(complete)
@@ -846,6 +852,11 @@ def test_construction_request_interruption_releases_ownership_without_publicatio
 def test_concurrent_construction_requests_are_serialized_as_whole_transactions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if spec.origin.endswith((".so", ".pyd")):
+        pytest.skip("private monkeypatch injection requires the pure Python core")
+
     machine, idle, running = make_machine()
     complete = State("complete")
     machine.add_state(complete)

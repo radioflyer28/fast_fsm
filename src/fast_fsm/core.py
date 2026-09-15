@@ -776,7 +776,8 @@ def _freeze_transition_sources(
 ) -> Tuple[Union[str, "State"], ...]:
     """Copy one public source shape into an immutable raw tuple."""
     if isinstance(sources, list):
-        return tuple(sources)
+        dynamic_sources: Any = sources
+        return tuple(iter(dynamic_sources))
     source = cast(Union[str, "State"], sources)
     return (source,)
 
@@ -848,7 +849,7 @@ class State:
 
     __slots__ = ("name", "_final")
 
-    def __init__(self, name: str, *, final: bool = False):
+    def __init__(self, name: str, *, final: object = False):
         """Initialize a state with explicit immutable completion intent.
 
         Args:
@@ -872,7 +873,7 @@ class State:
         on_enter: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
         *,
-        final: bool = False,
+        final: object = False,
     ) -> "CallbackState":
         """
         Factory method to create a state with inline callbacks.
@@ -941,7 +942,7 @@ class CallbackState(State):
         on_enter: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
         *,
-        final: bool = False,
+        final: object = False,
     ):
         """Initialize callbacks and optional explicit completion intent.
 
@@ -5338,7 +5339,7 @@ class DeclarativeState(State):
         name: str,
         logger_name: Optional[str] = None,
         *,
-        final: bool = False,
+        final: object = False,
     ):
         """Initialize declarative handlers and explicit completion intent.
 

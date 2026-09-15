@@ -431,10 +431,11 @@ def test_tracer_destination_enter_failure_commits_and_finalizes_once(
 
     def destination_enter(*_args: object, **_kwargs: object) -> None:
         recorder.add("destination-enter")
+        assert machine.is_terminated is True
         raise failure
 
     source = CallbackState("source", on_exit=source_exit)
-    destination = CallbackState("destination", on_enter=destination_enter)
+    destination = CallbackState("destination", on_enter=destination_enter, final=True)
     machine = StateMachine(source, name="lifecycle-tracer")
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination")
@@ -486,6 +487,7 @@ def test_tracer_destination_enter_failure_commits_and_finalizes_once(
     assert result.stage == "destination-enter"
     assert result.cause is failure
     assert machine.current_state is destination
+    assert machine.is_terminated is True
     assert [
         (record.from_state, record.trigger, record.to_state)
         for record in machine.history
@@ -948,18 +950,23 @@ def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
 ) -> None:
     """Every synchronous callback slot yields one truthful fail-fast result."""
     events: list[str] = []
+    termination_seen_during_entry: list[bool] = []
     failure = RuntimeError(f"{failing_stage}-secret")
 
     def callback(stage: str):
         def run(*_args: object, **_kwargs: object) -> None:
             events.append(stage)
+            if stage == "destination-enter":
+                termination_seen_during_entry.append(machine.is_terminated)
             if stage == failing_stage:
                 raise failure
 
         return run
 
     source = CallbackState("source", on_exit=callback("source-exit"))
-    destination = CallbackState("destination", on_enter=callback("destination-enter"))
+    destination = CallbackState(
+        "destination", on_enter=callback("destination-enter"), final=True
+    )
     machine = StateMachine(source, name=f"sync-{failing_stage}")
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination")
@@ -993,8 +1000,10 @@ def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
     assert result.cause is failure
     assert observed == ["observer"]
     assert machine.current_state is (destination if expected_committed else source)
+    assert machine.is_terminated is expected_committed
     assert len(machine.history) == int(expected_committed)
     assert events[-1] == failing_stage
+    assert termination_seen_during_entry == ([True] if expected_committed else [])
 
 
 @pytest.mark.parametrize(
@@ -1023,7 +1032,7 @@ def test_sync_declarative_failure_is_postcommit_and_finalized_once(
             return outcome
 
     source = Source("source")
-    destination = State("destination")
+    destination = State("destination", final=True)
     machine = StateMachine(source, name="sync-declarative-failure")
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination")
@@ -1039,6 +1048,7 @@ def test_sync_declarative_failure_is_postcommit_and_finalized_once(
     assert result.stage == "declarative-handler"
     assert result.cause is (outcome if expected_cause is not None else None)
     assert machine.current_state is destination
+    assert machine.is_terminated is True
     assert len(machine.history) == 1
     assert observer_calls == ["observer"]
 
@@ -1191,7 +1201,7 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
         condition = (
             _BlockingAsyncCondition(started, release) if boundary == "guard" else None
         )
-    destination = State("destination")
+    destination = State("destination", final=True)
     machine = AsyncStateMachine(source, name=f"cancel-{boundary}")
     machine.add_state(destination)
     machine.add_transition("advance", "source", "destination", condition)
@@ -1245,6 +1255,7 @@ async def test_async_cancellation_finalizes_once_at_the_reached_boundary(
             ("advance", "source", f"Transition cancelled at {expected_stage}"),
         ]
         assert machine.current_state is (destination if expected_committed else source)
+        assert machine.is_terminated is expected_committed
         assert len(machine.history) == int(expected_committed)
         assert "trigger-callback" not in events
         assert "after-transition" not in events
