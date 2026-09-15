@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
-current_phase: 26
-current_phase_name: Canonical Construction & Evidence Contract
-status: verifying
-stopped_at: Completed 26-05-PLAN.md; phase review and verification pending
-last_updated: "2026-09-15T21:22:00.000Z"
+current_phase: 27
+current_phase_name: Explicit Final States
+status: planning
+stopped_at: Phase 26 complete, ready to plan Phase 27
+last_updated: "2026-09-15T21:30:42.741Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 26 execution started
-state_head: fc9c1bf00311ca529a706d5ae490719035f10b81
+last_activity_desc: Phase 26 complete, transitioned to Phase 27
+state_head: 57efa76a02e04ad1ef02e911c902f1b9e42d4060
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 0
+  completed_plans: 5
+  percent: 14
 ---
 
 # State: Fast FSM
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 26 (Canonical Construction & Evidence Contract) — VERIFYING
-Plan: 5 of 5
-Status: All five plans complete; phase review and goal-backward verification pending
-Last activity: 2026-09-15 — Completed Phase 26 plan 05 exact manual comparison evidence
+Phase: 27 — Explicit Final States
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-15 — Phase 26 complete, transitioned to Phase 27
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 14%
 
 ## Performance Metrics
 
@@ -49,8 +49,9 @@ Progress: [░░░░░░░░░░] 0%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 26–32 | 0 | TBD | — |
+| 26 | 5 | - | - |
 
-**Recent Trend:** v0.4.0 shipped all five phases; v0.5.0 is ready for Phase 26 planning.
+**Recent Trend:** Phase 26 completed with 24/24 must-haves verified; v0.5.0 is ready for Phase 27 planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -104,9 +105,9 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-15T18:17:21.942Z
-Stopped at: Completed 26-05-PLAN.md; phase review and verification pending
+Stopped at: Phase 26 complete, ready to plan Phase 27
 Resume file: None
 
 ## Operator Next Steps
 
-- Run the Phase 26 code review and goal-backward verifier; close `fast_fsm-qj4` only after every phase gate succeeds.
+- Discuss and plan Phase 27: immutable explicit final states and O(1) termination truth.

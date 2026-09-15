@@ -26,7 +26,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
 
 **Milestone Goal:** Make completion, same-state behavior, and expected domain rejection explicit while preserving Fast FSM's decisive speed advantage for flat, deterministic machines.
 
-- [ ] **Phase 26: Canonical Construction & Evidence Contract** — establish one atomic construction seam and exact, non-gating competitor evidence lanes.
+- [x] **Phase 26: Canonical Construction & Evidence Contract** — establish one atomic construction seam and exact, non-gating competitor evidence lanes. (completed 2026-09-15)
 - [ ] **Phase 27: Explicit Final States** — make intentional completion immutable, queryable, and lifecycle-truthful.
 - [ ] **Phase 28: Same-State Transition Modes** — distinguish external re-entry from internal logical commits across sync and async execution.
 - [ ] **Phase 29: Expected Domain Rejection** — expose bounded structured rejection without priority fallthrough or lifecycle ambiguity.
@@ -184,7 +184,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 26. Canonical Construction & Evidence Contract | v0.5.0 | 4/5 | In Progress|  |
+| 26. Canonical Construction & Evidence Contract | v0.5.0 | 5/5 | Complete    | 2026-09-15 |
 | 27. Explicit Final States | v0.5.0 | 0/TBD | Not started | - |
 | 28. Same-State Transition Modes | v0.5.0 | 0/TBD | Not started | - |
 | 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |
