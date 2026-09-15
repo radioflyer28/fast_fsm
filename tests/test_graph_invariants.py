@@ -318,13 +318,17 @@ def test_retained_transition_adapters_use_the_canonical_request_transaction() ->
             )
         ],
         core_source[
-            core_source.index("    def _add_bidirectional_transition_owned(") : core_source.index(
+            core_source.index(
+                "    def _add_bidirectional_transition_owned("
+            ) : core_source.index(
                 "    def add_emergency_transition(",
                 core_source.index("    def _add_bidirectional_transition_owned("),
             )
         ],
         core_source[
-            core_source.index("    def _add_emergency_transition_owned(") : core_source.index(
+            core_source.index(
+                "    def _add_emergency_transition_owned("
+            ) : core_source.index(
                 "    def can_trigger(",
                 core_source.index("    def _add_emergency_transition_owned("),
             )

@@ -1059,8 +1059,10 @@ class TestConvenienceFunctions:
         method_start = source.index("    def quick_build(")
         method_end = source.index("    @classmethod\n    def from_dict(", method_start)
         quick_build_source = source[method_start:method_end]
-        assert "fsm.add_transitions(transition_rows)" in quick_build_source
+        assert "_TransitionRequest" in quick_build_source
+        assert "fsm._apply_transition_requests_owned(requests)" in quick_build_source
         assert "fsm.add_transition(" not in quick_build_source
+        assert "fsm.add_transitions(" not in quick_build_source
         assert machine._states["initial"] is initial
         assert machine._states["middle"] is middle
         assert machine._states["target"] is target

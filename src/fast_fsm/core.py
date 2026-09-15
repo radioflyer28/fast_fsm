@@ -1251,9 +1251,12 @@ class StateMachine:
             if state_obj is not initial_obj:
                 fsm.add_state(state_obj)
 
-        # Replay the full adapter input through the one canonical registrar.
-        # The candidate remains local until its complete topology validates.
-        fsm.add_transitions(transition_rows)
+        # Translate the complete adapter input into the private carrier, then
+        # publish the private candidate through the one canonical transaction.
+        requests: Tuple[_TransitionRequest, ...] = fsm._transition_requests_from_rows(
+            transition_rows
+        )
+        fsm._apply_transition_requests_owned(requests)
 
         return fsm
 
@@ -1498,7 +1501,7 @@ class StateMachine:
             normalized_registry[reference] = normalized
             return normalized
 
-        plans: List[_PreparedTransition] = []
+        requests: List[_TransitionRequest] = []
         for (
             index,
             trigger,
@@ -1517,23 +1520,27 @@ class StateMachine:
                 if resolved_reference is not None
                 else None
             )
-            try:
-                plans.append(
-                    fsm._normalize_transition_request(
-                        trigger,
-                        sources,
-                        target,
-                        condition,
-                        priority=priority,
-                        condition_ref=condition_ref,
-                        after=after,
-                        within=within,
-                    )
+            requests.append(
+                _TransitionRequest(
+                    trigger,
+                    _freeze_transition_sources(sources),
+                    target,
+                    condition,
+                    priority=priority,
+                    condition_ref=condition_ref,
+                    after=after,
+                    within=within,
                 )
-            except (TypeError, ValueError) as error:
-                raise type(error)(f"from_dict: transition[{index}] {error}") from None
+            )
 
-        fsm._commit_transition_plan(tuple(plans))
+        try:
+            fsm._apply_transition_requests_owned(tuple(requests))
+        except (TypeError, ValueError) as error:
+            # Dictionary shape, timing, and condition-reference errors retain
+            # their exact row context above. Remaining canonical conflicts can
+            # only arise while evaluating the complete final candidate set.
+            last_index = parsed_rows[-1][0] if parsed_rows else 0
+            raise type(error)(f"from_dict: transition[{last_index}] {error}") from None
         return fsm
 
     def to_dict(self) -> Dict[str, Any]:
@@ -2041,6 +2048,14 @@ class StateMachine:
         transitions: List[_TransitionRow],
     ) -> None:
         """Validate and commit a complete batch while the caller owns it."""
+        requests = self._transition_requests_from_rows(transitions)
+        self._apply_transition_requests_owned(requests)
+
+    @staticmethod
+    def _transition_requests_from_rows(
+        transitions: Sequence[_TransitionRow],
+    ) -> Tuple[_TransitionRequest, ...]:
+        """Parse public positional rows into one immutable request collection."""
         requests: List[_TransitionRequest] = []
         for entry in transitions:
             if len(entry) not in (3, 4, 5, 6, 7):
@@ -2071,7 +2086,7 @@ class StateMachine:
                     within=within,
                 )
             )
-        self._apply_transition_requests_owned(tuple(requests))
+        return tuple(requests)
 
     def add_bidirectional_transition(
         self,
@@ -2154,27 +2169,29 @@ class StateMachine:
         within2: object = None,
     ) -> None:
         """Validate and commit both directions while the caller owns it."""
-        first = self._normalize_transition_request(
-            trigger1,
-            state1,
-            state2,
-            condition1,
-            unless=unless1,
-            priority=priority1,
-            after=after1,
-            within=within1,
+        requests = (
+            _TransitionRequest(
+                trigger1,
+                _freeze_transition_sources(state1),
+                state2,
+                condition1,
+                unless=unless1,
+                priority=priority1,
+                after=after1,
+                within=within1,
+            ),
+            _TransitionRequest(
+                trigger2,
+                _freeze_transition_sources(state2),
+                state1,
+                condition2,
+                unless=unless2,
+                priority=priority2,
+                after=after2,
+                within=within2,
+            ),
         )
-        second = self._normalize_transition_request(
-            trigger2,
-            state2,
-            state1,
-            condition2,
-            unless=unless2,
-            priority=priority2,
-            after=after2,
-            within=within2,
-        )
-        self._commit_transition_plan((first, second))
+        self._apply_transition_requests_owned(requests)
 
     def add_emergency_transition(
         self,
@@ -2232,9 +2249,9 @@ class StateMachine:
         within: object = None,
     ) -> None:
         """Validate and commit an all-state transition while the caller owns it."""
-        prepared = self._normalize_transition_request(
+        request = _TransitionRequest(
             trigger,
-            list(self._states.values()),
+            tuple(self._states.values()),
             to_state,
             condition,
             unless=unless,
@@ -2242,7 +2259,7 @@ class StateMachine:
             after=after,
             within=within,
         )
-        self._commit_transition_plan((prepared,))
+        self._apply_transition_requests_owned((request,))
 
     @property
     def name(self) -> str:
@@ -3380,14 +3397,31 @@ class StateMachine:
         new_fsm: "StateMachine" = self.__class__(
             self._initial_state, name=self._name, clock=self._clock
         )
-        # Replace the minimal state/transition tables __init__ created with
-        # full shallow copies of our own tables (same State objects, independent
-        # inner transition dicts so additions to one don't bleed into the other).
+        # Preserve canonical State identities, but reconstruct every transition
+        # through the canonical transaction so entries, groups, and tables are
+        # structurally independent from the source machine.
         new_fsm._states = dict(self._states)
-        new_fsm._transitions = {
-            state_name: dict(triggers)
-            for state_name, triggers in self._transitions.items()
-        }
+        new_fsm._transitions = {state_name: {} for state_name in self._states}
+        requests: List[_TransitionRequest] = []
+        for source_name, triggers in self._transitions.items():
+            source = self._states[source_name]
+            for trigger, slot in triggers.items():
+                for entry in _transition_entries(slot):
+                    requests.append(
+                        _TransitionRequest(
+                            trigger,
+                            (source,),
+                            entry.to_state,
+                            entry.condition,
+                            priority=entry.priority,
+                            condition_ref=entry.condition_ref,
+                            after=entry.after,
+                            within=entry.within,
+                        )
+                    )
+        new_fsm._apply_transition_requests_owned(tuple(requests))
+        # Clone lineage keeps the source's externally visible topology version,
+        # independent of the reconstruction transaction's internal increment.
         new_fsm._graph_version = self._graph_version
         # current_state is already _initial_state from __init__ — correct.
         # Per-state callbacks are copied (shallow copy of each list).
