@@ -840,12 +840,24 @@ class State:
     """
     Base state class for FSM states.
     Uses slots for memory efficiency.
+
+    Args:
+        name: State name.
+        final: Whether this state explicitly represents termination.
     """
 
-    __slots__ = ("name",)
+    __slots__ = ("name", "_final")
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, final: bool = False):
+        if type(final) is not bool:
+            raise TypeError("final must be an exact built-in bool")
         self.name = name
+        self._final = final
+
+    @property
+    def final(self) -> bool:
+        """Return whether this state has been explicitly declared final."""
+        return self._final
 
     @classmethod
     def create(
@@ -2288,6 +2300,14 @@ class StateMachine:
     def current_state(self) -> State:
         """Get the current state"""
         return self._current_state
+
+    @property
+    def is_terminated(self) -> bool:
+        """Return whether the canonical current state is explicitly final.
+
+        Performance: O(1) — one current-state marker read.
+        """
+        return self._current_state.final
 
     @property
     def current_state_name(self) -> str:
