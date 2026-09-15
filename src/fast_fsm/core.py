@@ -765,10 +765,10 @@ class _TransitionRequest:
     to_state: Union[str, "State"]
     condition: Optional[Union[Condition, GuardCallable]] = None
     unless: Optional[Union[Condition, GuardCallable]] = None
-    priority: object = 0
+    priority: Any = 0
     condition_ref: Optional[str] = None
-    after: object = None
-    within: object = None
+    after: Any = None
+    within: Any = None
 
 
 def _freeze_transition_sources(
