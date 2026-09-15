@@ -1992,13 +1992,14 @@ def test_phase23_construction_projection_and_callback_probe_is_mode_invariant() 
     ]
     clone = quick.clone()
     assert clone.to_dict() == quick.to_dict()
-    assert clone._transitions["idle"]["go"] is quick._transitions["idle"]["go"]
+    assert clone._transitions["idle"]["go"] is not quick._transitions["idle"]["go"]
 
     core_source = CORE_PY.read_text(encoding="utf-8")
     from_dict_start = core_source.index("    def from_dict(")
     from_dict_end = core_source.index("    def to_dict(", from_dict_start)
     from_dict_source = core_source[from_dict_start:from_dict_end]
-    assert from_dict_source.count("fsm._commit_transition_plan(tuple(plans))") == 1
+    assert from_dict_source.count("fsm._apply_transition_requests_owned") == 1
+    assert "_TransitionRequest" in from_dict_source
     assert "fsm.add_transition(" not in from_dict_source
     with pytest.raises(ValueError, match="priority"):
         StateMachine.from_dict(
