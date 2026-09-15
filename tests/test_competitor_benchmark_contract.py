@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -15,6 +17,7 @@ sys.path.insert(0, str(BENCHMARK_ROOT))
 
 from comparison import common  # noqa: E402
 from comparison import fast_fsm_runner  # noqa: E402
+from comparison import run_comparison  # noqa: E402
 
 
 def supported_scenario(
@@ -197,3 +200,142 @@ def test_fast_fsm_record_proves_false_guard_before_measurement() -> None:
         "transition_callbacks": 0,
     }
     assert Path(str(checked["module_origin"])).is_absolute()
+
+
+def comparison_args() -> argparse.Namespace:
+    return argparse.Namespace(warmup=1, operations=2, samples=3)
+
+
+def test_exact_version_children_have_distinct_locked_script_commands() -> None:
+    commands = run_comparison.build_child_commands(comparison_args())
+
+    assert set(commands) == {
+        "fast-fsm",
+        "python-statemachine-2.5.0",
+        "python-statemachine-3.2.1",
+    }
+    fast = commands["fast-fsm"]
+    assert fast[:4] == [
+        "uv",
+        "run",
+        "--project",
+        str(Path(__file__).parents[1].resolve()),
+    ]
+    assert Path(fast[5]).name == "fast_fsm_runner.py"
+    for version in ("2_5", "3_2"):
+        command = commands[f"python-statemachine-{version.replace('_', '.')}" ]
+        assert command[:3] == ["uv", "run", "--locked"]
+        assert command[3] == "--script"
+        assert Path(command[4]).name == f"python_statemachine_{version}.py"
+
+
+@pytest.mark.parametrize(
+    ("filename", "version"),
+    [
+        ("python_statemachine_2_5.py", "2.5.0"),
+        ("python_statemachine_3_2.py", "3.2.1"),
+    ],
+)
+def test_exact_version_child_metadata_is_self_contained(
+    filename: str, version: str
+) -> None:
+    source = (BENCHMARK_ROOT / "comparison" / filename).read_text()
+    assert f'"python-statemachine=={version}"' in source
+    assert "import fast_fsm" not in source
+    assert "from fast_fsm" not in source
+    other = "3.2.1" if version == "2.5.0" else "2.5.0"
+    assert f'"python-statemachine=={other}"' not in source
+
+
+def test_parent_builds_ratios_only_after_identity_and_required_semantics() -> None:
+    records = [
+        fixture_record("fast-fsm"),
+        fixture_record("python-statemachine-2.5.0"),
+        fixture_record("python-statemachine-3.2.1"),
+    ]
+
+    report = run_comparison.build_comparison_report(records)
+
+    assert report["observation_only"] is True
+    assert {ratio["scenario_id"] for ratio in report["ratios"]} == {
+        "flat-alternating-cycle",
+        "false-guard-no-transition",
+    }
+    assert all(
+        ratio["competitor_id"].startswith("python-statemachine-")
+        for ratio in report["ratios"]
+    )
+    assert report["unsupported"] == [
+        {
+            "implementation_id": implementation,
+            "scenario_id": "final-state-rejection",
+            "reason": "api-unavailable",
+        }
+        for implementation in (
+            "fast-fsm",
+            "python-statemachine-2.5.0",
+            "python-statemachine-3.2.1",
+        )
+    ]
+
+
+def test_parent_rejects_shared_origin_and_required_preflight_contradiction() -> None:
+    fast = fixture_record("fast-fsm")
+    old = fixture_record("python-statemachine-2.5.0")
+    current = fixture_record("python-statemachine-3.2.1")
+    current["module_origin"] = old["module_origin"]
+    with pytest.raises(common.ComparisonContractError, match="distinct origin"):
+        run_comparison.build_comparison_report([fast, old, current])
+
+    current = fixture_record("python-statemachine-3.2.1")
+    current["scenarios"][1]["preflight"]["guard_calls"] = 2
+    with pytest.raises(common.ComparisonContractError, match="preflight"):
+        run_comparison.build_comparison_report([fast, old, current])
+
+
+def test_run_child_bounds_and_validates_subprocess_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid = fixture_record()
+
+    def completed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, json.dumps(valid), "")
+
+    monkeypatch.setattr(subprocess, "run", completed)
+    assert run_comparison.run_child(["fixture-child"]) == valid
+
+    def malformed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, "{} trailing", "")
+
+    monkeypatch.setattr(subprocess, "run", malformed)
+    with pytest.raises(common.ComparisonContractError, match="stdout"):
+        run_comparison.run_child(["fixture-child"])
+
+    def failed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 2, "", "caller secret")
+
+    monkeypatch.setattr(subprocess, "run", failed)
+    with pytest.raises(common.ComparisonContractError, match="child process failed") as error:
+        run_comparison.run_child(["fixture-child"])
+    assert "caller secret" not in str(error.value)
+
+
+def test_neutral_cwd_fast_child_smoke_resolves_repository_origin(
+    tmp_path: Path,
+) -> None:
+    command = run_comparison.build_child_commands(comparison_args())["fast-fsm"]
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    record = common.validate_child_record(json.loads(completed.stdout))
+
+    assert record["implementation_id"] == "fast-fsm"
+    assert record["requested_version"] == record["resolved_version"]
+    assert Path(str(record["module_origin"])).is_relative_to(
+        Path(__file__).parents[1].resolve()
+    )
