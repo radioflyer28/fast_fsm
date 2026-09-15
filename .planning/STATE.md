@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 26
 current_phase_name: Canonical Construction & Evidence Contract
 status: executing
-stopped_at: Completed 26-01-PLAN.md
-last_updated: "2026-09-15T17:58:59.202Z"
+stopped_at: Completed 26-02-PLAN.md
+last_updated: "2026-09-15T18:17:30.136Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 26 execution started
-state_head: a5413d3d8c9afd61681cd8fce8cccb3df1d12402
+state_head: 9632320e33a07ebc874ed712cd2158ee8775369d
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 26 (Canonical Construction & Evidence Contract) — EXECUTING
-Plan: 2 of 5
-Status: Executing plan 2 of 5
+Plan: 3 of 5
+Status: Executing plan 3 of 5
 Last activity: 2026-09-15 — Phase 26 execution started
 
 Progress: [░░░░░░░░░░] 0%
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 26 P01 | 12min | 2 tasks | 3 files |
+| Phase 26 P02 | 17min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - Deprecate `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` through a compatibility cycle rather than removing them immediately.
 - [Phase 26]: Copy mutable public source lists at the adapter edge so the request carrier remains frozen and slotted without forbidden dynamic assignment. — Matches the canonicalization boundary established by Phase 26 research and passes runtime audit policy.
 - [Phase 26]: Keep construction ownership on existing public envelopes and keep runtime selectors and lifecycle runners unaware of the request carrier. — Preserves atomic serialization and the O(1) direct singleton dispatch boundary.
+- [Phase 26]: Required flat-cycle and false-guard scenarios are contradictions when semantics differ; only the optional final-state cell may be unsupported. — Prevents fast-but-wrong behavior from entering comparison evidence.
+- [Phase 26]: The comparison parent imports no FSM implementation and computes ratios only after exact record, identity, origin, and preflight validation. — Preserves process isolation and evidence trust ordering.
 
 ### Pending Todos
 
@@ -91,8 +94,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T17:58:40.395Z
-Stopped at: Completed 26-01-PLAN.md
+Last session: 2026-09-15T18:17:21.942Z
+Stopped at: Completed 26-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
