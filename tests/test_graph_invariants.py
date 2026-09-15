@@ -468,6 +468,53 @@ def test_multi_source_and_batch_validation_are_atomic() -> None:
         assert graph_fingerprint(machine) == before
 
 
+def test_final_source_mixed_batch_and_multi_source_fail_before_publication() -> None:
+    """A late canonical final source rejects the complete request transaction."""
+    machine, idle, running = make_machine()
+    done = State("done", final=True)
+    machine.add_state(done)
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(
+        ValueError, match="^final state cannot be a transition source$"
+    ):
+        machine.add_transitions(
+            [
+                ("first", idle, running),
+                ("invalid", done, idle),
+                ("last", running, idle),
+            ]
+        )
+    assert graph_fingerprint(machine) == before
+
+    with pytest.raises(
+        ValueError, match="^final state cannot be a transition source$"
+    ):
+        machine.add_transition("fanout", [idle, done], running)
+    assert graph_fingerprint(machine) == before
+
+
+def test_final_source_validation_lives_only_in_canonical_normalization() -> None:
+    """Dispatch and lifecycle code stay unaware of construction-only finality."""
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    normalizer_start = core_source.index("    def _normalize_transition_request(")
+    normalizer_end = core_source.index(
+        "    def _commit_transition_plan(", normalizer_start
+    )
+    normalizer = core_source[normalizer_start:normalizer_end]
+    selector_start = core_source.index("    def _prepare_transition(")
+    selector_end = core_source.index("    def _run_transition(", selector_start)
+    selector = core_source[selector_start:selector_end]
+
+    assert normalizer.count("final state cannot be a transition source") == 1
+    assert normalizer.index("source = self._resolve_canonical_state") < normalizer.index(
+        "final state cannot be a transition source"
+    )
+    assert "final state cannot be a transition source" not in selector
+
+
 def test_bidirectional_and_emergency_helpers_commit_as_single_transactions() -> None:
     machine, idle, running = make_machine()
     before = graph_fingerprint(machine)

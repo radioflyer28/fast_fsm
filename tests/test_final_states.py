@@ -175,3 +175,49 @@ class TestFinalConstructionSurfaces:
         assert result.stage == "resolution"
         assert machine.current_state is done
         assert machine.is_terminated is True
+
+
+class TestFinalSourceConstructionInvariant:
+    """Outgoing final-state topology is rejected at construction time."""
+
+    @staticmethod
+    def _machine_with_final_source() -> tuple[StateMachine, State, State]:
+        done = State("done", final=True)
+        idle = State("idle")
+        machine = StateMachine(done)
+        machine.add_state(idle)
+        return machine, done, idle
+
+    @pytest.mark.parametrize("target_name", ["idle", "done"])
+    def test_final_source_and_self_transition_fail_with_a_fixed_error(
+        self, target_name: str
+    ) -> None:
+        machine, done, idle = self._machine_with_final_source()
+        target = done if target_name == "done" else idle
+        before_version = machine._graph_version
+        before_current = machine.current_state
+        before_snapshot = machine._graph_snapshot()
+
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            machine.add_transition("finish", done, target)
+
+        assert machine._graph_version == before_version
+        assert machine.current_state is before_current
+        assert machine._graph_snapshot() == before_snapshot
+        assert machine.get_transition(done, "finish") is None
+
+    def test_registered_final_source_wins_over_same_name_input_forms(self) -> None:
+        machine, done, idle = self._machine_with_final_source()
+        foreign_non_final = State("done")
+
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            machine.add_transition("finish", "done", idle)
+        with pytest.raises(ValueError, match="canonical registered object"):
+            machine.add_transition("finish", foreign_non_final, idle)
+
+        assert done.final is True
+        assert machine.get_transition(done, "finish") is None
