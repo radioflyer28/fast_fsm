@@ -72,6 +72,7 @@ def build_child_commands(args: argparse.Namespace) -> dict[str, list[str]]:
         "fast-fsm": [
             "uv",
             "run",
+            "--locked",
             "--project",
             str(REPOSITORY_ROOT),
             "python",
@@ -100,14 +101,17 @@ def build_child_commands(args: argparse.Namespace) -> dict[str, list[str]]:
 def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, bytes]:
     """Run one process with hard time and incremental per-stream byte limits."""
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=os.name != "nt",
-        creationflags=creationflags,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=os.name != "nt",
+            creationflags=creationflags,
+        )
+    except (OSError, ValueError):
+        raise ComparisonContractError("child process could not start") from None
     assert process.stdout is not None and process.stderr is not None
     output = {"stdout": bytearray(), "stderr": bytearray()}
     exceeded = threading.Event()
@@ -131,6 +135,18 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
         except (OSError, subprocess.SubprocessError):
             try:
                 process.kill()
+            except OSError:
+                pass
+
+    def close_stream_descriptors() -> None:
+        """Wake readers without waiting on a BufferedReader lock they may hold."""
+        for stream in (process.stdout, process.stderr):
+            try:
+                descriptor = stream.fileno()
+            except (OSError, ValueError):
+                continue
+            try:
+                os.close(descriptor)
             except OSError:
                 pass
 
@@ -173,6 +189,9 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
         if any(reader.is_alive() for reader in readers):
             timed_out = True
             stop_process_tree()
+            close_stream_descriptors()
+            for reader in readers:
+                reader.join(timeout=0.1)
         for stream in (process.stdout, process.stderr):
             try:
                 stream.close()

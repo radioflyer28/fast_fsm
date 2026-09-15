@@ -1533,14 +1533,12 @@ class StateMachine:
                 )
             )
 
-        try:
-            fsm._apply_transition_requests_owned(tuple(requests))
-        except (TypeError, ValueError) as error:
-            # Dictionary shape, timing, and condition-reference errors retain
-            # their exact row context above. Remaining canonical conflicts can
-            # only arise while evaluating the complete final candidate set.
-            last_index = parsed_rows[-1][0] if parsed_rows else 0
-            raise type(error)(f"from_dict: transition[{last_index}] {error}") from None
+        fsm._apply_transition_requests_owned(
+            tuple(requests),
+            error_contexts=tuple(
+                f"from_dict: transition[{index}]" for index, *_ in parsed_rows
+            ),
+        )
         return fsm
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1892,29 +1890,49 @@ class StateMachine:
         self._graph_version += 1
 
     def _apply_transition_requests_owned(
-        self, requests: Optional[Tuple[_TransitionRequest, ...]]
+        self,
+        requests: Optional[Tuple[_TransitionRequest, ...]],
+        *,
+        error_contexts: Optional[Tuple[str, ...]] = None,
     ) -> None:
         """Normalize and publish one complete immutable request collection."""
         if not isinstance(requests, tuple):
             raise TypeError("transition request collection must be a tuple")
+        if error_contexts is not None and (
+            not isinstance(error_contexts, tuple)
+            or len(error_contexts) != len(requests)
+            or any(
+                not isinstance(context, str) or not context
+                for context in error_contexts
+            )
+        ):
+            raise TypeError(
+                "transition error contexts must match the request collection"
+            )
         for request in requests:
             if not isinstance(request, _TransitionRequest):
                 raise TypeError("each transition request must be _TransitionRequest")
-        prepared = tuple(
-            self._normalize_transition_request(
-                request.trigger,
-                list(request.sources),
-                request.to_state,
-                request.condition,
-                unless=request.unless,
-                priority=request.priority,
-                condition_ref=request.condition_ref,
-                after=request.after,
-                within=request.within,
-            )
-            for request in requests
-        )
-        self._commit_transition_plan(prepared)
+        prepared: List[_PreparedTransition] = []
+        for index, request in enumerate(requests):
+            try:
+                prepared.append(
+                    self._normalize_transition_request(
+                        request.trigger,
+                        list(request.sources),
+                        request.to_state,
+                        request.condition,
+                        unless=request.unless,
+                        priority=request.priority,
+                        condition_ref=request.condition_ref,
+                        after=request.after,
+                        within=request.within,
+                    )
+                )
+            except (TypeError, ValueError) as error:
+                if error_contexts is None:
+                    raise
+                raise type(error)(f"{error_contexts[index]} {error}") from None
+        self._commit_transition_plan(tuple(prepared))
 
     @staticmethod
     def _merge_transition_slot(
