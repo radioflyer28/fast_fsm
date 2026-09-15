@@ -406,6 +406,7 @@ def test_single_state_snapshot_and_public_schemas_remain_unchanged() -> None:
         "name": "unicode-✓",
         "initial": "",
         "states": [""],
+        "final_states": [],
         "transitions": [],
     }
 

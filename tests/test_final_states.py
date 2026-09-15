@@ -244,3 +244,146 @@ class TestFinalSourceConstructionInvariant:
 
         assert by_name._states["done"].final is False
         assert from_names._states["done"].final is False
+
+
+class TestFinalControlCloneAndPersistence:
+    """Final metadata survives controls and strict topology persistence."""
+
+    def test_controls_and_snapshot_v1_derive_termination_from_current_state(self) -> None:
+        done = State("done", final=True)
+        idle = State("idle")
+        machine = StateMachine(done)
+        machine.add_state(idle)
+
+        assert machine.snapshot() == {"state": "done", "version": 1}
+        assert machine.is_terminated is True
+
+        machine.force_state("idle")
+        assert machine.current_state is idle
+        assert machine.is_terminated is False
+
+        machine.restore({"state": "done", "version": 1})
+        assert machine.current_state is done
+        assert machine.is_terminated is True
+
+        machine.reset()
+        assert machine.current_state is done
+        assert machine.is_terminated is True
+
+    def test_clone_reuses_final_states_but_resets_to_its_final_initial_state(self) -> None:
+        done = State("done", final=True)
+        idle = State("idle")
+        machine = StateMachine(done)
+        machine.add_state(idle)
+        machine.add_transition("restart", idle, done)
+        machine.force_state("idle")
+
+        clone = machine.clone()
+
+        assert clone is not machine
+        assert clone.current_state is done
+        assert clone.is_terminated is True
+        assert clone._states["done"] is done
+        assert clone._states["idle"] is idle
+        assert clone._transitions is not machine._transitions
+        assert clone._transitions["idle"] is not machine._transitions["idle"]
+
+    def test_clone_resets_to_non_final_initial_after_source_reaches_final(self) -> None:
+        idle = State("idle")
+        done = State("done", final=True)
+        machine = StateMachine(idle)
+        machine.add_state(done)
+        machine.add_transition("finish", idle, done)
+        assert machine.trigger("finish").success
+        assert machine.is_terminated is True
+
+        clone = machine.clone()
+
+        assert clone.current_state is idle
+        assert clone.is_terminated is False
+        assert clone._states["done"] is done
+        assert clone._states["done"].final is True
+
+    def test_to_dict_emits_sorted_explicit_final_names_and_round_trips(self) -> None:
+        idle = State("idle")
+        zulu = State("zulu", final=True)
+        alpha = State("alpha", final=True)
+        machine = StateMachine(idle, name="persisted")
+        machine.add_state(zulu)
+        machine.add_state(alpha)
+        machine.add_transition("finish", idle, alpha)
+
+        config = machine.to_dict()
+        restored = StateMachine.from_dict(config)
+
+        assert config["final_states"] == ["alpha", "zulu"]
+        assert restored._states["alpha"].final is True
+        assert restored._states["zulu"].final is True
+        assert restored._states["idle"].final is False
+        assert restored.to_dict() == config
+
+    def test_legacy_dictionary_omission_defaults_every_state_to_non_final(self) -> None:
+        machine = StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "states": ["idle", "done"],
+                "transitions": [{"trigger": "finish", "from": "idle", "to": "done"}],
+            }
+        )
+
+        assert all(not state.final for state in machine._states.values())
+        assert machine.to_dict()["final_states"] == []
+
+    @pytest.mark.parametrize(
+        ("final_states", "error"),
+        [
+            ("done", "final_states.*list"),
+            (["done", "done"], "final_states.*duplicate"),
+            (["missing"], "final_states.*unknown"),
+            ([""], "final_states.*non-empty"),
+            ([1], "final_states.*non-empty"),
+            (["idle", "done", "extra"], "final_states.*too many"),
+        ],
+    )
+    def test_from_dict_rejects_invalid_final_states_before_publication(
+        self, final_states: object, error: str
+    ) -> None:
+        config = {
+            "initial": "idle",
+            "states": ["idle", "done"],
+            "final_states": final_states,
+            "transitions": [],
+        }
+
+        with pytest.raises((TypeError, ValueError), match=error):
+            StateMachine.from_dict(config)  # type: ignore[arg-type]
+
+    def test_from_dict_reports_the_final_source_row_without_a_candidate_escape(self) -> None:
+        config = {
+            "initial": "idle",
+            "states": ["idle", "done"],
+            "final_states": ["done"],
+            "transitions": [{"trigger": "restart", "from": "done", "to": "idle"}],
+        }
+
+        with pytest.raises(
+            ValueError,
+            match="^from_dict: transition\\[0\\] final state cannot be a transition source$",
+        ):
+            StateMachine.from_dict(config)
+
+    def test_async_from_dict_and_clone_preserve_type_and_final_markers(self) -> None:
+        config = {
+            "initial": "idle",
+            "states": ["idle", "done"],
+            "final_states": ["done"],
+            "transitions": [{"trigger": "finish", "from": "idle", "to": "done"}],
+        }
+        machine = AsyncStateMachine.from_dict(config)
+        clone = machine.clone()
+
+        assert isinstance(machine, AsyncStateMachine)
+        assert isinstance(clone, AsyncStateMachine)
+        assert machine._states["done"].final is True
+        assert clone._states["done"] is machine._states["done"]
+        assert clone.is_terminated is False
