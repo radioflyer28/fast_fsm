@@ -8,11 +8,13 @@ import math
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 from typing import Any
 
 import pytest
 
 BENCHMARK_ROOT = Path(__file__).parents[1] / "benchmarks"
+REPOSITORY_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
 from comparison import common  # noqa: E402
@@ -248,6 +250,47 @@ def test_exact_version_child_metadata_is_self_contained(
     assert "from fast_fsm" not in source
     other = "3.2.1" if version == "2.5.0" else "2.5.0"
     assert f'"python-statemachine=={other}"' not in source
+
+
+def test_project_groups_exclude_competitors() -> None:
+    """Ordinary dependency groups do not install isolated comparators."""
+    project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+    grouped_requirements = {
+        requirement.split("[", 1)[0].split("=", 1)[0].split(">", 1)[0]
+        for requirements in project["dependency-groups"].values()
+        for requirement in requirements
+    }
+
+    assert "python-statemachine" not in grouped_requirements
+    assert "transitions" not in grouped_requirements
+
+
+def test_project_lock_excludes_comparator_packages() -> None:
+    """The ordinary project resolution has no comparator transitive lane."""
+    project_lock = tomllib.loads((REPOSITORY_ROOT / "uv.lock").read_text())
+    package_names = {package["name"] for package in project_lock["package"]}
+
+    assert "python-statemachine" not in package_names
+    assert "transitions" not in package_names
+
+
+@pytest.mark.parametrize(
+    ("script_name", "version"),
+    [
+        ("python_statemachine_2_5.py", "2.5.0"),
+        ("python_statemachine_3_2.py", "3.2.1"),
+    ],
+)
+def test_adjacent_script_lock_resolves_exact_approved_version(
+    script_name: str, version: str
+) -> None:
+    """Each generated adjacent lock belongs to one exact PEP 723 lane."""
+    lock_path = BENCHMARK_ROOT / "comparison" / f"{script_name}.lock"
+    locked = tomllib.loads(lock_path.read_text())
+    packages = {package["name"]: package for package in locked["package"]}
+
+    assert packages["python-statemachine"]["version"] == version
+    assert set(packages) == {"python-statemachine"}
 
 
 def test_parent_builds_ratios_only_after_identity_and_required_semantics() -> None:
