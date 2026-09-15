@@ -265,7 +265,7 @@ def test_topology_and_history_public_writer_entries_are_owned(method: str) -> No
 
 
 def test_clone_capture_waits_for_a_topology_owner_and_copies_mutable_tables() -> None:
-    """Clone sees one published graph and shares only immutable slot values."""
+    """Clone sees one published graph and reconstructs independent topology."""
     source = State("source")
     destination = State("destination")
     machine = StateMachine(source)
@@ -294,7 +294,10 @@ def test_clone_capture_waits_for_a_topology_owner_and_copies_mutable_tables() ->
     assert clone._states is not machine._states
     assert clone._transitions is not machine._transitions
     assert clone._transitions["source"] is not machine._transitions["source"]
-    assert clone._transitions["source"]["go"] is machine._transitions["source"]["go"]
+    assert (
+        clone._transitions["source"]["go"] is not machine._transitions["source"]["go"]
+    )
+    assert clone._transitions["source"]["go"].to_state is destination
     assert clone._sync_ownership_lock is not machine._sync_ownership_lock
 
     clone.add_transition("back", destination, source)
