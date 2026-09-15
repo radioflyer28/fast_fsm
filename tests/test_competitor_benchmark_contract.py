@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import subprocess
 import sys
+import time
 import tomllib
 from typing import Any
 
@@ -355,36 +356,32 @@ def test_run_child_bounds_and_validates_subprocess_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     valid = fixture_record()
+    emit_argument = [sys.executable, "-c", "import sys; print(sys.argv[1])"]
+    assert run_comparison.run_child([*emit_argument, json.dumps(valid)]) == valid
 
-    def completed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 0, json.dumps(valid), "")
-
-    monkeypatch.setattr(subprocess, "run", completed)
-    assert run_comparison.run_child(["fixture-child"]) == valid
-
-    def malformed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 0, "{} trailing", "")
-
-    monkeypatch.setattr(subprocess, "run", malformed)
     with pytest.raises(common.ComparisonContractError, match="stdout"):
-        run_comparison.run_child(["fixture-child"])
+        run_comparison.run_child([*emit_argument, "{} trailing"])
 
-    def excessive(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        output = "x" * (run_comparison.MAX_CHILD_OUTPUT_BYTES + 1)
-        return subprocess.CompletedProcess([], 0, output, "")
-
-    monkeypatch.setattr(subprocess, "run", excessive)
+    monkeypatch.setattr(run_comparison, "MAX_CHILD_OUTPUT_BYTES", 64)
+    monkeypatch.setattr(run_comparison, "CHILD_TIMEOUT_SECONDS", 2)
+    started = time.monotonic()
     with pytest.raises(common.ComparisonContractError, match="stdout"):
-        run_comparison.run_child(["fixture-child"])
+        run_comparison.run_child(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; "
+                "sys.stdout.write('x' * 4096); sys.stdout.flush(); time.sleep(10)",
+            ]
+        )
+    assert time.monotonic() - started < 1.5
 
-    def failed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 2, "", "caller secret")
-
-    monkeypatch.setattr(subprocess, "run", failed)
     with pytest.raises(
         common.ComparisonContractError, match="child process failed"
     ) as error:
-        run_comparison.run_child(["fixture-child"])
+        run_comparison.run_child(
+            [sys.executable, "-c", "import sys; print('caller secret'); sys.exit(2)"]
+        )
     assert "caller secret" not in str(error.value)
 
 
