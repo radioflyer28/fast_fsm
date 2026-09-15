@@ -1891,7 +1891,7 @@ class StateMachine:
 
     def _apply_transition_requests_owned(
         self,
-        requests: Optional[Tuple[_TransitionRequest, ...]],
+        requests: Optional[Tuple[Any, ...]],
         *,
         error_contexts: Optional[Tuple[str, ...]] = None,
     ) -> None:
