@@ -30,7 +30,7 @@ from fast_fsm.core import (
     simple_fsm,
     transition,
 )
-from fast_fsm.core import _TransitionGroup
+from fast_fsm.core import _TransitionGroup, _TransitionRequest
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +196,46 @@ def test_builder_priority_staging_materializes_one_atomic_transition_batch():
     assert tuple(entry.priority for entry in group.entries) == (-3, 7)
     assert machine._transitions["running"]["advance"].priority == 2
     assert machine._graph_version == 3
+
+
+def test_builder_stages_immutable_named_transition_requests() -> None:
+    """Builder staging copies source collections into the canonical carrier."""
+    sources = ["idle"]
+    guard = AlwaysTrue()
+    builder = FSMBuilder(State("idle"))
+
+    builder.add_transition(
+        "go", sources, "running", guard, priority=-2, after=1, within=3
+    )
+    sources.append("late-mutation")
+
+    assert len(builder._transitions) == 1
+    request = builder._transitions[0]
+    assert isinstance(request, _TransitionRequest)
+    assert request.trigger == "go"
+    assert request.sources == ("idle",)
+    assert request.to_state == "running"
+    assert request.condition is guard
+    assert request.priority == -2
+    assert request.after == 1.0
+    assert request.within == 3.0
+    with pytest.raises((AttributeError, TypeError)):
+        request.trigger = "changed"  # type: ignore[misc]
+
+
+def test_builder_build_submits_one_endpoint_bound_request_transaction() -> None:
+    """Build binds endpoints without converting staging back to positional rows."""
+    source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    builder_start = source.index("class FSMBuilder:")
+    build_start = source.index("    def build(", builder_start)
+    build_end = source.index("    @property\n    def machine_type", build_start)
+    build_source = source[build_start:build_end]
+
+    assert "_TransitionRequest" in build_source
+    assert "candidate._apply_transition_requests_owned" in build_source
+    assert "candidate.add_transitions" not in build_source
 
 
 def test_builder_rejects_bad_priority_before_staging_or_auto_mode_mutation():
