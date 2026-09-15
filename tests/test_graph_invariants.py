@@ -8,13 +8,14 @@ tool snapshot without turning any of those details into public API.
 
 from __future__ import annotations
 
+import threading
 from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from fast_fsm import State, StateMachine, TransitionEntry
+from fast_fsm import FuncCondition, State, StateMachine, TransitionEntry
 from fast_fsm.core import _TransitionGroup, _TransitionRequest
 
 
@@ -36,6 +37,8 @@ def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
                             if entry.condition is not None
                             else None,
                             entry.condition_ref,
+                            entry.after,
+                            entry.within,
                         )
                         for entry in (
                             slot.entries
@@ -490,7 +493,7 @@ def test_construction_request_copies_sources_and_is_immutable() -> None:
     machine, idle, running = make_machine()
     raw_sources = [idle]
 
-    request = _TransitionRequest("go", raw_sources, running)
+    request = _TransitionRequest("go", tuple(raw_sources), running)
     raw_sources.append(running)
 
     assert request.sources == (idle,)
@@ -533,7 +536,10 @@ def test_construction_request_collection_rejects_before_publication() -> None:
 
     with pytest.raises(TypeError, match="transition request"):
         machine._apply_transition_requests_owned(
-            (_TransitionRequest("go", idle, running), object())  # type: ignore[arg-type]
+            (
+                _TransitionRequest("go", (idle,), running),
+                object(),  # type: ignore[arg-type]
+            )
         )
     assert graph_fingerprint(machine) == before
 
@@ -578,6 +584,142 @@ def test_construction_request_adapters_delegate_only_to_canonical_apply() -> Non
         assert "_apply_transition_requests_owned" in adapter_source
         assert "_normalize_transition_request" not in adapter_source
         assert "_commit_transition_plan" not in adapter_source
+
+
+def test_construction_request_is_idempotent_with_complete_candidate_identity() -> None:
+    machine, idle, running = make_machine()
+    condition = FuncCondition(lambda **_: True, name="allowed")
+    request = _TransitionRequest(
+        "go",
+        (idle,),
+        running,
+        condition,
+        priority=-4,
+        condition_ref="allowed",
+        after=1,
+        within=3,
+    )
+
+    machine._apply_transition_requests_owned((request,))
+    first_slot = machine._transitions[idle.name]["go"]
+    first_version = machine._graph_version
+    first_snapshot = machine._graph_snapshot()
+
+    machine._apply_transition_requests_owned((request,))
+
+    assert machine._transitions[idle.name]["go"] is first_slot
+    assert machine._graph_version == first_version
+    assert machine.current_state is idle
+    assert machine._graph_snapshot() == first_snapshot
+
+
+class _InterruptingSources(list[State]):
+    """Raise a BaseException after exposing one raw source."""
+
+    def __iter__(self):
+        yield self[0]
+        raise KeyboardInterrupt
+
+
+def test_construction_request_interruption_releases_ownership_without_publication() -> (
+    None
+):
+    machine, idle, running = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(KeyboardInterrupt):
+        machine.add_transition("go", _InterruptingSources([idle]), running)
+
+    assert graph_fingerprint(machine) == before
+    machine.add_transition("go", idle, running)
+    assert machine._transitions[idle.name]["go"].to_state is running
+
+
+def test_concurrent_construction_requests_are_serialized_as_whole_transactions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine, idle, running = make_machine()
+    complete = State("complete")
+    machine.add_state(complete)
+    before = graph_fingerprint(machine)
+    first_owned = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    failures: list[BaseException] = []
+    original_apply = StateMachine._apply_transition_requests_owned
+
+    def paused_apply(
+        owned_machine: StateMachine,
+        requests: tuple[_TransitionRequest, ...] | None,
+    ) -> None:
+        if requests and requests[0].trigger == "first":
+            first_owned.set()
+            if not release_first.wait(timeout=2):
+                raise RuntimeError("test failed to release first construction request")
+        original_apply(owned_machine, requests)
+
+    monkeypatch.setattr(StateMachine, "_apply_transition_requests_owned", paused_apply)
+
+    def register(trigger: str, target: State) -> None:
+        try:
+            if trigger == "second":
+                second_started.set()
+            machine.add_transition(trigger, idle, target)
+        except BaseException as error:
+            failures.append(error)
+
+    first = threading.Thread(target=register, args=("first", running))
+    second = threading.Thread(target=register, args=("second", complete))
+    first.start()
+    assert first_owned.wait(timeout=2)
+    second.start()
+    assert second_started.wait(timeout=2)
+    assert "first" not in machine._transitions[idle.name]
+    assert "second" not in machine._transitions[idle.name]
+    assert machine._graph_version == before[2]
+    assert second.is_alive()
+
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert machine._transitions[idle.name]["first"].to_state is running
+    assert machine._transitions[idle.name]["second"].to_state is complete
+
+
+def test_construction_hot_path_symbols_are_absent_from_runtime_regions() -> None:
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    regions = (
+        core_source[
+            core_source.index("    def _select_transition_sync(") : core_source.index(
+                "    def _select_sync_candidate("
+            )
+        ],
+        core_source[
+            core_source.index("    def _execute_transition(") : core_source.index(
+                "    def _execute_control_transition("
+            )
+        ],
+        core_source[
+            core_source.index(
+                "    async def _execute_transition_async("
+            ) : core_source.index("    async def can_trigger_async(")
+        ],
+        core_source[
+            core_source.index(
+                "    async def _select_transition_async("
+            ) : core_source.index("    async def _select_async_candidate(")
+        ],
+    )
+
+    for region in regions:
+        assert "_TransitionRequest" not in region
+        assert "_apply_transition_requests_owned" not in region
 
 
 def test_equal_priority_conflict_rolls_back_all_staged_replacements() -> None:

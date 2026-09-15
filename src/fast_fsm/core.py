@@ -756,43 +756,29 @@ class _GraphSnapshot:
     state_names: Tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True)
 class _TransitionRequest:
     """Immutable raw transition request awaiting machine-owned normalization."""
 
     trigger: str
     sources: Tuple[Union[str, "State"], ...]
     to_state: Union[str, "State"]
-    condition: Optional[Union[Condition, GuardCallable]]
-    unless: Optional[Union[Condition, GuardCallable]]
-    priority: object
-    condition_ref: Optional[str]
-    after: object
-    within: object
+    condition: Optional[Union[Condition, GuardCallable]] = None
+    unless: Optional[Union[Condition, GuardCallable]] = None
+    priority: object = 0
+    condition_ref: Optional[str] = None
+    after: object = None
+    within: object = None
 
-    def __init__(
-        self,
-        trigger: str,
-        sources: Union[str, "State", List[Union[str, "State"]]],
-        to_state: Union[str, "State"],
-        condition: Optional[Union[Condition, GuardCallable]] = None,
-        *,
-        unless: Optional[Union[Condition, GuardCallable]] = None,
-        priority: object = 0,
-        condition_ref: Optional[str] = None,
-        after: object = None,
-        within: object = None,
-    ) -> None:
-        raw_sources = tuple(sources) if isinstance(sources, list) else (sources,)
-        object.__setattr__(self, "trigger", trigger)
-        object.__setattr__(self, "sources", raw_sources)
-        object.__setattr__(self, "to_state", to_state)
-        object.__setattr__(self, "condition", condition)
-        object.__setattr__(self, "unless", unless)
-        object.__setattr__(self, "priority", priority)
-        object.__setattr__(self, "condition_ref", condition_ref)
-        object.__setattr__(self, "after", after)
-        object.__setattr__(self, "within", within)
+
+def _freeze_transition_sources(
+    sources: Union[str, "State", List[Union[str, "State"]]],
+) -> Tuple[Union[str, "State"], ...]:
+    """Copy one public source shape into an immutable raw tuple."""
+    if isinstance(sources, list):
+        return tuple(sources)
+    source = cast(Union[str, "State"], sources)
+    return (source,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2007,7 +1993,7 @@ class StateMachine:
         """Validate and commit one transition while the caller owns this machine."""
         request = _TransitionRequest(
             trigger,
-            from_state,
+            _freeze_transition_sources(from_state),
             to_state,
             condition,
             unless=unless,
@@ -2077,7 +2063,7 @@ class StateMachine:
             requests.append(
                 _TransitionRequest(
                     trigger,
-                    from_state,
+                    _freeze_transition_sources(from_state),
                     to_state,
                     condition,
                     priority=priority,
