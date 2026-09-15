@@ -1,64 +1,96 @@
 {
   "version": "1.0",
-  "timestamp": "2026-09-05T21:39:53Z",
-  "phase": "20",
-  "phase_name": "Installed Artifact Parity & Release Proof",
-  "phase_dir": ".planning/phases/20-installed-artifact-parity-release-proof",
-  "plan": 6,
-  "task": 2,
-  "total_tasks": 3,
+  "timestamp": "2026-09-15T23:06:51.012Z",
+  "phase": "27",
+  "phase_name": "explicit-final-states",
+  "phase_dir": ".planning/phases/27-explicit-final-states",
+  "plan": 3,
+  "task": 4,
+  "total_tasks": 7,
   "status": "paused",
   "completed_tasks": [
     {
       "id": 1,
-      "name": "Execute all six Phase 20 plans",
+      "name": "Plan 27-01: explicit final-state model and derived termination",
       "status": "done",
-      "commit": "af08805"
+      "commit": "a578477"
     },
     {
       "id": 2,
-      "name": "Code review and two fix iterations",
+      "name": "Plan 27-02: reject outgoing final-state topology atomically",
       "status": "done",
-      "commit": "a4d2689"
+      "commit": "fd36515"
+    },
+    {
+      "id": 3,
+      "name": "Plan 27-03: persistence, lifecycle, async, and native parity",
+      "status": "done",
+      "commit": "4d7ef6e"
+    },
+    {
+      "id": 4,
+      "name": "Phase 27 code review",
+      "status": "in_progress",
+      "progress": "Initial review committed at 067b807. One blocker, CR-01, remains. The specialist fixer was dispatched and then interrupted on the user's pause request before any fix was accepted."
     }
   ],
   "remaining_tasks": [
     {
-      "id": 3,
-      "name": "Re-review iteration 3, resolve remaining findings, then run regression, Nyquist, security, verifier, UAT, and milestone completion gates",
+      "id": 4,
+      "name": "Recover or restart the CR-01 code-review fix, then re-review",
+      "status": "in_progress"
+    },
+    {
+      "id": 5,
+      "name": "Run Phase 27 post-execution Nyquist, security, UI applicability, and regression gates",
+      "status": "not_started"
+    },
+    {
+      "id": 6,
+      "name": "Run Phase 27 goal verification, close its bead, and complete the phase",
+      "status": "not_started"
+    },
+    {
+      "id": 7,
+      "name": "Continue the v0.5.0 milestone with Phase 28 discuss, plan, execute, and gap cycles",
       "status": "not_started"
     }
   ],
   "blockers": [
     {
-      "description": "The tracked release baseline is stale, but its reviewed generator requires exact uv 0.12.6 and this host only has uv 0.12.9.",
-      "type": "external",
-      "workaround": "Find or explicitly authorize installation of exact uv 0.12.6; never fabricate the baseline or weaken the pin."
+      "description": "Interrupted review-fix worktree has a recovery manifest at .planning/phases/27-explicit-final-states/.review-fix-recovery-pending.json.",
+      "type": "technical",
+      "workaround": "Inspect the recorded worktree and reviewfix branch before dispatching a replacement fixer; recover any valid work or clean it through the GSD recovery path."
+    },
+    {
+      "description": "bd commands currently misclassify PID 9693 on port 49752 as non-Dolt even though it was previously identified as /opt/homebrew/bin/dolt sql-server.",
+      "type": "technical",
+      "workaround": "Diagnose the stale/false-positive Beads server detection before changing issue state; do not kill PID 9693 blindly."
     }
   ],
   "async_jobs": [],
   "human_actions_pending": [],
   "decisions": [
     {
-      "decision": "Preserve exact uv 0.12.6 release-evidence pin",
-      "rationale": "The toolchain is part of the reviewed deterministic baseline contract; substitution would invalidate the evidence.",
-      "phase": "20"
+      "decision": "Use python-statemachine releases 2.5.0 and 3.2.1 from fgmacedo/python-statemachine as the approved comparator provenance.",
+      "rationale": "The user explicitly approved these two upstream versions.",
+      "phase": "milestone"
     },
     {
-      "decision": "Keep local profile evidence non-authorizing and hosted evidence inspection separate",
-      "rationale": "Local success cannot prove the complete native release matrix or authorize publication.",
-      "phase": "20"
-    },
-    {
-      "decision": "No remote release action during implementation",
-      "rationale": "The user approved only the checked-in tag-only contents:write workflow definition, not dispatch, tag, release, publication, fetch, or push.",
-      "phase": "20"
+      "decision": "Expose final as bool on every public constructor while retaining exact built-in-bool runtime validation.",
+      "rationale": "CR-01 identified a mismatch between the typed public API and runtime behavior.",
+      "phase": "27"
     }
   ],
   "uncommitted_files": [
-    ".planning/phases/20-installed-artifact-parity-release-proof/20-REVIEW.md",
-    ".planning/phases/20-installed-artifact-parity-release-proof/20-REVIEW-FIX.md"
+    ".beads/dolt-server.log",
+    ".claude/",
+    ".gsd/",
+    ".planning/milestone.lock",
+    ".planning/phases/27-explicit-final-states/.review-fix-recovery-pending.json",
+    ".planning/research/.cache/066917c9db9fb1c3ce49f76fd13e9f43dc9728af6e6cd87b813e1a39b5d15366.json",
+    ".planning/research/.cache/71b522dddf3607dae377d45a9f897241da3383fbee9b783ac35e5715c8f15eaf.json"
   ],
-  "next_action": "In /private/tmp/fast-fsm-phase20-resume, run the third independent standard-depth review over the original 24-file scope. If findings remain, apply the third and final bounded fix pass. Then commit the converged REVIEW.md and REVIEW-FIX.md together, run the regression gate, Nyquist and security hooks, and the phase verifier.",
-  "context_notes": "All six Phase 20 plans are summarized. Fix iteration 2 integrated eight atomic commits through a4d2689. Ruff, the 204-test targeted release/artifact suite, the real release-evidence-local-check, and the full sequential pytest suite passed. The current REVIEW.md is iteration 2 input and REVIEW-FIX.md is the uncommitted iteration 2 result. Hosted workflows were never dispatched and no remote state changed."
+  "next_action": "Inspect .review-fix-recovery-pending.json and the recorded review-fix worktree/branch; then resume or safely restart CR-01, re-run the code review, and commit the converged REVIEW.md plus REVIEW-FIX.md.",
+  "context_notes": "All three Phase 27 implementation plans and the full pure-source suite passed. Phase completion is paused inside the mandatory code-review gap cycle. No code changes from the interrupted fixer appear in the main worktree. Preserve unrelated operational artifacts."
 }
