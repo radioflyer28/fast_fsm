@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 27
 current_phase_name: Explicit Final States
 status: executing
-stopped_at: Completed 27-01-PLAN.md
-last_updated: "2026-09-15T22:25:24.850Z"
+stopped_at: Completed 27-02-PLAN.md
+last_updated: "2026-09-15T22:34:40.456Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 27 execution started
-state_head: 93a82483d1731b6dd6221688a1f5bba1f9c1c0cf
+state_head: 9bd31e36976b9d5683377b086e30e4d325e484de
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
   percent: 14
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 27 (Explicit Final States) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-09-15 — Phase 27 execution started
 
@@ -62,6 +62,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 26 P04 | checkpoint | 1 task | 0 files |
 | Phase 26 P05 | 18min | 2 tasks | 10 files |
 | Phase 27 P01 | 5min | 2 tasks | 4 files |
+| Phase 27 P02 | 9min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 26]: Manual comparison children run from neutral directories with hard time/count limits and incremental per-stream output caps. — Prevents the observational tool from becoming an unbounded local resource or disclosure boundary.
 - [Phase 27]: Finality is immutable State metadata; termination is derived from the canonical current State.
 - [Phase 27]: Construction surfaces forward keyword-only final while AsyncDeclarativeState inherits the same path.
+- [Phase 27]: Final-source validation runs once after canonical source resolution and before prepared topology publication.
+- [Phase 27]: All retained adapters delegate final-source rejection to the canonical transaction; runtime selectors remain unchanged.
 
 ### Pending Todos
 
@@ -107,8 +110,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:25:24.824Z
-Stopped at: Completed 27-01-PLAN.md
+Last session: 2026-09-15T22:34:40.431Z
+Stopped at: Completed 27-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

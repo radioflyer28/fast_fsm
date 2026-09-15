@@ -9,7 +9,7 @@
 
 - [x] **FINAL-01**: Users can declare a state final with an immutable `final=True` property.
 - [x] **FINAL-02**: Users can query termination in O(1) through `is_terminated`, including when the initial state is final.
-- [ ] **FINAL-03**: Users receive an atomic construction error when any supported construction path would add an outgoing transition to a final state.
+- [x] **FINAL-03**: Users receive an atomic construction error when any supported construction path would add an outgoing transition to a final state.
 - [x] **FINAL-04**: Users can distinguish a non-final sink state from a terminated final state.
 - [ ] **FINAL-05**: Users observe the machine as terminated after a transition commits into a final state even if later entry or observer work fails.
 - [ ] **FINAL-06**: Users receive consistent termination semantics after reset, restore, clone, and deserialization operations.
@@ -102,7 +102,7 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 |-------------|-------|--------|
 | FINAL-01 | Phase 27 | Complete |
 | FINAL-02 | Phase 27 | Complete |
-| FINAL-03 | Phase 27 | Pending |
+| FINAL-03 | Phase 27 | Complete |
 | FINAL-04 | Phase 27 | Complete |
 | FINAL-05 | Phase 27 | Pending |
 | FINAL-06 | Phase 27 | Pending |

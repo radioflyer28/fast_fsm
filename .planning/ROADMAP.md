@@ -80,7 +80,7 @@ Plans:
   3. Entering a final state makes termination visible at commit, and later entry, observer, or async cancellation failure does not undo the committed state or finality.
   4. Reset, restore, clone, and deserialization preserve the distinction between explicit finality and topology dead ends.
 
-**Plans**: 1/3 plans executed
+**Plans**: 2/3 plans executed
 
 Plans:
 **Wave 1**
@@ -89,7 +89,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 27-02-PLAN.md — reject outgoing final-source topology once at the canonical construction seam and prove adapter atomicity.
+- [x] 27-02-PLAN.md — reject outgoing final-source topology once at the canonical construction seam and prove adapter atomicity.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -198,7 +198,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 26. Canonical Construction & Evidence Contract | v0.5.0 | 5/5 | Complete    | 2026-09-15 |
-| 27. Explicit Final States | v0.5.0 | 1/3 | In Progress|  |
+| 27. Explicit Final States | v0.5.0 | 2/3 | In Progress|  |
 | 28. Same-State Transition Modes | v0.5.0 | 0/TBD | Not started | - |
 | 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 0/TBD | Not started | - |
