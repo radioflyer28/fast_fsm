@@ -1010,6 +1010,98 @@ def test_state_machine_graph_version_remains_in_slots() -> None:
     }
 
 
+def test_final_state_metadata_and_termination_query_keep_one_truth_source() -> None:
+    """Finality stays in State and termination remains a direct derived read."""
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    state = classes["State"]
+    state_machine = classes["StateMachine"]
+    async_declarative = classes["AsyncDeclarativeState"]
+
+    state_slots = next(
+        node.value
+        for node in state.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(state_slots, ast.Tuple)
+    assert "_final" in {
+        item.value for item in state_slots.elts if isinstance(item, ast.Constant)
+    }
+
+    final_property = next(
+        node
+        for node in state.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "final"
+        and any(
+            isinstance(decorator, ast.Name) and decorator.id == "property"
+            for decorator in node.decorator_list
+        )
+    )
+    assert not any(
+        isinstance(node, ast.FunctionDef)
+        and node.name == "final"
+        and any(
+            isinstance(decorator, ast.Attribute) and decorator.attr == "setter"
+            for decorator in node.decorator_list
+        )
+        for node in state.body
+    )
+    final_return = next(
+        node.value for node in final_property.body if isinstance(node, ast.Return)
+    )
+    assert isinstance(final_return, ast.Attribute)
+    assert isinstance(final_return.value, ast.Name)
+    assert final_return.value.id == "self"
+    assert final_return.attr == "_final"
+
+    machine_slots = next(
+        node.value
+        for node in state_machine.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(machine_slots, ast.Tuple)
+    assert not any(
+        isinstance(item, ast.Constant)
+        and isinstance(item.value, str)
+        and "terminated" in item.value
+        for item in machine_slots.elts
+    )
+
+    query = next(
+        node
+        for node in state_machine.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "is_terminated"
+        and any(
+            isinstance(decorator, ast.Name) and decorator.id == "property"
+            for decorator in node.decorator_list
+        )
+    )
+    query_return = next(node.value for node in query.body if isinstance(node, ast.Return))
+    assert isinstance(query_return, ast.Attribute)
+    assert query_return.attr == "final"
+    assert isinstance(query_return.value, ast.Attribute)
+    assert isinstance(query_return.value.value, ast.Name)
+    assert query_return.value.value.id == "self"
+    assert query_return.value.attr == "_current_state"
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "is_terminated"
+        for node in async_declarative.body
+    )
+
+
 def test_staged_writer_inventory_names_every_phase18_public_write() -> None:
     """Wave 0 records the exact writer owner before full entry checks land."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
