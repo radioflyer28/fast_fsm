@@ -27,8 +27,6 @@ release = [
 benchmarks = [
     "matplotlib>=3.10.3",
     "networkx>=3.2",
-    "python-statemachine>=2.5.0",
-    "transitions>=0.9.3",
 ]
 docs = [
     "sphinx>=8.0",
