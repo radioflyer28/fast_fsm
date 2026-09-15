@@ -1505,9 +1505,34 @@ class StateMachine:
                     f"from_dict: conditions key {trigger!r} is ambiguous for priority candidates"
                 )
 
-        fsm = cls.from_states(
-            *all_state_names, initial=initial, name=fsm_name, clock=clock
-        )
+        raw_final_states = config.get("final_states", [])
+        if not isinstance(raw_final_states, list):
+            raise TypeError("from_dict: 'final_states' must be a list")
+        if len(raw_final_states) > len(all_state_names):
+            raise ValueError("from_dict: 'final_states' contains too many entries")
+
+        final_names: set[str] = set()
+        for state_name in raw_final_states:
+            if not isinstance(state_name, str) or not state_name:
+                raise ValueError(
+                    "from_dict: 'final_states' must contain non-empty strings"
+                )
+            if state_name in final_names:
+                raise ValueError("from_dict: 'final_states' contains duplicate names")
+            if state_name not in all_state_names:
+                raise ValueError(
+                    "from_dict: 'final_states' contains an unknown state name"
+                )
+            final_names.add(state_name)
+
+        canonical_states = {
+            state_name: State(state_name, final=state_name in final_names)
+            for state_name in all_state_names
+        }
+        fsm = cls(canonical_states[initial], name=fsm_name, clock=clock)
+        for state_name in sorted(canonical_states):
+            if state_name != initial:
+                fsm.add_state(canonical_states[state_name])
         normalized_registry: Dict[str, Condition] = {}
 
         def resolve_condition(reference: str, index: int) -> Condition:
@@ -1587,7 +1612,7 @@ class StateMachine:
 
         Returns:
             A JSON-serialisable dict with keys ``"name"``, ``"initial"``,
-            ``"states"``, and ``"transitions"``.
+            ``"states"``, ``"final_states"``, and ``"transitions"``.
         """
         transitions: List[Dict[str, Any]] = []
         for from_name, triggers in sorted(self._transitions.items()):
@@ -1610,6 +1635,9 @@ class StateMachine:
             "name": self._name,
             "initial": self._initial_state.name,
             "states": sorted(self._states.keys()),
+            "final_states": sorted(
+                state.name for state in self._states.values() if state.final
+            ),
             "transitions": transitions,
         }
 

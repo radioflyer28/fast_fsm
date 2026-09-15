@@ -249,7 +249,9 @@ class TestFinalSourceConstructionInvariant:
 class TestFinalControlCloneAndPersistence:
     """Final metadata survives controls and strict topology persistence."""
 
-    def test_controls_and_snapshot_v1_derive_termination_from_current_state(self) -> None:
+    def test_controls_and_snapshot_v1_derive_termination_from_current_state(
+        self,
+    ) -> None:
         done = State("done", final=True)
         idle = State("idle")
         machine = StateMachine(done)
@@ -270,7 +272,9 @@ class TestFinalControlCloneAndPersistence:
         assert machine.current_state is done
         assert machine.is_terminated is True
 
-    def test_clone_reuses_final_states_but_resets_to_its_final_initial_state(self) -> None:
+    def test_clone_reuses_final_states_but_resets_to_its_final_initial_state(
+        self,
+    ) -> None:
         done = State("done", final=True)
         idle = State("idle")
         machine = StateMachine(done)
@@ -358,7 +362,9 @@ class TestFinalControlCloneAndPersistence:
         with pytest.raises((TypeError, ValueError), match=error):
             StateMachine.from_dict(config)  # type: ignore[arg-type]
 
-    def test_from_dict_reports_the_final_source_row_without_a_candidate_escape(self) -> None:
+    def test_from_dict_reports_the_final_source_row_without_a_candidate_escape(
+        self,
+    ) -> None:
         config = {
             "initial": "idle",
             "states": ["idle", "done"],
