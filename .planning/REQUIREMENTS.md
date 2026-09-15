@@ -11,8 +11,8 @@
 - [x] **FINAL-02**: Users can query termination in O(1) through `is_terminated`, including when the initial state is final.
 - [x] **FINAL-03**: Users receive an atomic construction error when any supported construction path would add an outgoing transition to a final state.
 - [x] **FINAL-04**: Users can distinguish a non-final sink state from a terminated final state.
-- [ ] **FINAL-05**: Users observe the machine as terminated after a transition commits into a final state even if later entry or observer work fails.
-- [ ] **FINAL-06**: Users receive consistent termination semantics after reset, restore, clone, and deserialization operations.
+- [x] **FINAL-05**: Users observe the machine as terminated after a transition commits into a final state even if later entry or observer work fails.
+- [x] **FINAL-06**: Users receive consistent termination semantics after reset, restore, clone, and deserialization operations.
 
 ### Internal and External Transitions
 
@@ -104,8 +104,8 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | FINAL-02 | Phase 27 | Complete |
 | FINAL-03 | Phase 27 | Complete |
 | FINAL-04 | Phase 27 | Complete |
-| FINAL-05 | Phase 27 | Pending |
-| FINAL-06 | Phase 27 | Pending |
+| FINAL-05 | Phase 27 | Complete |
+| FINAL-06 | Phase 27 | Complete |
 | MODE-01 | Phase 28 | Pending |
 | MODE-02 | Phase 28 | Pending |
 | MODE-03 | Phase 28 | Pending |

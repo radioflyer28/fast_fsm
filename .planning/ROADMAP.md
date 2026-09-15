@@ -80,7 +80,7 @@ Plans:
   3. Entering a final state makes termination visible at commit, and later entry, observer, or async cancellation failure does not undo the committed state or finality.
   4. Reset, restore, clone, and deserialization preserve the distinction between explicit finality and topology dead ends.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 **Wave 1**
@@ -93,7 +93,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 27-03-PLAN.md — preserve finality through lifecycle, control, clone, and persistence operations and close native/pure-source validation.
+- [x] 27-03-PLAN.md — preserve finality through lifecycle, control, clone, and persistence operations and close native/pure-source validation.
 
 ### Phase 28: Same-State Transition Modes
 
@@ -198,7 +198,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 26. Canonical Construction & Evidence Contract | v0.5.0 | 5/5 | Complete    | 2026-09-15 |
-| 27. Explicit Final States | v0.5.0 | 2/3 | In Progress|  |
+| 27. Explicit Final States | v0.5.0 | 3/3 | In Progress|  |
 | 28. Same-State Transition Modes | v0.5.0 | 0/TBD | Not started | - |
 | 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 0/TBD | Not started | - |
