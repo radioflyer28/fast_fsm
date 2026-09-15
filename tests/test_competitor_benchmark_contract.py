@@ -163,7 +163,10 @@ def test_fast_fsm_preflight_contradiction_prevents_sampling(
     monkeypatch.setattr(
         fast_fsm_runner,
         "_preflight_false_guard",
-        lambda: ({"guard_calls": 2, "state": "idle", "transition_callbacks": 0}, lambda: None),
+        lambda: (
+            {"guard_calls": 2, "state": "idle", "transition_callbacks": 0},
+            lambda: None,
+        ),
     )
     monkeypatch.setattr(
         fast_fsm_runner,
