@@ -1348,6 +1348,18 @@ class TestMachineCallbacks:
 class TestFromDict:
     """Tests for StateMachine.from_dict()."""
 
+    def test_canonical_validation_error_reports_the_failing_row(self) -> None:
+        config = {
+            "initial": "a",
+            "transitions": [
+                {"trigger": "broken", "from": ["a", "a"], "to": "b"},
+                {"trigger": "valid", "from": "b", "to": "a"},
+            ],
+        }
+
+        with pytest.raises(ValueError, match=r"from_dict: transition\[0\]"):
+            StateMachine.from_dict(config)
+
     # ------------------------------------------------------------------
     # Basic construction
     # ------------------------------------------------------------------

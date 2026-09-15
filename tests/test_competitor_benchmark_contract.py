@@ -219,13 +219,14 @@ def test_exact_version_children_have_distinct_locked_script_commands() -> None:
         "python-statemachine-3.2.1",
     }
     fast = commands["fast-fsm"]
-    assert fast[:4] == [
+    assert fast[:5] == [
         "uv",
         "run",
+        "--locked",
         "--project",
         str(Path(__file__).parents[1].resolve()),
     ]
-    assert Path(fast[5]).name == "fast_fsm_runner.py"
+    assert Path(fast[6]).name == "fast_fsm_runner.py"
     for version, implementation_id in (
         ("2_5", "python-statemachine-2.5.0"),
         ("3_2", "python-statemachine-3.2.1"),
@@ -383,6 +384,31 @@ def test_run_child_bounds_and_validates_subprocess_output(
             [sys.executable, "-c", "import sys; print('caller secret'); sys.exit(2)"]
         )
     assert "caller secret" not in str(error.value)
+
+
+def test_run_child_redacts_process_launch_failures() -> None:
+    missing = "fast-fsm-deliberately-missing-child-executable"
+    with pytest.raises(
+        common.ComparisonContractError, match="child process could not start"
+    ) as error:
+        run_comparison.run_child([missing])
+    assert missing not in str(error.value)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX session regression")
+def test_run_child_timeout_survives_detached_pipe_holding_descendant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_comparison, "CHILD_TIMEOUT_SECONDS", 0.1)
+    descendant = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'], "
+        "start_new_session=True); print('parent-exits', flush=True)"
+    )
+    started = time.monotonic()
+    with pytest.raises(common.ComparisonContractError, match="timed out"):
+        run_comparison.run_child([sys.executable, "-c", descendant])
+    assert time.monotonic() - started < 0.75
 
 
 def test_neutral_cwd_fast_child_smoke_resolves_repository_origin(
