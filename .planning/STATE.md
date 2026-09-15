@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 27
 current_phase_name: Explicit Final States
 status: executing
-stopped_at: Phase 27 context gathered
-last_updated: "2026-09-15T22:15:10.930Z"
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-09-15T22:25:24.850Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 27 execution started
-state_head: 74985ade8785e57fb964e5ef2eaf5773b460a43c
+state_head: 93a82483d1731b6dd6221688a1f5bba1f9c1c0cf
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
+  completed_plans: 6
   percent: 14
 ---
 
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 27 (Explicit Final States) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 27
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-09-15 — Phase 27 execution started
 
 Progress: [█░░░░░░░░░] 14%
@@ -61,6 +61,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 26 P03 | 16min | 2 tasks | 6 files |
 | Phase 26 P04 | checkpoint | 1 task | 0 files |
 | Phase 26 P05 | 18min | 2 tasks | 10 files |
+| Phase 27 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 26]: Human approval covers exactly python-statemachine 2.5.0 and 3.2.1 from fgmacedo/python-statemachine for adjacent isolated benchmark locks. — Establishes the external package trust boundary without broadening project dependencies.
 - [Phase 26]: Exact comparator packages live only in adjacent uv script locks; the ordinary dependency lock and required automation remain comparator-free. — Keeps competitor observations reproducible without taxing installation, CI, or release paths.
 - [Phase 26]: Manual comparison children run from neutral directories with hard time/count limits and incremental per-stream output caps. — Prevents the observational tool from becoming an unbounded local resource or disclosure boundary.
+- [Phase 27]: Finality is immutable State metadata; termination is derived from the canonical current State.
+- [Phase 27]: Construction surfaces forward keyword-only final while AsyncDeclarativeState inherits the same path.
 
 ### Pending Todos
 
@@ -104,9 +107,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T21:34:26.048Z
-Stopped at: Phase 27 context gathered
-Resume file: .planning/phases/27-explicit-final-states/27-CONTEXT.md
+Last session: 2026-09-15T22:25:24.824Z
+Stopped at: Completed 27-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
