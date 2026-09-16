@@ -64,12 +64,27 @@ _TransitionRow = Union[
 ]
 
 @dataclass(frozen=True, slots=True)
+class _GraphTransition:
+    from_state: State
+    trigger: str
+    to_state: State
+    condition: Condition | None
+    from_state_name: str
+    to_state_name: str
+    condition_name: str | None
+    priority: int
+    condition_ref: str | None = ...
+    after: float | None = ...
+    within: float | None = ...
+    statically_unconditional: bool = ...
+
+@dataclass(frozen=True, slots=True)
 class _GraphSnapshot:
     name: str
     initial_state: State
     graph_version: int
     states: tuple[State, ...]
-    transitions: tuple[Any, ...]
+    transitions: tuple[_GraphTransition, ...]
     initial_state_name: str
     current_state_name: str
     state_names: tuple[str, ...]

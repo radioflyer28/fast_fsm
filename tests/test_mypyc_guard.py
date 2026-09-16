@@ -465,6 +465,37 @@ def test_typed_downstream_transition_construction_rejects_malformed_rows(
     assert "list[object]" in completed.stdout
 
 
+def test_typed_downstream_graph_transition_rows_are_concrete(
+    tmp_path: Path,
+) -> None:
+    """The consumer stub keeps graph projections typed across package modules."""
+    client = tmp_path / "client.py"
+    client.write_text(
+        "from fast_fsm import State, StateMachine\n\n"
+        "machine = StateMachine(State('idle'))\n"
+        "snapshot = machine._graph_snapshot()\n"
+        "reveal_type(snapshot.transitions[0])\n"
+        "snapshot.transitions[0].not_a_real_field()\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["FAST_FSM_BUILD_MODE"] = "pure"
+    environment.pop("MYPYPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", str(client)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout.count(" error: ") == 1
+    assert 'Revealed type is "fast_fsm.core._GraphTransition"' in completed.stdout
+    assert "not_a_real_field" in completed.stdout
+
+
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
     """The private graph records must keep the compiled core's slot boundary."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
