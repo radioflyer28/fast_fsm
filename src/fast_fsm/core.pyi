@@ -1,6 +1,16 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence, overload
+from typing import (
+    Any,
+    Callable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    overload,
+)
 
 from .conditions import (
     AndCondition as AndCondition,
@@ -15,7 +25,43 @@ from .conditions import (
     OrCondition as OrCondition,
 )
 
-_TransitionRow = Any
+_TransitionRow = Union[
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
+    ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
+        object,
+    ],
+]
 
 @dataclass(frozen=True, slots=True)
 class _GraphSnapshot:

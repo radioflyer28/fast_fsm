@@ -434,6 +434,37 @@ def test_typecheck_mypy_checks_stub_and_implementation_separately() -> None:
     )
 
 
+def test_typed_downstream_transition_construction_rejects_malformed_rows(
+    tmp_path: Path,
+) -> None:
+    """The public stub preserves the implementation's exact row tuple union."""
+    client = tmp_path / "client.py"
+    client.write_text(
+        "from fast_fsm import State, StateMachine, quick_fsm\n\n"
+        "malformed_rows = [object()]\n"
+        "StateMachine.quick_build('idle', malformed_rows)\n"
+        "quick_fsm('idle', malformed_rows)\n"
+        "machine = StateMachine(State('idle'))\n"
+        "machine.add_transitions(malformed_rows)\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["FAST_FSM_BUILD_MODE"] = "pure"
+    environment.pop("MYPYPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", str(client)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout.count(" error: ") == 3
+    assert "list[object]" in completed.stdout
+
+
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
     """The private graph records must keep the compiled core's slot boundary."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
