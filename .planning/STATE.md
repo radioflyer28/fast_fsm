@@ -5,11 +5,11 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 28
 current_phase_name: Same-State Transition Modes
 status: planning
-stopped_at: Phase 27 complete, ready to plan Phase 28
-last_updated: "2026-09-16T03:26:53.097Z"
+stopped_at: Phase 28 context gathered
+last_updated: "2026-09-16T22:06:54.341Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 27 complete, transitioned to Phase 28
-state_head: 202c46916e4a25d087f194d1c0c7e0cf5d581c99
+state_head: 98d9a3c63873684896d91e75a1f77997e50549e2
 progress:
   total_phases: 7
   completed_phases: 2
@@ -115,10 +115,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-16T00:30:00Z
-Stopped at: Phase 27 complete, ready to plan Phase 28
-Resume file: None
+Last session: 2026-09-16T22:06:54.291Z
+Stopped at: Phase 28 context gathered
+Resume file: 
 
-## Operator Next Steps
+.planning/phases/28-same-state-transition-modes/28-CONTEXT.md
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
