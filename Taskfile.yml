@@ -115,6 +115,7 @@ tasks:
       FAST_FSM_BUILD_MODE: pure
     cmds:
       - uv run mypy {{.SRC_DIR}}/
+      - uv run mypy {{.SRC_DIR}}/core.py
 
   pure-source-check:
     desc: Fail closed when a native core artifact would shadow pure source

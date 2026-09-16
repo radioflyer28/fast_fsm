@@ -46,6 +46,7 @@ PHASE18_NATIVE_PROBE = (
     Path(__file__).parent.parent / "tools" / "phase18_native_probe.py"
 )
 CI_WORKFLOW = Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml"
+TASKFILE = Path(__file__).parent.parent / "Taskfile.yml"
 
 
 def _load_phase18_native_probe() -> ModuleType:
@@ -416,6 +417,21 @@ def test_typed_downstream_final_state_constructors_reject_non_bool(
     assert completed.returncode != 0
     assert completed.stdout.count(" error: ") == 5
     assert 'expected "bool"' in completed.stdout
+
+
+def test_typecheck_mypy_checks_stub_and_implementation_separately() -> None:
+    """The consumer stub must not hide the mypyc implementation from mypy."""
+    assert CORE_PY.with_suffix(".pyi").is_file()
+    taskfile = TASKFILE.read_text(encoding="utf-8")
+    typecheck_mypy = taskfile.split("  typecheck-mypy:\n", 1)[1].split(
+        "\n  pure-source-check:", 1
+    )[0]
+
+    assert "- uv run mypy {{.SRC_DIR}}/" in typecheck_mypy
+    assert "- uv run mypy {{.SRC_DIR}}/core.py" in typecheck_mypy
+    assert typecheck_mypy.index("{{.SRC_DIR}}/") < typecheck_mypy.index(
+        "{{.SRC_DIR}}/core.py"
+    )
 
 
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
