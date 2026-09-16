@@ -381,6 +381,43 @@ def test_typed_downstream_async_callable_wrappers_accept_exact_and_inherited_sha
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_typed_downstream_final_state_constructors_reject_non_bool(
+    tmp_path: Path,
+) -> None:
+    """PEP 561 consumers must reject invalid explicit final-state metadata."""
+    client = tmp_path / "client.py"
+    client.write_text(
+        "from fast_fsm import (\n"
+        "    AsyncDeclarativeState,\n"
+        "    CallbackState,\n"
+        "    DeclarativeState,\n"
+        "    State,\n"
+        ")\n\n"
+        "invalid_final = object()\n"
+        "State('done', final=invalid_final)\n"
+        "State.create('done', final=invalid_final)\n"
+        "CallbackState('done', final=invalid_final)\n"
+        "DeclarativeState('done', final=invalid_final)\n"
+        "AsyncDeclarativeState('done', final=invalid_final)\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["FAST_FSM_BUILD_MODE"] = "pure"
+    environment.pop("MYPYPATH", None)
+    completed = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", str(client)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout.count(" error: ") == 5
+    assert 'expected "bool"' in completed.stdout
+
+
 def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
     """The private graph records must keep the compiled core's slot boundary."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
