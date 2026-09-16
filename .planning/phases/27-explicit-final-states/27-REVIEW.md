@@ -1,10 +1,12 @@
 ---
 phase: 27-explicit-final-states
-reviewed: 2026-09-15T23:02:21Z
+reviewed: 2026-09-16T03:09:32Z
 depth: standard
-files_reviewed: 9
+files_reviewed: 11
 files_reviewed_list:
   - src/fast_fsm/core.py
+  - src/fast_fsm/core.pyi
+  - Taskfile.yml
   - tests/test_final_states.py
   - tests/test_mypyc_guard.py
   - tests/test_graph_invariants.py
@@ -14,48 +16,39 @@ files_reviewed_list:
   - tests/test_transition_lifecycle.py
   - .specify/memory/spr-core-api.md
 findings:
-  critical: 1
+  critical: 0
   warning: 0
   info: 0
-  total: 1
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 27: Code Review Report
 
-**Reviewed:** 2026-09-15T23:02:21Z
+**Reviewed:** 2026-09-16T03:09:32Z
 **Depth:** standard
-**Files Reviewed:** 9
-**Status:** issues_found
+**Files Reviewed:** 11
+**Status:** clean
 
 ## Summary
 
-The explicit final-state runtime behavior, canonical source rejection, lifecycle commit truth, persistence validation, and sync/async tests are internally consistent, and the focused 456-test review suite passed. One public API contract defect remains: every new `final` parameter is typed as `object`, so typed callers receive no protection from values that the runtime immediately rejects. A direct strict-mypy probe confirmed that `State("done", final=object())` passes type checking and then fails at runtime.
+All reviewed files meet quality standards. No issues found.
+
+The convergence review confirmed that all historical blockers are resolved:
+
+- Every public final-state constructor exposes `final: bool` to PEP 561 consumers while the implementation retains exact built-in-`bool` runtime validation without coercion.
+- The blocking mypy task checks both the package/stub surface and `core.py` explicitly, so the full-module stub cannot hide implementation errors.
+- The stub preserves the implementation's exact three-through-seven-field transition-row union across `quick_build`, `quick_fsm`, and `add_transitions`.
+- `_GraphTransition` and `_GraphSnapshot.transitions` retain concrete cross-module types instead of degrading to `Any`.
+
+Focused verification passed for the complete persisted review scope: pure-source origin, both blocking mypy invocations, `stubtest`, Ruff, the seven relevant test modules plus final-state and mypyc guards, and a temporary pure wheel containing `core.py`, `core.pyi`, and `py.typed`. No native shadow remains under `src/fast_fsm`.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-01 [BLOCKER]: Public final-state parameters discard the promised boolean type
-
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:852`
-
-**Issue:** Phase decision D-01 and FINAL-01 define `final` as a boolean public constructor parameter, but `State.__init__`, `State.create`, `CallbackState.__init__`, and `DeclarativeState.__init__` annotate it as `object` (lines 852, 876, 945, and 5342). This makes the package's PEP 561 interface claim that every object is valid even though runtime validation rejects every non-exact `bool`. Consequently, strict mypy accepts invalid client code such as `State("done", final=object())`, which then raises `TypeError` at runtime. The broad annotation also renders misleading Sphinx/API signatures for the milestone's central public feature.
-
-**Fix:** Keep the exact runtime check for `bool` subclasses/coercible values, but expose the actual public type on all four construction surfaces and add a downstream strict-mypy regression test:
-
-```python
-def __init__(self, name: str, *, final: bool = False) -> None:
-    if type(final) is not bool:
-        raise TypeError("final must be an exact built-in bool")
-    self.name = name
-    self._final = final
-```
-
-Apply `final: bool = False` likewise to `State.create`, `CallbackState.__init__`, and `DeclarativeState.__init__`. Runtime negative tests can continue using `# type: ignore[arg-type]` to exercise fail-closed validation.
+No blocker, warning, or informational findings remain after the iteration-3 fix.
 
 ---
 
-_Reviewed: 2026-09-15T23:02:21Z_
+_Reviewed: 2026-09-16T03:09:32Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_

@@ -5,8 +5,8 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 27
 current_phase_name: Explicit Final States
 status: verifying
-stopped_at: Completed 27-03-PLAN.md
-last_updated: "2026-09-15T22:54:54.436Z"
+stopped_at: Phase 27 code-review gap cycle resumed; CR-01 fix integrated
+last_updated: "2026-09-16T00:30:00Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 27 execution started
 state_head: ed515a640e790718524c318c781918af8b27e4fc
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 Phase: 27 (Explicit Final States) — EXECUTING
 Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-09-15 — Phase 27 execution started
+Status: Verifying — fresh re-review after CR-01 fix
+Last activity: 2026-09-16 — Integrated typed final-state constructor contract fix
 
 Progress: [█░░░░░░░░░] 14%
 
@@ -114,10 +114,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:54:54.407Z
-Stopped at: Completed 27-03-PLAN.md
+Last session: 2026-09-16T00:30:00Z
+Stopped at: Session resumed; proceeding to fresh Phase 27 re-review
 Resume file: None
 
 ## Operator Next Steps
 
-- Discuss and plan Phase 27: immutable explicit final states and O(1) termination truth.
+- Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
