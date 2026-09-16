@@ -53,7 +53,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
 Plans:
 **Wave 1**
 
-- [x] 26-01-PLAN.md — establish the single Phase 26 Beads item, then trace direct and batch registration through one immutable canonical construction transaction.
+- [x] 26-01-PLAN.md — trace direct and batch registration through one immutable canonical construction transaction.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -66,7 +66,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [x] 26-05-PLAN.md — generate exact locks, isolate ordinary dependencies/CI, wire the manual observation command, and carry the phase Beads item to verification-only closure.
+- [x] 26-05-PLAN.md — generate exact locks, isolate ordinary dependencies/CI, wire the manual observation command, and carry the phase to verification-only closure.
 
 ### Phase 27: Explicit Final States
 

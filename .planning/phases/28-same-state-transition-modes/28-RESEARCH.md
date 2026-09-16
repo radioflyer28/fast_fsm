@@ -98,7 +98,7 @@ The other planning hotspot is cancellation truth. The async selector already car
 - Preserve every condition and callback `*args, **kwargs` convention and do not inject mode into application kwargs. [VERIFIED: `.github/copilot-instructions.md:60-63`; locked D-11 at `.planning/phases/28-same-state-transition-modes/28-CONTEXT.md:31`].
 - Keep `core.py` as the only mypyc compilation unit; `conditions.py` and `condition_templates.py` remain interpreted. [VERIFIED: `.github/copilot-instructions.md:318-336`; `.specify/memory/constitution.md:92-109`].
 - Run targeted tests during implementation, the full sequential suite once before merge, blocking mypy, advisory ty, Ruff format/check, and the slots audit. [VERIFIED: `.github/copilot-instructions.md:65-71,108-119,237-264,318-334`].
-- Use Beads for task tracking and do not create Markdown TODO/task lists. `bd ready --json` currently cannot open the database because its configured Dolt port is occupied; execution must repair that environment before claiming/closing the Phase 28 item. [VERIFIED: `AGENTS.md:19-21,74-99`; local `bd ready --json` on 2026-09-16].
+- Use the active GSD phase plans as the local execution contract. Do not duplicate their task breakdown in another local tracker; create or update GitHub Issues only when the user explicitly authorizes external tracking. [VERIFIED: `AGENTS.md`; `.github/copilot-instructions.md` §Issue Tracking].
 - Public narrative/tutorial and installed release evidence remain Phase 32 work per the explicit phase boundary. Phase 28 should update code docstrings and `core.pyi` needed for an accurate API, but must not pull README/Sphinx tutorial or installed-wheel evidence forward. [VERIFIED: `.planning/phases/28-same-state-transition-modes/28-CONTEXT.md:9,113-117`; user-provided Phase 32 boundary].
 
 ## Standard Stack
@@ -446,9 +446,7 @@ No user decision blocks planning. The only undecided items are explicitly delega
 | Ruff | Formatting/linting | ✓ | `0.12.11` | None needed. [VERIFIED: local uv probe; `pyproject.toml:19`]. |
 | Task | Project quality commands | ✓ | `3.53.1` | Direct documented uv commands where a task wrapper is unnecessary. [VERIFIED: local `task --version`; `.github/copilot-instructions.md:27`]. |
 | Apple Clang | Fresh native extension build | ✓ | `21.0.0` | Pure-source tests still run, but native parity remains a phase gate. [VERIFIED: local `clang --version`; `.github/copilot-instructions.md:318-336`]. |
-| Beads/Dolt database | Required project tracking | ✗ | CLI present; configured DB unavailable | No alternate tracker is allowed; repair the occupied Dolt port before execution. [VERIFIED: local `bd ready --json`; `AGENTS.md:19-21,91-99`]. |
-
-**Missing dependencies with no fallback:** Beads database connectivity blocks the required claim/update/close workflow until its local Dolt port conflict is resolved. [VERIFIED: local `bd ready --json` on 2026-09-16].
+**Missing dependencies with no fallback:** none.
 
 **Missing dependencies with fallback:** none.
 

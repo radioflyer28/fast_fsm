@@ -87,18 +87,15 @@ These constraints apply to EVERY task. Violating any of them is a bug.
 - Default branch: `main`
 - Feature branches: `feat/<desc>`, `fix/<desc>`, `docs/<desc>`
 - Remote: `origin` → `https://github.com/radioflyer28/fast_fsm.git`
-- All feature work is tracked in **beads** (`bd`) — see [Issue Tracking](#issue-tracking)
+- Active milestone work is described by the GSD artifacts under `.planning/`.
 
 
 ## Development Workflow
 
 ### Workflow A: Feature/Fix Work (branch-based)
 
-1. **Claim work in beads:**
-   ```bash
-   bd ready                              # Find unblocked work
-   bd update <id> --status in_progress   # Claim the issue
-   ```
+1. **Confirm scope:** Read the active GSD phase plan or the GitHub Issue named
+   by the user. Do not create or update external issues without authorization.
 2. **Create branch:**
    ```bash
    git checkout main
@@ -124,19 +121,17 @@ These constraints apply to EVERY task. Violating any of them is a bug.
    When preserving concurrent work in a dirty worktree, inspect `git status`
    and stage/commit only the task's explicit paths; never use `git add .` or
    `git add -A`.
-8. **Merge to main and close:**
+8. **Merge to main and push:**
    ```bash
    git checkout main
    git merge feat/<desc>
    git branch -d feat/<desc>
-   bd close <id> --reason "Merged feat/<desc>"
    git push
    ```
 
 ### Workflow B: Direct-to-main (no feature branch)
 
 Use for docs-only changes, config tweaks, or trivial fixes.
-Beads tracking is optional for Workflow B — use your judgment.
 
 1. Ensure you're on `main`: `git checkout main`
 2. Make changes, commit directly, push
@@ -144,76 +139,13 @@ Beads tracking is optional for Workflow B — use your judgment.
 
 ## Issue Tracking
 
-**Primary tracker:** beads (`bd`) — all work items live here.
-**Mirror:** GitHub Issues — for visibility and long-term records.
+**External tracker:** GitHub Issues, when external tracking is useful and the
+user has authorized creating or updating an issue.
 
-### Beads (bd) — Day-to-Day Tracking
-
-All work is tracked in beads. Use `bd` for ALL task tracking — do NOT use
-markdown TODOs, task lists, or other tracking methods.
-
-```bash
-bd ready                              # Find unblocked work
-bd create "Title" -t task -p 2        # Create a task
-bd create "Epic title" -t epic -p 1   # Create an epic (groups related work)
-bd update <id> --status in_progress   # Claim work
-bd close <id> --reason "Done"         # Complete work
-```
-
-**Issue types:**
-
-| Type | Use for |
-|------|---------|
-| `bug` | Something broken |
-| `feature` | New functionality |
-| `task` | Work item (tests, docs, refactoring) |
-| `epic` | Large feature with subtasks |
-| `chore` | Maintenance (dependencies, tooling) |
-
-**Priorities:**
-
-| Priority | Meaning |
-|----------|---------|
-| `0` | Critical (security, data loss, broken builds) |
-| `1` | High (major features, important bugs) |
-| `2` | Medium (default, nice-to-have) |
-| `3` | Low (polish, optimization) |
-| `4` | Backlog (future ideas) |
-
-**Discovered work:** When you find new issues while working, link them:
-```bash
-bd create "Found bug" -p 1 --deps discovered-from:<parent-id>
-```
-
-**Granularity:** Create fine-grained beads issues freely — individual bug fixes, small refactors,
-test additions. Group related items under **epics** when they form a coherent feature or initiative.
-
-### GitHub Issues — Coarse-Grained Mirror
-
-GitHub Issues mirror beads **at the epic level** (or bundled related tasks).
-The goal is clean project history without noise from trivial items.
-
-**When to create a GitHub Issue:**
-- A beads epic is created (feature, major refactor, milestone)
-- A cluster of related beads tasks warrants external visibility
-- A bug is user-facing or significant enough to track publicly
-
-**When NOT to create a GitHub Issue:**
-- Individual small tasks within an epic (tracked only in beads)
-- Docs typo fixes, config tweaks, trivial chores
-- Discovered sub-tasks that roll up into an existing GitHub Issue
-
-**Convention:** Reference the GitHub Issue in beads epic descriptions and vice versa:
-```bash
-# In beads epic description, reference the GH issue
-bd create "Async guard conditions" -t epic -p 1 --description="GH #12"
-
-# In GitHub Issue body, reference the beads epic
-# "Tracked in beads as bd-a1b2"
-```
-
-**Closing:** When all child beads tasks under an epic are closed, close the corresponding
-GitHub Issue with a summary of what was delivered.
+GSD milestone and phase artifacts under `.planning/` are the authoritative
+local execution contracts for GSD work. Do not duplicate their task breakdown
+into a second local tracker. For non-GSD work, the user request and commit
+history are sufficient unless an existing GitHub Issue is explicitly in scope.
 
 
 ## Code Quality & Formatting
@@ -357,14 +289,13 @@ Do not move this precedence into caller-side `if`/`elif` dispatch code.
 
 **When ending a work session**, complete ALL steps below. Work is NOT complete until `git push` succeeds.
 
-1. **File issues for remaining work** — `bd create` for anything that needs follow-up
-2. **Run quality gates** (if .py files changed) — tests, linters, docs build
-3. **Update SPR files** (if public API or significant behaviour changed) — edit the relevant `.specify/memory/spr-*.md` in the same commit as the code change; if a decision was reversed, write a new ADR and update the old one's status to `Superseded by ADR-NNN`
-4. **Update issue status** — `bd close` finished work, update in-progress items
+1. **Record remaining work** in the active GSD artifacts, handoff, or an
+   authorized GitHub Issue; do not create a duplicate tracker.
+2. **Run quality gates** (if .py files changed) — tests, linters, docs build.
+3. **Update SPR files** (if public API or significant behaviour changed) — edit the relevant `.specify/memory/spr-*.md` in the same commit as the code change; if a decision was reversed, write a new ADR and update the old one's status to `Superseded by ADR-NNN`.
 4. **Push to remote** — this is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -388,7 +319,7 @@ a merged ADR; supersede it with a new one.
 **When NOT to write an ADR:**
 - Routine feature work that follows existing patterns
 - Bug fixes
-- Changes fully explained by a beads issue + commit message
+- Changes fully explained by the active phase plan, user request, or commit message
 
 **Creating a new ADR:**
 ```bash
