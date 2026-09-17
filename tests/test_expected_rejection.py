@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import pytest
+import logging
 
 from fast_fsm import (
+    DeclarativeState,
     State,
     StateMachine,
     TransitionError,
     TransitionRejected,
     TransitionResult,
+    transition,
 )
 
 
@@ -143,3 +146,167 @@ def test_reject_02_corrupt_signal_stays_an_unexpected_guard_failure() -> None:
     assert result.rejection_code is None
     assert result.error == "Transition guard raised an exception"
     assert result.cause is signal
+
+
+@pytest.mark.parametrize(
+    "boundary", ("transition_guard", "declarative_guard", "state_permission")
+)
+@pytest.mark.parametrize("internal", (False, True))
+def test_reject_03_approved_boundaries_abort_priority_groups(
+    boundary: str, internal: bool
+) -> None:
+    """REJECT-03/04: each approved seam returns terminal selection metadata."""
+    events: list[str] = []
+    rejected_name = "source" if internal else "rejected"
+
+    def reject(*_args: object, **_kwargs: object) -> bool:
+        events.append(boundary)
+        raise TransitionRejected("mission.altitude_limit")
+
+    if boundary == "declarative_guard":
+
+        class Source(DeclarativeState):
+            @transition("go", to_state=rejected_name, condition=reject)
+            def go(self) -> None:
+                raise AssertionError("rejected declarative handler must not run")
+
+        source: State = Source("source")
+    elif boundary == "state_permission":
+
+        class Source(State):
+            def can_transition(
+                self,
+                trigger_name: str,
+                to_state: State,
+                *args: object,
+                **kwargs: object,
+            ) -> bool:
+                if to_state.name == rejected_name:
+                    return reject(*args, **kwargs)
+                return super().can_transition(trigger_name, to_state, *args, **kwargs)
+
+        source = Source("source")
+    else:
+        source = State("source")
+
+    rejected = source if internal else State(rejected_name)
+    later = State("later")
+    machine = StateMachine(source, name=f"expected-rejection-{boundary}-{internal}")
+    if not internal:
+        machine.add_state(rejected)
+    machine.add_state(later)
+    machine.enable_history()
+    machine.on_exit(source.name, lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter(rejected.name, lambda *_args, **_kwargs: events.append("enter"))
+
+    def lower_candidate(*_args: object, **_kwargs: object) -> bool:
+        events.append("lower-candidate")
+        return True
+
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        reject if boundary == "transition_guard" else None,
+        priority=-4,
+        internal=internal,
+    )
+    machine.add_transition("go", source, later, lower_candidate, priority=3)
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.rejected is True
+    assert result.rejection_code == "mission.altitude_limit"
+    assert result.error == "Transition rejected: mission.altitude_limit"
+    assert result.stage == (
+        "state-permission" if boundary == "state_permission" else "guard"
+    )
+    assert result.priority == -4
+    assert result.internal is internal
+    assert result.cause is None
+    assert result.committed is False
+    assert result.to_state is None
+    assert machine.current_state is source
+    assert machine.history == []
+    assert events == [boundary]
+
+
+def test_reject_07_observers_finalize_once_and_reentry_stays_isolated() -> None:
+    """REJECT-07: rejection keeps the existing failure-observer ownership seam."""
+    source = State("source")
+    target = State("target")
+    machine = StateMachine(source, name="expected-rejection-observers")
+    machine.add_state(target)
+    machine.add_transition(
+        "go",
+        source,
+        target,
+        lambda: (_ for _ in ()).throw(TransitionRejected("battery.low")),
+    )
+    events: list[str] = []
+
+    def failing_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("failing")
+        raise RuntimeError("observer failure")
+
+    def reentering_observer(*_args: object, **_kwargs: object) -> None:
+        with pytest.raises(
+            RuntimeError, match=r"^FSM ownership violation: reentrant trigger$"
+        ):
+            machine.trigger("missing")
+        events.append("reentrant")
+
+    machine.on_failed(failing_observer)
+    machine.on_failed(reentering_observer)
+    machine.on_failed(lambda *_args, **_kwargs: events.append("later"))
+
+    result = machine.trigger("go")
+
+    assert result.rejection_code == "battery.low"
+    assert events == ["failing", "reentrant", "later"]
+
+
+def test_reject_02_logging_uses_only_debug_code_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """REJECT-02: expected control flow does not expose signal or caller reprs."""
+
+    class HostilePayload:
+        def __init__(self) -> None:
+            self.repr_calls = 0
+
+        def __repr__(self) -> str:
+            self.repr_calls += 1
+            return "caller-repr-secret"
+
+    class HostileSignal(TransitionRejected):
+        def __repr__(self) -> str:
+            return "signal-repr-secret"
+
+    source = State("source")
+    target = State("target")
+    logger_name = "fast_fsm.expected-rejection-logging"
+    machine = StateMachine(
+        source, name="expected-rejection-logging", logger_name=logger_name
+    )
+    machine.add_state(target)
+
+    def reject(*_args: object, **_kwargs: object) -> bool:
+        raise HostileSignal("link.lost")
+
+    machine.add_transition("go", source, target, reject)
+    payload = HostilePayload()
+
+    with caplog.at_level(logging.DEBUG, logger=logger_name):
+        result = machine.trigger("go", payload=payload)
+
+    assert result.rejection_code == "link.lost"
+    assert payload.repr_calls == 0
+    assert any(
+        record.levelno == logging.DEBUG and "link.lost" in record.getMessage()
+        for record in caplog.records
+    )
+    assert all(record.levelno < logging.WARNING for record in caplog.records)
+    assert "caller-repr-secret" not in caplog.text
+    assert "signal-repr-secret" not in caplog.text
