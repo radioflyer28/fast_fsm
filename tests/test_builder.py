@@ -278,6 +278,159 @@ def test_declarative_builder_keeps_destinationless_handlers_direct_only() -> Non
     assert calls == ["handler"]
 
 
+def test_builder_imports_initial_and_later_declaration_owners_without_mirroring() -> (
+    None
+):
+    """Only the declaration owner contributes its applicable canonical edge."""
+    initial_sources = ["initial"]
+    later_sources = ["armed"]
+    calls: list[str] = []
+
+    class Initial(DeclarativeState):
+        @transition("launch", from_state=initial_sources, to_state="armed", priority=2)
+        def launch(self, *_args: object, **_kwargs: object) -> bool:
+            calls.append("launch")
+            return True
+
+    class Armed(DeclarativeState):
+        @transition("complete", from_state=later_sources, to_state="done", priority=-3)
+        def complete(self, *_args: object, **_kwargs: object) -> bool:
+            calls.append("complete")
+            return True
+
+    initial = Initial("initial")
+    armed = Armed("armed")
+    builder = FSMBuilder(initial).add_state(armed).add_state(State("done"))
+    initial_sources.append("mutated-after-decoration")
+    later_sources.append("mutated-after-decoration")
+
+    machine = builder.build()
+
+    assert initial._handlers["launch"][0].from_state == ("initial",)
+    assert armed._handlers["complete"][0].from_state == ("armed",)
+    assert "launch" in machine._transitions["initial"]
+    assert "complete" not in machine._transitions["initial"]
+    assert "complete" in machine._transitions["armed"]
+    assert machine.trigger("launch").success is True
+    assert machine.trigger("complete").success is True
+    assert machine.current_state.name == "done"
+    assert calls == ["launch", "complete"]
+
+
+def test_builder_declarative_conflict_is_atomic_and_repairable() -> None:
+    """An explicit collision is rejected before the builder cache is published."""
+
+    class Source(DeclarativeState):
+        @transition("go", from_state="source", to_state="first", priority=0)
+        def go(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    source = Source("source")
+    builder = FSMBuilder(source)
+    builder.add_state(State("first")).add_state(State("second"))
+    builder.add_transition("go", "source", "second", priority=0)
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(ValueError, match="priority"):
+        builder.build()
+
+    assert builder._machine is None
+    assert builder_staging_fingerprint(builder) == before
+    builder._transitions[-1] = _TransitionRequest(
+        "go", ("source",), "second", priority=1
+    )
+    machine = builder.build()
+
+    assert machine.trigger("go").to_state == "first"
+    assert builder.build() is machine
+
+
+def test_builder_declarative_exact_duplicate_is_version_neutral() -> None:
+    """An equivalent explicit row shares the canonical entry without a graph bump."""
+
+    class Source(DeclarativeState):
+        @transition("go", from_state="source", to_state="target", priority=-2)
+        def go(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    source = Source("source")
+    builder = FSMBuilder(source)
+    builder.add_state(State("target"))
+    builder.add_transition("go", "source", "target", priority=-2)
+
+    machine = builder.build()
+
+    assert machine._graph_version == 2
+    assert machine._transitions["source"]["go"].priority == -2
+    assert machine.trigger("go").success is True
+
+
+def test_builder_ignores_nonapplicable_declarative_guards_during_preflight() -> None:
+    """A foreign source constraint cannot poison an owner's staged build attempt."""
+    cyclic_guard = NotCondition(AlwaysTrue())
+
+    class ForeignDeclaration(DeclarativeState):
+        @transition(
+            "ignored",
+            from_state="somewhere-else",
+            to_state="target",
+            condition=cyclic_guard,
+        )
+        def ignored(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    cyclic_guard.condition = cyclic_guard
+    foreign = ForeignDeclaration("later")
+    builder = FSMBuilder(State("initial"))
+
+    builder.add_state(foreign).add_state(State("target"))
+    machine = builder.build()
+
+    assert isinstance(machine, StateMachine)
+    assert "ignored" not in machine._transitions["later"]
+
+
+@pytest.mark.asyncio
+async def test_builder_declarative_async_topology_owns_each_runtime_seam_once() -> None:
+    """Imported async declarations retain one guard, permission, handler, and entry."""
+    calls = {"guard": 0, "permission": 0, "handler": 0, "entry": 0}
+
+    async def guard(*_args: object, **_kwargs: object) -> bool:
+        calls["guard"] += 1
+        return True
+
+    class Source(AsyncDeclarativeState):
+        @transition("go", from_state="source", to_state="target", condition=guard)
+        async def go(self, *_args: object, **_kwargs: object) -> bool:
+            calls["handler"] += 1
+            return True
+
+        async def can_transition_async(
+            self, trigger: str, to_state: State, *_args: object, **_kwargs: object
+        ) -> bool:
+            calls["permission"] += 1
+            return await super().can_transition_async(trigger, to_state)
+
+    class Target(State):
+        def on_enter(
+            self,
+            _from_state: State | None,
+            _trigger: str,
+            *_args: object,
+            **_kwargs: object,
+        ) -> None:
+            calls["entry"] += 1
+
+    source = Source("source")
+    target = Target("target")
+    machine = FSMBuilder(source).add_state(target).build()
+
+    assert isinstance(machine, AsyncStateMachine)
+    assert (await machine.trigger_async("go")).success is True
+    assert machine.current_state is target
+    assert calls == {"guard": 1, "permission": 1, "handler": 1, "entry": 1}
+
+
 def test_builder_build_submits_one_endpoint_bound_request_transaction() -> None:
     """Build binds endpoints without converting staging back to positional rows."""
     source = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py").read_text()
