@@ -5714,6 +5714,17 @@ def _resolve_declarative_handler(
         all_handlers = source_state._handlers.get(trigger, ())
         if len(all_handlers) == 1 and len(legacy_handlers) == 1:
             return legacy_handlers[0]
+        # Before decorators could author transition mode, one external-mode
+        # declaration could validly guard an explicitly registered internal
+        # edge. Keep that narrow one-handler compatibility path so the
+        # declarative guard remains a terminal selection seam. An internal
+        # declaration never falls back to an external entry.
+        if internal is True:
+            pre_mode_handlers = _matching_declarative_handlers(
+                source_state, trigger, target_state, None, False
+            )
+            if len(all_handlers) == 1 and len(pre_mode_handlers) == 1:
+                return pre_mode_handlers[0]
     return None
 
 
