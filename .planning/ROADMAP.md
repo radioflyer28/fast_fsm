@@ -136,7 +136,7 @@ Plans:
   4. Existing failure observers receive one notification for a rejected trigger, with no new listener family and no arbitrary exception detail exposed by default.
   5. Raising the same signal outside approved pre-commit eligibility seams retains ordinary staged execution-failure and cancellation truth.
 
-**Plans**: 1/4 plans executed
+**Plans**: 2/4 plans executed
 
 Plans:
 **Wave 1**
@@ -145,7 +145,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 29-02-PLAN.md — complete query, condition-composition, asynchronous selection, cancellation, and observer parity.
+- [x] 29-02-PLAN.md — complete query, condition-composition, asynchronous selection, cancellation, and observer parity.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -230,7 +230,7 @@ Plans:
 | 26. Canonical Construction & Evidence Contract | v0.5.0 | 5/5 | Complete    | 2026-09-15 |
 | 27. Explicit Final States | v0.5.0 | 3/3 | Complete    | 2026-09-15 |
 | 28. Same-State Transition Modes | v0.5.0 | 3/3 | Complete    | 2026-09-16 |
-| 29. Expected Domain Rejection | v0.5.0 | 1/4 | In Progress|  |
+| 29. Expected Domain Rejection | v0.5.0 | 2/4 | In Progress|  |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 0/TBD | Not started | - |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 0/TBD | Not started | - |
 | 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |

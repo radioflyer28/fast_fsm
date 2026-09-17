@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 29
 current_phase_name: Expected Domain Rejection
 status: executing
-stopped_at: Completed 29-01-PLAN.md
-last_updated: "2026-09-17T16:26:40.209Z"
+stopped_at: Completed 29-02-PLAN.md
+last_updated: "2026-09-17T16:36:43.079Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 29 execution started
-state_head: 67ae57db044291b5a389a8b191c2436236005243
+state_head: ccb48cd1c0ebb3d1f047f636213d4e3c5790a32d
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 43
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 29 (Expected Domain Rejection) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 29 execution started
 
@@ -70,6 +70,7 @@ Progress: [████░░░░░░] 43%
 | Phase 28 P02 | 4min | 2 tasks | 3 files |
 | Phase 28 P03 | 48min | 2 tasks | 4 files |
 | Phase 29 P01 | 16 min | 2 tasks | 9 files |
+| Phase 29 P02 | 4 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -109,6 +110,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 29]: TransitionRejected accepts only exact bounded ASCII strings and is revalidated only on the rejection path.
 - [Phase 29]: Expected rejection remains a terminal TransitionResult; None remains reserved for ordinary group fallthrough.
 - [Phase 29]: Failure observers remain owned by existing trigger finalization, with no rejection listener family.
+- [Phase 29]: Phase 29: Async selector conversion stays at the three approved eligibility seams and reuses the existing terminal result path.
+- [Phase 29]: Phase 29: Query APIs project terminal expected rejection to False without failure finalization or mutation.
+- [Phase 29]: Phase 29: Condition combinators remain catch-free; rejection and cancellation propagate with their original identities.
 
 ### Pending Todos
 
@@ -130,8 +134,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T16:26:40.153Z
-Stopped at: Completed 29-01-PLAN.md
+Last session: 2026-09-17T16:36:42.964Z
+Stopped at: Completed 29-02-PLAN.md
 Resume file: 
 
 None
