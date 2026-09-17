@@ -223,6 +223,22 @@ class TestFinalSourceConstructionInvariant:
         assert done.final is True
         assert "finish" not in machine._transitions[done.name]
 
+    def test_batch_row_preserves_final_source_rejection_and_atomicity(self) -> None:
+        """Batch mode rows reach the same final-source normalization boundary."""
+        machine, done, idle = self._machine_with_final_source()
+        before_version = machine._graph_version
+        before_snapshot = machine._graph_snapshot()
+
+        with pytest.raises(
+            ValueError, match="^final state cannot be a transition source$"
+        ):
+            machine.add_transitions(
+                [("finish", done, idle, None, 0, None, None, False)]
+            )
+
+        assert machine._graph_version == before_version
+        assert machine._graph_snapshot() == before_snapshot
+
     def test_quick_factories_reject_supplied_final_sources_but_names_stay_non_final(
         self,
     ) -> None:

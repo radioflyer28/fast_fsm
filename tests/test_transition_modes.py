@@ -169,6 +169,21 @@ def test_internal_self_transition_commits_without_state_lifecycle_or_payload_inj
     assert events == ["before", "trigger-callback", "after"]
 
 
+def test_batch_internal_row_commits_with_the_same_mode_and_history_truth() -> None:
+    """The retained batch adapter carries internal mode into canonical selection."""
+    state = State("hover")
+    machine = StateMachine(state)
+    machine.enable_history()
+    machine.add_transitions([("refresh", state, state, None, -2, None, None, True)])
+
+    result = machine.trigger("refresh")
+
+    assert result.success is True
+    assert result.priority == -2
+    assert result.internal is True
+    assert machine.history[-1].internal is True
+
+
 def test_internal_transition_retains_only_transition_surfaces_in_exact_order() -> None:
     """A selected internal edge bypasses all six state lifecycle families."""
     events: list[str] = []

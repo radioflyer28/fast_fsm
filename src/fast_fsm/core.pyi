@@ -61,6 +61,16 @@ _TransitionRow = Union[
         object,
         object,
     ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
+        object,
+        object,
+    ],
 ]
 
 @dataclass(frozen=True, slots=True)

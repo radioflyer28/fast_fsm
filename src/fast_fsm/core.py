@@ -743,6 +743,16 @@ _TransitionRow = Union[
         object,
         object,
     ],
+    Tuple[
+        str,
+        Union[str, "State", List[Union[str, "State"]]],
+        Union[str, "State"],
+        Optional[Union[Condition, GuardCallable]],
+        object,
+        object,
+        object,
+        object,
+    ],
 ]
 
 
@@ -1252,7 +1262,7 @@ class StateMachine:
 
         Args:
             initial_state: Initial state name or State object
-            transitions: 3-, 4-, or 5-field transition rows accepted by
+            transitions: 3- through 8-field transition rows accepted by
                 :meth:`add_transitions`. State endpoints may be strings or State
                 objects; from_state may also be a list of either form.
             states: Optional additional states to add
@@ -1304,9 +1314,9 @@ class StateMachine:
 
         transition_rows = list(transitions)
         for entry in transition_rows:
-            if len(entry) not in (3, 4, 5, 6, 7):
+            if len(entry) not in (3, 4, 5, 6, 7, 8):
                 raise ValueError(
-                    "each transition entry must contain 3, 4, 5, 6, or 7 items"
+                    "each transition entry must contain 3, 4, 5, 6, 7, or 8 items"
                 )
             trigger, from_state, to_state = entry[:3]
             if isinstance(from_state, list):
@@ -2181,16 +2191,17 @@ class StateMachine:
         """
         Add multiple transitions at once.
 
-        Each entry is either a 3-tuple ``(trigger, from_state, to_state)`` or a
-        4-tuple ``(trigger, from_state, to_state, condition)`` or 5-tuple
-        ``(trigger, from_state, to_state, condition, priority)`` where
+        Each entry is a 3- through 8-tuple beginning with
+        ``(trigger, from_state, to_state)``. Optional trailing fields are
+        ``condition``, ``priority``, ``after``, ``within``, and ``internal`` in
+        that order, where
         *condition* follows the same rules as :meth:`add_transition` — a
         :class:`~fast_fsm.Condition` instance, a plain
         ``(**kwargs) -> GuardResult`` callable, or ``None`` / omitted for an
         unconditional transition. ``priority`` must be an exact built-in int.
 
         Args:
-            transitions: List of 3-, 4-, or 5-tuples describing each transition.
+            transitions: List of 3- through 8-tuples describing each transition.
 
         Example::
 
@@ -2222,9 +2233,9 @@ class StateMachine:
         """Parse public positional rows into one immutable request collection."""
         requests: List[_TransitionRequest] = []
         for entry in transitions:
-            if len(entry) not in (3, 4, 5, 6, 7):
+            if len(entry) not in (3, 4, 5, 6, 7, 8):
                 raise ValueError(
-                    "each transition entry must contain 3, 4, 5, 6, or 7 items"
+                    "each transition entry must contain 3, 4, 5, 6, 7, or 8 items"
                 )
             trigger, from_state, to_state, *rest = entry  # type: ignore[misc]
             condition: Optional[Union[Condition, GuardCallable]]
@@ -2239,6 +2250,7 @@ class StateMachine:
             priority: object = rest[1] if len(rest) >= 2 else 0
             after: object = rest[2] if len(rest) >= 3 else None
             within: object = rest[3] if len(rest) >= 4 else None
+            internal: object = rest[4] if len(rest) >= 5 else False
             requests.append(
                 _TransitionRequest(
                     trigger,
@@ -2248,6 +2260,7 @@ class StateMachine:
                     priority=priority,
                     after=after,
                     within=within,
+                    internal=internal,
                 )
             )
         return tuple(requests)
@@ -7068,7 +7081,7 @@ def quick_fsm(
 
     Args:
         initial_state: Initial state name
-        transitions: List of 3- through 7-field transition rows accepted by
+        transitions: List of 3- through 8-field transition rows accepted by
             :meth:`StateMachine.add_transitions`
         name: FSM name
         clock: Injected monotonic clock used for transition timing

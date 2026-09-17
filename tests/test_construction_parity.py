@@ -285,9 +285,12 @@ def test_construction_parity_covers_final_destination_and_internal_batch_row() -
         return machine
 
     machines = (direct(), batch(), builder(), declarative(), callback())
-    expected = _exercise_final_and_internal_topology(machines[0])
+    outcomes = tuple(
+        _exercise_final_and_internal_topology(machine) for machine in machines
+    )
+    expected = outcomes[0]
 
-    for machine in machines:
-        assert machine._states["source"] is machine.initial_state
+    for machine, outcome in zip(machines, outcomes, strict=True):
+        assert machine._states["source"] is machine._initial_state
         assert machine._states["done"].final is True
-        assert _exercise_final_and_internal_topology(machine) == expected
+        assert outcome == expected

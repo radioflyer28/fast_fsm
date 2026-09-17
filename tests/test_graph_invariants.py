@@ -372,6 +372,24 @@ def test_declarative_builder_derives_into_one_canonical_transaction() -> None:
     assert "self._transitions.append" not in build_source
 
 
+def test_batch_transition_mode_rows_remain_one_canonical_request_transaction() -> None:
+    """The batch parser carries internal mode without a second publication path."""
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    parser_start = core_source.index("    def _transition_requests_from_rows(")
+    parser_end = core_source.index(
+        "    def add_bidirectional_transition(", parser_start
+    )
+    parser_source = core_source[parser_start:parser_end]
+
+    assert "(3, 4, 5, 6, 7, 8)" in parser_source
+    assert "internal: object = rest[4]" in parser_source
+    assert "internal=internal" in parser_source
+    assert parser_source.count("_apply_transition_requests_owned") == 1
+    assert "_commit_transition_plan" not in parser_source
+
+
 def test_priority_selectors_do_not_call_the_cold_projection_helper() -> None:
     """Phase 22 keeps direct singleton/group selection independently guarded."""
     core_source = (
