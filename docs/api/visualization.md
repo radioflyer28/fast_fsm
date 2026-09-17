@@ -79,12 +79,16 @@ uses `include_adjacency=True` and the same preflighted budget.
 ### Diagram only
 
 ```python
-from fast_fsm import StateMachine, to_mermaid
+from fast_fsm import FSMBuilder, State, to_mermaid
 
-fsm = StateMachine.quick_build(
-    "idle",
-    [("start", "idle", "running"), ("stop", "running", "idle")],
-    name="Demo",
+idle = State("idle")
+running = State("running")
+fsm = (
+    FSMBuilder(idle, name="Demo")
+    .add_state(running)
+    .add_transition("start", "idle", "running")
+    .add_transition("stop", "running", "idle")
+    .build()
 )
 print(to_mermaid(fsm))
 ```

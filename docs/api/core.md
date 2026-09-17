@@ -2,6 +2,22 @@
 
 The core module provides the primary FSM classes and utilities.
 
+## Construction hierarchy
+
+Use `FSMBuilder` for new programmatic topology: it accepts caller-owned
+`State` objects, stages the complete graph, and publishes a machine only when
+`build()` succeeds. `StateMachine` and `AsyncStateMachine` constructors remain
+public, supported **advanced** interfaces for deliberate incremental topology
+control or an explicitly managed machine identity. Use `from_dict()` only to
+reconstruct serialized topology; it is the persistence adapter, not another
+general-purpose programmatic builder.
+
+`simple_fsm()`, `quick_fsm()`, `StateMachine.quick_build()`, and
+`StateMachine.from_states()` are retained warned compatibility boundaries
+through v0.5.x and may be removed no earlier than v0.6.0. For new code,
+replace their programmatic construction role with `FSMBuilder`; do not replace
+them with `from_dict()` unless the input is serialized topology.
+
 ## State Classes
 
 ```{eval-rst}
@@ -37,24 +53,27 @@ priority. Lower integer values are evaluated first; registration order does
 not affect the winner.
 
 ```{testcode}
-from fast_fsm import FuncCondition, State, StateMachine
+from fast_fsm import FSMBuilder, FuncCondition, State
 
 active = State("active")
 fallback = State("fallback")
 halted = State("halted")
 
-fsm = StateMachine(active)
-fsm.add_state(fallback)
-fsm.add_state(halted)
-fsm.add_transition(
-    "tick", "active", "halted",
-    FuncCondition(lambda **data: data.get("fatal", False)),
-    priority=0,
-)
-fsm.add_transition(
-    "tick", "active", "fallback",
-    FuncCondition(lambda **data: data.get("degraded", False)),
-    priority=10,
+fsm = (
+    FSMBuilder(active)
+    .add_state(fallback)
+    .add_state(halted)
+    .add_transition(
+        "tick", "active", "halted",
+        FuncCondition(lambda **data: data.get("fatal", False)),
+        priority=0,
+    )
+    .add_transition(
+        "tick", "active", "fallback",
+        FuncCondition(lambda **data: data.get("degraded", False)),
+        priority=10,
+    )
+    .build()
 )
 
 result = fsm.trigger("tick", fatal=False, degraded=True)
@@ -90,6 +109,13 @@ row `(trigger, source, target, condition, priority)`.
 ```
 
 ## Builder
+
+`FSMBuilder` is the primary API for ordinary programmatic construction. It
+stages explicit transitions and topology-complete declarative definitions as
+ordinary requests, then sends their combined collection through one canonical
+validation and publication transaction. Decorator guards remain state-owned,
+so importing declarations does not duplicate guard evaluation. There is no
+parallel declarative topology registrar.
 
 ```{eval-rst}
 .. autoclass:: fast_fsm.FSMBuilder
@@ -205,6 +231,15 @@ redactor=None)` accepts `debug`, `info`, `warning`, `error`, `critical`,
 
 ## Convenience Functions
 
+### Retained compatibility constructors
+
+The convenience constructors below remain exported and callable during v0.5.x,
+but each invocation emits one actionable `DeprecationWarning` at the caller.
+`simple_fsm()`, `quick_fsm()`, `StateMachine.quick_build()`, and
+`StateMachine.from_states()` may be removed no earlier than v0.6.0. Use
+`FSMBuilder` for programmatic construction; use `StateMachine.from_dict()` or
+`AsyncStateMachine.from_dict()` only for serialized topology reconstruction.
+
 ```{eval-rst}
 .. autofunction:: fast_fsm.simple_fsm
 
@@ -216,6 +251,11 @@ redactor=None)` accepts `debug`, `info`, `warning`, `error`, `critical`,
 ```
 
 ## Decorators
+
+When a `DeclarativeState` is staged in an `FSMBuilder`, its topology-complete
+`@transition` declarations are derived into the same canonical request
+transaction as explicit builder transitions. The handler and its guard remain
+on the state-owned execution seam, preserving exactly-once behavior.
 
 ```{eval-rst}
 .. autofunction:: fast_fsm.transition

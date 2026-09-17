@@ -31,6 +31,14 @@ def _active_python_regions(path: Path) -> str:
         pytest.param(PROJECT_ROOT / "docs" / "QUICK_START.md", id="quick_start"),
         pytest.param(PROJECT_ROOT / "docs" / "TUTORIAL.md", id="tutorial"),
         pytest.param(
+            PROJECT_ROOT / "docs" / "api" / "visualization.md",
+            id="api_visualization",
+        ),
+        pytest.param(
+            PROJECT_ROOT / "docs" / "api" / "validation.md",
+            id="api_validation",
+        ),
+        pytest.param(
             PROJECT_ROOT / "examples" / "cross_fsm_demo.py", id="cross_fsm_demo"
         ),
     ),

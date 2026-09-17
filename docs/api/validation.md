@@ -20,19 +20,24 @@ every event by design — receives a fair structural grade instead of a
 misleading *D* for transition coverage.
 
 ```python
-from fast_fsm import EnhancedFSMValidator, StateMachine
+from fast_fsm import EnhancedFSMValidator, FSMBuilder, State
 
-fsm = StateMachine.quick_build(
-    "idle",
-    [
-        ("start", "idle", "running"),
-        ("pause", "running", "paused"),
-        ("resume", "paused", "running"),
-        ("stop", "running", "idle"),
-        ("error", "running", "error"),
-        ("reset", "error", "idle"),
-    ],
-    name="MyFSM",
+idle = State("idle")
+running = State("running")
+paused = State("paused")
+error = State("error")
+fsm = (
+    FSMBuilder(idle, name="MyFSM")
+    .add_state(running)
+    .add_state(paused)
+    .add_state(error)
+    .add_transition("start", "idle", "running")
+    .add_transition("pause", "running", "paused")
+    .add_transition("resume", "paused", "running")
+    .add_transition("stop", "running", "idle")
+    .add_transition("error", "running", "error")
+    .add_transition("reset", "error", "idle")
+    .build()
 )
 
 v = EnhancedFSMValidator(fsm)

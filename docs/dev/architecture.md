@@ -230,8 +230,9 @@ protocol.
 
 ### FSMBuilder
 
-The fluent builder stages identity-canonical `State` objects, auto-detects
-supported nested async requirements, and returns the appropriate machine type:
+`FSMBuilder` is the primary construction surface for new programmatic
+topology. It stages identity-canonical `State` objects, auto-detects supported
+nested async requirements, and returns the appropriate machine type:
 
 ```{testcode}
 from fast_fsm import FSMBuilder, State
@@ -258,6 +259,72 @@ callback registrar, and force-mode selector raises `RuntimeError`. A failed
 build leaves the staging area mutable and repairable. Explicit async/sync
 selection remains authoritative; explicit sync rejects a detected async
 requirement before allocating a candidate.
+
+### Construction and persistence adapters
+
+The public construction story has three deliberate roles. `FSMBuilder` is the
+ordinary programmatic path. Direct `StateMachine` and `AsyncStateMachine`
+construction remains a supported **advanced** path when a caller deliberately
+controls incremental topology or machine identity. `from_dict()` is the
+serialized-topology adapter, not a second programmatic builder.
+
+All transition-producing paths follow one cold-path construction flow:
+
+```text
+explicit builder rows ───────┐
+declarative builder rows ────┼─> immutable _TransitionRequest tuple
+direct/batch/helper rows ───┤             │
+clone replay/from_dict rows ┘             ▼
+                       normalize every request
+                       (identity, finality, internal mode, priority, timing)
+                                      │
+                                      ▼
+                     prepare all replacement slots off-table
+                                      │
+                                      ▼
+                 publish once and advance graph version on success
+```
+
+`FSMBuilder.build()` derives topology-complete decorated declarations afresh
+from the staged `DeclarativeState` / `AsyncDeclarativeState` objects. Those
+rows are joined with explicit builder rows in one `_TransitionRequest`
+collection and submitted through the same prepare-all/publish-once
+transaction. There is no declarative-specific topology table or parallel
+registrar. A declaration's guard remains state-owned at the declarative
+handler seam rather than being copied to the request; selection therefore
+evaluates it exactly once.
+
+The retained `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and
+`StateMachine.from_states` boundaries are compatibility-only in v0.5.x. Each
+public boundary emits one fixed, caller-attributed `DeprecationWarning`, then
+delegates to a private non-warning worker so nested helpers cannot multiply
+warnings. They stay exported, typed, atomic, and semantically equivalent until
+they may be removed no earlier than v0.6.0. New code uses `FSMBuilder` for
+programmatic topology; serialized input uses `from_dict()`.
+
+`to_dict()` emits final-state names and transition `internal` only when its
+value is exactly `True`; external rows keep their legacy shape. `from_dict()`
+accepts omitted or exact `False` as external, validates the full JSON-native
+document before candidate publication, and reports only bounded indexed
+structural context. Compatibility is directional: old payloads read under the
+new runtime with default final/external semantics, while pre-v0.5 readers may
+ignore additive final/internal data and lose those meanings. No schema-version
+field claims otherwise.
+
+`clone()` replays canonical requests, retaining established state and callable
+collaborator identity while rebuilding independent transition, callback,
+listener, and ownership containers. A clone resets to its initial state with
+history disabled. `snapshot()` and `restore()` intentionally remain state-only
+format v1: the exact payload is `{"state": ..., "version": 1}`, and finality
+or transition mode after restore derives from the receiving machine's existing
+topology. Construction, deprecation, parsing, cloning, and validation are all
+absent from selector, lifecycle, and direct singleton-dispatch paths.
+
+The construction parity tests exercise direct, batch, builder, legacy helper,
+declarative, callback, clone, and deserialization adapters against the same
+final/internal semantics and atomic-failure contract. They also assert that no
+adapter performs post-publication semantic repair or bypasses the canonical
+request transaction.
 
 ### Atomic Transition Lifecycle
 
@@ -449,15 +516,20 @@ Slot-protected instances eliminate `__dict__` per instance, yielding:
 3. **Lazy logging.** Logger calls are guarded to avoid string formatting
    when logging is disabled.
 
-## Convenience Functions
+## Compatibility Functions
 
-These are thin wrappers that reduce boilerplate. They do NOT alter the
-core dispatch path.
+The four construction conveniences are warned compatibility surfaces during
+v0.5.x, not recommended starts. They remain callable and do not alter the core
+dispatch path; use `FSMBuilder` for new programmatic construction. Direct
+machine construction is the advanced alternative, and `from_dict()` is only
+for serialized topology reconstruction.
 
 | Function | Purpose |
 |----------|---------|
-| `simple_fsm(*states, initial=)` | Create a basic FSM from state names |
-| `quick_fsm(initial, transitions)` | Create an FSM from a transition list |
+| `simple_fsm(*states, initial=)` | Deprecated compatibility constructor; migrate to `FSMBuilder` |
+| `quick_fsm(initial, transitions)` | Deprecated compatibility constructor; migrate to `FSMBuilder` |
+| `StateMachine.quick_build(...)` | Deprecated compatibility classmethod; migrate to `FSMBuilder` |
+| `StateMachine.from_states(...)` | Deprecated compatibility classmethod; migrate to `FSMBuilder` |
 | `condition_builder(func)` | Decorator to wrap a function as a named condition |
 | `configure_fsm_logging()` | Set up logging for named FSMs |
 | `set_fsm_logging_level(level)` | Adjust log verbosity |
