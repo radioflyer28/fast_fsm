@@ -12,9 +12,9 @@ provides:
   - Canonical self-only validation, builder propagation, and graph/clone continuity
 affects: [28-02, 28-03, 30-construction-and-persistence-parity, 31-diagnostics, 32-docs-and-release]
 actuals:
-  tokens: 7919
+  tokens: 8335
   tasks: 2
-  commits: 4
+  commits: 5
 tech-stack:
   added: []
   patterns:
@@ -30,6 +30,7 @@ key-files:
     - tests/test_graph_invariants.py
     - tests/test_hypothesis.py
     - tests/test_builder.py
+    - tests/test_mypyc_guard.py
 key-decisions:
   - "Internal mode stays on the selected immutable entry; it is never inferred from endpoint equality."
   - "Internal logical commits append optional history while preserving the existing state-entry epoch."
@@ -72,11 +73,11 @@ status: complete
 
 ## Performance
 
-- **Duration:** 7 min
+- **Duration:** 20 min
 - **Started:** 2026-09-17T00:18:16Z
-- **Completed:** 2026-09-17T00:25:43Z
+- **Completed:** 2026-09-17T00:38:05Z
 - **Tasks:** 2/2
-- **Files modified:** 6
+- **Files modified:** 7
 
 ## Accomplishments
 
@@ -88,6 +89,7 @@ status: complete
 
 1. **Task 1: Trace one State through explicit external and internal self-transitions** — `1ef328a` (RED test) and `54aaa61` (feature)
 2. **Task 2: Harden canonical validation, mode identity, builder staging, and graph continuity** — `7298336` (RED test) and `7822615` (feature)
+3. **Post-merge structural gap fix** — `184373f` (mypy/slots assertion repair)
 
 ## Files Created/Modified
 
@@ -97,6 +99,7 @@ status: complete
 - `tests/test_graph_invariants.py` — exact validation, conflict identity, snapshot/clone, and deterministic ownership evidence.
 - `tests/test_hypothesis.py` — reordered invalid internal request transaction property.
 - `tests/test_builder.py` — builder authoring and repairability coverage.
+- `tests/test_mypyc_guard.py` — structural field-order and slots assertions for all mode-bearing carriers.
 
 ## Decisions Made
 
@@ -106,7 +109,20 @@ status: complete
 
 ## Deviations from Plan
 
-None — plan executed as specified.
+### Auto-fixed Issues
+
+**1. [Rule 1 - Regression] Updated stale mypyc structural carrier expectations**
+- **Found during:** Post-merge Phase 28-01 full-suite gate
+- **Issue:** The runtime correctly added `internal` to the immutable carriers, result, and record, but the structural test still asserted their old field sets.
+- **Fix:** Added the scalar to graph, prepared, entry, result, and record expectations.
+- **Files modified:** `tests/test_mypyc_guard.py`
+- **Verification:** Targeted structural assertions, full mypyc guard suite, and full sequential pytest suite passed.
+- **Committed in:** `184373f`
+
+---
+
+**Total deviations:** 1 auto-fixed (1 regression)
+**Impact on plan:** The correction closes a Wave 0 structural-proof omission without changing production behavior or scope.
 
 ## Issues Encountered
 
@@ -123,7 +139,7 @@ The canonical mode carrier and synchronous construction/runtime path are ready f
 ## Self-Check: PASSED
 
 - All six planned source/test artifacts exist and the four task commits are present in Git history.
-- Focused sync, construction, property, builder, lifecycle, blocking mypy, Ruff, and slots-policy checks passed.
+- Focused sync, construction, property, builder, lifecycle, full mypyc guard, full sequential suite, blocking mypy, Ruff, and slots-policy checks passed.
 
 ---
 *Phase: 28-same-state-transition-modes*
