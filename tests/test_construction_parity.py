@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 
 import pytest
 
 from fast_fsm.core import (
+    AsyncDeclarativeState,
+    AsyncStateMachine,
     CallbackState,
     DeclarativeState,
     FSMBuilder,
@@ -225,6 +228,38 @@ def _exercise_final_and_internal_topology(machine: StateMachine) -> tuple[object
     )
 
 
+async def _exercise_async_final_and_internal_topology(
+    machine: AsyncStateMachine,
+) -> tuple[object, ...]:
+    """Return the async observable contract shared by every construction adapter."""
+    events: list[str] = []
+    machine.enable_history()
+    machine.on_exit("source", lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter("done", lambda *_args, **_kwargs: events.append("enter"))
+    machine.on_trigger(
+        "refresh", lambda *_args, **_kwargs: events.append("refresh-trigger")
+    )
+    machine.on_trigger(
+        "finish", lambda *_args, **_kwargs: events.append("finish-trigger")
+    )
+
+    refresh = await machine.trigger_async("refresh")
+    refresh_events = tuple(events)
+    events.clear()
+    finish = await machine.trigger_async("finish")
+
+    return (
+        (refresh.success, refresh.committed, refresh.priority, refresh.internal),
+        refresh_events,
+        machine.history[0].internal,
+        (finish.success, finish.committed, finish.priority, finish.internal),
+        tuple(events),
+        machine.current_state.name,
+        machine.is_terminated,
+        machine.history[1].internal,
+    )
+
+
 def _capture_deprecated_machine(factory) -> StateMachine:
     """Return one helper-built machine after proving its warning is contained."""
     with warnings.catch_warnings(record=True) as captured:
@@ -320,9 +355,133 @@ def test_construction_parity_covers_final_destination_and_internal_batch_row() -
     expected = outcomes[0]
 
     for machine, outcome in zip(machines, outcomes, strict=True):
+        graph_version = machine._graph_version
         assert machine._states["source"] is machine._initial_state
         assert machine._states["done"].final is True
         assert outcome == expected
+        assert machine._graph_version == graph_version
+
+
+def test_construction_parity_oracle_covers_async_adapter_semantics() -> None:
+    """The shared oracle also proves the retained async construction paths."""
+
+    def direct() -> AsyncStateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        machine = AsyncStateMachine(source)
+        machine.add_state(done)
+        machine.add_transition("refresh", source, source, priority=-2, internal=True)
+        machine.add_transition("finish", source, done, priority=4)
+        return machine
+
+    def batch() -> AsyncStateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        machine = AsyncStateMachine(source)
+        machine.add_state(done)
+        machine.add_transitions(
+            [
+                ("refresh", source, source, None, -2, None, None, True),
+                ("finish", source, done, None, 4),
+            ]
+        )
+        return machine
+
+    def builder() -> AsyncStateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        machine = (
+            FSMBuilder(source)
+            .add_state(done)
+            .add_transition("refresh", "source", "source", priority=-2, internal=True)
+            .add_transition("finish", "source", "done", priority=4)
+            .force_async()
+            .build()
+        )
+        assert isinstance(machine, AsyncStateMachine)
+        return machine
+
+    def declarative() -> AsyncStateMachine:
+        class Source(AsyncDeclarativeState):
+            @transition(
+                "refresh",
+                from_state="source",
+                to_state="source",
+                priority=-2,
+                internal=True,
+            )
+            async def refresh(self, *_args: object, **_kwargs: object) -> bool:
+                return True
+
+            @transition("finish", from_state="source", to_state="done", priority=4)
+            async def finish(self, *_args: object, **_kwargs: object) -> bool:
+                return True
+
+        machine = (
+            FSMBuilder(Source("source")).add_state(State("done", final=True)).build()
+        )
+        assert isinstance(machine, AsyncStateMachine)
+        return machine
+
+    def callback() -> AsyncStateMachine:
+        source = CallbackState("source", lambda *_args, **_kwargs: None)
+        done = CallbackState("done", lambda *_args, **_kwargs: None, final=True)
+        machine = AsyncStateMachine(source)
+        machine.add_state(done)
+        machine.add_transition("refresh", source, source, priority=-2, internal=True)
+        machine.add_transition("finish", source, done, priority=4)
+        return machine
+
+    async def assert_all_adapters() -> None:
+        machines = (
+            direct(),
+            batch(),
+            builder(),
+            declarative(),
+            callback(),
+            AsyncStateMachine.from_dict(direct().to_dict()),
+            direct().clone(),
+        )
+        outcomes: list[tuple[object, ...]] = []
+        for machine in machines:
+            assert isinstance(machine, AsyncStateMachine)
+            graph_version = machine._graph_version
+            outcomes.append(await _exercise_async_final_and_internal_topology(machine))
+            assert machine._states["source"] is machine._initial_state
+            assert machine._states["done"].final is True
+            assert machine._graph_version == graph_version
+
+        assert outcomes == [outcomes[0]] * len(outcomes)
+
+    asyncio.run(assert_all_adapters())
+
+
+def test_construction_parity_oracle_keeps_late_batch_failure_atomic() -> None:
+    """A late final-source error cannot publish the valid prefix or advance version."""
+    source = State("source")
+    done = State("done", final=True)
+    machine = StateMachine(source)
+    machine.add_state(done)
+    machine.add_transition("existing", source, source, internal=True)
+    before = (
+        machine._graph_version,
+        tuple((name, id(state)) for name, state in machine._states.items()),
+        tuple(machine._transitions["source"]),
+    )
+
+    with pytest.raises(ValueError, match="final state cannot be a transition source"):
+        machine.add_transitions(
+            [
+                ("valid-prefix", source, done),
+                ("invalid-final-source", done, source),
+            ]
+        )
+
+    assert (
+        machine._graph_version,
+        tuple((name, id(state)) for name, state in machine._states.items()),
+        tuple(machine._transitions["source"]),
+    ) == before
 
 
 @pytest.mark.parametrize(

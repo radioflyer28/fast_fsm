@@ -2462,6 +2462,164 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
     assert "_async_selection_internal.get()" in selection_source
 
 
+def test_phase30_construction_authorities_stay_canonical_and_cold() -> None:
+    """Retained adapters share one construction seam and never reach dispatch."""
+    runtime_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    stub_tree = ast.parse(CORE_PYI.read_text(encoding="utf-8"), filename=str(CORE_PYI))
+    runtime_classes = {
+        node.name: node
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+    stub_classes = {
+        node.name: node
+        for node in ast.walk(stub_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+    runtime_functions = {
+        node.name: node
+        for node in runtime_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    stub_functions = {
+        node.name: node for node in stub_tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    expected_declarative_fields = {
+        "_DeclarativeHandlerMetadata": [
+            "trigger",
+            "from_state",
+            "to_state",
+            "condition",
+            "priority",
+            "after",
+            "within",
+            "internal",
+        ],
+        "_DeclarativeHandler": [
+            "method",
+            "from_state",
+            "to_state",
+            "condition",
+            "is_async",
+            "priority",
+            "after",
+            "within",
+            "internal",
+        ],
+        "_TransitionRequest": [
+            "trigger",
+            "sources",
+            "to_state",
+            "condition",
+            "unless",
+            "priority",
+            "condition_ref",
+            "after",
+            "within",
+            "internal",
+        ],
+    }
+    for class_name, expected_fields in expected_declarative_fields.items():
+        assert [
+            item.target.id
+            for item in runtime_classes[class_name].body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        ] == expected_fields
+
+    state_machine_stub_methods = {
+        node.name
+        for node in stub_classes["StateMachine"].body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert {"from_states", "quick_build", "from_dict", "clone", "snapshot"} <= (
+        state_machine_stub_methods
+    )
+    assert {"simple_fsm", "quick_fsm"} <= set(stub_functions)
+
+    package_tree = ast.parse(
+        PACKAGE_INIT.read_text(encoding="utf-8"), filename=str(PACKAGE_INIT)
+    )
+    exports = next(
+        node.value
+        for node in package_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(exports, ast.List)
+    assert {"simple_fsm", "quick_fsm"} <= {
+        item.value for item in exports.elts if isinstance(item, ast.Constant)
+    }
+
+    def method_source(class_name: str, method_name: str) -> str:
+        method = next(
+            node
+            for node in runtime_classes[class_name].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method_name
+        )
+        return ast.unparse(method)
+
+    for class_name, method_name in (
+        ("StateMachine", "_add_transition_owned"),
+        ("StateMachine", "_add_transitions_owned"),
+        ("StateMachine", "_quick_build_compat"),
+        ("StateMachine", "from_dict"),
+        ("StateMachine", "_clone_owned"),
+        ("FSMBuilder", "build"),
+    ):
+        source = method_source(class_name, method_name)
+        assert source.count("_apply_transition_requests_owned") == 1
+        assert "_TransitionRequest" in source
+        assert "_normalize_transition_request" not in source
+        assert "_commit_transition_plan" not in source
+
+    for function_name, compatibility_worker in (
+        ("simple_fsm", "_from_states_compat"),
+        ("quick_fsm", "_quick_build_compat"),
+    ):
+        source = ast.unparse(runtime_functions[function_name])
+        assert "warnings.warn" in source
+        assert compatibility_worker in source
+    for method_name, compatibility_worker in (
+        ("from_states", "_from_states_compat"),
+        ("quick_build", "_quick_build_compat"),
+    ):
+        source = method_source("StateMachine", method_name)
+        assert "warnings.warn" in source
+        assert compatibility_worker in source
+
+    forbidden_cold_path_symbols = {
+        "_TransitionRequest",
+        "_apply_transition_requests_owned",
+        "_transition_requests_from_rows",
+        "_commit_transition_plan",
+        "FSMBuilder",
+        "_fsm_declarations",
+        "_discover_handlers",
+        "warnings.warn",
+        "from_dict",
+        "to_dict",
+        "_clone_owned",
+    }
+    for class_name, method_name in (
+        ("StateMachine", "trigger"),
+        ("StateMachine", "_trigger_owned"),
+        ("StateMachine", "_select_transition_sync"),
+        ("StateMachine", "_execute_transition"),
+        ("AsyncStateMachine", "_trigger_async_owned"),
+        ("AsyncStateMachine", "_select_transition_async"),
+        ("AsyncStateMachine", "_execute_transition_async"),
+    ):
+        source = method_source(class_name, method_name)
+        assert not {
+            symbol for symbol in forbidden_cold_path_symbols if symbol in source
+        }
+
+
 def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None:
     """The same narrow winner/history/query oracle runs in both core modes."""
     spec = importlib.util.find_spec("fast_fsm.core")
