@@ -20,7 +20,7 @@
 - [x] **MODE-02**: Users can register internal transitions only when source and destination are the same state, with invalid registration rejected atomically.
 - [x] **MODE-03**: Users observe the complete exit-and-reentry lifecycle and reset state-entry timing for external self-transitions.
 - [x] **MODE-04**: Users observe internal transitions without state exit or entry hooks and listeners, while non-state transition behavior, logical commit, results, history, and appropriate observers remain intact.
-- [ ] **MODE-05**: Users observe uninterrupted state-residency timing across internal transitions.
+- [x] **MODE-05**: Users observe uninterrupted state-residency timing across internal transitions.
 - [ ] **MODE-06**: Users receive equivalent internal and external transition behavior across synchronous and asynchronous machines, prioritized selection, cancellation, and failure handling.
 
 ### Expected Transition Rejection
@@ -110,7 +110,7 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | MODE-02 | Phase 28 | Complete |
 | MODE-03 | Phase 28 | Complete |
 | MODE-04 | Phase 28 | Complete |
-| MODE-05 | Phase 28 | Pending |
+| MODE-05 | Phase 28 | Complete |
 | MODE-06 | Phase 28 | Pending |
 | REJECT-01 | Phase 29 | Pending |
 | REJECT-02 | Phase 29 | Pending |

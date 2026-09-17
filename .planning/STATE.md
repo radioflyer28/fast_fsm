@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 28
 current_phase_name: Same-State Transition Modes
 status: executing
-stopped_at: Completed 28-01-PLAN.md
-last_updated: "2026-09-17T00:26:44.730Z"
+stopped_at: Completed 28-02-PLAN.md
+last_updated: "2026-09-17T00:47:52.491Z"
 last_activity: 2026-09-16
 last_activity_desc: Phase 28 execution started
-state_head: 7822615a2995014fd5088ea920b39f38c8dfc380
+state_head: 61594bf71711f4c7b12daf300abf75d6f39d0318
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 29
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 28 (Same-State Transition Modes) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-09-16 — Phase 28 execution started
 
@@ -66,6 +66,7 @@ Progress: [███░░░░░░░] 29%
 | Phase 27 P02 | 9min | 2 tasks | 7 files |
 | Phase 27 P03 | 18min | 2 tasks | 5 files |
 | Phase 28 P01 | 7 min | 2 tasks | 6 files |
+| Phase 28 P02 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 28]: Internal mode stays on the selected immutable entry; the external lifecycle remains the default.
 - [Phase 28]: Internal commits preserve residency timing and append history only when recording is enabled.
 - [Phase 28]: Primary builder staging and clone/graph replay carry the canonical internal scalar.
+- [Phase 28]: Use local fake clocks and lifecycle sentinels to prove internal commits preserve residency timing without sleep-based tests.
+- [Phase 28]: Keep MODE-06 pending until async and cancellation parity is proven in Plan 03.
 
 ### Pending Todos
 
@@ -119,10 +122,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T00:26:44.693Z
-Stopped at: Completed 28-01-PLAN.md
+Last session: 2026-09-17T00:47:52.452Z
+Stopped at: Completed 28-02-PLAN.md
 Resume file: 
 
-28-02-PLAN.md
+28-03-PLAN.md
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
