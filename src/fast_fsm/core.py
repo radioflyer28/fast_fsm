@@ -17,6 +17,7 @@ import math
 import time
 import threading
 import contextvars
+import warnings
 from collections import deque
 from typing import (
     Optional,
@@ -100,6 +101,28 @@ _async_selection_priority: contextvars.ContextVar[Optional[int]] = (
 # storing mutable per-dispatch state on the machine.
 _async_selection_internal: contextvars.ContextVar[bool] = contextvars.ContextVar[bool](
     "_async_selection_internal", default=False
+)
+
+
+_FROM_STATES_DEPRECATION_WARNING = (
+    "StateMachine.from_states is deprecated and remains supported through v0.5.x; "
+    "use FSMBuilder for programmatic construction or StateMachine.from_dict() "
+    "for serialized topology. It may be removed no earlier than v0.6.0."
+)
+_QUICK_BUILD_DEPRECATION_WARNING = (
+    "StateMachine.quick_build is deprecated and remains supported through v0.5.x; "
+    "use FSMBuilder for programmatic construction or StateMachine.from_dict() "
+    "for serialized topology. It may be removed no earlier than v0.6.0."
+)
+_SIMPLE_FSM_DEPRECATION_WARNING = (
+    "simple_fsm is deprecated and remains supported through v0.5.x; "
+    "use FSMBuilder for programmatic construction or StateMachine.from_dict() "
+    "for serialized topology. It may be removed no earlier than v0.6.0."
+)
+_QUICK_FSM_DEPRECATION_WARNING = (
+    "quick_fsm is deprecated and remains supported through v0.5.x; "
+    "use FSMBuilder for programmatic construction or StateMachine.from_dict() "
+    "for serialized topology. It may be removed no earlier than v0.6.0."
 )
 
 
@@ -1229,6 +1252,24 @@ class StateMachine:
         Example:
             fsm = StateMachine.from_states('idle', 'processing', 'done', initial='idle')
         """
+        warnings.warn(
+            _FROM_STATES_DEPRECATION_WARNING,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls._from_states_compat(
+            *state_names, initial=initial, name=name, clock=clock
+        )
+
+    @classmethod
+    def _from_states_compat(
+        cls,
+        *state_names: str,
+        initial: Optional[str] = None,
+        name: str = "FSM",
+        clock: Callable[[], float] = time.monotonic,
+    ) -> "StateMachine":
+        """Construct states for retained convenience helpers without warning."""
         if not state_names:
             raise ValueError("At least one state name is required")
 
@@ -1282,6 +1323,29 @@ class StateMachine:
                 ],
             )
         """
+        warnings.warn(
+            _QUICK_BUILD_DEPRECATION_WARNING,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls._quick_build_compat(
+            initial_state,
+            transitions,
+            states=states,
+            name=name,
+            clock=clock,
+        )
+
+    @classmethod
+    def _quick_build_compat(
+        cls,
+        initial_state: Union[str, State],
+        transitions: Sequence[_TransitionRow],
+        states: Optional[List[Union[str, State]]] = None,
+        name: str = "FSM",
+        clock: Callable[[], float] = time.monotonic,
+    ) -> "StateMachine":
+        """Construct retained quick-build topology without warning."""
         # Collect exact supplied state objects first. String endpoints remain a
         # convenience shorthand, but they must never replace caller-owned
         # State identities or subclass behavior.
@@ -7064,7 +7128,12 @@ def simple_fsm(
     Example:
         fsm = simple_fsm('idle', 'running', 'error', initial='idle')
     """
-    return StateMachine.from_states(
+    warnings.warn(
+        _SIMPLE_FSM_DEPRECATION_WARNING,
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return StateMachine._from_states_compat(
         *state_names, initial=initial, name=name, clock=clock
     )
 
@@ -7099,7 +7168,14 @@ def quick_fsm(
             ],
         )
     """
-    return StateMachine.quick_build(initial_state, transitions, name=name, clock=clock)
+    warnings.warn(
+        _QUICK_FSM_DEPRECATION_WARNING,
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return StateMachine._quick_build_compat(
+        initial_state, transitions, name=name, clock=clock
+    )
 
 
 @overload
