@@ -1963,6 +1963,80 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
     )
 
 
+def test_expected_rejection_contract_is_a_read_only_result_tail_and_public_export() -> (
+    None
+):
+    """The compiled/public surface keeps expected rejection precisely bounded."""
+    runtime_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    stub_tree = ast.parse(CORE_PYI.read_text(encoding="utf-8"), filename=str(CORE_PYI))
+    runtime_classes = {
+        node.name: node
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+    stub_classes = {
+        node.name: node
+        for node in ast.walk(stub_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+
+    runtime_result = runtime_classes["TransitionResult"]
+    stub_result = stub_classes["TransitionResult"]
+    for result in (runtime_result, stub_result):
+        fields = [
+            node.target.id
+            for node in result.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        ]
+        assert fields[-2:] == ["internal", "rejection_code"]
+        rejected = next(
+            node
+            for node in result.body
+            if isinstance(node, ast.FunctionDef) and node.name == "rejected"
+        )
+        assert any(
+            isinstance(decorator, ast.Name) and decorator.id == "property"
+            for decorator in rejected.decorator_list
+        )
+        assert not any(
+            isinstance(node, ast.FunctionDef)
+            and node.name == "rejected"
+            and any(
+                isinstance(decorator, ast.Attribute) and decorator.attr == "setter"
+                for decorator in node.decorator_list
+            )
+            for node in result.body
+        )
+
+    rejected_runtime = runtime_classes["TransitionRejected"]
+    code_property = next(
+        node
+        for node in rejected_runtime.body
+        if isinstance(node, ast.FunctionDef) and node.name == "code"
+    )
+    assert any(
+        isinstance(decorator, ast.Name) and decorator.id == "property"
+        for decorator in code_property.decorator_list
+    )
+
+    package_tree = ast.parse(
+        PACKAGE_INIT.read_text(encoding="utf-8"), filename=str(PACKAGE_INIT)
+    )
+    exported = next(
+        node.value
+        for node in package_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(exported, ast.List)
+    assert "TransitionRejected" in {
+        item.value for item in exported.elts if isinstance(item, ast.Constant)
+    }
+
+
 def test_priority_selectors_keep_their_closed_slotted_boundary() -> None:
     """Selector structure must not widen, copy, sort, or fan out candidates."""
     tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
@@ -2507,6 +2581,223 @@ def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None
         assert [record.internal for record in async_machine.history] == [False, True]
 
     asyncio.run(run_mode_probe())
+
+
+def test_expected_rejection_selector_contract_is_exact_and_mode_invariant() -> None:
+    """One pure/native oracle protects the terminal three-valued selector path."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if os.environ.get("FAST_FSM_BUILD_MODE") == "compiled":
+        assert spec.origin.endswith((".so", ".pyd"))
+
+    from fast_fsm.conditions import AndCondition, FuncCondition
+    from fast_fsm.core import (
+        AsyncStateMachine,
+        State,
+        StateMachine,
+        TransitionError,
+        TransitionRejected,
+        TransitionResult,
+    )
+
+    tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    expected_sites = {
+        "StateMachine": "_select_sync_candidate",
+        "AsyncStateMachine": "_select_async_candidate",
+    }
+    for class_name, method_name in expected_sites.items():
+        method = next(
+            node
+            for node in classes[class_name].body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == method_name
+        )
+        catches = [
+            node
+            for node in ast.walk(method)
+            if isinstance(node, ast.ExceptHandler)
+            and isinstance(node.type, ast.Name)
+            and node.type.id == "TransitionRejected"
+        ]
+        assert len(catches) == 3
+
+    for class_name, method_names in {
+        "StateMachine": ("_trigger_owned", "_execute_transition", "_finalize_failure"),
+        "AsyncStateMachine": (
+            "_trigger_async_owned",
+            "_execute_transition_async",
+        ),
+    }.items():
+        for method_name in method_names:
+            method = next(
+                node
+                for node in classes[class_name].body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == method_name
+            )
+            assert "TransitionRejected" not in ast.unparse(method)
+    assert "TransitionRejected" not in CONDITIONS_PY.read_text(encoding="utf-8")
+
+    def reject() -> bool:
+        raise TransitionRejected("battery.low")
+
+    source = State("source")
+    rejected_target = State("rejected-target")
+    fallback_target = State("fallback-target")
+    machine = StateMachine(source)
+    machine.add_state(rejected_target)
+    machine.add_state(fallback_target)
+    machine.add_transition(
+        "go", source, rejected_target, FuncCondition(reject), priority=-2
+    )
+    machine.add_transition("go", source, fallback_target, priority=4)
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("failed"))
+
+    assert machine.can_trigger("go") is False
+    assert observed == []
+    result = machine.trigger("go")
+    assert (
+        result.success,
+        result.rejected,
+        result.rejection_code,
+        result.error,
+        result.cause,
+        result.from_state,
+        result.to_state,
+        result.stage,
+        result.priority,
+        result.internal,
+    ) == (
+        False,
+        True,
+        "battery.low",
+        "Transition rejected: battery.low",
+        None,
+        "source",
+        None,
+        "guard",
+        -2,
+        False,
+    )
+    assert machine.current_state is source
+    assert observed == ["failed"]
+    assert "rejection_code='battery.low'" in repr(result)
+    assert TransitionResult(False, rejection_code="one") == TransitionResult(
+        False, rejection_code="two"
+    )
+    with pytest.raises(TransitionError) as raised:
+        result.raise_if_failed()
+    assert raised.value.result is result
+
+    false_source = State("false-source")
+    false_target = State("false-target")
+    false_fallback = State("false-fallback")
+    false_machine = StateMachine(false_source)
+    false_machine.add_state(false_target)
+    false_machine.add_state(false_fallback)
+    false_machine.add_transition(
+        "go", false_source, false_target, FuncCondition(lambda: False), priority=-2
+    )
+    false_machine.add_transition("go", false_source, false_fallback, priority=4)
+    false_result = false_machine.trigger("go")
+    assert (false_result.success, false_result.priority) == (True, 4)
+
+    later_calls: list[str] = []
+
+    def later() -> bool:
+        later_calls.append("later")
+        return True
+
+    composed = AndCondition(FuncCondition(reject), FuncCondition(later))
+    with pytest.raises(TransitionRejected, match="battery.low"):
+        composed.check()
+    assert later_calls == []
+
+    class LifecycleSource(State):
+        __slots__ = ()
+
+        def on_exit(self, *args: object, **kwargs: object) -> None:
+            raise TransitionRejected("battery.low")
+
+    lifecycle_source = LifecycleSource("lifecycle-source")
+    lifecycle_target = State("lifecycle-target")
+    lifecycle_machine = StateMachine(lifecycle_source)
+    lifecycle_machine.add_state(lifecycle_target)
+    lifecycle_machine.add_transition("go", lifecycle_source, lifecycle_target)
+    lifecycle_result = lifecycle_machine.trigger("go")
+    assert lifecycle_result.rejected is False
+    assert lifecycle_result.cause is not None
+    assert isinstance(lifecycle_result.cause, TransitionRejected)
+    assert lifecycle_result.stage == "source-exit"
+
+    async def run_async_probe() -> None:
+        async_source = State("async-source")
+        async_target = State("async-target")
+        async_fallback = State("async-fallback")
+        async_machine = AsyncStateMachine(async_source)
+        async_machine.add_state(async_target)
+        async_machine.add_state(async_fallback)
+
+        async def async_reject() -> bool:
+            raise TransitionRejected("battery.low")
+
+        async_machine.add_transition(
+            "go",
+            async_source,
+            async_target,
+            FuncCondition(async_reject),
+            priority=-2,
+        )
+        async_machine.add_transition("go", async_source, async_fallback, priority=4)
+        async_observed: list[str] = []
+        async_machine.on_failed(
+            lambda *_args, **_kwargs: async_observed.append("failed")
+        )
+        assert await async_machine.can_trigger_async("go") is False
+        assert async_observed == []
+        async_result = await async_machine.trigger_async("go")
+        assert (
+            async_result.rejected,
+            async_result.rejection_code,
+            async_result.priority,
+        ) == (True, "battery.low", -2)
+        assert async_observed == ["failed"]
+
+        started = asyncio.Event()
+        released = asyncio.Event()
+        cancellation_source = State("cancellation-source")
+        cancellation_target = State("cancellation-target")
+        cancellation_machine = AsyncStateMachine(cancellation_source)
+        cancellation_machine.add_state(cancellation_target)
+        cancellation_observed: list[str] = []
+
+        async def wait_for_release() -> bool:
+            started.set()
+            await released.wait()
+            return True
+
+        cancellation_machine.add_transition(
+            "go",
+            cancellation_source,
+            cancellation_target,
+            FuncCondition(wait_for_release),
+        )
+        cancellation_machine.on_failed(
+            lambda *_args, **_kwargs: cancellation_observed.append("failed")
+        )
+        dispatch = asyncio.create_task(cancellation_machine.trigger_async("go"))
+        await started.wait()
+        dispatch.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await dispatch
+        assert cancellation_observed == ["failed"]
+        released.set()
+        recovered = await cancellation_machine.trigger_async("go")
+        assert recovered.success is True
+
+    asyncio.run(run_async_probe())
 
 
 def test_phase23_construction_projection_and_callback_probe_is_mode_invariant() -> None:
