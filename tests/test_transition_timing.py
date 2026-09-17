@@ -97,6 +97,67 @@ def test_untimed_singleton_does_not_read_the_clock_during_selection() -> None:
     assert clock.calls == before_query
 
 
+def test_internal_commit_clock_and_entry_epoch_depend_only_on_history() -> None:
+    """An internal logical commit timestamps history without re-entering state."""
+    clock = FakeClock()
+    state = State("hover")
+    machine = StateMachine(state, clock=clock)
+    machine.add_transition("refresh", state, state, internal=True)
+    initial_epoch = machine._state_entered_at
+    calls_before = clock.calls
+
+    clock.now = 10
+    no_history = machine.trigger("refresh")
+
+    assert no_history.success is True
+    assert no_history.committed is True
+    assert machine._state_entered_at == initial_epoch
+    assert clock.calls == calls_before
+
+    machine.enable_history()
+    clock.now = 12
+    history = machine.trigger("refresh")
+
+    assert history.success is True
+    assert machine._state_entered_at == initial_epoch
+    assert clock.calls == calls_before + 1
+    assert machine.history[-1].timestamp == 12
+    assert machine.history[-1].internal is True
+
+
+def test_internal_events_do_not_restart_after_or_within_residency_windows() -> None:
+    """Repeated internal events leave the original state-entry deadline intact."""
+    clock = FakeClock()
+    state = State("hover")
+    machine = StateMachine(state, clock=clock)
+    machine.add_transition("refresh", state, state, internal=True, after=3, within=5)
+
+    clock.now = 3
+    assert machine.trigger("refresh").success is True
+    clock.now = 4
+    assert machine.trigger("refresh").success is True
+    clock.now = 5
+    expired = machine.trigger("refresh")
+
+    assert expired.success is False
+    assert expired.stage == "selection"
+    assert machine._state_entered_at == 0
+
+
+def test_external_self_transition_restarts_residency_windows() -> None:
+    """The default self transition remains a full re-entry with a fresh epoch."""
+    clock = FakeClock()
+    state = State("hover")
+    machine = StateMachine(state, clock=clock)
+    machine.add_transition("restart", state, state, after=3, within=5)
+
+    clock.now = 3
+    assert machine.trigger("restart").success is True
+    assert machine._state_entered_at == 3
+    clock.now = 5
+    assert machine.trigger("restart").success is False
+
+
 def test_legacy_transition_preparation_preserves_resolution_and_guard_context() -> None:
     """The compatibility lookup keeps failures and sanitized guard context distinct."""
     source = State("source")

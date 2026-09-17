@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fast_fsm.core import State, StateMachine
+import pytest
+
+from fast_fsm.core import DeclarativeState, State, StateMachine, transition
 
 
 class _RecordingState(State):
@@ -111,3 +113,53 @@ def test_internal_self_transition_commits_without_state_lifecycle_or_payload_inj
     assert machine.history[-1].internal is True
     assert received_kwargs == [{"payload": "caller-value"}]
     assert events == ["before", "trigger-callback", "after"]
+
+
+def test_internal_transition_retains_only_transition_surfaces_in_exact_order() -> None:
+    """A selected internal edge bypasses all six state lifecycle families."""
+    events: list[str] = []
+
+    class RefreshState(DeclarativeState):
+        __slots__ = ()
+
+        @transition("refresh", from_state="hover", to_state="hover")
+        def on_refresh(self, *args: object, **kwargs: object) -> None:
+            events.append("declarative-handler")
+
+    state = RefreshState("hover")
+    machine = StateMachine(state, clock=lambda: 5.0)
+    machine.enable_history()
+    machine.add_transition("refresh", state, state, internal=True)
+    machine.add_listener(_LifecycleListener(events))
+    machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
+    machine.on_enter("hover", lambda *_args, **_kwargs: events.append("enter-callback"))
+    machine.on_trigger(
+        "refresh", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+
+    result = machine.trigger("refresh")
+
+    assert result.success is True
+    assert result.committed is True
+    assert result.internal is True
+    assert events == [
+        "before",
+        "declarative-handler",
+        "trigger-callback",
+        "after",
+    ]
+
+
+def test_direct_controls_remain_external_and_accept_no_internal_mode() -> None:
+    """Only registered event transitions may select internal lifecycle semantics."""
+    source = State("source")
+    target = State("target")
+    machine = StateMachine(source)
+    machine.add_state(target)
+
+    with pytest.raises(TypeError, match="internal"):
+        machine.force_state("target", internal=True)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="internal"):
+        machine.reset(internal=True)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="internal"):
+        machine.restore({}, internal=True)  # type: ignore[call-arg]
