@@ -1,0 +1,110 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-17T21:42:28.725Z",
+  "phase": "30",
+  "phase_name": "Builder-First Construction & Persistence Parity",
+  "phase_dir": ".planning/phases/30-builder-first-construction-persistence-parity",
+  "plan": 6,
+  "task": 1,
+  "total_tasks": 4,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Execute all six Phase 30 plans",
+      "status": "done",
+      "commit": "996a1d6"
+    },
+    {
+      "id": 2,
+      "name": "Complete Nyquist audit and installed-artifact gap fix",
+      "status": "done",
+      "commit": "3577eca"
+    },
+    {
+      "id": 3,
+      "name": "Complete security remediation and audit",
+      "status": "done",
+      "commit": "819c2e3"
+    },
+    {
+      "id": 4,
+      "name": "Complete UI applicability and deep code review",
+      "status": "done",
+      "commit": "517928a"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 1,
+      "name": "Fix code-review CR-01 declarative/explicit duplicate topology",
+      "status": "not_started"
+    },
+    {
+      "id": 2,
+      "name": "Fix WR-01 compatibility-wrapper provenance, type hints, and pickling",
+      "status": "not_started"
+    },
+    {
+      "id": 3,
+      "name": "Re-run code review, prior-phase regression gate, and Phase 30 verifier",
+      "status": "not_started"
+    },
+    {
+      "id": 4,
+      "name": "Mark Phase 30 complete and continue Phase 31 milestone workflow",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "CR-01: FSMBuilder auto-import duplicates legacy explicit source/trigger/target topology, can change the winning priority/mode, and can evaluate a state-owned guard twice.",
+      "type": "technical",
+      "workaround": "Run the gsd-code-fixer against 30-REVIEW.md; preserve explicit topology authority or fail with an actionable conflict, then add pure/native stateful-guard regressions."
+    },
+    {
+      "description": "WR-01: interpreted compatibility wrappers lose public provenance; type-hint resolution and module-level helper pickling fail in pure/native modes.",
+      "type": "technical",
+      "workaround": "Preserve public callable metadata and resolvable annotations across pure/native wrappers, with type-hint, signature, provenance, and pickle tests."
+    },
+    {
+      "description": "Push to origin is pending because the environment has not established the configured GitHub remote as trusted in this transcript.",
+      "type": "human_action",
+      "workaround": "Continue local milestone work. Before pushing, obtain explicit approval for origin https://github.com/radioflyer28/fast_fsm.git; do not stash unrelated dirty files for rebase."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Explicitly authorize pushing to the configured origin remote when ready to publish the milestone branch.",
+      "context": "The branch is more than 100 commits ahead and the environment rejected push without an established trust decision. This does not block local GSD work.",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Routine and recommended GSD choices are pre-approved; do not pause for them.",
+      "rationale": "The standing milestone goal explicitly authorizes autonomous discuss-plan-execute and gap-fix cycles.",
+      "phase": "30"
+    },
+    {
+      "decision": "Phase 30 execution remains sequential on the milestone branch.",
+      "rationale": "HEAD diverges from origin/HEAD, so GSD correctly degraded worktree isolation rather than forking from a stale base.",
+      "phase": "30"
+    },
+    {
+      "decision": "Treat non-blocking audit findings as fix-cycle work when they violate locked Phase 30 contracts.",
+      "rationale": "This closed the payload-disclosure gap rather than shipping it merely because it was below the security block threshold.",
+      "phase": "30"
+    }
+  ],
+  "uncommitted_files": [
+    ".beads/dolt-server.log",
+    ".beads/dolt.20260617T201152Z.corrupt.backup/.dolt/",
+    ".gsd/",
+    ".planning/milestone.lock",
+    ".planning/research/.cache/*.json"
+  ],
+  "next_action": "Run the Phase 30 code-review fix cycle for CR-01 and WR-01 from 30-REVIEW.md, then re-review and continue regression/security/verifier completion gates.",
+  "context_notes": "All six Phase 30 plans, Nyquist validation, security remediation, and UI applicability audit are complete and committed. Pure/native closure passed and core origin is src/fast_fsm/core.py. The deep code review is the current gate and found two uncovered compatibility bugs; Phase 30 must not be marked complete until both are fixed and the independent review/verifier tail passes."
+}
