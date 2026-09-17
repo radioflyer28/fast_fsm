@@ -1,6 +1,6 @@
 ---
 phase: 28-same-state-transition-modes
-reviewed: 2026-09-17T01:17:04Z
+reviewed: 2026-09-17T01:52:12Z
 depth: standard
 files_reviewed: 14
 files_reviewed_list:
@@ -19,87 +19,98 @@ files_reviewed_list:
   - tests/test_transition_modes.py
   - tests/test_transition_timing.py
 findings:
-  critical: 1
-  warning: 1
+  critical: 0
+  warning: 0
   info: 0
-  total: 2
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 28: Code Review Report
 
-**Reviewed:** 2026-09-17T01:17:04Z
+**Reviewed:** 2026-09-17T01:52:12Z
 **Depth:** standard
 **Files Reviewed:** 14
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-The Phase 28 implementation has a blocker in its canonical topology carrier: the new `internal` mode is mutable after registration even though mode is validated only while the transition is registered. A caller can therefore bypass the self-transition invariant and produce a successful result whose destination disagrees with the machine's actual state. The builder atomicity helpers also omit the new identity-bearing field, leaving this mode vulnerable to undetected staging/topology regressions.
-
-The scoped test suite completed successfully with 6 skipped tests, but neither issue is covered by those tests.
+All Phase 28 review findings are resolved. Candidate-specific terminal
+selection failures now preserve the selected immutable entry's `internal` mode
+in both synchronous and asynchronous dispatch, while group fallthrough and
+group-exhaustion results remain mode-neutral. Focused pure-mode regressions
+cover timing, direct and declarative guard rejection/exception, and state
+permission rejection/exception seams in both dispatch modes.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
+## Resolved Issues
 
-### CR-01: Mutable transition mode bypasses canonical self-transition validation
+### CR-01: Pre-commit candidate failures discarded internal-mode truth
 
-**Classification:** BLOCKER
+**Classification:** RESOLVED
 
-**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:632-665`
+**File:** `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:2873-3042` and `/Users/akriz/code/fast_fsm/src/fast_fsm/core.py:5083-5193`
 
-**Issue:** `TransitionEntry` is publicly exported and stores `internal` in an ordinary writable slot. Registration validates `internal=True` only for canonical self-targets, but the published entry can be mutated afterward. For example, changing an already registered `s -> t` entry to `entry.internal = True` makes `trigger()` take the internal commit path: it returns `success=True`, `internal=True`, and `to_state="t"`, while `current_state` remains `s`. This violates the finite topology, result/state coherence, and the phase's explicit immutable-mode/tamper-resistance contract. Every other identity field on the same carrier is writable as well, so replacing `to_state` or `priority` can similarly invalidate the validated plan after publication.
+**Issue:** Both candidate evaluators attached `entry.priority` to terminal timing,
+guard, declarative-guard, and state-permission failures but omit
+`internal=entry.internal`. Consequently, a registered internal self-transition
+whose guard raises returns `TransitionResult(success=False, stage="guard",
+priority=7, internal=False)`. The same transition reports `internal=True` when
+cancelled during that guard and when it reaches lifecycle execution. This makes
+ordinary failure results disagree with the immutable candidate that caused
+them, breaks the Phase 28 sync/async failure-parity contract, and gives callers
+contradictory mode metadata depending only on whether an async guard raises or
+is cancelled. Normal group fallthrough and group exhaustion should remain
+mode-neutral; the defect is in terminal results for the currently evaluated
+entry.
 
-**Fix:** Make the canonical entry actually immutable at runtime and expose it as read-only in the stub. Preserve the existing identity-based equality/repr behavior if converting it to a dataclass, then add a regression that assignment raises and that a registered non-self edge cannot be converted into an internal edge.
+The existing `test_internal_priority_guard_error_is_terminal_before_lifecycle`
+asserts priority, stage, commit, and cause but never asserts `result.internal`,
+so the scoped suite passes despite the contract violation. A direct pure-mode
+probe produced:
 
-```python
-@dataclass(frozen=True, slots=True, eq=False, repr=False)
-class TransitionEntry:
-    to_state: "State"
-    condition: Optional[Condition] = None
-    priority: int = 0
-    condition_ref: Optional[str] = None
-    after: Optional[float] = None
-    within: Optional[float] = None
-    internal: bool = False
+```text
+sync False guard 7 False
+async False guard 7 False
 ```
 
-The equivalent manual slotted implementation is acceptable if mypyc constraints require it, provided every published field becomes runtime read-only.
-
-## Warnings
-
-### WR-01: Builder atomicity fingerprints omit the new identity-bearing mode
-
-**Classification:** WARNING
-
-**File:** `/Users/akriz/code/fast_fsm/tests/test_builder.py:123-161`
-
-**Issue:** `_machine_topology_fingerprint()` records target, condition, and priority but not `entry.internal`; `builder_staging_fingerprint()` records every prior request field but not `request.internal`. These helpers are used broadly to assert that failed or repeated builder operations leave staging and published topology unchanged. A regression that replaces a request/entry with one whose only difference is mode would therefore satisfy the atomicity assertions even though Phase 28 defines mode as candidate identity and the machine's lifecycle behavior has changed.
-
-**Fix:** Include the mode in both fingerprints and retain the existing failure/retry tests against internal requests.
+**Fix:** The candidate scalar is now propagated on every terminal result produced by
+`_select_sync_candidate()` and `_select_async_candidate()`, while leaving
+`None` fallthrough and group-exhaustion results unchanged. Add paired sync and
+async regressions for guard exceptions and at least one non-exception singleton
+rejection seam (timing or permission).
 
 ```python
-# _machine_topology_fingerprint
-(id(entry.to_state), id(entry.condition), entry.priority, entry.internal)
-
-# builder_staging_fingerprint
-(
-    request.trigger,
-    request.sources,
-    request.to_state,
-    id(request.condition),
-    request.priority,
-    id(request.unless) if request.unless is not None else None,
-    request.condition_ref,
-    request.after,
-    request.within,
-    request.internal,
+return self._build_failure_result(
+    current_name,
+    trigger,
+    "Transition guard raised an exception",
+    stage=_LIFECYCLE_STAGE_GUARD,
+    cause=cause,
+    priority=entry.priority,
+    internal=entry.internal,
 )
 ```
 
+All terminal candidate-specific failure branches in both evaluators now pass
+`internal=entry.internal`. The regression suite covers direct and declarative
+guard rejection and exceptions, state-permission rejection and exceptions, and
+timing rejection in both dispatch modes.
+
+## Resolution Evidence
+
+- Fix commit `5454eef` adds `internal=entry.internal` to each terminal timing,
+  guard, declarative-guard, and state-permission result built by
+  `_select_sync_candidate()` and `_select_async_candidate()`.
+- `FAST_FSM_BUILD_MODE=pure uv run pytest tests/test_transition_modes.py tests/test_priority_selection.py -x -q` — passed: 35 tests.
+- `uv run ruff format src/fast_fsm/core.py tests/test_transition_modes.py`,
+  `uv run ruff check --fix ...`, and clean `uv run ruff check ...` — passed.
+- `task typecheck-mypy` — passed for the package and explicit `core.py` check.
+- `uv run python -c "import ast; ..."` and `git diff --check` — passed.
+
 ---
 
-_Reviewed: 2026-09-17T01:17:04Z_
+_Reviewed: 2026-09-17T01:52:12Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
