@@ -136,7 +136,24 @@ Plans:
   4. Existing failure observers receive one notification for a rejected trigger, with no new listener family and no arbitrary exception detail exposed by default.
   5. Raising the same signal outside approved pre-commit eligibility seams retains ordinary staged execution-failure and cancellation truth.
 
-**Plans**: TBD
+**Plans**: 0/4 plans executed
+
+Plans:
+**Wave 1**
+
+- [ ] 29-01-PLAN.md — establish the bounded public rejection signal, additive result contract, synchronous eligibility conversion, and atomic four-exception policy authority.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 29-02-PLAN.md — complete query, condition-composition, asynchronous selection, cancellation, and observer parity.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 29-03-PLAN.md — prove lifecycle-boundary classification, payload-safe logging, and focused public API documentation.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 29-04-PLAN.md — close structural, slots-policy, pure/native, performance, restoration, and full-suite evidence.
 
 ### Phase 30: Builder-First Construction & Persistence Parity
 

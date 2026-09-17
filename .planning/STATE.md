@@ -4,16 +4,16 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 29
 current_phase_name: Expected Domain Rejection
-status: planning
-stopped_at: Phase 29 context gathered
-last_updated: "2026-09-17T02:51:58.614Z"
-last_activity: 2026-09-16
-last_activity_desc: Phase 28 complete, transitioned to Phase 29
-state_head: 56c9a3b31b47db71b4f8e93672e646fc8cb114cb
+status: planned
+stopped_at: Phase 29 plans verified; ready to execute
+last_updated: "2026-09-17T16:08:02.053Z"
+last_activity: 2026-09-17
+last_activity_desc: Phase 29 planning complete with four verified plans
+state_head: fcef84da9a9b2e7c7ffb5d9fb345af31c25dec16
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 11
+  total_plans: 19
   completed_plans: 11
   percent: 43
 ---
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Preserve direct O(1) singleton dispatch and its installed compiled ≥200,000 operations/sec floor while adding explicit, finite flat-FSM semantics.
-**Current focus:** Phase 28 — Same-State Transition Modes
+**Current focus:** Phase 29 — Expected Domain Rejection
 
 ## Current Position
 
-Phase: 29 — Expected Domain Rejection
+Phase: 29 (Expected Domain Rejection) — READY TO EXECUTE
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-16 — Phase 28 complete, transitioned to Phase 29
+Status: Ready to execute
+Last activity: 2026-09-17 — Phase 29 planning complete with four verified plans
 
 Progress: [████░░░░░░] 43%
 
@@ -53,7 +53,7 @@ Progress: [████░░░░░░] 43%
 | 27 | 3 | - | - |
 | 28 | 3 | - | - |
 
-**Recent Trend:** Phases 26–28 are complete and independently verified; v0.5.0 is ready for Phase 29 planning.
+**Recent Trend:** Phases 26–28 are complete and independently verified; Phase 29 has four checker-approved execution plans.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
