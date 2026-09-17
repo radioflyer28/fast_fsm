@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
-current_phase: 28
-current_phase_name: Same-State Transition Modes
-status: verifying
-stopped_at: Completed 28-03-PLAN.md
-last_updated: "2026-09-17T01:07:29.398Z"
+current_phase: 29
+current_phase_name: Expected Domain Rejection
+status: planning
+stopped_at: Phase 28 complete, ready to plan Phase 29
+last_updated: "2026-09-17T02:15:43.514Z"
 last_activity: 2026-09-16
-last_activity_desc: Phase 28 execution started
-state_head: df26a3f085584016a4fcf90fddaf0041ae30d6df
+last_activity_desc: Phase 28 complete, transitioned to Phase 29
+state_head: 30c704269c810f9d1f9589032ca223dc1283a6dd
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 11
   completed_plans: 11
-  percent: 29
+  percent: 43
 ---
 
 # State: Fast FSM
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 28 (Same-State Transition Modes) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-09-16 — Phase 28 execution started
+Phase: 29 — Expected Domain Rejection
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-16 — Phase 28 complete, transitioned to Phase 29
 
-Progress: [███░░░░░░░] 29%
+Progress: [████░░░░░░] 43%
 
 ## Performance Metrics
 
@@ -51,8 +51,9 @@ Progress: [███░░░░░░░] 29%
 | 26–32 | 0 | TBD | — |
 | 26 | 5 | - | - |
 | 27 | 3 | - | - |
+| 28 | 3 | - | - |
 
-**Recent Trend:** Phase 26 completed with 24/24 must-haves verified; v0.5.0 is ready for Phase 27 planning.
+**Recent Trend:** Phases 26–28 are complete and independently verified; v0.5.0 is ready for Phase 29 planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -126,7 +127,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-17T01:07:29.363Z
-Stopped at: Completed 28-03-PLAN.md
+Stopped at: Phase 28 complete, ready to plan Phase 29
 Resume file: 
 
 None
