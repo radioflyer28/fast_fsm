@@ -4,17 +4,17 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 29
 current_phase_name: Expected Domain Rejection
-status: planned
-stopped_at: Phase 29 plans verified; ready to execute
-last_updated: "2026-09-17T16:08:02.053Z"
+status: executing
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-09-17T16:26:40.209Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 29 planning complete with four verified plans
-state_head: fcef84da9a9b2e7c7ffb5d9fb345af31c25dec16
+last_activity_desc: Phase 29 execution started
+state_head: 67ae57db044291b5a389a8b191c2436236005243
 progress:
   total_phases: 7
   completed_phases: 3
-  total_plans: 19
-  completed_plans: 11
+  total_plans: 15
+  completed_plans: 12
   percent: 43
 ---
 
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 29 (Expected Domain Rejection) — READY TO EXECUTE
-Plan: Not started
+Phase: 29 (Expected Domain Rejection) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 29 planning complete with four verified plans
+Last activity: 2026-09-17 — Phase 29 execution started
 
 Progress: [████░░░░░░] 43%
 
@@ -69,6 +69,7 @@ Progress: [████░░░░░░] 43%
 | Phase 28 P01 | 7 min | 2 tasks | 6 files |
 | Phase 28 P02 | 4min | 2 tasks | 3 files |
 | Phase 28 P03 | 48min | 2 tasks | 4 files |
+| Phase 29 P01 | 16 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 28]: Keep MODE-06 pending until async and cancellation parity is proven in Plan 03.
 - [Phase 28]: Phase 28: Async execution branches only on prepared.entry.internal; cancellation retains selected mode task-locally without payload injection.
 - [Phase 28]: Phase 28: Fresh native proof builds from a pure origin and relocates only verified core shadows before restored pure-suite validation.
+- [Phase 29]: TransitionRejected accepts only exact bounded ASCII strings and is revalidated only on the rejection path.
+- [Phase 29]: Expected rejection remains a terminal TransitionResult; None remains reserved for ordinary group fallthrough.
+- [Phase 29]: Failure observers remain owned by existing trigger finalization, with no rejection listener family.
 
 ### Pending Todos
 
@@ -126,10 +130,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T02:51:58.543Z
-Stopped at: Phase 29 context gathered
+Last session: 2026-09-17T16:26:40.153Z
+Stopped at: Completed 29-01-PLAN.md
 Resume file: 
 
-.planning/phases/29-expected-domain-rejection/29-CONTEXT.md
+None
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
