@@ -834,6 +834,89 @@ def test_sync_group_guard_exception_is_terminal_and_finalized_once() -> None:
     assert observed == ["observer"]
 
 
+def test_mixed_mode_candidates_fall_through_and_execute_only_selected_mode() -> None:
+    """Priority evaluates mode-neutrally; exactly one selected entry owns lifecycle."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class RecordingState(State):
+        __slots__ = ()
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            events.append("exit")
+
+        def on_enter(
+            self,
+            from_state: State | None,
+            trigger: str,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            events.append("enter")
+
+    state = RecordingState("hover")
+    machine = StateMachine(state, name="mixed-mode-priority")
+    rejected = _RecordingCondition(events, "internal-guard", False, payloads)
+    machine.add_transition("refresh", state, state, rejected, internal=True, priority=0)
+    machine.add_transition("refresh", state, state, internal=False, priority=1)
+
+    external = machine.trigger("refresh")
+
+    assert external.success is True
+    assert external.internal is False
+    assert events == ["internal-guard", "exit", "enter"]
+
+    events.clear()
+    state = RecordingState("hover")
+    machine = StateMachine(state, name="mixed-mode-selected-internal")
+    rejected = _RecordingCondition(events, "external-guard", False, payloads)
+    machine.add_transition(
+        "refresh", state, state, rejected, internal=False, priority=0
+    )
+    machine.add_transition("refresh", state, state, internal=True, priority=1)
+
+    internal = machine.trigger("refresh")
+
+    assert internal.success is True
+    assert internal.internal is True
+    assert events == ["external-guard"]
+
+
+def test_internal_priority_guard_error_is_terminal_before_lifecycle() -> None:
+    """A guard exception remains terminal rather than becoming priority fallthrough."""
+    events: list[str] = []
+    payloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    failure = RuntimeError("internal-guard-secret")
+    state = State("hover")
+    machine = StateMachine(state, name="internal-priority-guard-error")
+    machine.enable_history()
+    machine.add_transition(
+        "refresh",
+        state,
+        state,
+        _RecordingCondition(events, "internal-guard", failure, payloads),
+        internal=True,
+        priority=0,
+    )
+    machine.add_transition("refresh", state, state, internal=False, priority=1)
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("observer"))
+
+    result = machine.trigger("refresh")
+
+    assert result.success is False
+    assert result.stage == "guard"
+    assert result.committed is False
+    assert result.priority == 0
+    assert result.cause is failure
+    assert machine.current_state is state
+    assert machine.history == []
+    assert events == ["internal-guard"]
+    assert observed == ["observer"]
+
+
 def test_sync_group_declarative_and_permission_exceptions_stop_selection() -> None:
     """Both remaining eligibility seams are terminal before lifecycle work."""
     declarative_events: list[str] = []
