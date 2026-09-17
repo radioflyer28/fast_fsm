@@ -1508,26 +1508,26 @@ class StateMachine:
             config = json.loads(open("traffic_light.json").read())
             fsm = StateMachine.from_dict(config)
         """
-        if not isinstance(config, dict):
+        if type(config) is not dict:
             raise TypeError("from_dict: config must be a dictionary")
         if "initial" not in config:
             raise ValueError("from_dict: config must contain an 'initial' key.")
 
         initial = config["initial"]
-        if not isinstance(initial, str) or not initial:
+        if type(initial) is not str or not initial:
             raise ValueError("from_dict: 'initial' must be a non-empty string")
         fsm_name = name if name is not None else config.get("name", "FSM")
-        if not isinstance(fsm_name, str):
+        if type(fsm_name) is not str:
             raise TypeError("from_dict: 'name' must be a string")
 
         raw_transitions = config.get("transitions", [])
-        if not isinstance(raw_transitions, list):
+        if type(raw_transitions) is not list:
             raise TypeError("from_dict: 'transitions' must be a list")
         explicit = config.get("states")
         if explicit is None:
             explicit = []
-        if not isinstance(explicit, list) or any(
-            not isinstance(state_name, str) or not state_name for state_name in explicit
+        if type(explicit) is not list or any(
+            type(state_name) is not str or not state_name for state_name in explicit
         ):
             raise ValueError("from_dict: 'states' must be a list of non-empty strings")
 
@@ -1549,12 +1549,13 @@ class StateMachine:
                 Optional[str],
                 Optional[float],
                 Optional[float],
+                bool,
             ]
         ] = []
         expanded_candidate_counts: Dict[str, int] = {}
         all_state_names: set[str] = {initial, *explicit}
         for index, entry in enumerate(raw_transitions):
-            if not isinstance(entry, dict):
+            if type(entry) is not dict:
                 raise TypeError(f"from_dict: transition[{index}] must be a dictionary")
             for required in ("trigger", "from", "to"):
                 if required not in entry:
@@ -1565,17 +1566,17 @@ class StateMachine:
             trigger = entry["trigger"]
             target = entry["to"]
             raw_sources = entry["from"]
-            if not isinstance(trigger, str) or not trigger:
+            if type(trigger) is not str or not trigger:
                 raise ValueError(
                     f"from_dict: transition[{index}] field 'trigger' must be a non-empty string"
                 )
-            if not isinstance(target, str) or not target:
+            if type(target) is not str or not target:
                 raise ValueError(
                     f"from_dict: transition[{index}] field 'to' must be a non-empty string"
                 )
-            if isinstance(raw_sources, list):
+            if type(raw_sources) is list:
                 if not raw_sources or any(
-                    not isinstance(source, str) or not source for source in raw_sources
+                    type(source) is not str or not source for source in raw_sources
                 ):
                     raise ValueError(
                         f"from_dict: transition[{index}] field 'from' must be a non-empty string or list of non-empty strings"
@@ -1586,7 +1587,7 @@ class StateMachine:
                 )
                 expanded_count = len(source_names)
                 all_state_names.update(source_names)
-            elif isinstance(raw_sources, str) and raw_sources:
+            elif type(raw_sources) is str and raw_sources:
                 sources = raw_sources
                 expanded_count = 1
                 all_state_names.add(sources)
@@ -1611,10 +1612,17 @@ class StateMachine:
                 ) from None
             condition_ref = entry.get("condition_ref")
             if condition_ref is not None and (
-                not isinstance(condition_ref, str) or not condition_ref
+                type(condition_ref) is not str or not condition_ref
             ):
                 raise ValueError(
                     f"from_dict: transition[{index}] field 'condition_ref' must be a non-empty string"
+                )
+
+            internal = entry.get("internal", False)
+            if type(internal) is not bool:
+                raise TypeError(
+                    f"from_dict: transition[{index}] field 'internal' "
+                    "must be an exact built-in bool"
                 )
 
             parsed_rows.append(
@@ -1627,6 +1635,7 @@ class StateMachine:
                     condition_ref,
                     after,
                     within,
+                    internal,
                 )
             )
             expanded_candidate_counts[trigger] = (
@@ -1634,7 +1643,7 @@ class StateMachine:
             )
             all_state_names.add(target)
 
-        for index, trigger, _, _, _, condition_ref, _, _ in parsed_rows:
+        for index, trigger, _, _, _, condition_ref, _, _, _ in parsed_rows:
             if condition_ref is not None and condition_ref not in registry:
                 raise ValueError(
                     f"from_dict: transition[{index}] field 'condition_ref' references an unknown condition"
@@ -1649,14 +1658,14 @@ class StateMachine:
                 )
 
         raw_final_states = config.get("final_states", [])
-        if not isinstance(raw_final_states, list):
+        if type(raw_final_states) is not list:
             raise TypeError("from_dict: 'final_states' must be a list")
         if len(raw_final_states) > len(all_state_names):
             raise ValueError("from_dict: 'final_states' contains too many entries")
 
         final_names: set[str] = set()
         for state_name in raw_final_states:
-            if not isinstance(state_name, str) or not state_name:
+            if type(state_name) is not str or not state_name:
                 raise ValueError(
                     "from_dict: 'final_states' must contain non-empty strings"
                 )
@@ -1710,6 +1719,7 @@ class StateMachine:
             condition_ref,
             after,
             within,
+            internal,
         ) in parsed_rows:
             resolved_reference = condition_ref
             if resolved_reference is None and trigger in registry:
@@ -1729,6 +1739,7 @@ class StateMachine:
                     condition_ref=condition_ref,
                     after=after,
                     within=within,
+                    internal=internal,
                 )
             )
 
@@ -1773,6 +1784,8 @@ class StateMachine:
                         record["after"] = entry.after
                     if entry.within is not None:
                         record["within"] = entry.within
+                    if entry.internal:
+                        record["internal"] = True
                     transitions.append(record)
         return {
             "name": self._name,
