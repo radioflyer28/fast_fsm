@@ -110,6 +110,11 @@ class TransitionError(RuntimeError):
 
     def __init__(self, result: TransitionResult) -> None: ...
 
+class TransitionRejected(Exception):
+    def __init__(self, code: str) -> None: ...
+    @property
+    def code(self) -> str: ...
+
 @dataclass(slots=True)
 class TransitionResult:
     success: bool
@@ -122,7 +127,10 @@ class TransitionResult:
     cause: BaseException | None = field(default=None, repr=False, compare=False)
     priority: int | None = field(default=None, compare=False)
     internal: bool = field(default=False, compare=False)
+    rejection_code: str | None = field(default=None, compare=False)
 
+    @property
+    def rejected(self) -> bool: ...
     def raise_if_failed(self) -> TransitionResult: ...
 
 class TransitionRecord:

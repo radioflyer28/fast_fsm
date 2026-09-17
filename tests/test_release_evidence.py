@@ -806,6 +806,7 @@ def test_slots_policy_recursively_classifies_every_production_class() -> None:
     assert set(registered) == {
         "fast_fsm.conditions.CompiledFuncCondition",
         "fast_fsm.core.TransitionError",
+        "fast_fsm.core.TransitionRejected",
         "fast_fsm._diagnostics.DiagnosticBudgetExceeded",
     }
     for name, entry in registered.items():
@@ -814,11 +815,12 @@ def test_slots_policy_recursively_classifies_every_production_class() -> None:
         assert entry["exception_reason"]
 
 
-def test_slots_policy_authorities_name_the_same_three_exceptions() -> None:
+def test_slots_policy_authorities_name_the_same_four_exceptions() -> None:
     """The measured registry, runtime audit, instructions, and SPR stay aligned."""
     expected = (
         "CompiledFuncCondition",
         "TransitionError",
+        "TransitionRejected",
         "DiagnosticBudgetExceeded",
     )
     completed = _run_evidence("slots-policy", "--json")
@@ -834,7 +836,8 @@ def test_slots_policy_authorities_name_the_same_three_exceptions() -> None:
     )
 
     policy_sentence = (
-        "CompiledFuncCondition, TransitionError, and DiagnosticBudgetExceeded"
+        "CompiledFuncCondition, TransitionError, TransitionRejected, and "
+        "DiagnosticBudgetExceeded"
     )
     instructions = (ROOT / ".github" / "copilot-instructions.md").read_text(
         encoding="utf-8"

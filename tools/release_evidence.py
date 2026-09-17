@@ -133,6 +133,10 @@ REGISTERED_SLOTS_EXCEPTIONS: Mapping[str, str] = {
     "fast_fsm.core.TransitionError": (
         "@mypyc_attr(native_class=False) preserves normal Python exception behavior."
     ),
+    "fast_fsm.core.TransitionRejected": (
+        "@mypyc_attr(native_class=False) preserves the bounded public "
+        "expected-domain control-signal boundary."
+    ),
     "fast_fsm._diagnostics.DiagnosticBudgetExceeded": (
         "ADR-006 accepts this interpreted bounded-diagnostic exception boundary "
         "because public failures carry a scalar DiagnosticStatus."
@@ -5116,6 +5120,7 @@ def _slots_measurements(
         "fast_fsm.core.TransitionError": core.TransitionError(
             core.TransitionResult(False)
         ),
+        "fast_fsm.core.TransitionRejected": core.TransitionRejected("slots.policy"),
         "fast_fsm._diagnostics.DiagnosticBudgetExceeded": (
             diagnostics.DiagnosticBudgetExceeded(
                 diagnostics.DiagnosticStatus(True, None, None, 0, 0, 0, 0)

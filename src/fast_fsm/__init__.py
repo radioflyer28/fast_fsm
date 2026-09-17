@@ -12,6 +12,7 @@ from .core import (
     FSMBuilder,
     TransitionResult,
     TransitionError,
+    TransitionRejected,
     TransitionEntry,
     TransitionRecord,
     Condition,
@@ -80,6 +81,7 @@ __all__ = [
     "FSMBuilder",
     "TransitionResult",
     "TransitionError",
+    "TransitionRejected",
     "TransitionEntry",
     "TransitionRecord",
     # Condition system

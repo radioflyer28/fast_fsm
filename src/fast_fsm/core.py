@@ -551,6 +551,46 @@ class TransitionError(RuntimeError):
         )
 
 
+_TRANSITION_REJECTION_CODE_MAX_LENGTH = 64
+_TRANSITION_REJECTION_CODE_ERROR = "invalid transition rejection code"
+
+
+def _validate_transition_rejection_code(code: object) -> str:
+    """Return one exact bounded domain-rejection code or raise eagerly.
+
+    This intentionally avoids coercion and normalization: the scalar is copied
+    into a public result and may appear in debug metadata, so only the locked
+    ASCII grammar may cross the control-signal boundary.
+    """
+    if type(code) is not str:
+        raise TypeError("transition rejection code must be an exact str")
+    if not code or len(code) > _TRANSITION_REJECTION_CODE_MAX_LENGTH:
+        raise ValueError(_TRANSITION_REJECTION_CODE_ERROR)
+    if not "a" <= code[0] <= "z":
+        raise ValueError(_TRANSITION_REJECTION_CODE_ERROR)
+    for character in code[1:]:
+        if not (
+            "a" <= character <= "z" or "0" <= character <= "9" or character in "_.-"
+        ):
+            raise ValueError(_TRANSITION_REJECTION_CODE_ERROR)
+    return code
+
+
+@mypyc_attr(native_class=False)
+class TransitionRejected(Exception):
+    """Signal one bounded expected domain rejection from an eligibility hook."""
+
+    def __init__(self, code: str) -> None:
+        validated_code = _validate_transition_rejection_code(code)
+        self._code: str = validated_code
+        super().__init__(validated_code)
+
+    @property
+    def code(self) -> str:
+        """Return the exact validated domain-rejection identifier."""
+        return self._code
+
+
 @dataclass(slots=True)
 class TransitionResult:
     """Result of a state transition."""
@@ -568,6 +608,12 @@ class TransitionResult:
     cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
     priority: Optional[int] = field(default=None, compare=False)
     internal: bool = field(default=False, compare=False)
+    rejection_code: Optional[str] = field(default=None, compare=False)
+
+    @property
+    def rejected(self) -> bool:
+        """Whether this result represents an expected domain rejection."""
+        return self.rejection_code is not None
 
     def raise_if_failed(self) -> "TransitionResult":
         """Raise :class:`TransitionError` if the transition did not succeed.
@@ -2925,6 +2971,30 @@ class StateMachine:
                         condition_name,
                         condition_result,
                     )
+            except TransitionRejected as signal:
+                try:
+                    rejection_code = _validate_transition_rejection_code(signal.code)
+                except (TypeError, ValueError):
+                    if for_query:
+                        raise signal
+                    return self._build_failure_result(
+                        current_name,
+                        trigger,
+                        "Transition guard raised an exception",
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        cause=signal,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    f"Transition rejected: {rejection_code}",
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    priority=entry.priority,
+                    internal=entry.internal,
+                    rejection_code=rejection_code,
+                )
             except Exception as cause:
                 if for_query:
                     raise
@@ -3639,6 +3709,7 @@ class StateMachine:
         cause: Optional[BaseException] = None,
         priority: Optional[int] = None,
         internal: bool = False,
+        rejection_code: Optional[str] = None,
     ) -> TransitionResult:
         """Construct one staged failure without observing it.
 
@@ -3657,6 +3728,7 @@ class StateMachine:
             cause=cause,
             priority=priority,
             internal=internal,
+            rejection_code=rejection_code,
         )
 
     def _build_lifecycle_failure(

@@ -1891,6 +1891,7 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
     }
     result = classes["TransitionResult"]
     error = classes["TransitionError"]
+    rejected = classes["TransitionRejected"]
 
     result_decorator = next(
         item
@@ -1910,7 +1911,14 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     ]
     assert fields[:5] == ["success", "from_state", "to_state", "trigger", "error"]
-    assert fields[5:] == ["committed", "stage", "cause", "priority", "internal"]
+    assert fields[5:] == [
+        "committed",
+        "stage",
+        "cause",
+        "priority",
+        "internal",
+        "rejection_code",
+    ]
 
     raise_if_failed = next(
         node
@@ -1937,6 +1945,21 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
             for keyword in item.keywords
         )
         for item in error.decorator_list
+    )
+    assert (
+        isinstance(rejected.bases[0], ast.Name) and rejected.bases[0].id == "Exception"
+    )
+    assert any(
+        isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "mypyc_attr"
+        and any(
+            keyword.arg == "native_class"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+            for keyword in item.keywords
+        )
+        for item in rejected.decorator_list
     )
 
 
@@ -2164,6 +2187,7 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
             "cause",
             "priority",
             "internal",
+            "rejection_code",
         ],
     }
     for class_name, expected_fields in expected_runtime_fields.items():
