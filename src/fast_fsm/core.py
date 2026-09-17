@@ -1658,7 +1658,8 @@ class StateMachine:
                 and expanded_candidate_counts[trigger] != 1
             ):
                 raise ValueError(
-                    f"from_dict: conditions key {trigger!r} is ambiguous for priority candidates"
+                    f"from_dict: transition[{index}] has an ambiguous legacy condition "
+                    "key for priority candidates"
                 )
 
         raw_final_states = config.get("final_states", [])
@@ -2012,13 +2013,14 @@ class StateMachine:
 
         sources: List[State] = []
         source_names: set[str] = set()
-        for raw_source in raw_sources:
+        for source_index, raw_source in enumerate(raw_sources):
             source = self._resolve_canonical_state(raw_source, role="source")
             if source.final:
                 raise ValueError("final state cannot be a transition source")
             if source.name in source_names:
                 raise ValueError(
-                    f"duplicate canonical source state {source.name!r} in one request"
+                    "duplicate canonical source state at source index "
+                    f"{source_index} in one request"
                 )
             source_names.add(source.name)
             sources.append(source)

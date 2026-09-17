@@ -2335,7 +2335,13 @@ class TestPrioritySerialization:
             return original(machine, plans)
 
         monkeypatch.setattr(StateMachine, "_commit_transition_plan", count_commit)
-        with pytest.raises(ValueError, match="conditions.*go.*ambiguous"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "^from_dict: transition\\[0\\] has an ambiguous legacy condition "
+                "key for priority candidates$"
+            ),
+        ):
             StateMachine.from_dict(
                 {
                     "initial": "idle",
@@ -2352,6 +2358,59 @@ class TestPrioritySerialization:
                 conditions={"go": FuncCondition(lambda **kw: True, name="legacy")},
             )
         assert commits == 0
+
+    def test_legacy_trigger_guard_ambiguity_does_not_disclose_trigger(self):
+        """Legacy ambiguity errors identify a row without exposing trigger data."""
+        from fast_fsm import FuncCondition
+
+        secret_trigger = "trigger-secret-9dd76a"
+        with pytest.raises(ValueError) as error:
+            StateMachine.from_dict(
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {
+                            "trigger": secret_trigger,
+                            "from": "idle",
+                            "to": "safe",
+                        },
+                        {
+                            "trigger": secret_trigger,
+                            "from": "idle",
+                            "to": "alternate",
+                            "priority": 1,
+                        },
+                    ],
+                },
+                conditions={
+                    secret_trigger: FuncCondition(lambda **kw: True, name="legacy")
+                },
+            )
+
+        message = str(error.value)
+        assert message == (
+            "from_dict: transition[0] has an ambiguous legacy condition key "
+            "for priority candidates"
+        )
+        assert secret_trigger not in message
+
+    def test_duplicate_source_diagnostic_does_not_disclose_source(self):
+        """Canonical duplicate-source errors retain an index, not source text."""
+        secret_source = "source-secret-870fa"
+        source = State(secret_source)
+        target = State("done")
+        machine = StateMachine(source)
+        machine.add_state(target)
+
+        with pytest.raises(ValueError) as error:
+            machine.add_transition("go", [secret_source, secret_source], target)
+
+        message = str(error.value)
+        assert (
+            message
+            == "duplicate canonical source state at source index 1 in one request"
+        )
+        assert secret_source not in message
 
     @pytest.mark.parametrize(
         "record, pattern",
