@@ -12,9 +12,9 @@ provides:
   - Structural proof that declaration import remains construction-only
 affects: [30-02, 30-04, 30-06, declarative-construction, persistence-parity]
 actuals:
-  tokens: 7305
+  tokens: 8094
   tasks: 2
-  commits: 4
+  commits: 5
 tech-stack:
   added: []
   patterns:
@@ -66,6 +66,17 @@ coverage:
         ref: tests/test_mypyc_guard.py#test_declarative_transition_mode_contract_keeps_raw_runtime_input
         status: pass
     human_judgment: false
+  - id: D4
+    description: Declarative rejection remains terminal for both builder-imported internal rows and compatible legacy manual internal rows.
+    requirement: BUILD-06
+    verification:
+      - kind: integration
+        ref: tests/test_construction_parity.py#test_declarative_builder_rejection_is_terminal_for_internal_candidate
+        status: pass
+      - kind: unit
+        ref: tests/test_expected_rejection.py#test_reject_03_approved_boundaries_abort_priority_groups
+        status: pass
+    human_judgment: false
 duration: 9 min
 completed: 2026-09-17
 status: complete
@@ -88,12 +99,14 @@ status: complete
 - Added keyword-only exact-boolean `internal` mode to frozen/slotted declaration metadata, bound handler records, and the PEP 561 stub.
 - Made `FSMBuilder.build()` derive each applicable destination-bearing declaration into a fresh unguarded `_TransitionRequest` and submit it with explicit rows through its existing single transaction.
 - Added behavior, atomicity, carrier-layout, static-boundary, and hot-path structural evidence for the new construction seam.
+- Restored terminal `TransitionRejected` handling for a legacy manually registered internal edge and added the corresponding builder-imported rejection regression.
 
 ## Task Commits
 
 1. **Task 1: Trace one internal declarative transition from decorator through builder to dispatch** — `0bf89c9` (RED test), `d07b910` (implementation)
 2. **Task 2: Lock declaration layout, canonical publication, and hot-path absence** — `5c673e1` (structural proof)
 3. **Auto-fix: Narrow declarative source metadata for static checking** — `e5b6ed1`
+4. **Regression fix: Preserve declarative rejection compatibility** — `cdfc485`
 
 ## Files Created/Modified
 
@@ -109,6 +122,7 @@ status: complete
 
 - Derive declaration rows only while constructing the private candidate. This leaves staged builder data untouched after a failed attempt and preserves cached success semantics.
 - Keep decorator guards on the handler record rather than copying them to `TransitionEntry`; selected machine dispatch evaluates the policy exactly once.
+- Preserve the old external-declaration-to-manual-internal compatibility direction while refusing the unsafe reverse internal-declaration-to-external binding.
 
 ## Deviations from Plan
 
@@ -122,12 +136,20 @@ status: complete
 - **Verification:** Focused tests, Ruff, and `task typecheck-mypy` pass; the new `ty` assignment diagnostic is gone.
 - **Committed in:** `e5b6ed1`
 
-**Total deviations:** 1 auto-fixed (1 Rule 1 static type defect).
-**Impact on plan:** Correctness-only adjustment; no additional API or topology behavior was introduced.
+**2. [Rule 1 - Compatibility regression] Restored terminal declarative rejection on legacy manual internal rows**
+- **Found during:** Post-wave full-suite verification
+- **Issue:** New exact mode matching skipped a default declarative guard attached to a manually registered internal edge, allowing priority fallthrough and a committed result.
+- **Fix:** Added a narrow one-way legacy fallback for one external-mode declaration to guard an internal manual edge; internal declarations still cannot bind external manual edges.
+- **Files modified:** `src/fast_fsm/core.py`, `tests/test_construction_parity.py`
+- **Verification:** Focused Phase 29 rejection suite, Plan 30 focused suites, mypy, and the full sequential suite pass.
+- **Committed in:** `cdfc485`
+
+**Total deviations:** 2 auto-fixed (2 Rule 1 correctness defects).
+**Impact on plan:** Both changes preserve the locked canonical transaction and exactly-once guard ownership; no alternate registrar or dispatch-time import work was added.
 
 ## Issues Encountered
 
-No blocking issues. The visible advisory `task typecheck-ty` result still reports its pre-existing unresolved relative import `.conditions`; after the fix it reports no Task 01-specific diagnostic. Mypy remains the blocking authority and passes.
+The post-wave full suite exposed a mode-aware declarative rejection regression; it is fixed in `cdfc485` and the full sequential suite now passes. The visible advisory `task typecheck-ty` result still reports its pre-existing unresolved relative import `.conditions`; after the earlier type-boundary fix it reports no Task 01-specific diagnostic. Mypy remains the blocking authority and passes.
 
 ## User Setup Required
 
@@ -140,8 +162,8 @@ Plan 02 can extend source/target applicability, collision, async, repair, and br
 ## Self-Check: PASSED
 
 - Required tracer and structural test files exist.
-- Task commits `0bf89c9`, `d07b910`, `5c673e1`, and `e5b6ed1` exist in git history.
-- Plan verification passed apart from the documented non-blocking `ty` advisory import diagnostic.
+- Task commits `0bf89c9`, `d07b910`, `5c673e1`, `e5b6ed1`, and `cdfc485` exist in git history.
+- Focused Phase 29/30 verification, mypy, and the full sequential suite pass; `ty` retains only the documented non-blocking import advisory.
 
 ---
 *Phase: 30-builder-first-construction-persistence-parity*
