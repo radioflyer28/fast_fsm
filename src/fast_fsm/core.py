@@ -559,6 +559,7 @@ class TransitionResult:
     stage: Optional[str] = field(default=None, compare=False)
     cause: Optional[BaseException] = field(default=None, repr=False, compare=False)
     priority: Optional[int] = field(default=None, compare=False)
+    internal: bool = field(default=False, compare=False)
 
     def raise_if_failed(self) -> "TransitionResult":
         """Raise :class:`TransitionError` if the transition did not succeed.
@@ -588,7 +589,14 @@ class TransitionRecord:
     via :meth:`StateMachine.enable_history`.
     """
 
-    __slots__ = ("from_state", "trigger", "to_state", "timestamp", "priority")
+    __slots__ = (
+        "from_state",
+        "trigger",
+        "to_state",
+        "timestamp",
+        "priority",
+        "internal",
+    )
 
     def __init__(
         self,
@@ -597,12 +605,14 @@ class TransitionRecord:
         to_state: str,
         timestamp: float,
         priority: Optional[int] = None,
+        internal: bool = False,
     ) -> None:
         self.from_state: str = from_state
         self.trigger: str = trigger
         self.to_state: str = to_state
         self.timestamp: float = timestamp
         self.priority: Optional[int] = priority
+        self.internal: bool = internal
 
     def __repr__(self) -> str:
         return (
@@ -625,6 +635,7 @@ class TransitionEntry:
         "condition_ref",
         "after",
         "within",
+        "internal",
     )
 
     def __init__(
@@ -635,6 +646,7 @@ class TransitionEntry:
         condition_ref: Optional[str] = None,
         after: Optional[float] = None,
         within: Optional[float] = None,
+        internal: bool = False,
     ) -> None:
         self.to_state: "State" = to_state
         self.condition: Optional[Condition] = condition
@@ -642,6 +654,7 @@ class TransitionEntry:
         self.condition_ref: Optional[str] = condition_ref
         self.after: Optional[float] = after
         self.within: Optional[float] = within
+        self.internal: bool = internal
 
 
 _TransitionRow = Union[
@@ -769,6 +782,7 @@ class _TransitionRequest:
     condition_ref: Optional[str] = None
     after: Any = None
     within: Any = None
+    internal: Any = False
 
 
 def _freeze_transition_sources(
@@ -794,6 +808,7 @@ class _PreparedTransition:
     condition_ref: Optional[str] = None
     after: Optional[float] = None
     within: Optional[float] = None
+    internal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1832,9 +1847,12 @@ class StateMachine:
         condition_ref: Optional[str] = None,
         after: object = None,
         within: object = None,
+        internal: object = False,
     ) -> _PreparedTransition:
         """Materialize and validate a complete transition request without writing."""
         normalized_priority = _normalize_priority(priority)
+        if type(internal) is not bool:
+            raise TypeError("internal must be an exact built-in bool")
         if condition_ref is not None and (
             not isinstance(condition_ref, str) or not condition_ref
         ):
@@ -1924,6 +1942,7 @@ class StateMachine:
             condition_ref,
             normalized_after,
             normalized_within,
+            internal,
         )
 
     def _commit_transition_plan(self, plans: Tuple[_PreparedTransition, ...]) -> None:
@@ -1988,6 +2007,7 @@ class StateMachine:
                         condition_ref=request.condition_ref,
                         after=request.after,
                         within=request.within,
+                        internal=request.internal,
                     )
                 )
             except (TypeError, ValueError) as error:
@@ -2008,6 +2028,7 @@ class StateMachine:
             plan.condition_ref,
             plan.after,
             plan.within,
+            plan.internal,
         )
         if existing is None:
             return candidate
@@ -2048,6 +2069,7 @@ class StateMachine:
         priority: object = 0,
         after: object = None,
         within: object = None,
+        internal: object = False,
     ) -> None:
         """Add a validated, canonical transition in one topology operation."""
         owner_thread_id = self._acquire_sync_ownership("add_transition")
@@ -2061,6 +2083,7 @@ class StateMachine:
                 priority=priority,
                 after=after,
                 within=within,
+                internal=internal,
             )
         finally:
             self._release_sync_ownership(owner_thread_id)
@@ -2076,6 +2099,7 @@ class StateMachine:
         priority: object = 0,
         after: object = None,
         within: object = None,
+        internal: object = False,
     ) -> None:
         """Validate and commit one transition while the caller owns this machine."""
         request = _TransitionRequest(
@@ -2087,6 +2111,7 @@ class StateMachine:
             priority=priority,
             after=after,
             within=within,
+            internal=internal,
         )
         self._apply_transition_requests_owned((request,))
 
@@ -3572,6 +3597,29 @@ class StateMachine:
         self._current_state = to_state
         self._state_entered_at = timestamp
 
+    def _commit_internal_transition(
+        self,
+        old_state: State,
+        to_state: State,
+        trigger: str,
+        *,
+        priority: Optional[int] = None,
+    ) -> None:
+        """Commit one in-state event without resetting residency timing."""
+        history = self._history
+        if history is None:
+            return
+        timestamp = self._read_clock()
+        record = TransitionRecord(
+            old_state.name,
+            trigger,
+            to_state.name,
+            timestamp,
+            priority,
+            internal=True,
+        )
+        history.append(record)
+
     @staticmethod
     def _build_failure_result(
         from_state: str,
@@ -3583,6 +3631,7 @@ class StateMachine:
         committed: bool = False,
         cause: Optional[BaseException] = None,
         priority: Optional[int] = None,
+        internal: bool = False,
     ) -> TransitionResult:
         """Construct one staged failure without observing it.
 
@@ -3600,6 +3649,7 @@ class StateMachine:
             stage=stage,
             cause=cause,
             priority=priority,
+            internal=internal,
         )
 
     def _build_lifecycle_failure(
@@ -3612,6 +3662,7 @@ class StateMachine:
         *,
         committed: bool,
         priority: Optional[int] = None,
+        internal: bool = False,
     ) -> TransitionResult:
         """Describe one redacted lifecycle failure without observing it."""
         return self._build_failure_result(
@@ -3623,6 +3674,7 @@ class StateMachine:
             committed=committed,
             cause=cause,
             priority=priority,
+            internal=internal,
         )
 
     def _finalize_failure(
@@ -3665,6 +3717,9 @@ class StateMachine:
         args = prepared.args
         priority = prepared.entry.priority
         declarative_handler = prepared.declarative_handler
+
+        if prepared.entry.internal:
+            return self._execute_internal_transition(prepared, kwargs)
 
         # Pre-commit: before-transition listeners.
         if self._before_listeners:
@@ -3865,6 +3920,126 @@ class StateMachine:
             trigger=trigger,
             committed=True,
             priority=priority,
+        )
+
+    def _execute_internal_transition(
+        self, prepared: _PreparedDispatch, kwargs: Dict[str, Any]
+    ) -> TransitionResult:
+        """Run retained transition work for one canonical internal self-event."""
+        old_state = prepared.source_state
+        to_state = prepared.entry.to_state
+        trigger = prepared.trigger
+        args = prepared.args
+        priority = prepared.entry.priority
+        declarative_handler = prepared.declarative_handler
+
+        if self._before_listeners:
+            for fn in self._before_listeners:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_BEFORE_TRANSITION,
+                        cause,
+                        committed=False,
+                        priority=priority,
+                        internal=True,
+                    )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: Executing internal transition %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+        try:
+            self._commit_internal_transition(
+                old_state, to_state, trigger, priority=priority
+            )
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                _LIFECYCLE_STAGE_COMMIT,
+                cause,
+                committed=False,
+                priority=priority,
+                internal=True,
+            )
+
+        if declarative_handler is not None:
+            declarative_result = _invoke_declarative_handler_for_transition(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage=_LIFECYCLE_STAGE_DECLARATIVE_HANDLER,
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                    priority=priority,
+                    internal=True,
+                )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        trigger_callbacks = self._trigger_callbacks.get(trigger)
+        if trigger_callbacks:
+            for fn in trigger_callbacks:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_TRIGGER_CALLBACK,
+                        cause,
+                        committed=True,
+                        priority=priority,
+                        internal=True,
+                    )
+
+        if self._after_listeners:
+            for fn in self._after_listeners:
+                try:
+                    fn(old_state, to_state, trigger, **kwargs)
+                except Exception as cause:
+                    return self._build_lifecycle_failure(
+                        old_state,
+                        to_state,
+                        trigger,
+                        _LIFECYCLE_STAGE_AFTER_TRANSITION,
+                        cause,
+                        committed=True,
+                        priority=priority,
+                        internal=True,
+                    )
+
+        return TransitionResult(
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
+            priority=priority,
+            internal=True,
         )
 
     def _execute_control_transition(self, to_state: State, trigger: str) -> None:

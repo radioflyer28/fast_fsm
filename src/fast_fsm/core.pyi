@@ -120,6 +120,7 @@ class TransitionResult:
     stage: str | None = field(default=None, compare=False)
     cause: BaseException | None = field(default=None, repr=False, compare=False)
     priority: int | None = field(default=None, compare=False)
+    internal: bool = field(default=False, compare=False)
 
     def raise_if_failed(self) -> TransitionResult: ...
 
@@ -129,6 +130,7 @@ class TransitionRecord:
     to_state: str
     timestamp: float
     priority: int | None
+    internal: bool
 
     def __init__(
         self,
@@ -137,6 +139,7 @@ class TransitionRecord:
         to_state: str,
         timestamp: float,
         priority: int | None = None,
+        internal: bool = False,
     ) -> None: ...
 
 class TransitionEntry:
@@ -146,6 +149,7 @@ class TransitionEntry:
     condition_ref: str | None
     after: float | None
     within: float | None
+    internal: bool
 
     def __init__(
         self,
@@ -155,6 +159,7 @@ class TransitionEntry:
         condition_ref: str | None = None,
         after: float | None = None,
         within: float | None = None,
+        internal: bool = False,
     ) -> None: ...
 
 class State:
@@ -254,6 +259,7 @@ class StateMachine:
         priority: object = 0,
         after: object = None,
         within: object = None,
+        internal: bool = False,
     ) -> None: ...
     def add_transitions(self, transitions: list[_TransitionRow]) -> None: ...
     def add_bidirectional_transition(
