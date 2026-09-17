@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 
 import pytest
@@ -16,7 +17,9 @@ from fast_fsm import (
     NotCondition,
     OrCondition,
     State,
+    AsyncStateMachine,
     StateMachine,
+    TransitionRejected,
 )
 from fast_fsm.condition_templates import (
     AlwaysCondition,
@@ -96,6 +99,170 @@ async def test_deferred_compound_guard_result_has_single_await_ownership() -> No
     assert await deferred
     with pytest.raises(RuntimeError, match="cannot reuse an awaited guard result"):
         await deferred
+
+
+def test_reject_08_direct_and_synchronous_composition_preserve_signal_identity() -> (
+    None
+):
+    """REJECT-08: synchronous wrappers do not reinterpret expected rejection."""
+    signal = TransitionRejected("mission.altitude_limit")
+
+    def verify(factory) -> None:
+        calls: list[str] = []
+
+        def reject() -> bool:
+            calls.append("rejected")
+            raise signal
+
+        def later() -> bool:
+            calls.append("later")
+            return True
+
+        rejected = FuncCondition(reject)
+        later_condition = FuncCondition(later)
+        with pytest.raises(TransitionRejected) as raised:
+            factory(rejected, later_condition).check()
+        assert raised.value is signal
+        assert calls == ["rejected"]
+
+    verify(lambda rejected, later: rejected)
+    verify(lambda rejected, later: rejected & later)
+    verify(lambda rejected, later: rejected | later)
+    verify(lambda rejected, later: NotCondition(rejected))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        verify(lambda rejected, later: NegatedCondition(rejected))
+    verify(lambda rejected, later: OrCondition(AndCondition(rejected, later), later))
+
+
+@pytest.mark.asyncio
+async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_terminal() -> (
+    None
+):
+    """REJECT-08: awaited wrappers retain one owner and stop at the raised child."""
+    signal = TransitionRejected("link.lost")
+    rejection_calls: list[str] = []
+
+    async def reject() -> bool:
+        rejection_calls.append("rejected")
+        await asyncio.sleep(0)
+        raise signal
+
+    def earlier_false() -> bool:
+        rejection_calls.append("earlier")
+        return False
+
+    def later() -> bool:
+        rejection_calls.append("later")
+        return True
+
+    deferred = OrCondition(
+        FuncCondition(earlier_false),
+        FuncCondition(reject),
+        FuncCondition(later),
+    ).check()
+    with pytest.raises(TransitionRejected) as raised:
+        await deferred
+    assert raised.value is signal
+    assert rejection_calls == ["earlier", "rejected"]
+    with pytest.raises(RuntimeError, match="cannot reuse an awaited guard result"):
+        await deferred
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancellation_calls: list[str] = []
+    cancellations: list[asyncio.CancelledError] = []
+
+    async def wait_for_cancellation() -> bool:
+        cancellation_calls.append("blocking")
+        started.set()
+        try:
+            await asyncio.wait_for(release.wait(), timeout=5)
+        except asyncio.CancelledError as cancellation:
+            cancellations.append(cancellation)
+            raise
+        return True
+
+    deferred_cancellation = AndCondition(
+        FuncCondition(wait_for_cancellation), FuncCondition(later)
+    ).check()
+    pending = asyncio.ensure_future(deferred_cancellation)
+    await asyncio.wait_for(started.wait(), timeout=5)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await pending
+    assert cancellations == [cancelled.value]
+    assert cancellation_calls == ["blocking"]
+
+
+@pytest.mark.asyncio
+async def test_reject_08_direct_async_leaf_and_fsm_boundary_have_distinct_owners() -> (
+    None
+):
+    """REJECT-08: direct evaluation raises; the selector alone returns a result."""
+    signal = TransitionRejected("battery.low")
+    direct_calls: list[str] = []
+
+    class RaisingAsyncCondition(AsyncCondition):
+        __slots__ = ()
+
+        def __init__(self) -> None:
+            super().__init__("raising", "raises an expected rejection")
+
+        async def check_async(self, *args: object, **kwargs: object) -> bool:
+            direct_calls.append("rejected")
+            raise signal
+
+    direct = RaisingAsyncCondition()
+    with pytest.raises(TransitionRejected) as raised:
+        await direct.check_async()
+    assert raised.value is signal
+
+    source = State("source")
+    target = State("target")
+    machine = StateMachine(source, name="composition-rejection-boundary")
+    machine.add_state(target)
+    later_calls: list[str] = []
+
+    def later() -> bool:
+        later_calls.append("later")
+        return True
+
+    def reject() -> bool:
+        raise signal
+
+    machine.add_transition(
+        "go", source, target, AndCondition(FuncCondition(reject), FuncCondition(later))
+    )
+
+    result = machine.trigger("go")
+
+    assert result.rejected is True
+    assert result.rejection_code == "battery.low"
+    assert later_calls == []
+
+    async_source = State("async-source")
+    async_target = State("async-target")
+    async_machine = AsyncStateMachine(
+        async_source, name="async-composition-rejection-boundary"
+    )
+    async_machine.add_state(async_target)
+
+    async def async_reject() -> bool:
+        raise signal
+
+    async_machine.add_transition(
+        "go",
+        async_source,
+        async_target,
+        AndCondition(FuncCondition(async_reject), FuncCondition(later)),
+    )
+
+    async_result = await async_machine.trigger_async("go")
+
+    assert async_result.rejected is True
+    assert async_result.rejection_code == "battery.low"
+    assert later_calls == []
 
 
 def test_unless_stores_canonical_not_condition_without_warning() -> None:
