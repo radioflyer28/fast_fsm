@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from fast_fsm.core import DeclarativeState, State, StateMachine, transition
+from fast_fsm.conditions import AsyncCondition
+from fast_fsm.core import (
+    AsyncDeclarativeState,
+    AsyncStateMachine,
+    DeclarativeState,
+    State,
+    StateMachine,
+    TransitionResult,
+    transition,
+)
 
 
 class _RecordingState(State):
@@ -286,3 +297,254 @@ def test_internal_declarative_failure_is_committed_and_skips_state_surfaces() ->
     assert machine.history[-1].internal is True
     assert events == ["before", "declarative-handler"]
     assert observed == ["observer"]
+
+
+class _BlockingInternalGuard(AsyncCondition):
+    """A handshake-driven async guard used to prove pre-commit cancellation."""
+
+    def __init__(self, started: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__("blocking-internal-guard", "phase 28 cancellation guard")
+        self.started = started
+        self.release = release
+        self.cancellation: asyncio.CancelledError | None = None
+
+    async def check_async(self, **_kwargs: object) -> bool:
+        self.started.set()
+        try:
+            await asyncio.wait_for(self.release.wait(), timeout=5)
+        except asyncio.CancelledError as cancellation:
+            self.cancellation = cancellation
+            raise
+        return True
+
+
+class _CapturingAsyncMachine(AsyncStateMachine):
+    """Capture the one finalized result while preserving ordinary observers."""
+
+    __slots__ = ("finalized_failures",)
+
+    def __init__(self, initial_state: State) -> None:
+        super().__init__(initial_state)
+        self.finalized_failures: list[TransitionResult] = []
+
+    def _finalize_failure(
+        self, result: TransitionResult, kwargs: dict[str, object]
+    ) -> TransitionResult:
+        self.finalized_failures.append(result)
+        return super()._finalize_failure(result, kwargs)
+
+
+@pytest.mark.asyncio
+async def test_async_internal_transition_retains_transition_work_and_skips_all_state_surfaces() -> None:
+    """The async lifecycle uses the same internal seam as synchronous dispatch."""
+    events: list[str] = []
+
+    class RefreshingState(AsyncDeclarativeState):
+        __slots__ = ()
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            events.append("state-exit")
+
+        def on_enter(
+            self,
+            from_state: State | None,
+            trigger: str,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            events.append("state-enter")
+
+        @transition("refresh", from_state="hover", to_state="hover")
+        async def refresh(self, *args: object, **kwargs: object) -> None:
+            events.append("declarative-handler")
+
+    state = RefreshingState("hover")
+    machine = AsyncStateMachine(state)
+    machine.enable_history()
+    machine.add_transition("refresh", state, state, internal=True, priority=7)
+    machine.add_listener(_LifecycleListener(events))
+    machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
+    machine.on_enter(
+        "hover", lambda *_args, **_kwargs: events.append("enter-callback")
+    )
+
+    async def exit_async(*_args: object, **_kwargs: object) -> None:
+        events.append("exit-async")
+
+    async def enter_async(*_args: object, **_kwargs: object) -> None:
+        events.append("enter-async")
+
+    machine.on_exit_async("hover", exit_async)
+    machine.on_enter_async("hover", enter_async)
+    machine.on_trigger(
+        "refresh", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+
+    result = await machine.trigger_async("refresh", payload="caller-value")
+
+    assert result.success is True
+    assert result.committed is True
+    assert result.priority == 7
+    assert result.internal is True
+    assert machine.history[-1].internal is True
+    assert events == ["before", "declarative-handler", "trigger-callback", "after"]
+
+
+@pytest.mark.asyncio
+async def test_async_internal_guard_cancellation_is_uncommitted_mode_true_and_reusable() -> None:
+    """A selected internal guard cancellation finalizes once before commit."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    state = State("hover")
+    guard = _BlockingInternalGuard(started, release)
+    machine = _CapturingAsyncMachine(state)
+    machine.enable_history()
+    machine.add_transition("refresh", state, state, guard, internal=True, priority=7)
+    observed: list[str] = []
+    machine.on_failed(
+        lambda _trigger, _source, error, **_kwargs: observed.append(error)
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("refresh"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, timeout=5)
+
+        assert isinstance(guard.cancellation, asyncio.CancelledError)
+        assert len(machine.finalized_failures) == 1
+        cancelled = machine.finalized_failures[0]
+        assert cancelled.stage == "guard"
+        assert cancelled.committed is False
+        assert cancelled.priority == 7
+        assert cancelled.internal is True
+        assert machine.current_state is state
+        assert machine.history == []
+        assert observed == ["Transition cancelled at guard"]
+        assert machine._async_owner_task is None
+        assert machine._async_owner_root is None
+        assert not machine._async_ownership_lock.locked()
+
+        release.set()
+        reused = await machine.trigger_async("refresh")
+        assert reused.success is True
+        assert reused.internal is True
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable() -> None:
+    """Cancellation in retained declarative work preserves commit and history truth."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    events: list[str] = []
+
+    class RefreshingState(AsyncDeclarativeState):
+        __slots__ = ()
+
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            events.append("state-exit")
+
+        def on_enter(
+            self,
+            from_state: State | None,
+            trigger: str,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            events.append("state-enter")
+
+        @transition("refresh", from_state="hover", to_state="hover")
+        async def refresh(self, *args: object, **kwargs: object) -> None:
+            events.append("declarative-handler")
+            started.set()
+            await asyncio.wait_for(release.wait(), timeout=5)
+
+    state = RefreshingState("hover")
+    machine = _CapturingAsyncMachine(state)
+    machine.enable_history()
+    machine.add_transition("refresh", state, state, internal=True, priority=7)
+    machine.on_trigger("refresh", lambda *_args, **_kwargs: events.append("trigger"))
+    machine.after_transition(lambda *_args, **_kwargs: events.append("after"))
+    observed: list[str] = []
+    machine.on_failed(
+        lambda _trigger, _source, error, **_kwargs: observed.append(error)
+    )
+
+    pending = asyncio.create_task(machine.trigger_async("refresh"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, timeout=5)
+
+        assert len(machine.finalized_failures) == 1
+        cancelled = machine.finalized_failures[0]
+        assert cancelled.stage == "declarative-handler"
+        assert cancelled.committed is True
+        assert cancelled.priority == 7
+        assert cancelled.internal is True
+        assert machine.current_state is state
+        assert len(machine.history) == 1
+        assert machine.history[-1].internal is True
+        assert events == ["declarative-handler"]
+        assert observed == ["Transition cancelled at declarative-handler"]
+        assert machine._async_owner_task is None
+        assert machine._async_owner_root is None
+        assert not machine._async_ownership_lock.locked()
+
+        release.set()
+        reused = await machine.trigger_async("refresh")
+        assert reused.success is True
+        assert reused.internal is True
+        assert events == ["declarative-handler", "declarative-handler", "trigger", "after"]
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_mixed_mode_priority_selects_the_same_internal_entry_sync_and_async() -> None:
+    """Priority chooses a candidate before its selected lifecycle mode matters."""
+    sync_state = State("hover")
+    sync_machine = StateMachine(sync_state)
+    sync_machine.enable_history()
+    sync_machine.add_transition("refresh", sync_state, sync_state, priority=5)
+    sync_machine.add_transition(
+        "refresh", sync_state, sync_state, internal=True, priority=-1
+    )
+
+    async_state = State("hover")
+    async_machine = AsyncStateMachine(async_state)
+    async_machine.enable_history()
+    async_machine.add_transition("refresh", async_state, async_state, priority=5)
+    async_machine.add_transition(
+        "refresh", async_state, async_state, internal=True, priority=-1
+    )
+
+    sync_result = sync_machine.trigger("refresh")
+    async_result = await async_machine.trigger_async("refresh")
+
+    assert (sync_result.success, sync_result.priority, sync_result.internal) == (
+        True,
+        -1,
+        True,
+    )
+    assert (async_result.success, async_result.priority, async_result.internal) == (
+        True,
+        -1,
+        True,
+    )
+    assert sync_machine.history[-1].internal is True
+    assert async_machine.history[-1].internal is True

@@ -94,6 +94,14 @@ _async_selection_priority: contextvars.ContextVar[Optional[int]] = (
     contextvars.ContextVar[Optional[int]]("_async_selection_priority", default=None)
 )
 
+# Keep the selected candidate's mode beside its priority while a guard or state
+# permission check awaits.  The owned cancellation boundary can then produce a
+# truthful failure result before a _PreparedDispatch is available, without
+# storing mutable per-dispatch state on the machine.
+_async_selection_internal: contextvars.ContextVar[bool] = contextvars.ContextVar[
+    bool
+]("_async_selection_internal", default=False)
+
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a
 # failure result without importing a private implementation type. Every stage
@@ -4598,14 +4606,11 @@ class AsyncStateMachine(StateMachine):
 
     async def _execute_transition_async(
         self,
-        to_state: State,
-        trigger: str,
-        *args: Any,
-        declarative_handler: Optional[_DeclarativeHandler] = None,
-        priority: int,
+        prepared: _PreparedDispatch,
+        *,
         lifecycle_stage: List[str],
         committed: List[bool],
-        **kwargs: Any,
+        kwargs: Dict[str, Any],
     ) -> TransitionResult:
         """Run the async lifecycle with awaits at their matching callback slots.
 
@@ -4614,7 +4619,20 @@ class AsyncStateMachine(StateMachine):
         explicit while converting ordinary callback exceptions into one staged
         result, exactly like the synchronous runner.
         """
-        old_state = self._current_state
+        old_state = prepared.source_state
+        to_state = prepared.entry.to_state
+        trigger = prepared.trigger
+        args = prepared.args
+        priority = prepared.entry.priority
+        declarative_handler = prepared.declarative_handler
+
+        if prepared.entry.internal:
+            return await self._execute_internal_transition_async(
+                prepared,
+                lifecycle_stage=lifecycle_stage,
+                committed=committed,
+                kwargs=kwargs,
+            )
 
         lifecycle_stage[0] = _LIFECYCLE_STAGE_BEFORE_TRANSITION
         for fn in self._before_listeners:
@@ -4834,6 +4852,134 @@ class AsyncStateMachine(StateMachine):
             priority=priority,
         )
 
+    async def _execute_internal_transition_async(
+        self,
+        prepared: _PreparedDispatch,
+        *,
+        lifecycle_stage: List[str],
+        committed: List[bool],
+        kwargs: Dict[str, Any],
+    ) -> TransitionResult:
+        """Run retained async work for one canonical internal self-event."""
+        old_state = prepared.source_state
+        to_state = prepared.entry.to_state
+        trigger = prepared.trigger
+        args = prepared.args
+        priority = prepared.entry.priority
+        declarative_handler = prepared.declarative_handler
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_BEFORE_TRANSITION
+        for fn in self._before_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=False,
+                    priority=priority,
+                    internal=True,
+                )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: Executing internal async transition %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_COMMIT
+        try:
+            self._commit_internal_transition(
+                old_state, to_state, trigger, priority=priority
+            )
+        except Exception as cause:
+            return self._build_lifecycle_failure(
+                old_state,
+                to_state,
+                trigger,
+                lifecycle_stage[0],
+                cause,
+                committed=False,
+                priority=priority,
+                internal=True,
+            )
+        committed[0] = True
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_DECLARATIVE_HANDLER
+        if declarative_handler is not None:
+            declarative_result = await _invoke_declarative_handler_for_transition_async(
+                old_state, declarative_handler, trigger, args, kwargs
+            )
+            if not declarative_result.success:
+                return self._build_failure_result(
+                    old_state.name,
+                    trigger,
+                    "Declarative handler failed",
+                    stage=lifecycle_stage[0],
+                    to_state=to_state.name,
+                    committed=True,
+                    cause=declarative_result.cause,
+                    priority=priority,
+                    internal=True,
+                )
+
+        _emit_legacy_debug(
+            self._logger,
+            "%s: %s --[%s]--> %s",
+            self._name,
+            old_state.name,
+            trigger,
+            to_state.name,
+        )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_TRIGGER_CALLBACK
+        for fn in self._trigger_callbacks.get(trigger, ()):
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                    priority=priority,
+                    internal=True,
+                )
+
+        lifecycle_stage[0] = _LIFECYCLE_STAGE_AFTER_TRANSITION
+        for fn in self._after_listeners:
+            try:
+                fn(old_state, to_state, trigger, **kwargs)
+            except Exception as cause:
+                return self._build_lifecycle_failure(
+                    old_state,
+                    to_state,
+                    trigger,
+                    lifecycle_stage[0],
+                    cause,
+                    committed=True,
+                    priority=priority,
+                    internal=True,
+                )
+
+        return TransitionResult(
+            True,
+            from_state=old_state.name,
+            to_state=to_state.name,
+            trigger=trigger,
+            committed=True,
+            priority=priority,
+            internal=True,
+        )
+
     async def can_trigger_async(self, trigger: str, *args, **kwargs) -> bool:
         """Check whether an async trigger can fire without lifecycle work.
 
@@ -4942,6 +5088,7 @@ class AsyncStateMachine(StateMachine):
         """Await one candidate, using ``None`` only for group fallthrough."""
         if not for_query:
             _async_selection_priority.set(entry.priority)
+            _async_selection_internal.set(entry.internal)
         if entry.after is not None or entry.within is not None:
             assert now is not None
             elapsed = now - self._state_entered_at
@@ -5143,10 +5290,12 @@ class AsyncStateMachine(StateMachine):
         to_state = old_state
         selection_complete = False
         selected_priority: Optional[int] = None
+        selected_internal = False
         selection_token = _async_selection_lifecycle_stage.set(
             _LIFECYCLE_STAGE_SELECTION
         )
         selection_priority_token = _async_selection_priority.set(None)
+        selection_internal_token = _async_selection_internal.set(False)
 
         try:
             prepared = await self._select_transition_async(
@@ -5157,16 +5306,13 @@ class AsyncStateMachine(StateMachine):
                 return self._finalize_failure(prepared, kwargs)
             to_state = prepared.entry.to_state
             selected_priority = prepared.entry.priority
+            selected_internal = prepared.entry.internal
 
             result = await self._execute_transition_async(
-                to_state,
-                trigger,
-                *args,
-                declarative_handler=prepared.declarative_handler,
-                priority=selected_priority,
+                prepared,
                 lifecycle_stage=lifecycle_stage,
                 committed=committed,
-                **kwargs,
+                kwargs=kwargs,
             )
             if not result.success:
                 return self._finalize_failure(result, kwargs)
@@ -5190,12 +5336,18 @@ class AsyncStateMachine(StateMachine):
                     if selection_complete
                     else _async_selection_priority.get()
                 ),
+                internal=(
+                    selected_internal
+                    if selection_complete
+                    else _async_selection_internal.get()
+                ),
             )
             self._finalize_failure(cancelled_result, kwargs)
             raise
         finally:
             _async_selection_lifecycle_stage.reset(selection_token)
             _async_selection_priority.reset(selection_priority_token)
+            _async_selection_internal.reset(selection_internal_token)
 
 
 # Convenience functions and classes
