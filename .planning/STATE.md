@@ -5,11 +5,11 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: planning
-stopped_at: Phase 29 complete, ready to plan Phase 30
-last_updated: "2026-09-17T17:47:41.384Z"
+stopped_at: Phase 30 context gathered
+last_updated: "2026-09-17T17:52:37.764Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 29 complete, transitioned to Phase 30
-state_head: 619bcbb4ccabf2581c98b40cfbb22dbb835abeb6
+state_head: 3108f31a0b4c26f49fb9cb938883c8e2a589f02f
 progress:
   total_phases: 7
   completed_phases: 4
@@ -140,10 +140,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T17:03:12.680Z
-Stopped at: Phase 29 complete, ready to plan Phase 30
+Last session: 2026-09-17T17:52:37.673Z
+Stopped at: Phase 30 context gathered
 Resume file: 
 
-None
+.planning/phases/30-builder-first-construction-persistence-parity/30-CONTEXT.md
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
