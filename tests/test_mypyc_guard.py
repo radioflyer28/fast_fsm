@@ -589,19 +589,29 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
 
     entry = classes.get("TransitionEntry")
     assert entry is not None
-    entry_slots = next(
-        node.value
-        for node in entry.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__slots__"
-            for target in node.targets
-        )
+    decorator = next(
+        item
+        for item in entry.decorator_list
+        if isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "dataclass"
     )
-    assert isinstance(entry_slots, ast.Tuple)
-    assert {
-        item.value for item in entry_slots.elts if isinstance(item, ast.Constant)
-    } == {
+    keywords = {
+        keyword.arg: keyword.value.value
+        for keyword in decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    }
+    assert keywords == {
+        "frozen": True,
+        "slots": True,
+        "eq": False,
+        "repr": False,
+    }
+    assert [
+        item.target.id
+        for item in entry.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+    ] == [
         "to_state",
         "condition",
         "priority",
@@ -609,7 +619,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         "after",
         "within",
         "internal",
-    }
+    ]
 
 
 def test_phase24_diagnostic_projection_stays_scalar_and_cold() -> None:
@@ -2165,18 +2175,28 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
         ] == expected_fields
 
     entry = runtime_classes["TransitionEntry"]
-    entry_slots = next(
-        node.value
-        for node in entry.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "__slots__"
-            for target in node.targets
-        )
+    decorator = next(
+        item
+        for item in entry.decorator_list
+        if isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "dataclass"
     )
-    assert isinstance(entry_slots, ast.Tuple)
+    keywords = {
+        keyword.arg: keyword.value.value
+        for keyword in decorator.keywords
+        if isinstance(keyword.value, ast.Constant)
+    }
+    assert keywords == {
+        "frozen": True,
+        "slots": True,
+        "eq": False,
+        "repr": False,
+    }
     assert [
-        item.value for item in entry_slots.elts if isinstance(item, ast.Constant)
+        item.target.id
+        for item in entry.body
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
     ] == [
         "to_state",
         "condition",
@@ -2220,15 +2240,6 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
             "priority",
             "internal",
         ],
-        "TransitionEntry": [
-            "to_state",
-            "condition",
-            "priority",
-            "condition_ref",
-            "after",
-            "within",
-            "internal",
-        ],
     }.items():
         node = stub_classes[class_name]
         assert [
@@ -2236,6 +2247,31 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
             for item in node.body
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
         ] == expected_fields
+
+    entry_stub = stub_classes["TransitionEntry"]
+    assert [
+        item.name
+        for item in entry_stub.body
+        if isinstance(item, ast.FunctionDef)
+        and any(
+            isinstance(decorator, ast.Name) and decorator.id == "property"
+            for decorator in item.decorator_list
+        )
+    ] == [
+        "to_state",
+        "condition",
+        "priority",
+        "condition_ref",
+        "after",
+        "within",
+        "internal",
+    ]
+    assert not any(
+        isinstance(decorator, ast.Attribute) and decorator.attr == "setter"
+        for item in entry_stub.body
+        if isinstance(item, ast.FunctionDef)
+        for decorator in item.decorator_list
+    )
 
     for class_name in ("StateMachine", "FSMBuilder"):
         add_transition = next(
