@@ -6317,6 +6317,15 @@ class FSMBuilder:
             if isinstance(item, DeclarativeState):
                 for handlers in item._handlers.values():
                     for handler_info in handlers:
+                        # Builder-derived topology only owns declarations
+                        # authored by this exact staged state.  A handler
+                        # constrained to another state remains direct-handler
+                        # compatibility metadata; it must not classify or
+                        # validate an unrelated candidate graph.
+                        if not _metadata_matches_state(
+                            handler_info.from_state, item.name
+                        ):
+                            continue
                         if handler_info.is_async:
                             async_required = True
                         condition = handler_info.condition
@@ -6558,6 +6567,14 @@ class FSMBuilder:
             if isinstance(state, DeclarativeState):
                 for trigger, handlers in state._handlers.items():
                     for handler_info in handlers:
+                        # Keep async preflight aligned with build-time
+                        # declaration derivation.  Otherwise an inapplicable
+                        # foreign source constraint could reject a builder
+                        # before it has contributed any canonical request.
+                        if not _metadata_matches_state(
+                            handler_info.from_state, state.name
+                        ):
+                            continue
                         if handler_info.is_async:
                             if first_requirement is None:
                                 first_requirement = (
