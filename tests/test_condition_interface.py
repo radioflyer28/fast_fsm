@@ -135,6 +135,43 @@ def test_reject_08_direct_and_synchronous_composition_preserve_signal_identity()
     verify(lambda rejected, later: OrCondition(AndCondition(rejected, later), later))
 
 
+@pytest.mark.parametrize(
+    ("factory", "prefix_result"),
+    (
+        (lambda prefix, rejected, later: AndCondition(prefix, rejected, later), True),
+        (lambda prefix, rejected, later: OrCondition(prefix, rejected, later), False),
+    ),
+)
+def test_reject_08_composition_propagates_rejection_after_eligible_prefix(
+    factory, prefix_result: bool
+) -> None:
+    """REJECT-08: operator position cannot turn rejection into fallthrough."""
+    signal = TransitionRejected("mission.altitude_limit")
+    calls: list[str] = []
+
+    def prefix() -> bool:
+        calls.append("prefix")
+        return prefix_result
+
+    def reject() -> bool:
+        calls.append("reject")
+        raise signal
+
+    def later() -> bool:
+        calls.append("later")
+        return True
+
+    condition = factory(
+        FuncCondition(prefix), FuncCondition(reject), FuncCondition(later)
+    )
+
+    with pytest.raises(TransitionRejected) as raised:
+        condition.check()
+
+    assert raised.value is signal
+    assert calls == ["prefix", "reject"]
+
+
 @pytest.mark.asyncio
 async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_terminal() -> (
     None

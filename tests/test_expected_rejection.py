@@ -236,6 +236,78 @@ def test_reject_03_approved_boundaries_abort_priority_groups(
     assert events == [boundary]
 
 
+def test_reject_04_false_candidate_falls_through_to_terminal_rejection() -> None:
+    """REJECT-04: ordinary false advances once, then rejection ends the group."""
+    source = State("source")
+    rejected = State("rejected")
+    later = State("later")
+    machine = StateMachine(source, name="false-before-expected-rejection")
+    machine.add_state(rejected)
+    machine.add_state(later)
+    events: list[str] = []
+
+    machine.add_transition(
+        "go", source, rejected, lambda: events.append("false") or False, priority=-8
+    )
+
+    def reject() -> bool:
+        events.append("reject")
+        raise TransitionRejected("battery.low")
+
+    machine.add_transition("go", source, rejected, reject, priority=0)
+    machine.add_transition(
+        "go", source, later, lambda: events.append("later") or True, priority=8
+    )
+
+    result = machine.trigger("go")
+
+    assert result.rejected is True
+    assert result.rejection_code == "battery.low"
+    assert result.priority == 0
+    assert result.committed is False
+    assert machine.current_state is source
+    assert events == ["false", "reject"]
+
+
+@pytest.mark.asyncio
+async def test_reject_04_async_false_candidate_falls_through_to_terminal_rejection() -> (
+    None
+):
+    """REJECT-04: async false advances once without making rejection fall through."""
+    source = State("source")
+    rejected = State("rejected")
+    later = State("later")
+    machine = AsyncStateMachine(source, name="async-false-before-rejection")
+    machine.add_state(rejected)
+    machine.add_state(later)
+    events: list[str] = []
+
+    async def false_guard() -> bool:
+        events.append("false")
+        return False
+
+    async def reject() -> bool:
+        events.append("reject")
+        raise TransitionRejected("battery.low")
+
+    async def later_guard() -> bool:
+        events.append("later")
+        return True
+
+    machine.add_transition("go", source, rejected, false_guard, priority=-8)
+    machine.add_transition("go", source, rejected, reject, priority=0)
+    machine.add_transition("go", source, later, later_guard, priority=8)
+
+    result = await machine.trigger_async("go")
+
+    assert result.rejected is True
+    assert result.rejection_code == "battery.low"
+    assert result.priority == 0
+    assert result.committed is False
+    assert machine.current_state is source
+    assert events == ["false", "reject"]
+
+
 def test_reject_07_observers_finalize_once_and_reentry_stays_isolated() -> None:
     """REJECT-07: rejection keeps the existing failure-observer ownership seam."""
     source = State("source")
@@ -445,6 +517,60 @@ def test_reject_07_observer_signal_remains_isolated_from_trigger_result() -> Non
     assert result.cause is original_cause
     assert result.stage == "guard"
     assert events == ["rejecting-observer", "later-observer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("surface", "expected_stage", "expected_committed"),
+    (
+        ("source-exit", "source-exit-callback", False),
+        ("destination-enter", "destination-enter-callback", True),
+        ("declarative-handler", "declarative-handler", True),
+    ),
+)
+async def test_reject_09_async_lifecycle_signal_stays_an_ordinary_failure(
+    surface: str, expected_stage: str, expected_committed: bool
+) -> None:
+    """REJECT-09: async-only lifecycle seams never classify the signal."""
+    signal = TransitionRejected(f"lifecycle.{surface}")
+
+    if surface == "declarative-handler":
+
+        class Source(AsyncDeclarativeState):
+            @transition("go")
+            async def go(self) -> None:
+                raise signal
+
+        source: State = Source("source")
+    else:
+        source = State("source")
+
+    destination = State("destination")
+    machine = AsyncStateMachine(source, name=f"async-outside-boundary-{surface}")
+    machine.add_state(destination)
+    machine.enable_history()
+    machine.add_transition("go", source, destination, priority=-3)
+
+    async def reject_from_callback(*_args: object, **_kwargs: object) -> None:
+        raise signal
+
+    if surface == "source-exit":
+        machine.on_exit_async(source.name, reject_from_callback)
+    elif surface == "destination-enter":
+        machine.on_enter_async(destination.name, reject_from_callback)
+
+    result = await machine.trigger_async("go")
+
+    assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.cause is signal
+    assert result.stage == expected_stage
+    assert result.committed is expected_committed
+    assert result.priority == -3
+    assert result.to_state == ("destination" if expected_committed else None)
+    assert machine.current_state is (destination if expected_committed else source)
+    assert len(machine.history) == int(expected_committed)
 
 
 @pytest.mark.parametrize(
