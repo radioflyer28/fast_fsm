@@ -108,7 +108,7 @@ Plans:
   4. Internal transitions preserve the original state-entry timestamp so residency-based conditions remain uninterrupted.
   5. Synchronous and asynchronous machines produce matching mode, priority, failure, and cancellation outcomes without collapsing an internal commit into a no-op.
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 **Wave 1**
@@ -121,7 +121,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 28-03-PLAN.md — close async cancellation/ownership parity and prove typing, slots, pure/native, and full-suite conformance.
+- [x] 28-03-PLAN.md — close async cancellation/ownership parity and prove typing, slots, pure/native, and full-suite conformance.
 
 ### Phase 29: Expected Domain Rejection
 
@@ -212,7 +212,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 26. Canonical Construction & Evidence Contract | v0.5.0 | 5/5 | Complete    | 2026-09-15 |
 | 27. Explicit Final States | v0.5.0 | 3/3 | Complete    | 2026-09-15 |
-| 28. Same-State Transition Modes | v0.5.0 | 2/3 | In Progress|  |
+| 28. Same-State Transition Modes | v0.5.0 | 3/3 | In Progress|  |
 | 29. Expected Domain Rejection | v0.5.0 | 0/TBD | Not started | - |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 0/TBD | Not started | - |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 0/TBD | Not started | - |

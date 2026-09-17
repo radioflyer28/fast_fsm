@@ -4,17 +4,17 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 28
 current_phase_name: Same-State Transition Modes
-status: executing
-stopped_at: Completed 28-02-PLAN.md
-last_updated: "2026-09-17T00:47:52.491Z"
+status: verifying
+stopped_at: Completed 28-03-PLAN.md
+last_updated: "2026-09-17T01:07:29.398Z"
 last_activity: 2026-09-16
 last_activity_desc: Phase 28 execution started
-state_head: 61594bf71711f4c7b12daf300abf75d6f39d0318
+state_head: df26a3f085584016a4fcf90fddaf0041ae30d6df
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
   percent: 29
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 Phase: 28 (Same-State Transition Modes) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-16 — Phase 28 execution started
 
 Progress: [███░░░░░░░] 29%
@@ -67,6 +67,7 @@ Progress: [███░░░░░░░] 29%
 | Phase 27 P03 | 18min | 2 tasks | 5 files |
 | Phase 28 P01 | 7 min | 2 tasks | 6 files |
 | Phase 28 P02 | 4min | 2 tasks | 3 files |
+| Phase 28 P03 | 48min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 28]: Primary builder staging and clone/graph replay carry the canonical internal scalar.
 - [Phase 28]: Use local fake clocks and lifecycle sentinels to prove internal commits preserve residency timing without sleep-based tests.
 - [Phase 28]: Keep MODE-06 pending until async and cancellation parity is proven in Plan 03.
+- [Phase 28]: Phase 28: Async execution branches only on prepared.entry.internal; cancellation retains selected mode task-locally without payload injection.
+- [Phase 28]: Phase 28: Fresh native proof builds from a pure origin and relocates only verified core shadows before restored pure-suite validation.
 
 ### Pending Todos
 
@@ -122,10 +125,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T00:47:52.452Z
-Stopped at: Completed 28-02-PLAN.md
+Last session: 2026-09-17T01:07:29.363Z
+Stopped at: Completed 28-03-PLAN.md
 Resume file: 
 
-28-03-PLAN.md
+None
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
