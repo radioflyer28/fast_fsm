@@ -748,6 +748,7 @@ class _GraphTransition:
     after: Optional[float] = None
     within: Optional[float] = None
     statically_unconditional: bool = False
+    internal: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1798,6 +1799,7 @@ class StateMachine:
                             entry.after,
                             entry.within,
                             entry.condition is None and type(source_state) is State,
+                            entry.internal,
                         )
                     )
         return _GraphSnapshot(
@@ -1878,6 +1880,10 @@ class StateMachine:
             source_names.add(source.name)
             sources.append(source)
         target = self._resolve_canonical_state(to_state, role="target")
+        if internal and any(source is not target for source in sources):
+            raise ValueError(
+                "internal transition requires identical canonical source and target"
+            )
         if after is None and within is None and len(sources) == 1:
             declarative_handler = _resolve_declarative_handler(
                 sources[0], trigger, target, normalized_priority
@@ -2045,6 +2051,7 @@ class StateMachine:
                     and entry.condition_ref == candidate.condition_ref
                     and entry.after == candidate.after
                     and entry.within == candidate.within
+                    and entry.internal == candidate.internal
                 ):
                     return existing
                 raise ValueError(
@@ -3530,6 +3537,7 @@ class StateMachine:
                             condition_ref=entry.condition_ref,
                             after=entry.after,
                             within=entry.within,
+                            internal=entry.internal,
                         )
                     )
         new_fsm._apply_transition_requests_owned(tuple(requests))
@@ -5947,6 +5955,7 @@ class FSMBuilder:
         priority: object = 0,
         after: object = None,
         within: object = None,
+        internal: object = False,
     ) -> "FSMBuilder":
         """Add a transition to the builder with async detection.
 
@@ -5960,6 +5969,8 @@ class FSMBuilder:
         """
         self._ensure_mutable()
         normalized_priority = _normalize_priority(priority)
+        if type(internal) is not bool:
+            raise TypeError("internal must be an exact built-in bool")
         normalized_after, normalized_within = StateMachine._normalize_timing(
             after, within
         )
@@ -6002,6 +6013,7 @@ class FSMBuilder:
                 priority=normalized_priority,
                 after=normalized_after,
                 within=normalized_within,
+                internal=internal,
             )
         )
         if required_type != self._machine_type:
@@ -6224,6 +6236,7 @@ class FSMBuilder:
                     condition_ref=staged.condition_ref,
                     after=staged.after,
                     within=staged.within,
+                    internal=staged.internal,
                 )
             )
         candidate._apply_transition_requests_owned(tuple(bound_requests))

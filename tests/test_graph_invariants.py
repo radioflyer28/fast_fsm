@@ -40,6 +40,7 @@ def graph_fingerprint(machine: StateMachine) -> tuple[Any, ...]:
                             entry.condition_ref,
                             entry.after,
                             entry.within,
+                            entry.internal,
                         )
                         for entry in (
                             slot.entries
@@ -716,6 +717,20 @@ def test_internal_registration_rejects_non_self_canonical_endpoints_atomically()
     assert graph_fingerprint(machine) == before
 
 
+@pytest.mark.parametrize("internal", (1, 0, "true", object()))
+def test_internal_requires_an_exact_builtin_bool_before_mutation(
+    internal: object,
+) -> None:
+    """Truthy and coercible inputs cannot weaken the immutable mode contract."""
+    machine, idle, _ = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(TypeError, match="exact built-in bool"):
+        machine.add_transition("refresh", idle, idle, internal=internal)
+
+    assert graph_fingerprint(machine) == before
+
+
 def test_mode_is_part_of_equal_priority_candidate_identity() -> None:
     """External and internal candidates cannot silently collapse as duplicates."""
     machine, idle, _ = make_machine()
@@ -949,6 +964,65 @@ def test_concurrent_construction_requests_are_serialized_as_whole_transactions(
     assert failures == []
     assert machine._transitions[idle.name]["first"].to_state is running
     assert machine._transitions[idle.name]["second"].to_state is complete
+
+
+def test_internal_construction_requests_publish_whole_transactions_under_contention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mode propagation remains inside the existing single-owner transaction."""
+    spec = importlib.util.find_spec("fast_fsm.core")
+    assert spec is not None and spec.origin is not None
+    if spec.origin.endswith((".so", ".pyd")):
+        pytest.skip("private monkeypatch injection requires the pure Python core")
+
+    machine, idle, _ = make_machine()
+    before = graph_fingerprint(machine)
+    first_owned = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    failures: list[BaseException] = []
+    original_apply = StateMachine._apply_transition_requests_owned
+
+    def paused_apply(
+        owned_machine: StateMachine,
+        requests: tuple[_TransitionRequest, ...] | None,
+    ) -> None:
+        if requests and requests[0].trigger == "first":
+            first_owned.set()
+            if not release_first.wait(timeout=2):
+                raise RuntimeError("test failed to release first construction request")
+        original_apply(owned_machine, requests)
+
+    monkeypatch.setattr(StateMachine, "_apply_transition_requests_owned", paused_apply)
+
+    def register(trigger: str) -> None:
+        try:
+            if trigger == "second":
+                second_started.set()
+            machine.add_transition(trigger, idle, idle, internal=True)
+        except BaseException as error:
+            failures.append(error)
+
+    first = threading.Thread(target=register, args=("first",))
+    second = threading.Thread(target=register, args=("second",))
+    first.start()
+    assert first_owned.wait(timeout=2)
+    second.start()
+    assert second_started.wait(timeout=2)
+    assert "first" not in machine._transitions[idle.name]
+    assert "second" not in machine._transitions[idle.name]
+    assert machine._graph_version == before[2]
+    assert second.is_alive()
+
+    release_first.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert failures == []
+    assert machine._transitions[idle.name]["first"].internal is True
+    assert machine._transitions[idle.name]["second"].internal is True
 
 
 def test_construction_hot_path_symbols_are_absent_from_runtime_regions() -> None:

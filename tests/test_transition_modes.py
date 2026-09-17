@@ -54,9 +54,7 @@ def test_default_and_false_self_transitions_keep_the_external_lifecycle() -> Non
     machine.add_transition("false", state, state, internal=False)
     machine.add_listener(_LifecycleListener(events))
     machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
-    machine.on_enter(
-        "hover", lambda *_args, **_kwargs: events.append("enter-callback")
-    )
+    machine.on_enter("hover", lambda *_args, **_kwargs: events.append("enter-callback"))
     machine.on_trigger(
         "default", lambda *_args, **_kwargs: events.append("trigger-callback")
     )
@@ -97,9 +95,7 @@ def test_internal_self_transition_commits_without_state_lifecycle_or_payload_inj
     machine.add_transition("refresh", state, state, internal=True)
     machine.add_listener(_LifecycleListener(events))
     machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
-    machine.on_enter(
-        "hover", lambda *_args, **_kwargs: events.append("enter-callback")
-    )
+    machine.on_enter("hover", lambda *_args, **_kwargs: events.append("enter-callback"))
 
     def trigger_callback(*args: object, **kwargs: object) -> None:
         received_kwargs.append(dict(kwargs))

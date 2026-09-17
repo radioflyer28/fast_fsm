@@ -278,6 +278,18 @@ def test_builder_stages_and_builds_an_internal_self_transition():
     assert machine._transitions["idle"]["refresh"].internal is True
 
 
+@pytest.mark.parametrize("internal", (1, 0, "true", object()))
+def test_builder_rejects_non_bool_internal_before_staging(internal: object):
+    """The builder preserves repairable staging at the exact-bool boundary."""
+    builder = FSMBuilder(State("idle"))
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(TypeError, match="exact built-in bool"):
+        builder.add_transition("refresh", "idle", "idle", internal=internal)
+
+    assert builder_staging_fingerprint(builder) == before
+
+
 def test_builder_internal_validation_failure_leaves_staging_repairable():
     """Invalid internal topology rejects only the private build candidate."""
     idle = State("idle")

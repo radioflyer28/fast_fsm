@@ -271,9 +271,7 @@ class TestFinalSourceTransactionInvariant:
         machine.add_state(done)
         rows = {
             "before": _TransitionRequest("before", (idle,), running),
-            "invalid": _TransitionRequest(
-                "invalid", (idle,), running, internal=True
-            ),
+            "invalid": _TransitionRequest("invalid", (idle,), running, internal=True),
             "after": _TransitionRequest("after", (running,), done),
         }
         before = (machine._graph_version, machine._graph_snapshot())
