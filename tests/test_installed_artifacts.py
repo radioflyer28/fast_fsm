@@ -22,6 +22,7 @@ from tools import artifact_conformance, release_evidence  # noqa: E402
 
 _SDIST_PACKAGE_SOURCES = (
     "src/fast_fsm/__init__.py",
+    "src/fast_fsm/_construction_compat.py",
     "src/fast_fsm/_diagnostics.py",
     "src/fast_fsm/condition_templates.py",
     "src/fast_fsm/conditions.py",
