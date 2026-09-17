@@ -246,17 +246,21 @@ class TestFinalSourceConstructionInvariant:
         idle = State("idle")
         rows = [("leave", done, idle)]
 
-        with pytest.raises(
-            ValueError, match="^final state cannot be a transition source$"
-        ):
-            StateMachine.quick_build("done", rows)
-        with pytest.raises(
-            ValueError, match="^final state cannot be a transition source$"
-        ):
-            quick_fsm("done", rows)  # type: ignore[arg-type]
+        with pytest.warns(DeprecationWarning):
+            with pytest.raises(
+                ValueError, match="^final state cannot be a transition source$"
+            ):
+                StateMachine.quick_build("done", rows)
+        with pytest.warns(DeprecationWarning):
+            with pytest.raises(
+                ValueError, match="^final state cannot be a transition source$"
+            ):
+                quick_fsm("done", rows)  # type: ignore[arg-type]
 
-        by_name = StateMachine.quick_build("idle", [("finish", "idle", "done")])
-        from_names = StateMachine.from_states("idle", "done")
+        with pytest.warns(DeprecationWarning):
+            by_name = StateMachine.quick_build("idle", [("finish", "idle", "done")])
+        with pytest.warns(DeprecationWarning):
+            from_names = StateMachine.from_states("idle", "done")
 
         assert by_name._states["done"].final is False
         assert from_names._states["done"].final is False

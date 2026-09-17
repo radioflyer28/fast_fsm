@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from fast_fsm.core import (
@@ -11,6 +13,8 @@ from fast_fsm.core import (
     State,
     StateMachine,
     TransitionRejected,
+    quick_fsm,
+    simple_fsm,
     transition,
 )
 
@@ -221,6 +225,17 @@ def _exercise_final_and_internal_topology(machine: StateMachine) -> tuple[object
     )
 
 
+def _capture_deprecated_machine(factory) -> StateMachine:
+    """Return one helper-built machine after proving its warning is contained."""
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        machine = factory()
+
+    assert len(captured) == 1
+    assert captured[0].category is DeprecationWarning
+    return machine
+
+
 def test_construction_parity_covers_final_destination_and_internal_batch_row() -> None:
     """Direct, batch, builder, declarative, and callback adapters agree visibly."""
 
@@ -294,3 +309,113 @@ def test_construction_parity_covers_final_destination_and_internal_batch_row() -
         assert machine._states["source"] is machine._initial_state
         assert machine._states["done"].final is True
         assert outcome == expected
+
+
+@pytest.mark.parametrize(
+    "factory",
+    (
+        lambda: simple_fsm("source", "done", initial="source"),
+        lambda: StateMachine.from_states("source", "done", initial="source"),
+    ),
+    ids=("simple_fsm", "from_states"),
+)
+def test_deprecated_state_only_helpers_keep_identity_and_mode_registration_parity(
+    factory,
+) -> None:
+    """State-only helpers stay ordinary adapters after their one warning."""
+    machine = _capture_deprecated_machine(factory)
+    source = machine._states["source"]
+    done = machine._states["done"]
+
+    machine.add_transition("refresh", source, source, priority=-2, internal=True)
+    machine.add_transition("finish", source, done, priority=4)
+    outcome = _exercise_final_and_internal_topology(machine)
+
+    assert source is machine._initial_state
+    assert done.final is False
+    assert outcome[0] == (True, True, -2, True)
+    assert outcome[6] is False
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ("quick_build", "quick_fsm"),
+)
+def test_deprecated_quick_helpers_keep_final_internal_priority_and_atomicity(
+    factory: str,
+) -> None:
+    """Quick helpers retain the canonical final/internal transaction."""
+
+    def rows(source: State, done: State) -> list[tuple[object, ...]]:
+        return [
+            (
+                "refresh",
+                source,
+                source,
+                lambda *_args, **_kwargs: False,
+                -3,
+                None,
+                None,
+                True,
+            ),
+            (
+                "refresh",
+                source,
+                source,
+                lambda *_args, **_kwargs: True,
+                2,
+                None,
+                None,
+                True,
+            ),
+            ("finish", source, done, None, 4),
+        ]
+
+    source = State("source")
+    done = State("done", final=True)
+    transition_rows = rows(source, done)
+    if factory == "quick_build":
+        machine = _capture_deprecated_machine(
+            lambda: StateMachine.quick_build(source, transition_rows)
+        )
+    else:
+        machine = _capture_deprecated_machine(
+            lambda: quick_fsm("source", transition_rows)
+        )
+
+    machine.enable_history()
+    refresh = machine.trigger("refresh")
+    finish = machine.trigger("finish")
+
+    assert machine._states["source"] is source
+    assert machine._states["done"] is done
+    assert refresh.success is True
+    assert refresh.priority == 2
+    assert refresh.internal is True
+    assert finish.success is True
+    assert finish.internal is False
+    assert machine.is_terminated is True
+
+    result = None
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        with pytest.raises(TypeError, match="priority"):
+            if factory == "quick_build":
+                result = StateMachine.quick_build(
+                    "source",
+                    [
+                        ("valid", "source", "done"),
+                        ("broken", "source", "done", None, True),
+                    ],
+                )
+            else:
+                result = quick_fsm(
+                    "source",
+                    [
+                        ("valid", "source", "done"),
+                        ("broken", "source", "done", None, True),
+                    ],
+                )
+
+    assert result is None
+    assert len(captured) == 1

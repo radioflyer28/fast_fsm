@@ -3143,3 +3143,48 @@ def test_nondeprecated_construction_surfaces_remain_silent():
         DeclarativeState("idle")
 
     assert captured == []
+
+
+def test_deprecated_construction_public_surface_remains_typed_exported_and_subclass_safe():
+    """The v0.5.x compatibility names retain their public contracts."""
+    import inspect
+    import warnings
+
+    import fast_fsm
+
+    class DerivedMachine(StateMachine):
+        pass
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        from_states = DerivedMachine.from_states("idle")
+        quick_build = DerivedMachine.quick_build("idle", [])
+
+    assert len(captured) == 2
+    assert all(warning.category is DeprecationWarning for warning in captured)
+    assert type(from_states) is DerivedMachine
+    assert type(quick_build) is DerivedMachine
+    assert fast_fsm.simple_fsm is simple_fsm
+    assert fast_fsm.quick_fsm is quick_fsm
+    assert {"simple_fsm", "quick_fsm"} <= set(fast_fsm.__all__)
+    assert inspect.signature(StateMachine.from_states).parameters.keys() == {
+        "state_names",
+        "initial",
+        "name",
+        "clock",
+    }
+    assert inspect.signature(StateMachine.quick_build).parameters.keys() == {
+        "initial_state",
+        "transitions",
+        "states",
+        "name",
+        "clock",
+    }
+
+    stub = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.pyi").read_text(
+        encoding="utf-8"
+    )
+    assert "def from_states(" in stub
+    assert "def quick_build(" in stub
+    assert "def simple_fsm(" in stub
+    assert "def quick_fsm(" in stub
