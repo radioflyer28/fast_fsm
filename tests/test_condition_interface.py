@@ -209,6 +209,7 @@ async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_term
     release = asyncio.Event()
     cancellation_calls: list[str] = []
     cancellations: list[asyncio.CancelledError] = []
+    cancellation_later_calls: list[str] = []
 
     async def wait_for_cancellation() -> bool:
         cancellation_calls.append("blocking")
@@ -220,8 +221,12 @@ async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_term
             raise
         return True
 
+    def cancellation_later() -> bool:
+        cancellation_later_calls.append("later")
+        return True
+
     deferred_cancellation = AndCondition(
-        FuncCondition(wait_for_cancellation), FuncCondition(later)
+        FuncCondition(wait_for_cancellation), FuncCondition(cancellation_later)
     ).check()
     pending = asyncio.ensure_future(deferred_cancellation)
     await asyncio.wait_for(started.wait(), timeout=5)
@@ -230,6 +235,7 @@ async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_term
         await pending
     assert cancellations == [cancelled.value]
     assert cancellation_calls == ["blocking"]
+    assert cancellation_later_calls == []
 
 
 @pytest.mark.asyncio
