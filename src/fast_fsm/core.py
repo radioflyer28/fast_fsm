@@ -36,6 +36,9 @@ from dataclasses import dataclass, field
 import asyncio
 from inspect import iscoroutinefunction
 from mypy_extensions import mypyc_attr
+from ._construction_compat import (
+    install_construction_compat as _install_construction_compat,
+)
 from .conditions import (
     AndCondition as AndCondition,
     AsyncCondition as AsyncCondition,
@@ -1070,6 +1073,7 @@ class CallbackState(State):
             self._on_exit(to_state, trigger, *args, **kwargs)
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class StateMachine:
     """
     High-performance finite state machine.
@@ -7237,3 +7241,13 @@ def condition_builder(
         return decorator
     else:
         return decorator(func)
+
+
+_install_construction_compat(
+    state_machine=StateMachine,
+    module_globals=globals(),
+    from_states_message=_FROM_STATES_DEPRECATION_WARNING,
+    quick_build_message=_QUICK_BUILD_DEPRECATION_WARNING,
+    simple_fsm_message=_SIMPLE_FSM_DEPRECATION_WARNING,
+    quick_fsm_message=_QUICK_FSM_DEPRECATION_WARNING,
+)

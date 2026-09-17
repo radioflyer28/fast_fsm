@@ -40,6 +40,9 @@ import pytest
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
 CORE_PYI = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.pyi"
 CONDITIONS_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "conditions.py"
+CONSTRUCTION_COMPAT = (
+    Path(__file__).parent.parent / "src" / "fast_fsm" / "_construction_compat.py"
+)
 PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
 SETUP_PY = Path(__file__).parent.parent / "setup.py"
 PHASE16_RUNNER = Path(__file__).parent.parent / "tools" / "phase16_isolated_verify.py"
@@ -2476,11 +2479,6 @@ def test_phase30_construction_authorities_stay_canonical_and_cold() -> None:
         for node in ast.walk(stub_tree)
         if isinstance(node, ast.ClassDef)
     }
-    runtime_functions = {
-        node.name: node
-        for node in runtime_tree.body
-        if isinstance(node, ast.FunctionDef)
-    }
     stub_functions = {
         node.name: node for node in stub_tree.body if isinstance(node, ast.FunctionDef)
     }
@@ -2573,24 +2571,42 @@ def test_phase30_construction_authorities_stay_canonical_and_cold() -> None:
     ):
         source = method_source(class_name, method_name)
         assert source.count("_apply_transition_requests_owned") == 1
-        assert "_TransitionRequest" in source
+        assert (
+            "_TransitionRequest" in source or "_transition_requests_from_rows" in source
+        )
         assert "_normalize_transition_request" not in source
         assert "_commit_transition_plan" not in source
 
+    compat_tree = ast.parse(
+        CONSTRUCTION_COMPAT.read_text(encoding="utf-8"),
+        filename=str(CONSTRUCTION_COMPAT),
+    )
+    compat_functions = {
+        node.name: node
+        for node in ast.walk(compat_tree)
+        if isinstance(node, ast.FunctionDef)
+    }
     for function_name, compatibility_worker in (
         ("simple_fsm", "_from_states_compat"),
         ("quick_fsm", "_quick_build_compat"),
-    ):
-        source = ast.unparse(runtime_functions[function_name])
-        assert "warnings.warn" in source
-        assert compatibility_worker in source
-    for method_name, compatibility_worker in (
         ("from_states", "_from_states_compat"),
         ("quick_build", "_quick_build_compat"),
     ):
-        source = method_source("StateMachine", method_name)
-        assert "warnings.warn" in source
+        source = ast.unparse(compat_functions[function_name])
+        assert "_warn_deprecated_construction" in source
         assert compatibility_worker in source
+
+    installation_source = ast.unparse(compat_functions["install_construction_compat"])
+    assert "setattr(state_machine" in installation_source
+    assert "from_states" in installation_source
+    assert "quick_build" in installation_source
+    assert "module_globals" in installation_source
+    assert "simple_fsm" in installation_source
+    assert "quick_fsm" in installation_source
+
+    warning_helper = ast.unparse(compat_functions["_warn_deprecated_construction"])
+    assert "warnings.warn" in warning_helper
+    assert "stacklevel=3" in warning_helper
 
     forbidden_cold_path_symbols = {
         "_TransitionRequest",

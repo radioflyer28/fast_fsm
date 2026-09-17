@@ -5,6 +5,7 @@ Tests for FSMBuilder, DeclarativeState, AsyncDeclarativeState,
 All tests use real components — no mocking.
 """
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -3063,33 +3064,10 @@ class TestFSMBuilderAsyncPreflight:
 
 
 @pytest.mark.parametrize(
-    ("symbol", "valid_call", "invalid_call"),
-    [
-        (
-            "simple_fsm",
-            lambda: simple_fsm("idle", initial="idle"),
-            lambda: simple_fsm(initial=object()),
-        ),
-        (
-            "quick_fsm",
-            lambda: quick_fsm("idle", [("go", "idle", "done")]),
-            lambda: quick_fsm("idle", [("go", "idle")]),
-        ),
-        (
-            "StateMachine.quick_build",
-            lambda: StateMachine.quick_build("idle", [("go", "idle", "done")]),
-            lambda: StateMachine.quick_build("idle", [("go", "idle")]),
-        ),
-        (
-            "StateMachine.from_states",
-            lambda: StateMachine.from_states("idle", initial="idle"),
-            lambda: StateMachine.from_states(),
-        ),
-    ],
+    "symbol",
+    ("simple_fsm", "quick_fsm", "StateMachine.quick_build", "StateMachine.from_states"),
 )
-def test_deprecated_construction_boundaries_warn_once_at_the_user_call_site(
-    symbol, valid_call, invalid_call
-):
+def test_deprecated_construction_boundaries_warn_once_at_the_user_call_site(symbol):
     """Each retained compatibility boundary warns once before construction."""
     import warnings
 
@@ -3101,7 +3079,18 @@ def test_deprecated_construction_boundaries_warn_once_at_the_user_call_site(
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        machine = valid_call()
+        if symbol == "simple_fsm":
+            valid_line = inspect.currentframe().f_lineno + 1
+            machine = simple_fsm("idle", initial="idle")
+        elif symbol == "quick_fsm":
+            valid_line = inspect.currentframe().f_lineno + 1
+            machine = quick_fsm("idle", [("go", "idle", "done")])
+        elif symbol == "StateMachine.quick_build":
+            valid_line = inspect.currentframe().f_lineno + 1
+            machine = StateMachine.quick_build("idle", [("go", "idle", "done")])
+        else:
+            valid_line = inspect.currentframe().f_lineno + 1
+            machine = StateMachine.from_states("idle", initial="idle")
 
     assert isinstance(machine, StateMachine)
     assert len(captured) == 1
@@ -3109,19 +3098,30 @@ def test_deprecated_construction_boundaries_warn_once_at_the_user_call_site(
     assert warning.category is DeprecationWarning
     assert str(warning.message) == expected
     assert warning.filename == __file__
-    assert warning.lineno == valid_call.__code__.co_firstlineno
+    assert warning.lineno == valid_line
     assert "object at 0x" not in str(warning.message)
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         with pytest.raises((TypeError, ValueError)):
-            invalid_call()
+            if symbol == "simple_fsm":
+                invalid_line = inspect.currentframe().f_lineno + 1
+                simple_fsm(initial=object())
+            elif symbol == "quick_fsm":
+                invalid_line = inspect.currentframe().f_lineno + 1
+                quick_fsm("idle", [("go", "idle")])
+            elif symbol == "StateMachine.quick_build":
+                invalid_line = inspect.currentframe().f_lineno + 1
+                StateMachine.quick_build("idle", [("go", "idle")])
+            else:
+                invalid_line = inspect.currentframe().f_lineno + 1
+                StateMachine.from_states()
 
     assert len(captured) == 1
     assert captured[0].category is DeprecationWarning
     assert str(captured[0].message) == expected
     assert captured[0].filename == __file__
-    assert captured[0].lineno == invalid_call.__code__.co_firstlineno
+    assert captured[0].lineno == invalid_line
 
 
 def test_nondeprecated_construction_surfaces_remain_silent():
