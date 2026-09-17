@@ -703,6 +703,48 @@ def test_exact_duplicate_is_version_neutral_and_preserves_slot_identity() -> Non
     assert machine._graph_version == before_version
 
 
+def test_internal_registration_rejects_non_self_canonical_endpoints_atomically() -> (
+    None
+):
+    """Internal mode is valid only for an identical canonical source and target."""
+    machine, idle, running = make_machine()
+    before = graph_fingerprint(machine)
+
+    with pytest.raises(ValueError, match="internal transition"):
+        machine.add_transition("refresh", idle, running, internal=True)
+
+    assert graph_fingerprint(machine) == before
+
+
+def test_mode_is_part_of_equal_priority_candidate_identity() -> None:
+    """External and internal candidates cannot silently collapse as duplicates."""
+    machine, idle, _ = make_machine()
+    machine.add_transition("refresh", idle, idle)
+    first_slot = machine._transitions[idle.name]["refresh"]
+    before_version = machine._graph_version
+
+    with pytest.raises(ValueError, match="priority"):
+        machine.add_transition("refresh", idle, idle, internal=True)
+
+    assert machine._transitions[idle.name]["refresh"] is first_slot
+    assert machine._graph_version == before_version
+
+
+def test_graph_snapshot_and_clone_preserve_internal_mode_independently() -> None:
+    """Cold projections retain mode without sharing mutable topology containers."""
+    machine, idle, _ = make_machine()
+    machine.add_transition("refresh", idle, idle, internal=True)
+
+    snapshot = machine._graph_snapshot()
+    assert snapshot.transitions[0].internal is True
+
+    clone = machine.clone()
+    original_slot = machine._transitions[idle.name]["refresh"]
+    clone_slot = clone._transitions[idle.name]["refresh"]
+    assert clone_slot is not original_slot
+    assert clone_slot.internal is True
+
+
 def test_construction_request_copies_sources_and_is_immutable() -> None:
     machine, idle, running = make_machine()
     raw_sources = [idle]

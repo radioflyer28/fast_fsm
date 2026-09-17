@@ -267,6 +267,38 @@ def test_builder_priority_failure_stays_repairable_until_candidate_publication()
     assert machine._transitions["idle"]["go"].priority == -3
 
 
+def test_builder_stages_and_builds_an_internal_self_transition():
+    """The primary builder surface carries the explicit per-entry mode scalar."""
+    idle = State("idle")
+    builder = FSMBuilder(idle)
+    builder.add_transition("refresh", "idle", "idle", internal=True)
+
+    machine = builder.build()
+
+    assert machine._transitions["idle"]["refresh"].internal is True
+
+
+def test_builder_internal_validation_failure_leaves_staging_repairable():
+    """Invalid internal topology rejects only the private build candidate."""
+    idle = State("idle")
+    running = State("running")
+    builder = FSMBuilder(idle)
+    builder.add_state(running).add_transition(
+        "refresh", "idle", "running", internal=True
+    )
+    before = builder_staging_fingerprint(builder)
+
+    with pytest.raises(ValueError, match="internal transition"):
+        builder.build()
+
+    assert builder._machine is None
+    assert builder_staging_fingerprint(builder) == before
+    builder._transitions[-1] = _TransitionRequest(
+        "refresh", ("idle",), "idle", internal=True
+    )
+    assert builder.build()._transitions["idle"]["refresh"].internal is True
+
+
 def test_builder_final_source_failure_preserves_staging_and_can_be_repaired():
     """A final staged source rejects only the private candidate build."""
     idle = State("idle")

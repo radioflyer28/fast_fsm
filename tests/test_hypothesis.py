@@ -15,7 +15,13 @@ import pytest
 from hypothesis import given, settings, assume, HealthCheck
 from hypothesis import strategies as st
 
-from fast_fsm.core import State, StateMachine, TransitionResult, _TransitionGroup
+from fast_fsm.core import (
+    State,
+    StateMachine,
+    TransitionResult,
+    _TransitionGroup,
+    _TransitionRequest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +256,32 @@ class TestFinalSourceTransactionInvariant:
             ValueError, match="^final state cannot be a transition source$"
         ):
             machine.add_transitions([rows[name] for name in order])
+
+        assert (machine._graph_version, machine._graph_snapshot()) == before
+
+    @given(order=st.permutations(("before", "invalid", "after")))
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+    def test_internal_non_self_request_rejects_every_reordered_batch(self, order):
+        """No permutation may publish a prefix before canonical mode rejection."""
+        idle = State("idle")
+        running = State("running")
+        done = State("done")
+        machine = StateMachine(idle)
+        machine.add_state(running)
+        machine.add_state(done)
+        rows = {
+            "before": _TransitionRequest("before", (idle,), running),
+            "invalid": _TransitionRequest(
+                "invalid", (idle,), running, internal=True
+            ),
+            "after": _TransitionRequest("after", (running,), done),
+        }
+        before = (machine._graph_version, machine._graph_snapshot())
+
+        with pytest.raises(ValueError, match="internal transition"):
+            machine._apply_transition_requests_owned(
+                tuple(rows[name] for name in order)
+            )
 
         assert (machine._graph_version, machine._graph_snapshot()) == before
 
