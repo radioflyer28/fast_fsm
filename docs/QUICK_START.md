@@ -27,19 +27,21 @@ pip install -e .
 Let's create a simple traffic light in just a few lines:
 
 ```python
-from fast_fsm import simple_fsm
+from fast_fsm import FSMBuilder, State
 
-# Create a traffic light FSM
-traffic = simple_fsm(
-    'red', 'yellow', 'green',  # states
-    initial='red',
-    name='TrafficLight'
+# Create caller-owned states, then build the complete topology.
+red = State("red")
+yellow = State("yellow")
+green = State("green")
+traffic = (
+    FSMBuilder(red, name="TrafficLight")
+    .add_state(yellow)
+    .add_state(green)
+    .add_transition("timer", "red", "green")
+    .add_transition("timer", "green", "yellow")
+    .add_transition("timer", "yellow", "red")
+    .build()
 )
-
-# Add transitions
-traffic.add_transition('timer', 'red', 'green')
-traffic.add_transition('timer', 'green', 'yellow') 
-traffic.add_transition('timer', 'yellow', 'red')
 
 # Use it!
 print(f"Current: {traffic.current_state}")  # red
@@ -51,24 +53,45 @@ print(f"Current: {traffic.current_state}")  # yellow
 
 **🎉 Congratulations!** You just created your first Fast FSM.
 
+## Construction roles
+
+For new programmatic machines, use `FSMBuilder` as this guide does: create the
+`State` objects you own, stage states and transitions fluently, then call
+`build()`. Direct `StateMachine` and `AsyncStateMachine` construction is the
+advanced option for intentional incremental topology control. Use
+`StateMachine.from_dict()` only to reconstruct serialized topology; it is not
+a competing programmatic builder.
+
+`simple_fsm()`, `quick_fsm()`, `StateMachine.quick_build()`, and
+`StateMachine.from_states()` remain supported warned compatibility helpers
+through v0.5.x and may be removed no earlier than v0.6.0. Migrate new
+programmatic code to `FSMBuilder`; reserve `from_dict()` for serialized data.
+
 ## 🔄 Common Patterns (2 minutes)
 
-### Pattern 1: Quick Build from Transitions
-Perfect when you know all your transitions upfront:
+### Pattern 1: Build from Transitions
+Use the primary builder when you know all your transitions upfront:
 
 ```python
-from fast_fsm import StateMachine
+from fast_fsm import FSMBuilder, State
 
-# Define all transitions at once
-order_fsm = StateMachine.quick_build(
-    initial_state='pending',
-    transitions=[
-        ('pay', 'pending', 'paid'),
-        ('process', 'paid', 'processing'),
-        ('ship', 'processing', 'shipped'),
-        ('deliver', 'shipped', 'delivered')
-    ],
-    name='OrderProcessor'
+# Caller-owned state objects keep identity explicit.
+pending = State("pending")
+paid = State("paid")
+processing = State("processing")
+shipped = State("shipped")
+delivered = State("delivered")
+order_fsm = (
+    FSMBuilder(pending, name="OrderProcessor")
+    .add_state(paid)
+    .add_state(processing)
+    .add_state(shipped)
+    .add_state(delivered)
+    .add_transition("pay", "pending", "paid")
+    .add_transition("process", "paid", "processing")
+    .add_transition("ship", "processing", "shipped")
+    .add_transition("deliver", "shipped", "delivered")
+    .build()
 )
 
 # Process an order
@@ -221,10 +244,14 @@ class History:
     def after_transition(self, source, target, trigger, **kwargs):
         self.log.append((source.name, trigger, target.name))
 
-fsm = StateMachine.quick_build(
-    "idle",
-    [("start", "idle", "running"), ("stop", "running", "idle")],
-    name="Demo",
+idle = State("idle")
+running = State("running")
+fsm = (
+    FSMBuilder(idle, name="Demo")
+    .add_state(running)
+    .add_transition("start", "idle", "running")
+    .add_transition("stop", "running", "idle")
+    .build()
 )
 
 hist = History()
@@ -279,7 +306,7 @@ On Python 3.10, use `class MyState(str, Enum)` instead.
 
 ```{testcode}
 from enum import StrEnum
-from fast_fsm import StateMachine
+from fast_fsm import FSMBuilder, State
 
 class OrderState(StrEnum):
     PENDING = "pending"
@@ -290,13 +317,16 @@ class OrderTrigger(StrEnum):
     PAY  = "pay"
     SHIP = "ship"
 
-order_fsm = StateMachine.quick_build(
-    OrderState.PENDING,
-    [
-        (OrderTrigger.PAY,  OrderState.PENDING, OrderState.PAID),
-        (OrderTrigger.SHIP, OrderState.PAID,    OrderState.SHIPPED),
-    ],
-    name="OrderFSM",
+pending = State(OrderState.PENDING)
+paid = State(OrderState.PAID)
+shipped = State(OrderState.SHIPPED)
+order_fsm = (
+    FSMBuilder(pending, name="OrderFSM")
+    .add_state(paid)
+    .add_state(shipped)
+    .add_transition(OrderTrigger.PAY, OrderState.PENDING, OrderState.PAID)
+    .add_transition(OrderTrigger.SHIP, OrderState.PAID, OrderState.SHIPPED)
+    .build()
 )
 
 order_fsm.trigger(OrderTrigger.PAY)
@@ -323,12 +353,16 @@ lifecycle failure information. Use `raise_if_failed()` when you prefer
 exception-based control flow:
 
 ```python
-from fast_fsm import StateMachine, TransitionError
+from fast_fsm import FSMBuilder, State, TransitionError
 
-fsm = StateMachine.quick_build(
-    "idle",
-    [("start", "idle", "running"), ("stop", "running", "idle")],
-    name="Demo",
+idle = State("idle")
+running = State("running")
+fsm = (
+    FSMBuilder(idle, name="Demo")
+    .add_state(running)
+    .add_transition("start", "idle", "running")
+    .add_transition("stop", "running", "idle")
+    .build()
 )
 
 # Inspect truth before choosing the opt-in exception boundary.
@@ -380,7 +414,8 @@ fsm.reset()                  # returns to initial_state_name
 fsm.on_enter("running", lambda from_s, t, **kw: print("→ running"))
 fsm.on_exit("running",  lambda to_s,   t, **kw: print("← running"))
 
-# Build from a dict / JSON / YAML config
+# Reconstruct serialized topology from a dict / JSON / YAML config.
+# `from_dict()` is a persistence adapter, not a programmatic builder.
 config = {
     "initial": "idle",
     "transitions": [
@@ -686,7 +721,7 @@ fsm = FSMBuilder(state).add_transition('go', 'a', 'b', condition=async_condition
 ## 🏁 You're Ready!
 
 **Congratulations!** You now know:
-- ✅ How to create FSMs quickly with `simple_fsm()`
+- ✅ How to create FSMs with the primary `FSMBuilder` interface
 - ✅ How to use conditions for business logic
 - ✅ How to add state callbacks
 - ✅ When to use the builder pattern

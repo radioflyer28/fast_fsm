@@ -23,14 +23,18 @@ This tutorial guides you through Fast FSM's capabilities in progressive complexi
 
 ### Step 1.1: Your First State Machine
 ```python
-from fast_fsm import simple_fsm
+from fast_fsm import FSMBuilder, State
 
-# Create the simplest possible FSM
-light = simple_fsm('off', 'on', initial='off', name='LightSwitch')
-
-# Add a transition  
-light.add_transition('flip', 'off', 'on')
-light.add_transition('flip', 'on', 'off')
+# Create caller-owned states and publish one complete topology.
+off = State("off")
+on = State("on")
+light = (
+    FSMBuilder(off, name="LightSwitch")
+    .add_state(on)
+    .add_transition("flip", "off", "on")
+    .add_transition("flip", "on", "off")
+    .build()
+)
 
 # Use it
 print(f"Light is: {light.current_state}")  # off
@@ -58,12 +62,21 @@ print(f"Error: {result.error}")          # No transition 'explode' from state 'o
 
 ### Step 1.3: Multiple States
 ```python
-# Traffic light with 3 states
-traffic = simple_fsm('red', 'yellow', 'green', initial='red', name='Traffic')
+from fast_fsm import FSMBuilder, State
 
-traffic.add_transition('timer', 'red', 'green')
-traffic.add_transition('timer', 'green', 'yellow')  
-traffic.add_transition('timer', 'yellow', 'red')
+# Traffic light with three caller-owned states.
+red = State("red")
+yellow = State("yellow")
+green = State("green")
+traffic = (
+    FSMBuilder(red, name="Traffic")
+    .add_state(yellow)
+    .add_state(green)
+    .add_transition("timer", "red", "green")
+    .add_transition("timer", "green", "yellow")
+    .add_transition("timer", "yellow", "red")
+    .build()
+)
 
 # Cycle through states
 for i in range(6):
@@ -341,12 +354,16 @@ transitions = [
     ('reset', ['state_a', 'state_b', 'state_c'], 'state_a')
 ]
 
-# Quick build from transition list
-bulk_fsm = StateMachine.quick_build(
-    initial_state='state_a',
-    transitions=transitions,
-    name='BulkDemo'
-)
+# Build the transition list through the primary builder.
+from fast_fsm import FSMBuilder, State
+
+states = {name: State(name) for name in ("state_a", "state_b", "state_c")}
+builder = FSMBuilder(states["state_a"], name="BulkDemo")
+for state in (states["state_b"], states["state_c"]):
+    builder.add_state(state)
+for trigger, source, target in transitions:
+    builder.add_transition(trigger, source, target)
+bulk_fsm = builder.build()
 
 print(f"States: {bulk_fsm.states}")
 print(f"Can trigger 'event1': {bulk_fsm.can_trigger('event1')}")

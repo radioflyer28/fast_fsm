@@ -1,14 +1,46 @@
-"""
-Pytest migration of README examples and validation tests.
+"""Executable documentation examples and construction-guidance regressions."""
 
-These tests are rewritten to be compatible with the mypyc-compiled version
-of fast_fsm, using composition instead of inheritance where needed.
-"""
+from pathlib import Path
+import re
 
 import pytest
 
 from fast_fsm.core import StateMachine, State, TransitionError
 from fast_fsm.conditions import Condition, FuncCondition
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_PYTHON_FENCE = re.compile(r"```(?:python|\{testcode\})\n(.*?)```", re.DOTALL)
+_DEPRECATED_CONSTRUCTION = re.compile(
+    r"\b(?:simple_fsm|quick_fsm)\b|StateMachine\.(?:quick_build|from_states)\b"
+)
+
+
+def _active_python_regions(path: Path) -> str:
+    """Return executable Python regions without inspecting compatibility prose."""
+    source = path.read_text(encoding="utf-8")
+    if path.suffix == ".py":
+        return source
+    return "\n".join(_PYTHON_FENCE.findall(source))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param(PROJECT_ROOT / "README.md", id="readme"),
+        pytest.param(PROJECT_ROOT / "docs" / "QUICK_START.md", id="quick_start"),
+        pytest.param(PROJECT_ROOT / "docs" / "TUTORIAL.md", id="tutorial"),
+        pytest.param(
+            PROJECT_ROOT / "examples" / "cross_fsm_demo.py", id="cross_fsm_demo"
+        ),
+    ),
+)
+def test_active_construction_guidance_uses_builder(path: Path) -> None:
+    """Active teaching regions lead with builder, not warned helper calls."""
+    regions = _active_python_regions(path)
+
+    assert "FSMBuilder" in regions
+    assert _DEPRECATED_CONSTRUCTION.search(regions) is None
 
 
 class TestReadmeExamples:

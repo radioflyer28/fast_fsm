@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
 """Tier 3: coordinate replaceable FSMs through cross-machine guards."""
 
-from fast_fsm import StateMachine, condition_builder, simple_fsm
+from collections.abc import Iterable
+
+from fast_fsm import FSMBuilder, State, StateMachine, condition_builder
+
+
+def build_machine(
+    name: str,
+    state_names: Iterable[str],
+    transitions: Iterable[tuple[str, str | list[str], str]],
+) -> StateMachine:
+    """Build one replaceable machine from caller-owned state objects."""
+    states = {state_name: State(state_name) for state_name in state_names}
+    initial_name = next(iter(states))
+    builder = FSMBuilder(states[initial_name], name=name)
+    for state_name, state in states.items():
+        if state_name != initial_name:
+            builder.add_state(state)
+    for trigger, source, target in transitions:
+        builder.add_transition(trigger, source, target)
+    return builder.build()
 
 
 class FactorySystem:
     """Own three independent machines and their explicit coordination rules."""
 
     def __init__(self) -> None:
-        self.power = simple_fsm("Off", "On", initial="Off", name="Power")
-        self.power.add_transition("start", "Off", "On")
-        self.power.add_transition("stop", "On", "Off")
-
-        self.cooling = simple_fsm("Off", "On", initial="Off", name="Cooling")
-        self.cooling.add_transition("start", "Off", "On")
-        self.cooling.add_transition("stop", "On", "Off")
-
-        self.production = simple_fsm(
-            "Offline", "Ready", "Running", initial="Offline", name="Production"
+        self.power = build_machine(
+            "Power",
+            ("Off", "On"),
+            (("start", "Off", "On"), ("stop", "On", "Off")),
+        )
+        self.cooling = build_machine(
+            "Cooling",
+            ("Off", "On"),
+            (("start", "Off", "On"), ("stop", "On", "Off")),
         )
 
         @condition_builder(
@@ -26,11 +44,18 @@ class FactorySystem:
         def utilities_ready(**_context: object) -> bool:
             return self.power.is_in("On") and self.cooling.is_in("On")
 
-        self.production.add_transition(
-            "prepare", "Offline", "Ready", condition=utilities_ready
+        offline = State("Offline")
+        ready = State("Ready")
+        running = State("Running")
+        self.production = (
+            FSMBuilder(offline, name="Production")
+            .add_state(ready)
+            .add_state(running)
+            .add_transition("prepare", "Offline", "Ready", condition=utilities_ready)
+            .add_transition("run", "Ready", "Running")
+            .add_transition("stop", ["Ready", "Running"], "Offline")
+            .build()
         )
-        self.production.add_transition("run", "Ready", "Running")
-        self.production.add_transition("stop", ["Ready", "Running"], "Offline")
 
     def start_utilities(self) -> None:
         self.power.trigger("start").raise_if_failed()

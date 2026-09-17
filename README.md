@@ -8,11 +8,16 @@ to guarded priority candidates, lifecycle callbacks, async I/O, persistence,
 validation, and visualization.
 
 ```python
-from fast_fsm import State, StateMachine
+from fast_fsm import FSMBuilder, State
 
-machine = StateMachine(State("idle"), name="Worker")
-machine.add_state(State("running"))
-machine.add_transition("start", "idle", "running")
+idle = State("idle")
+running = State("running")
+machine = (
+    FSMBuilder(idle, name="Worker")
+    .add_state(running)
+    .add_transition("start", "idle", "running")
+    .build()
+)
 
 result = machine.trigger("start")
 assert result.success
@@ -64,21 +69,26 @@ cd fast_fsm
 uv sync --all-groups
 ```
 
-## Start with the core API
+## Start with the builder
 
 A machine has one current state. A trigger selects a transition registered for
 that state and either returns a successful `TransitionResult` or a structured
 failure.
 
 ```python
-from fast_fsm import State, StateMachine
+from fast_fsm import FSMBuilder, State
 
-order = StateMachine(State("pending"), name="Order")
-order.add_state(State("paid"))
-order.add_state(State("shipped"))
-
-order.add_transition("pay", "pending", "paid")
-order.add_transition("ship", "paid", "shipped")
+pending = State("pending")
+paid = State("paid")
+shipped = State("shipped")
+order = (
+    FSMBuilder(pending, name="Order")
+    .add_state(paid)
+    .add_state(shipped)
+    .add_transition("pay", "pending", "paid")
+    .add_transition("ship", "paid", "shipped")
+    .build()
+)
 
 paid = order.trigger("pay")
 print(paid.success, paid.from_state, paid.to_state)
@@ -94,46 +104,24 @@ print(rejected.success, rejected.stage, rejected.error)
 order.trigger("ship").raise_if_failed()
 ```
 
-## Choose the construction style that fits
+## Choose the construction path
 
-All construction styles create ordinary `StateMachine` or
-`AsyncStateMachine` instances. Start with the simplest style that expresses
-the topology clearly.
+All construction paths create ordinary `StateMachine` or
+`AsyncStateMachine` instances. For new programmatic topology, start with
+`FSMBuilder`: it keeps caller-owned `State` identities visible while staging
+the complete machine before `build()`. Direct machine construction remains an
+advanced interface for incremental topology control or an explicitly managed
+machine identity. `from_dict()` is the adapter for serialized topology, not a
+second general-purpose builder.
 
 | Style | Best fit |
 |---|---|
-| `StateMachine` | Explicit construction and maximum local clarity |
-| `simple_fsm()` | A few named states, with transitions added afterward |
-| `quick_fsm()` | A compact transition table |
-| `FSMBuilder` | Fluent setup, callbacks, or automatic async detection |
+| `FSMBuilder` | **Primary:** new programmatic construction, callbacks, and automatic async detection |
+| `StateMachine` / `AsyncStateMachine` | **Advanced:** explicit identity or incremental topology control |
 | Declarative states | Event handlers that naturally belong to state classes |
-| `from_dict()` | Topology loaded from JSON, YAML, TOML, or another config source |
+| `from_dict()` | Serialized topology loaded from JSON, YAML, TOML, or another config source |
 
-### Factory helpers
-
-```python
-from fast_fsm import quick_fsm, simple_fsm
-
-connection = simple_fsm(
-    "disconnected",
-    "connected",
-    initial="disconnected",
-    name="Connection",
-)
-connection.add_transition("connect", "disconnected", "connected")
-
-job = quick_fsm(
-    "queued",
-    [
-        ("start", "queued", "running"),
-        ("finish", "running", "done"),
-        ("fail", "running", "failed"),
-    ],
-    name="Job",
-)
-```
-
-### Fluent builder
+### Primary: fluent builder
 
 ```python
 from fast_fsm import FSMBuilder, State
@@ -151,6 +139,21 @@ worker = (
 
 Passing a list of source states is shorthand for registering the same
 transition from each source.
+
+### Compatibility migration
+
+`simple_fsm()`, `quick_fsm()`, `StateMachine.quick_build()`, and
+`StateMachine.from_states()` remain callable, but each is a warned
+compatibility surface throughout v0.5.x and may be removed no earlier than
+v0.6.0. Replace them with `FSMBuilder` for programmatic construction. Use
+`StateMachine.from_dict()` only when reconstructing serialized topology.
+
+### Advanced: direct machine control
+
+Direct `StateMachine` and `AsyncStateMachine` construction remains supported
+for advanced workflows that deliberately add topology incrementally. The
+ordinary examples in this guide use the builder so the complete topology is
+assembled before the machine is published.
 
 ## Put transition rules in guards
 
