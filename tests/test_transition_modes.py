@@ -56,6 +56,34 @@ class _LifecycleListener:
         self._events.append("after")
 
 
+def test_registered_transition_entry_is_immutable_after_validation() -> None:
+    """Published entries cannot bypass registration's internal-edge invariant."""
+    source = State("source")
+    target = State("target")
+    machine = StateMachine(source)
+    machine.add_state(target)
+    machine.add_transition("advance", source, target)
+    entry = machine._transitions["source"]["advance"]
+
+    for attribute, value in (
+        ("to_state", source),
+        ("condition", None),
+        ("priority", 7),
+        ("condition_ref", "other"),
+        ("after", 1.0),
+        ("within", 2.0),
+        ("internal", True),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(entry, attribute, value)
+
+    result = machine.trigger("advance")
+
+    assert result.success is True
+    assert result.internal is False
+    assert machine.current_state is target
+
+
 def test_default_and_false_self_transitions_keep_the_external_lifecycle() -> None:
     """Omitted and explicit ``False`` retain ordinary exit/re-entry behavior."""
     events: list[str] = []

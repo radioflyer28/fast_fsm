@@ -144,14 +144,20 @@ class TransitionRecord:
     ) -> None: ...
 
 class TransitionEntry:
-    to_state: State
-    condition: Condition | None
-    priority: int
-    condition_ref: str | None
-    after: float | None
-    within: float | None
-    internal: bool
-
+    @property
+    def to_state(self) -> State: ...
+    @property
+    def condition(self) -> Condition | None: ...
+    @property
+    def priority(self) -> int: ...
+    @property
+    def condition_ref(self) -> str | None: ...
+    @property
+    def after(self) -> float | None: ...
+    @property
+    def within(self) -> float | None: ...
+    @property
+    def internal(self) -> bool: ...
     def __init__(
         self,
         to_state: State,

@@ -629,40 +629,23 @@ class TransitionRecord:
         )
 
 
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
 class TransitionEntry:
     """Internal typed container for one singleton transition candidate.
 
-    Uses ``__slots__`` for the same memory/speed profile as the raw ``dict``
-    it replaces, while giving attribute access and type safety.
+    Published topology must remain the exact topology that registration
+    validated.  The identity-bearing fields are therefore read-only once the
+    entry is created, while identity equality and the default object repr are
+    preserved for existing callers and hot-path diagnostics.
     """
 
-    __slots__ = (
-        "to_state",
-        "condition",
-        "priority",
-        "condition_ref",
-        "after",
-        "within",
-        "internal",
-    )
-
-    def __init__(
-        self,
-        to_state: "State",
-        condition: Optional[Condition] = None,
-        priority: int = 0,
-        condition_ref: Optional[str] = None,
-        after: Optional[float] = None,
-        within: Optional[float] = None,
-        internal: bool = False,
-    ) -> None:
-        self.to_state: "State" = to_state
-        self.condition: Optional[Condition] = condition
-        self.priority: int = priority
-        self.condition_ref: Optional[str] = condition_ref
-        self.after: Optional[float] = after
-        self.within: Optional[float] = within
-        self.internal: bool = internal
+    to_state: "State"
+    condition: Optional[Condition] = None
+    priority: int = 0
+    condition_ref: Optional[str] = None
+    after: Optional[float] = None
+    within: Optional[float] = None
+    internal: bool = False
 
 
 _TransitionRow = Union[
