@@ -377,7 +377,11 @@ def test_batch_transition_mode_rows_remain_one_canonical_request_transaction() -
     core_source = (
         Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
     ).read_text()
-    parser_start = core_source.index("    def _transition_requests_from_rows(")
+    batch_start = core_source.index("    def _add_transitions_owned(")
+    parser_start = core_source.index(
+        "    def _transition_requests_from_rows(", batch_start
+    )
+    batch_source = core_source[batch_start:parser_start]
     parser_end = core_source.index(
         "    def add_bidirectional_transition(", parser_start
     )
@@ -386,7 +390,12 @@ def test_batch_transition_mode_rows_remain_one_canonical_request_transaction() -
     assert "(3, 4, 5, 6, 7, 8)" in parser_source
     assert "internal: object = rest[4]" in parser_source
     assert "internal=internal" in parser_source
-    assert parser_source.count("_apply_transition_requests_owned") == 1
+    assert "return tuple(requests)" in parser_source
+    assert "_apply_transition_requests_owned" not in parser_source
+    assert "self._transition_requests_from_rows(transitions)" in batch_source
+    assert batch_source.count("_apply_transition_requests_owned") == 1
+    assert "_normalize_transition_request" not in batch_source
+    assert "_commit_transition_plan" not in batch_source
     assert "_commit_transition_plan" not in parser_source
 
 
