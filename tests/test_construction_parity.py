@@ -299,7 +299,21 @@ def test_construction_parity_covers_final_destination_and_internal_batch_row() -
         machine.add_transition("finish", source, done, priority=4)
         return machine
 
-    machines = (direct(), batch(), builder(), declarative(), callback())
+    def deserialization() -> StateMachine:
+        return StateMachine.from_dict(direct().to_dict())
+
+    def clone() -> StateMachine:
+        return direct().clone()
+
+    machines = (
+        direct(),
+        batch(),
+        builder(),
+        declarative(),
+        callback(),
+        deserialization(),
+        clone(),
+    )
     outcomes = tuple(
         _exercise_final_and_internal_topology(machine) for machine in machines
     )

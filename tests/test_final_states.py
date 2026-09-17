@@ -441,3 +441,73 @@ class TestFinalControlCloneAndPersistence:
         assert refresh.internal is True
         assert finish.success is True
         assert machine.is_terminated is True
+
+    def test_async_clone_preserves_type_and_rebuilds_async_ownership_containers(
+        self,
+    ) -> None:
+        source = State("idle")
+        done = State("done", final=True)
+        machine = AsyncStateMachine(source)
+        machine.add_state(done)
+        machine.add_transition("refresh", source, source, internal=True)
+        machine.add_transition("finish", source, done)
+
+        async def on_enter(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        machine.on_enter_async("idle", on_enter)
+        clone = machine.clone()
+
+        assert type(clone) is AsyncStateMachine
+        assert clone._states["idle"] is source
+        assert clone._states["done"] is done
+        assert clone._states["done"].final is True
+        assert clone._transitions["idle"]["refresh"].internal is True
+        assert (
+            clone._state_enter_async_callbacks
+            is not machine._state_enter_async_callbacks
+        )
+        assert (
+            clone._state_enter_async_callbacks["idle"]
+            is not machine._state_enter_async_callbacks["idle"]
+        )
+        assert clone._async_ownership_lock is not machine._async_ownership_lock
+        assert clone._async_admission_lock is not machine._async_admission_lock
+        assert clone._bound_loop is None
+        assert clone._async_owner_task is None
+
+    def test_restore_uses_the_receiving_topology_for_finality_and_mode(self) -> None:
+        snapshot = StateMachine(State("hover")).snapshot()
+
+        final_receiver = StateMachine(State("idle"))
+        final_receiver.add_state(State("hover", final=True))
+        final_receiver.restore(snapshot)
+
+        internal_events: list[str] = []
+        internal_receiver = StateMachine(State("idle"))
+        internal_hover = State("hover")
+        internal_receiver.add_state(internal_hover)
+        internal_receiver.add_transition(
+            "refresh", internal_hover, internal_hover, internal=True
+        )
+        internal_receiver.restore(snapshot)
+        internal_receiver.on_enter(
+            "hover", lambda *_args, **_kwargs: internal_events.append("enter")
+        )
+
+        external_events: list[str] = []
+        external_receiver = StateMachine(State("idle"))
+        external_hover = State("hover")
+        external_receiver.add_state(external_hover)
+        external_receiver.add_transition("refresh", external_hover, external_hover)
+        external_receiver.restore(snapshot)
+        external_receiver.on_enter(
+            "hover", lambda *_args, **_kwargs: external_events.append("enter")
+        )
+
+        assert snapshot == {"state": "hover", "version": 1}
+        assert final_receiver.is_terminated is True
+        assert internal_receiver.trigger("refresh").internal is True
+        assert external_receiver.trigger("refresh").internal is False
+        assert internal_events == []
+        assert external_events == ["enter"]

@@ -2583,3 +2583,61 @@ class TestPrioritySerialization:
     def test_from_dict_rejects_subclassed_serialized_shape(self, config, pattern):
         with pytest.raises((TypeError, ValueError), match=pattern):
             StateMachine.from_dict(config)
+
+    def test_clone_retains_state_and_callable_identity_without_aliasing_tables(self):
+        """Clone shares immutable collaborators but owns every mutable registry."""
+        from fast_fsm import CallbackState, FuncCondition
+
+        def callback(*_args, **_kwargs):
+            return None
+
+        guard = FuncCondition(lambda **_kwargs: True, name="guard")
+        source = CallbackState("source", callback, callback)
+        done = CallbackState("done", callback, callback, final=True)
+        machine = StateMachine(source)
+        machine.add_state(done)
+        machine.add_transition(
+            "refresh", source, source, guard, priority=-2, internal=True
+        )
+        machine.add_transition("finish", source, done, priority=4)
+        machine.on_enter("source", callback)
+        machine.on_exit("source", callback)
+        machine.on_trigger("refresh", callback)
+        machine.on_failed(callback)
+        machine.enable_history()
+        assert machine.trigger("refresh").success is True
+
+        clone = machine.clone()
+        source_slot = machine._transitions["source"]["refresh"]
+        clone_slot = clone._transitions["source"]["refresh"]
+
+        assert type(clone) is StateMachine
+        assert clone._states["source"] is source
+        assert clone._states["done"] is done
+        assert clone._states["done"].final is True
+        assert clone._graph_version == machine._graph_version
+        assert clone.current_state is source
+        assert clone.history == []
+        assert clone._transitions is not machine._transitions
+        assert clone._transitions["source"] is not machine._transitions["source"]
+        assert clone_slot is not source_slot
+        assert clone_slot.to_state is source_slot.to_state
+        assert clone_slot.condition is guard
+        assert clone_slot.internal is True
+        assert clone._state_enter_callbacks is not machine._state_enter_callbacks
+        assert (
+            clone._state_enter_callbacks["source"]
+            is not machine._state_enter_callbacks["source"]
+        )
+        assert clone._state_exit_callbacks is not machine._state_exit_callbacks
+        assert (
+            clone._state_exit_callbacks["source"]
+            is not machine._state_exit_callbacks["source"]
+        )
+        assert clone._trigger_callbacks is not machine._trigger_callbacks
+        assert (
+            clone._trigger_callbacks["refresh"]
+            is not machine._trigger_callbacks["refresh"]
+        )
+        assert clone._on_failed_callbacks is not machine._on_failed_callbacks
+        assert clone._sync_ownership_lock is not machine._sync_ownership_lock
