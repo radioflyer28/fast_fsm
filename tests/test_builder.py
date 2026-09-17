@@ -3060,3 +3060,86 @@ class TestFSMBuilderAsyncPreflight:
         assert not any(
             issubclass(warning.category, RuntimeWarning) for warning in recwarn
         )
+
+
+@pytest.mark.parametrize(
+    ("symbol", "valid_call", "invalid_call"),
+    [
+        (
+            "simple_fsm",
+            lambda: simple_fsm("idle", initial="idle"),
+            lambda: simple_fsm(initial=object()),
+        ),
+        (
+            "quick_fsm",
+            lambda: quick_fsm("idle", [("go", "idle", "done")]),
+            lambda: quick_fsm("idle", [("go", "idle")]),
+        ),
+        (
+            "StateMachine.quick_build",
+            lambda: StateMachine.quick_build("idle", [("go", "idle", "done")]),
+            lambda: StateMachine.quick_build("idle", [("go", "idle")]),
+        ),
+        (
+            "StateMachine.from_states",
+            lambda: StateMachine.from_states("idle", initial="idle"),
+            lambda: StateMachine.from_states(),
+        ),
+    ],
+)
+def test_deprecated_construction_boundaries_warn_once_at_the_user_call_site(
+    symbol, valid_call, invalid_call
+):
+    """Each retained compatibility boundary warns once before construction."""
+    import warnings
+
+    expected = (
+        f"{symbol} is deprecated and remains supported through v0.5.x; "
+        "use FSMBuilder for programmatic construction or StateMachine.from_dict() "
+        "for serialized topology. It may be removed no earlier than v0.6.0."
+    )
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        machine = valid_call()
+
+    assert isinstance(machine, StateMachine)
+    assert len(captured) == 1
+    warning = captured[0]
+    assert warning.category is DeprecationWarning
+    assert str(warning.message) == expected
+    assert warning.filename == __file__
+    assert warning.lineno == valid_call.__code__.co_firstlineno
+    assert "object at 0x" not in str(warning.message)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        with pytest.raises((TypeError, ValueError)):
+            invalid_call()
+
+    assert len(captured) == 1
+    assert captured[0].category is DeprecationWarning
+    assert str(captured[0].message) == expected
+    assert captured[0].filename == __file__
+    assert captured[0].lineno == invalid_call.__code__.co_firstlineno
+
+
+def test_nondeprecated_construction_surfaces_remain_silent():
+    """Only the four retained compatibility constructors warn."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        StateMachine(State("idle"))
+        StateMachine.from_dict(
+            {
+                "states": ["idle"],
+                "initial": "idle",
+                "transitions": [],
+            }
+        )
+        State.create("idle")
+        FSMBuilder(State("idle"))
+        DeclarativeState("idle")
+
+    assert captured == []
