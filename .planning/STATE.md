@@ -4,17 +4,17 @@ milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
-status: executing
-stopped_at: Completed 30-05-PLAN.md
-last_updated: "2026-09-17T20:24:05.224Z"
+status: verifying
+stopped_at: Completed 30-06-PLAN.md
+last_updated: "2026-09-17T21:06:49.921Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 30 execution started
-state_head: 30615ff40d7091058eadc747ca74233298e8030a
+state_head: 11b5774867197a678e67045ed0eab9ea3b3763bb
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 21
-  completed_plans: 20
+  completed_plans: 21
   percent: 57
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 30 execution started
 
 Progress: [██████░░░░] 57%
@@ -79,6 +79,7 @@ Progress: [██████░░░░] 57%
 | Phase 30 P03 | 6 min | 2 tasks | 5 files |
 | Phase 30 P04 | 14 min | 2 tasks | 5 files |
 | Phase 30 P05 | 11 min | 2 tasks | 9 files |
+| Phase 30 P06 | 36 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 30]: Topology dictionaries emit internal only as JSON true; missing or exact false remains external.
 - [Phase 30]: Clone replays canonical requests into independent mutable containers; snapshot v1 remains state-only and receiver-owned.
 - [Phase 30]: Focused guides lead with FSMBuilder; direct construction stays advanced and from_dict stays the serialized-topology adapter.
+- [Phase 30]: Phase 30: Keep deprecated construction warnings in interpreted cold wrappers so pure and mypyc builds attribute them to the same caller.
+- [Phase 30]: Phase 30: Allow interpreted StateMachine subclasses in mypyc because retained classmethod factories preserve subclass result types.
 
 ### Pending Todos
 
@@ -154,8 +157,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T20:24:05.134Z
-Stopped at: Completed 30-05-PLAN.md
+Last session: 2026-09-17T21:06:49.814Z
+Stopped at: Completed 30-06-PLAN.md
 Resume file: 
 
 None

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 4
 waived_count: 1
 fixed_count: 2
-total_count: 6
-last_updated: 2026-09-07T06:52:40.414Z
+total_count: 7
+last_updated: 2026-09-17T21:06:57.145Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,7 @@ last_updated: 2026-09-07T06:52:40.414Z
 | 4 | 20 | unrun-verify | Taskfile.yml |  | release-readiness-check cannot complete release-baseline-check locally because host uv 0.12.9 differs from reviewed exact uv 0.12.6; the pin remains preserved. | waived | Duplicate of open entry 3, which already records the same exact-uv baseline verification gap. | 2026-09-05T19:50:43.486Z | 2026-09-05T19:51:37.764Z |
 | 5 | 20 | unrun-verify | Taskfile.yml |  | release-hosted-prerelease-check requires an explicitly authorized exact-SHA terminal Release Evidence run and was intentionally not run; hosted runner/matrix evidence remains required before tagging. | open |  | 2026-09-05T19:50:43.569Z |  |
 | 6 | 25 | unrun-verify | tests/test_build_modes.py | 234 | Full pure-suite result was inconclusive because the available offline phase cache lacked pinned isolated-build requirements; the exact blocked test passed from the existing local cache. | open |  | 2026-09-07T06:52:40.414Z |  |
+| 7 | 30 | deviation | src/fast_fsm/_construction_compat.py |  | Native warning attribution and interpreted StateMachine subclass parity required cold compatibility wrappers and a mypyc subclass decorator. | open |  | 2026-09-17T21:06:57.145Z |  |
 
 ````json
 [
@@ -94,6 +95,18 @@ last_updated: 2026-09-07T06:52:40.414Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-07T06:52:40.414Z",
+    "resolved_at": null
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "30",
+    "file": "src/fast_fsm/_construction_compat.py",
+    "line": null,
+    "description": "Native warning attribution and interpreted StateMachine subclass parity required cold compatibility wrappers and a mypyc subclass decorator.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-17T21:06:57.145Z",
     "resolved_at": null
   }
 ]
