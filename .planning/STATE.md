@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 28
 current_phase_name: Same-State Transition Modes
 status: executing
-stopped_at: Phase 28 context gathered
-last_updated: "2026-09-17T00:14:43.276Z"
+stopped_at: Completed 28-01-PLAN.md
+last_updated: "2026-09-17T00:26:44.730Z"
 last_activity: 2026-09-16
 last_activity_desc: Phase 28 execution started
-state_head: b167d02562fef5de934c0fc9d59b7f52307c9f15
+state_head: 7822615a2995014fd5088ea920b39f38c8dfc380
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
   percent: 29
 ---
 
@@ -30,11 +30,11 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 28 (Same-State Transition Modes) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 28
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-09-16 — Phase 28 execution started
 
-Progress: [█░░░░░░░░░] 14%
+Progress: [███░░░░░░░] 29%
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Progress: [█░░░░░░░░░] 14%
 | Phase 27 P01 | 5min | 2 tasks | 4 files |
 | Phase 27 P02 | 9min | 2 tasks | 7 files |
 | Phase 27 P03 | 18min | 2 tasks | 5 files |
+| Phase 28 P01 | 7 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 27]: Persist explicit final names in sorted final_states metadata; omitted legacy data remains non-final.
 - [Phase 27]: Keep termination derived from committed current State through controls and post-commit failures; no latch or rollback exists.
 - [Phase 27]: Keep exact public final validation and raw-list copying dynamic at native boundaries to preserve source/compiled parity.
+- [Phase 28]: Internal mode stays on the selected immutable entry; the external lifecycle remains the default.
+- [Phase 28]: Internal commits preserve residency timing and append history only when recording is enabled.
+- [Phase 28]: Primary builder staging and clone/graph replay carry the canonical internal scalar.
 
 ### Pending Todos
 
@@ -115,10 +119,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-16T22:06:54.291Z
-Stopped at: Phase 28 context gathered
+Last session: 2026-09-17T00:26:44.693Z
+Stopped at: Completed 28-01-PLAN.md
 Resume file: 
 
-.planning/phases/28-same-state-transition-modes/28-CONTEXT.md
+28-02-PLAN.md
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
