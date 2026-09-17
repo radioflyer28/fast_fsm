@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
 import logging
+
+import pytest
 
 from fast_fsm import (
     DeclarativeState,
+    AsyncCondition,
+    AsyncDeclarativeState,
+    AsyncStateMachine,
     State,
     StateMachine,
     TransitionError,
@@ -310,3 +314,199 @@ def test_reject_02_logging_uses_only_debug_code_metadata(
     assert all(record.levelno < logging.WARNING for record in caplog.records)
     assert "caller-repr-secret" not in caplog.text
     assert "signal-repr-secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "boundary", ("transition_guard", "declarative_guard", "state_permission")
+)
+@pytest.mark.parametrize("topology", ("singleton", "grouped"))
+@pytest.mark.parametrize("internal", (False, True))
+def test_reject_06_sync_query_stops_at_every_approved_boundary(
+    boundary: str, topology: str, internal: bool
+) -> None:
+    """REJECT-06: a query consumes rejection without finalizing any work."""
+    events: list[str] = []
+    rejected_name = "source" if internal else "rejected"
+
+    def reject(*_args: object, **_kwargs: object) -> bool:
+        events.append(boundary)
+        raise TransitionRejected("battery.low")
+
+    if boundary == "declarative_guard":
+
+        class Source(DeclarativeState):
+            @transition("go", to_state=rejected_name, condition=reject)
+            def go(self) -> None:
+                raise AssertionError("a rejected query must not invoke the handler")
+
+        source: State = Source("source")
+    elif boundary == "state_permission":
+
+        class Source(State):
+            def can_transition(
+                self,
+                trigger_name: str,
+                to_state: State,
+                *args: object,
+                **kwargs: object,
+            ) -> bool:
+                if to_state.name == rejected_name:
+                    return reject(*args, **kwargs)
+                return super().can_transition(trigger_name, to_state, *args, **kwargs)
+
+        source = Source("source")
+    else:
+        source = State("source")
+
+    rejected = source if internal else State(rejected_name)
+    machine = StateMachine(source, name=f"sync-query-{boundary}-{topology}-{internal}")
+    if not internal:
+        machine.add_state(rejected)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        reject if boundary == "transition_guard" else None,
+        priority=-2,
+        internal=internal,
+    )
+    if topology == "grouped":
+        later = State("later")
+        machine.add_state(later)
+
+        def lower_candidate(*_args: object, **_kwargs: object) -> bool:
+            events.append("lower")
+            return True
+
+        machine.add_transition("go", source, later, lower_candidate, priority=4)
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("failed"))
+    machine.on_exit(source.name, lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter(rejected.name, lambda *_args, **_kwargs: events.append("enter"))
+
+    assert machine.can_trigger("go") is False
+    assert events == [boundary]
+    assert observed == []
+    assert machine.current_state is source
+    assert machine.history == []
+
+    result = machine.trigger("go")
+
+    assert result.rejected is True
+    assert result.rejection_code == "battery.low"
+    assert result.stage == (
+        "state-permission" if boundary == "state_permission" else "guard"
+    )
+    assert result.priority == -2
+    assert result.internal is internal
+    assert result.committed is False
+    assert result.to_state is None
+    assert events == [boundary, boundary]
+    assert observed == ["failed"]
+    assert machine.current_state is source
+    assert machine.history == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "boundary", ("transition_guard", "declarative_guard", "state_permission")
+)
+@pytest.mark.parametrize("topology", ("singleton", "grouped"))
+@pytest.mark.parametrize("internal", (False, True))
+async def test_reject_06_async_query_stops_at_every_approved_boundary(
+    boundary: str, topology: str, internal: bool
+) -> None:
+    """REJECT-03/04/06/07: async selection shares terminal query semantics."""
+    events: list[str] = []
+    rejected_name = "source" if internal else "rejected"
+
+    async def reject(*_args: object, **_kwargs: object) -> bool:
+        events.append(boundary)
+        raise TransitionRejected("battery.low")
+
+    class RejectionCondition(AsyncCondition):
+        __slots__ = ()
+
+        def __init__(self) -> None:
+            super().__init__("expected-rejection", "raises a domain rejection")
+
+        async def check_async(self, *args: object, **kwargs: object) -> bool:
+            return await reject(*args, **kwargs)
+
+    if boundary == "declarative_guard":
+
+        class Source(AsyncDeclarativeState):
+            @transition("go", to_state=rejected_name, condition=reject)
+            async def go(self) -> None:
+                raise AssertionError("a rejected query must not invoke the handler")
+
+        source: State = Source("source")
+    elif boundary == "state_permission":
+
+        class Source(State):
+            async def can_transition_async(
+                self,
+                trigger_name: str,
+                to_state: State,
+                *args: object,
+                **kwargs: object,
+            ) -> bool:
+                if to_state.name == rejected_name:
+                    return await reject(*args, **kwargs)
+                return self.can_transition(trigger_name, to_state, *args, **kwargs)
+
+        source = Source("source")
+    else:
+        source = State("source")
+
+    rejected = source if internal else State(rejected_name)
+    machine = AsyncStateMachine(
+        source, name=f"async-query-{boundary}-{topology}-{internal}"
+    )
+    if not internal:
+        machine.add_state(rejected)
+    machine.enable_history()
+    machine.add_transition(
+        "go",
+        source,
+        rejected,
+        RejectionCondition() if boundary == "transition_guard" else None,
+        priority=-2,
+        internal=internal,
+    )
+    if topology == "grouped":
+        later = State("later")
+        machine.add_state(later)
+
+        async def lower_candidate(*_args: object, **_kwargs: object) -> bool:
+            events.append("lower")
+            return True
+
+        machine.add_transition("go", source, later, lower_candidate, priority=4)
+    observed: list[str] = []
+    machine.on_failed(lambda *_args, **_kwargs: observed.append("failed"))
+    machine.on_exit(source.name, lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter(rejected.name, lambda *_args, **_kwargs: events.append("enter"))
+
+    assert await machine.can_trigger_async("go") is False
+    assert events == [boundary]
+    assert observed == []
+    assert machine.current_state is source
+    assert machine.history == []
+
+    result = await machine.trigger_async("go")
+
+    assert result.rejected is True
+    assert result.rejection_code == "battery.low"
+    assert result.stage == (
+        "state-permission" if boundary == "state_permission" else "guard"
+    )
+    assert result.priority == -2
+    assert result.internal is internal
+    assert result.committed is False
+    assert result.to_state is None
+    assert events == [boundary, boundary]
+    assert observed == ["failed"]
+    assert machine.current_state is source
+    assert machine.history == []
