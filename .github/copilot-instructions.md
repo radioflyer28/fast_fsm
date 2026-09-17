@@ -42,9 +42,11 @@ These constraints apply to EVERY task. Violating any of them is a bug.
   `uv run python tools/release_evidence.py slots-policy --json` audit is the
   authority. Exactly four measured registered exceptions are CompiledFuncCondition, TransitionError, TransitionRejected, and DiagnosticBudgetExceeded.
   `CompiledFuncCondition` remains interpreted in `conditions.py` to preserve
-  the public Python subclass boundary; `TransitionError` and
-  `TransitionRejected` use `@mypyc_attr(native_class=False)` for compiled
-  built-in-exception boundaries; and ADR-006 accepts interpreted
+  the public Python subclass boundary; `TransitionError` uses
+  `@mypyc_attr(native_class=False)`, while `TransitionRejected` uses
+  `@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)` so
+  application-defined expected-rejection signals behave identically in pure
+  and compiled artifacts; and ADR-006 accepts interpreted
   `DiagnosticBudgetExceeded` for its bounded diagnostic status. These are
   measured exceptions, not a reason to weaken slots on hot-path classes.
 - Fresh installed compiled singleton `trigger()` throughput MUST stay ≥200,000
@@ -253,9 +255,11 @@ than plain fenced code blocks so they are verified on every CI run.
    `uv run python tools/release_evidence.py slots-policy --json`; the command
    fails on an unregistered or omitted exception. Exactly four measured
    registered exceptions are CompiledFuncCondition, TransitionError, TransitionRejected, and DiagnosticBudgetExceeded. `CompiledFuncCondition` remains interpreted to
-   preserve the `Condition` subclass boundary; `TransitionError` and
-   `TransitionRejected` use `@mypyc_attr(native_class=False)` to preserve
-   normal Python exception behavior in compiled `core.py`; and ADR-006 accepts interpreted
+   preserve the `Condition` subclass boundary; `TransitionError` uses
+   `@mypyc_attr(native_class=False)`, while `TransitionRejected` uses
+   `@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)` so
+   application-defined expected-rejection signals preserve their public
+   behavior in compiled `core.py`; and ADR-006 accepts interpreted
    `DiagnosticBudgetExceeded` for bounded diagnostic failures. Those measured
    exceptions may retain an instance `__dict__`; `State`, `StateMachine`, and
    other hot-path objects may not. Use `CallbackState` (with dedicated

@@ -576,29 +576,32 @@ def _validate_transition_rejection_code(code: object) -> str:
     return code
 
 
-def _revalidate_transition_rejection_code(
-    signal: "TransitionRejected",
-) -> Optional[str]:
+def _revalidate_transition_rejection_code(signal: BaseException) -> Optional[str]:
     """Return a safe signal code or classify a corrupt signal as unexpected."""
     try:
-        return _validate_transition_rejection_code(signal.code)
+        return _validate_transition_rejection_code(getattr(signal, "code"))
     except Exception:
         return None
 
 
-@mypyc_attr(native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class TransitionRejected(Exception):
     """Signal one bounded expected domain rejection from an eligibility hook."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self: Any, code: str) -> None:
         validated_code = _validate_transition_rejection_code(code)
         self._code: str = validated_code
         super().__init__(validated_code)
 
     @property
-    def code(self) -> str:
+    def code(self: Any) -> str:
         """Return the exact validated domain-rejection identifier."""
         return self._code
+
+
+def _is_transition_rejection_signal(signal: BaseException) -> bool:
+    """Recognize the public signal without native exact-type narrowing."""
+    return isinstance(signal, cast(Any, TransitionRejected))
 
 
 @dataclass(slots=True)
@@ -2981,29 +2984,29 @@ class StateMachine:
                         condition_name,
                         condition_result,
                     )
-            except TransitionRejected as signal:
-                rejection_code = _revalidate_transition_rejection_code(signal)
-                if rejection_code is None:
-                    if for_query:
-                        raise signal
-                    return self._build_failure_result(
+            except Exception as cause:
+                if _is_transition_rejection_signal(cause):
+                    rejection_code = _revalidate_transition_rejection_code(cause)
+                    if rejection_code is None:
+                        if for_query:
+                            raise cause
+                        return self._build_failure_result(
+                            current_name,
+                            trigger,
+                            "Transition guard raised an exception",
+                            stage=_LIFECYCLE_STAGE_GUARD,
+                            cause=cause,
+                            priority=entry.priority,
+                            internal=entry.internal,
+                        )
+                    return self._build_rejection_result(
                         current_name,
                         trigger,
-                        "Transition guard raised an exception",
+                        rejection_code,
                         stage=_LIFECYCLE_STAGE_GUARD,
-                        cause=signal,
                         priority=entry.priority,
                         internal=entry.internal,
                     )
-                return self._build_rejection_result(
-                    current_name,
-                    trigger,
-                    rejection_code,
-                    stage=_LIFECYCLE_STAGE_GUARD,
-                    priority=entry.priority,
-                    internal=entry.internal,
-                )
-            except Exception as cause:
                 if for_query:
                     raise
                 _emit_legacy_warning(
@@ -3044,43 +3047,43 @@ class StateMachine:
             declarative_guard_passed = self._evaluate_declarative_condition_sync(
                 prepared, raise_on_error=True
             )
-        except TransitionRejected as signal:
-            rejection_code = _revalidate_transition_rejection_code(signal)
-            if rejection_code is not None:
-                return self._build_rejection_result(
-                    current_name,
-                    trigger,
-                    rejection_code,
-                    stage=_LIFECYCLE_STAGE_GUARD,
-                    priority=entry.priority,
-                    internal=entry.internal,
+        except Exception as cause:
+            if _is_transition_rejection_signal(cause):
+                rejection_code = _revalidate_transition_rejection_code(cause)
+                if rejection_code is not None:
+                    return self._build_rejection_result(
+                        current_name,
+                        trigger,
+                        rejection_code,
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                if for_query:
+                    return self._build_failure_result(
+                        current_name,
+                        trigger,
+                        "Transition guard raised an exception",
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        cause=cause,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED guard type=%s",
+                    self._name,
+                    type(cause).__name__,
                 )
-            if for_query:
                 return self._build_failure_result(
                     current_name,
                     trigger,
                     "Transition guard raised an exception",
                     stage=_LIFECYCLE_STAGE_GUARD,
-                    cause=signal,
+                    cause=cause,
                     priority=entry.priority,
                     internal=entry.internal,
                 )
-            _emit_legacy_warning(
-                self._logger,
-                "%s: FAILED guard type=%s",
-                self._name,
-                type(signal).__name__,
-            )
-            return self._build_failure_result(
-                current_name,
-                trigger,
-                "Transition guard raised an exception",
-                stage=_LIFECYCLE_STAGE_GUARD,
-                cause=signal,
-                priority=entry.priority,
-                internal=entry.internal,
-            )
-        except Exception as cause:
             if for_query:
                 return self._build_failure_result(
                     current_name,
@@ -3131,35 +3134,35 @@ class StateMachine:
             can_proceed = self._can_transition_after_declarative_guard(
                 source_state, trigger, entry.to_state, args, kwargs
             )
-        except TransitionRejected as signal:
-            rejection_code = _revalidate_transition_rejection_code(signal)
-            if rejection_code is not None:
-                return self._build_rejection_result(
+        except Exception as cause:
+            if _is_transition_rejection_signal(cause):
+                rejection_code = _revalidate_transition_rejection_code(cause)
+                if rejection_code is not None:
+                    return self._build_rejection_result(
+                        current_name,
+                        trigger,
+                        rejection_code,
+                        stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                if for_query:
+                    raise cause
+                _emit_legacy_warning(
+                    self._logger,
+                    "%s: FAILED state-permission type=%s",
+                    self._name,
+                    type(cause).__name__,
+                )
+                return self._build_failure_result(
                     current_name,
                     trigger,
-                    rejection_code,
+                    "State permission raised an exception",
                     stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                    cause=cause,
                     priority=entry.priority,
                     internal=entry.internal,
                 )
-            if for_query:
-                raise signal
-            _emit_legacy_warning(
-                self._logger,
-                "%s: FAILED state-permission type=%s",
-                self._name,
-                type(signal).__name__,
-            )
-            return self._build_failure_result(
-                current_name,
-                trigger,
-                "State permission raised an exception",
-                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
-                cause=signal,
-                priority=entry.priority,
-                internal=entry.internal,
-            )
-        except Exception as cause:
             if for_query:
                 raise
             _emit_legacy_warning(
@@ -5306,29 +5309,29 @@ class AsyncStateMachine(StateMachine):
                         priority=entry.priority,
                         internal=entry.internal,
                     )
-            except TransitionRejected as signal:
-                rejection_code = _revalidate_transition_rejection_code(signal)
-                if rejection_code is not None:
-                    return self._build_rejection_result(
+            except Exception as cause:
+                if _is_transition_rejection_signal(cause):
+                    rejection_code = _revalidate_transition_rejection_code(cause)
+                    if rejection_code is not None:
+                        return self._build_rejection_result(
+                            current_name,
+                            trigger,
+                            rejection_code,
+                            stage=_LIFECYCLE_STAGE_GUARD,
+                            priority=entry.priority,
+                            internal=entry.internal,
+                        )
+                    if for_query:
+                        raise cause
+                    return self._build_failure_result(
                         current_name,
                         trigger,
-                        rejection_code,
+                        "Transition guard raised an exception",
                         stage=_LIFECYCLE_STAGE_GUARD,
+                        cause=cause,
                         priority=entry.priority,
                         internal=entry.internal,
                     )
-                if for_query:
-                    raise signal
-                return self._build_failure_result(
-                    current_name,
-                    trigger,
-                    "Transition guard raised an exception",
-                    stage=_LIFECYCLE_STAGE_GUARD,
-                    cause=signal,
-                    priority=entry.priority,
-                    internal=entry.internal,
-                )
-            except Exception as cause:
                 if for_query:
                     raise
                 return self._build_failure_result(
@@ -5347,27 +5350,27 @@ class AsyncStateMachine(StateMachine):
             declarative_guard_passed = await self._evaluate_declarative_condition_async(
                 prepared, raise_on_error=True
             )
-        except TransitionRejected as signal:
-            rejection_code = _revalidate_transition_rejection_code(signal)
-            if rejection_code is not None:
-                return self._build_rejection_result(
+        except Exception as cause:
+            if _is_transition_rejection_signal(cause):
+                rejection_code = _revalidate_transition_rejection_code(cause)
+                if rejection_code is not None:
+                    return self._build_rejection_result(
+                        current_name,
+                        trigger,
+                        rejection_code,
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                return self._build_failure_result(
                     current_name,
                     trigger,
-                    rejection_code,
+                    "Transition guard raised an exception",
                     stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=cause,
                     priority=entry.priority,
                     internal=entry.internal,
                 )
-            return self._build_failure_result(
-                current_name,
-                trigger,
-                "Transition guard raised an exception",
-                stage=_LIFECYCLE_STAGE_GUARD,
-                cause=signal,
-                priority=entry.priority,
-                internal=entry.internal,
-            )
-        except Exception as cause:
             return self._build_failure_result(
                 current_name,
                 trigger,
@@ -5395,29 +5398,29 @@ class AsyncStateMachine(StateMachine):
             can_proceed = await self._can_transition_after_declarative_guard_async(
                 source_state, trigger, entry.to_state, args, kwargs
             )
-        except TransitionRejected as signal:
-            rejection_code = _revalidate_transition_rejection_code(signal)
-            if rejection_code is not None:
-                return self._build_rejection_result(
+        except Exception as cause:
+            if _is_transition_rejection_signal(cause):
+                rejection_code = _revalidate_transition_rejection_code(cause)
+                if rejection_code is not None:
+                    return self._build_rejection_result(
+                        current_name,
+                        trigger,
+                        rejection_code,
+                        stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                if for_query:
+                    raise cause
+                return self._build_failure_result(
                     current_name,
                     trigger,
-                    rejection_code,
+                    "State permission raised an exception",
                     stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                    cause=cause,
                     priority=entry.priority,
                     internal=entry.internal,
                 )
-            if for_query:
-                raise signal
-            return self._build_failure_result(
-                current_name,
-                trigger,
-                "State permission raised an exception",
-                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
-                cause=signal,
-                priority=entry.priority,
-                internal=entry.internal,
-            )
-        except Exception as cause:
             if for_query:
                 raise
             return self._build_failure_result(

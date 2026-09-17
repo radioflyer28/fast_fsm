@@ -1961,6 +1961,18 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         )
         for item in rejected.decorator_list
     )
+    assert any(
+        isinstance(item, ast.Call)
+        and isinstance(item.func, ast.Name)
+        and item.func.id == "mypyc_attr"
+        and any(
+            keyword.arg == "allow_interpreted_subclasses"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in item.keywords
+        )
+        for item in rejected.decorator_list
+    )
 
 
 def test_expected_rejection_contract_is_a_read_only_result_tail_and_public_export() -> (
@@ -2613,14 +2625,15 @@ def test_expected_rejection_selector_contract_is_exact_and_mode_invariant() -> N
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name == method_name
         )
-        catches = [
+        conversions = [
             node
             for node in ast.walk(method)
-            if isinstance(node, ast.ExceptHandler)
-            and isinstance(node.type, ast.Name)
-            and node.type.id == "TransitionRejected"
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_is_transition_rejection_signal"
         ]
-        assert len(catches) == 3
+        assert len(conversions) == 3
+        assert "except TransitionRejected" not in ast.unparse(method)
 
     for class_name, method_names in {
         "StateMachine": ("_trigger_owned", "_execute_transition", "_finalize_failure"),
