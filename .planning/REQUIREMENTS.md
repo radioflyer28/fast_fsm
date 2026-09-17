@@ -30,9 +30,9 @@
 - [x] **REJECT-03**: Users receive expected-rejection semantics only when rejection originates from transition guards, declarative guards, or state permission checks.
 - [x] **REJECT-04**: Users observe a rejection aborting the complete prioritized candidate group, while an ordinary false condition alone permits fallthrough.
 - [x] **REJECT-05**: Users receive an uncommitted `TransitionResult` with explicit rejection status and code, distinct from unexpected exception causes.
-- [ ] **REJECT-06**: Users receive false from synchronous and asynchronous `can_trigger` queries for an expected rejection, while trigger operations preserve the structured rejection code.
+- [x] **REJECT-06**: Users receive false from synchronous and asynchronous `can_trigger` queries for an expected rejection, while trigger operations preserve the structured rejection code.
 - [x] **REJECT-07**: Users observe existing failure observers exactly once for a rejected trigger without needing a separate rejection listener system.
-- [ ] **REJECT-08**: Users can compose conditions without expected rejection being swallowed or converted to an ordinary false result.
+- [x] **REJECT-08**: Users can compose conditions without expected rejection being swallowed or converted to an ordinary false result.
 - [x] **REJECT-09**: Users receive ordinary execution-failure semantics when `TransitionRejected` is raised outside pre-commit eligibility evaluation.
 
 ### Construction Interface and Topology Integrity
@@ -117,9 +117,9 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | REJECT-03 | Phase 29 | Complete |
 | REJECT-04 | Phase 29 | Complete |
 | REJECT-05 | Phase 29 | Complete |
-| REJECT-06 | Phase 29 | Pending |
+| REJECT-06 | Phase 29 | Complete |
 | REJECT-07 | Phase 29 | Complete |
-| REJECT-08 | Phase 29 | Pending |
+| REJECT-08 | Phase 29 | Complete |
 | REJECT-09 | Phase 29 | Complete |
 | BUILD-01 | Phase 30 | Pending |
 | BUILD-02 | Phase 30 | Pending |
