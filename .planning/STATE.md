@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 29
 current_phase_name: Expected Domain Rejection
 status: executing
-stopped_at: Completed 29-02-PLAN.md
-last_updated: "2026-09-17T16:36:43.079Z"
+stopped_at: Completed 29-03-PLAN.md
+last_updated: "2026-09-17T16:45:43.220Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 29 execution started
-state_head: ccb48cd1c0ebb3d1f047f636213d4e3c5790a32d
+state_head: 368f6e80bae301be3c32a1528ffdfd383cb30c92
 progress:
   total_phases: 7
   completed_phases: 3
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
   percent: 43
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 29 (Expected Domain Rejection) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 29 execution started
 
@@ -71,6 +71,7 @@ Progress: [████░░░░░░] 43%
 | Phase 28 P03 | 48min | 2 tasks | 4 files |
 | Phase 29 P01 | 16 min | 2 tasks | 9 files |
 | Phase 29 P02 | 4 min | 2 tasks | 3 files |
+| Phase 29 P03 | 8min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 29]: Phase 29: Async selector conversion stays at the three approved eligibility seams and reuses the existing terminal result path.
 - [Phase 29]: Phase 29: Query APIs project terminal expected rejection to False without failure finalization or mutation.
 - [Phase 29]: Phase 29: Condition combinators remain catch-free; rejection and cancellation propagate with their original identities.
+- [Phase 29]: Only approved selector eligibility seams convert TransitionRejected; lifecycle and observer signals remain ordinary failures.
+- [Phase 29]: Phase 29 API docs expose the bounded rejection contract without adding tutorial material owned by Phase 32.
 
 ### Pending Todos
 
@@ -134,10 +137,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T16:36:42.964Z
-Stopped at: Completed 29-02-PLAN.md
+Last session: 2026-09-17T16:45:43.161Z
+Stopped at: Completed 29-03-PLAN.md
 Resume file: 
 
-None
+29-04-PLAN.md
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
