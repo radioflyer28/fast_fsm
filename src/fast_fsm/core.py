@@ -867,12 +867,13 @@ class _DeclarativeHandlerMetadata:
     """Immutable decorator metadata retained before state binding."""
 
     trigger: str
-    from_state: Optional[Union[str, List[str]]]
+    from_state: Optional[Union[str, Tuple[str, ...]]]
     to_state: Optional[str]
     condition: Optional[Any]
     priority: int
     after: Optional[float]
     within: Optional[float]
+    internal: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -880,13 +881,14 @@ class _DeclarativeHandler:
     """One immutable declarative candidate bound to a state instance."""
 
     method: Callable[..., Any]
-    from_state: Optional[Union[str, List[str]]]
+    from_state: Optional[Union[str, Tuple[str, ...]]]
     to_state: Optional[str]
     condition: Optional[Any]
     is_async: bool
     priority: int
     after: Optional[float]
     within: Optional[float]
+    internal: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1936,7 +1938,7 @@ class StateMachine:
             )
         if after is None and within is None and len(sources) == 1:
             declarative_handler = _resolve_declarative_handler(
-                sources[0], trigger, target, normalized_priority
+                sources[0], trigger, target, normalized_priority, internal
             )
             if declarative_handler is not None:
                 after = declarative_handler.after
@@ -2793,7 +2795,7 @@ class StateMachine:
             )
         entry = slot
         declarative_handler = _resolve_declarative_handler(
-            self._current_state, trigger, entry.to_state, entry.priority
+            self._current_state, trigger, entry.to_state, entry.priority, entry.internal
         )
         has_declarative_guard = bool(
             declarative_handler and declarative_handler.condition
@@ -2938,7 +2940,7 @@ class StateMachine:
                     internal=entry.internal,
                 )
         declarative_handler = _resolve_declarative_handler(
-            source_state, trigger, entry.to_state, entry.priority
+            source_state, trigger, entry.to_state, entry.priority, entry.internal
         )
         has_declarative_guard = bool(
             declarative_handler and declarative_handler.condition
@@ -5270,7 +5272,7 @@ class AsyncStateMachine(StateMachine):
                     internal=entry.internal,
                 )
         declarative_handler = _resolve_declarative_handler(
-            source_state, trigger, entry.to_state, entry.priority
+            source_state, trigger, entry.to_state, entry.priority, entry.internal
         )
         has_declarative_guard = bool(
             declarative_handler and declarative_handler.condition
@@ -5597,6 +5599,7 @@ def transition(
     priority: object = 0,
     after: object = None,
     within: object = None,
+    internal: object = False,
 ):
     """
     Decorator to mark methods as transition handlers.
@@ -5609,31 +5612,39 @@ def transition(
         condition: Optional guard — can be a :class:`Condition`, a callable,
             or any truthy object evaluated via ``bool()``
         priority: Exact integer candidate priority; lower values are selected first
+        internal: Exact built-in boolean selecting internal self-transition mode
     """
     normalized_priority = _normalize_priority(priority)
+    if type(internal) is not bool:
+        raise TypeError("internal must be an exact built-in bool")
     normalized_after, normalized_within = StateMachine._normalize_timing(after, within)
+    normalized_from_state = (
+        tuple(from_state) if isinstance(from_state, list) else from_state
+    )
 
     def decorator(func):
         declarations = tuple(getattr(func, "_fsm_declarations", ()))
         declarations += (
             _DeclarativeHandlerMetadata(
                 trigger,
-                from_state,
+                normalized_from_state,
                 to_state,
                 condition,
                 normalized_priority,
                 normalized_after,
                 normalized_within,
+                internal,
             ),
         )
         func._fsm_declarations = declarations
         func._fsm_trigger = trigger
-        func._fsm_from_state = from_state
+        func._fsm_from_state = normalized_from_state
         func._fsm_to_state = to_state
         func._fsm_condition = condition
         func._fsm_priority = normalized_priority
         func._fsm_after = normalized_after
         func._fsm_within = normalized_within
+        func._fsm_internal = internal
         return func
 
     return decorator
@@ -5643,7 +5654,7 @@ def _metadata_matches_state(metadata: Any, state_name: str) -> bool:
     """Return whether optional declarative metadata accepts one canonical name."""
     if metadata is None:
         return True
-    if isinstance(metadata, list):
+    if isinstance(metadata, (list, tuple)):
         return state_name in metadata
     return metadata == state_name
 
@@ -5653,6 +5664,7 @@ def _matching_declarative_handlers(
     trigger: str,
     target_state: Optional[State],
     priority: Optional[int],
+    internal: Optional[bool],
 ) -> Tuple[_DeclarativeHandler, ...]:
     """Return candidate-qualified declarations without imposing precedence."""
     if not isinstance(source_state, DeclarativeState):
@@ -5667,6 +5679,7 @@ def _matching_declarative_handlers(
             or _metadata_matches_state(handler.to_state, target_state.name)
         )
         and (priority is None or handler.priority == priority)
+        and (internal is None or handler.internal is internal)
     )
 
 
@@ -5675,6 +5688,7 @@ def _resolve_declarative_handler(
     trigger: str,
     target_state: Optional[State],
     priority: Optional[int],
+    internal: Optional[bool],
 ) -> Optional[_DeclarativeHandler]:
     """Find one exact handler without giving discovery order semantic meaning.
 
@@ -5683,7 +5697,7 @@ def _resolve_declarative_handler(
     handler when that filtered declaration set has one member.
     """
     handlers = _matching_declarative_handlers(
-        source_state, trigger, target_state, priority
+        source_state, trigger, target_state, priority, internal
     )
     if len(handlers) == 1:
         return handlers[0]
@@ -5693,7 +5707,7 @@ def _resolve_declarative_handler(
     # match priority exactly so discovery cannot decide candidate identity.
     if priority is not None and isinstance(source_state, DeclarativeState):
         legacy_handlers = _matching_declarative_handlers(
-            source_state, trigger, target_state, None
+            source_state, trigger, target_state, None, internal
         )
         all_handlers = source_state._handlers.get(trigger, ())
         if len(all_handlers) == 1 and len(legacy_handlers) == 1:
@@ -5948,6 +5962,7 @@ class DeclarativeState(State):
                                 getattr(attr, "_fsm_priority", 0),
                                 getattr(attr, "_fsm_after", None),
                                 getattr(attr, "_fsm_within", None),
+                                getattr(attr, "_fsm_internal", False),
                             ),
                         )
                     for metadata in metadata_items:
@@ -5956,6 +5971,7 @@ class DeclarativeState(State):
                             metadata.from_state,
                             metadata.to_state,
                             metadata.priority,
+                            metadata.internal,
                         )
                         if any(identity == prior for prior in identities):
                             raise ValueError("duplicate declarative candidate")
@@ -5969,6 +5985,7 @@ class DeclarativeState(State):
                             metadata.priority,
                             metadata.after,
                             metadata.within,
+                            metadata.internal,
                         )
                         discovered.setdefault(metadata.trigger, []).append(handler_info)
                         _emit_legacy_debug(
@@ -5994,7 +6011,9 @@ class DeclarativeState(State):
         if trigger in self._handlers and not _has_prepared_declarative_guard(
             self, trigger, to_state
         ):
-            handlers = _matching_declarative_handlers(self, trigger, to_state, None)
+            handlers = _matching_declarative_handlers(
+                self, trigger, to_state, None, None
+            )
             if len(handlers) > 1:
                 return False
             condition = handlers[0].condition if handlers else None
@@ -6058,10 +6077,10 @@ class DeclarativeState(State):
         """
         Enhanced event handling with full logging and async support.
         """
-        handlers = _matching_declarative_handlers(self, event, None, None)
+        handlers = _matching_declarative_handlers(self, event, None, None, None)
         if len(handlers) > 1:
             return TransitionResult(False, error="Ambiguous declarative transition")
-        handler_info = _resolve_declarative_handler(self, event, None, None)
+        handler_info = _resolve_declarative_handler(self, event, None, None, None)
         if handler_info is not None:
             return _invoke_declarative_handler(self, handler_info, event, args, kwargs)
 
@@ -6089,7 +6108,9 @@ class AsyncDeclarativeState(DeclarativeState):
         if trigger in self._handlers and not _has_prepared_declarative_guard(
             self, trigger, to_state
         ):
-            handlers = _matching_declarative_handlers(self, trigger, to_state, None)
+            handlers = _matching_declarative_handlers(
+                self, trigger, to_state, None, None
+            )
             if len(handlers) > 1:
                 return False
             condition = handlers[0].condition if handlers else None
@@ -6142,10 +6163,10 @@ class AsyncDeclarativeState(DeclarativeState):
         """
         Async version of handle_event that can execute both sync and async handlers.
         """
-        handlers = _matching_declarative_handlers(self, event, None, None)
+        handlers = _matching_declarative_handlers(self, event, None, None, None)
         if len(handlers) > 1:
             return TransitionResult(False, error="Ambiguous declarative transition")
-        handler_info = _resolve_declarative_handler(self, event, None, None)
+        handler_info = _resolve_declarative_handler(self, event, None, None, None)
         if handler_info is not None:
             return await _invoke_declarative_handler_async(
                 self, handler_info, event, args, kwargs
@@ -6626,6 +6647,32 @@ class FSMBuilder:
                     internal=staged.internal,
                 )
             )
+
+        # A topology-complete declarative handler is ordinary builder input.
+        # Derive it afresh for this private candidate so failed builds leave
+        # staging reusable, then publish it beside explicit requests below.
+        for state in self._states.values():
+            if not isinstance(state, DeclarativeState):
+                continue
+            for trigger, handlers in state._handlers.items():
+                for handler in handlers:
+                    if handler.to_state is None or not _metadata_matches_state(
+                        handler.from_state, state.name
+                    ):
+                        continue
+                    target = handler.to_state
+                    bound_target = self._states.get(target, target)
+                    bound_requests.append(
+                        _TransitionRequest(
+                            trigger,
+                            (state,),
+                            bound_target,
+                            priority=handler.priority,
+                            after=handler.after,
+                            within=handler.within,
+                            internal=handler.internal,
+                        )
+                    )
         candidate._apply_transition_requests_owned(tuple(bound_requests))
 
         # Wire per-state sync callbacks

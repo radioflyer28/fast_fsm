@@ -233,6 +233,51 @@ def test_builder_stages_immutable_named_transition_requests() -> None:
         request.trigger = "changed"  # type: ignore[misc]
 
 
+def test_declarative_transition_internal_is_exact_and_metadata_is_immutable() -> None:
+    """Decorator mode is exact while plural sources are copied before discovery."""
+    sources = ["hover"]
+
+    class RefreshingState(DeclarativeState):
+        @transition("refresh", from_state=sources, to_state="hover", internal=True)
+        def refresh(self, *_args, **_kwargs):
+            return True
+
+    sources.append("mutated-after-decoration")
+    state = RefreshingState("hover")
+    handler = state._handlers["refresh"][0]
+
+    assert handler.from_state == ("hover",)
+    assert handler.internal is True
+
+    with pytest.raises(TypeError, match="exact built-in bool"):
+        transition("refresh", internal=1)
+
+    class DefaultModeState(DeclarativeState):
+        @transition("refresh", to_state="hover")
+        def refresh(self, *_args, **_kwargs):
+            return True
+
+    assert DefaultModeState("hover")._handlers["refresh"][0].internal is False
+
+
+def test_declarative_builder_keeps_destinationless_handlers_direct_only() -> None:
+    """A compatibility handler without a target never becomes invented topology."""
+    calls: list[str] = []
+
+    class DirectOnlyState(DeclarativeState):
+        @transition("refresh")
+        def refresh(self, *_args, **_kwargs):
+            calls.append("handler")
+            return True
+
+    state = DirectOnlyState("hover")
+    machine = FSMBuilder(state).build()
+
+    assert "refresh" not in machine._transitions["hover"]
+    assert state.handle_event("refresh").success is True
+    assert calls == ["handler"]
+
+
 def test_builder_build_submits_one_endpoint_bound_request_transaction() -> None:
     """Build binds endpoints without converting staging back to positional rows."""
     source = (Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py").read_text()

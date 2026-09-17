@@ -377,6 +377,7 @@ def transition(
     priority: object = 0,
     after: object = None,
     within: object = None,
+    internal: bool = False,
 ) -> Any: ...
 
 class DeclarativeState(State):
