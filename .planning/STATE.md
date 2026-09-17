@@ -157,10 +157,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T21:42:28.725Z
-Stopped at: Session resumed, proceeding to Phase 30 code-review fix cycle
-Resume file: 
+Last session: 2026-09-17T21:51:39.386Z
+Stopped at: Phase 30 code-review fixer interrupted with four uncommitted intended files
+Resume file: .planning/phases/30-builder-first-construction-persistence-parity/.continue-here.md
 
 None
 
-- Fix Phase 30 review findings CR-01 and WR-01, re-review, then run regression and goal verification.
+- Resume CR-01/WR-01 from the existing four-file uncommitted diff; verify, commit atomically, re-review, then run regression and goal verification.
