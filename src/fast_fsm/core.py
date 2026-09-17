@@ -2876,6 +2876,7 @@ class StateMachine:
                     "Transition timing rejected trigger",
                     stage=_LIFECYCLE_STAGE_SELECTION,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
         declarative_handler = _resolve_declarative_handler(
             source_state, trigger, entry.to_state, entry.priority
@@ -2940,6 +2941,7 @@ class StateMachine:
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
             if not condition_result:
                 if scan_group:
@@ -2957,6 +2959,7 @@ class StateMachine:
                     error_msg,
                     stage=_LIFECYCLE_STAGE_GUARD,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
 
         try:
@@ -2972,6 +2975,7 @@ class StateMachine:
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
             _emit_legacy_warning(
                 self._logger,
@@ -2986,6 +2990,7 @@ class StateMachine:
                 stage=_LIFECYCLE_STAGE_GUARD,
                 cause=cause,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         if not declarative_guard_passed:
             if scan_group:
@@ -2998,6 +3003,7 @@ class StateMachine:
                 error_msg,
                 stage=_LIFECYCLE_STAGE_GUARD,
                 priority=entry.priority,
+                internal=entry.internal,
             )
 
         _emit_legacy_debug(
@@ -3027,6 +3033,7 @@ class StateMachine:
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 cause=cause,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         if not can_proceed:
             if scan_group:
@@ -3039,6 +3046,7 @@ class StateMachine:
                 error_msg,
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         return prepared
 
@@ -5086,6 +5094,7 @@ class AsyncStateMachine(StateMachine):
                     "Transition timing rejected trigger",
                     stage=_LIFECYCLE_STAGE_SELECTION,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
         declarative_handler = _resolve_declarative_handler(
             source_state, trigger, entry.to_state, entry.priority
@@ -5125,6 +5134,7 @@ class AsyncStateMachine(StateMachine):
                         f"from state '{current_name}'",
                         stage=_LIFECYCLE_STAGE_GUARD,
                         priority=entry.priority,
+                        internal=entry.internal,
                     )
             except Exception as cause:
                 if for_query:
@@ -5136,6 +5146,7 @@ class AsyncStateMachine(StateMachine):
                     stage=_LIFECYCLE_STAGE_GUARD,
                     cause=cause,
                     priority=entry.priority,
+                    internal=entry.internal,
                 )
 
         try:
@@ -5152,6 +5163,7 @@ class AsyncStateMachine(StateMachine):
                 stage=_LIFECYCLE_STAGE_GUARD,
                 cause=cause,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         if not declarative_guard_passed:
             if scan_group:
@@ -5162,6 +5174,7 @@ class AsyncStateMachine(StateMachine):
                 f"State '{current_name}' rejected transition '{trigger}'",
                 stage=_LIFECYCLE_STAGE_GUARD,
                 priority=entry.priority,
+                internal=entry.internal,
             )
 
         try:
@@ -5180,6 +5193,7 @@ class AsyncStateMachine(StateMachine):
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 cause=cause,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         if not can_proceed:
             if scan_group:
@@ -5190,6 +5204,7 @@ class AsyncStateMachine(StateMachine):
                 f"State '{current_name}' rejected transition '{trigger}'",
                 stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
                 priority=entry.priority,
+                internal=entry.internal,
             )
         return prepared
 

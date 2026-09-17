@@ -6,13 +6,14 @@ import asyncio
 
 import pytest
 
-from fast_fsm.conditions import AsyncCondition
+from fast_fsm.conditions import AsyncCondition, FuncCondition
 from fast_fsm.core import (
     AsyncDeclarativeState,
     AsyncStateMachine,
     DeclarativeState,
     State,
     StateMachine,
+    TransitionResult,
     transition,
 )
 
@@ -54,6 +55,21 @@ class _LifecycleListener:
 
     def after_transition(self, *args: object, **kwargs: object) -> None:
         self._events.append("after")
+
+
+def _assert_internal_selection_failure(
+    result: TransitionResult,
+    stage: str,
+    *,
+    cause: BaseException | None = None,
+) -> None:
+    """Assert that a selected internal candidate retains pre-commit truth."""
+    assert result.success is False
+    assert result.committed is False
+    assert result.stage == stage
+    assert result.priority == 7
+    assert result.internal is True
+    assert result.cause is cause
 
 
 def test_registered_transition_entry_is_immutable_after_validation() -> None:
@@ -201,6 +217,257 @@ def test_direct_controls_remain_external_and_accept_no_internal_mode() -> None:
         machine.reset(internal=True)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         machine.restore({}, internal=True)  # type: ignore[call-arg]
+
+
+def test_sync_internal_selection_failures_preserve_selected_mode() -> None:
+    """Every singleton pre-commit rejection keeps its selected edge metadata."""
+    timing_state = State("hover")
+    timing_machine = StateMachine(timing_state, clock=lambda: 0.0)
+    timing_machine.add_transition(
+        "refresh", timing_state, timing_state, after=1, internal=True, priority=7
+    )
+    _assert_internal_selection_failure(timing_machine.trigger("refresh"), "selection")
+
+    direct_guard_state = State("hover")
+    direct_guard_machine = StateMachine(direct_guard_state)
+    direct_guard_machine.add_transition(
+        "reject",
+        direct_guard_state,
+        direct_guard_state,
+        FuncCondition(lambda **_kwargs: False),
+        internal=True,
+        priority=7,
+    )
+    direct_guard_failure = RuntimeError("direct-guard")
+
+    def raise_direct_guard(**_kwargs: object) -> bool:
+        raise direct_guard_failure
+
+    direct_guard_machine.add_transition(
+        "raise",
+        direct_guard_state,
+        direct_guard_state,
+        FuncCondition(raise_direct_guard),
+        internal=True,
+        priority=7,
+    )
+    _assert_internal_selection_failure(direct_guard_machine.trigger("reject"), "guard")
+    _assert_internal_selection_failure(
+        direct_guard_machine.trigger("raise"), "guard", cause=direct_guard_failure
+    )
+
+    declarative_failure = RuntimeError("declarative-guard")
+
+    def reject_declarative_guard(**_kwargs: object) -> bool:
+        return False
+
+    def raise_declarative_guard(**_kwargs: object) -> bool:
+        raise declarative_failure
+
+    class DeclarativeSource(DeclarativeState):
+        __slots__ = ()
+
+        @transition(
+            "reject",
+            from_state="hover",
+            to_state="hover",
+            condition=reject_declarative_guard,
+        )
+        def reject(self) -> None:
+            raise AssertionError("rejected declarative handler must not run")
+
+        @transition(
+            "raise",
+            from_state="hover",
+            to_state="hover",
+            condition=raise_declarative_guard,
+        )
+        def raise_(self) -> None:
+            raise AssertionError("failing declarative handler must not run")
+
+    declarative_state = DeclarativeSource("hover")
+    declarative_machine = StateMachine(declarative_state)
+    declarative_machine.add_transition(
+        "reject",
+        declarative_state,
+        declarative_state,
+        internal=True,
+        priority=7,
+    )
+    declarative_machine.add_transition(
+        "raise",
+        declarative_state,
+        declarative_state,
+        internal=True,
+        priority=7,
+    )
+    _assert_internal_selection_failure(declarative_machine.trigger("reject"), "guard")
+    _assert_internal_selection_failure(
+        declarative_machine.trigger("raise"), "guard", cause=declarative_failure
+    )
+
+    permission_failure = RuntimeError("permission")
+
+    class PermissionSource(State):
+        __slots__ = ()
+
+        def can_transition(
+            self, trigger: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            if trigger == "raise":
+                raise permission_failure
+            return False
+
+    permission_state = PermissionSource("hover")
+    permission_machine = StateMachine(permission_state)
+    for trigger in ("reject", "raise"):
+        permission_machine.add_transition(
+            trigger,
+            permission_state,
+            permission_state,
+            internal=True,
+            priority=7,
+        )
+    _assert_internal_selection_failure(
+        permission_machine.trigger("reject"), "state-permission"
+    )
+    _assert_internal_selection_failure(
+        permission_machine.trigger("raise"),
+        "state-permission",
+        cause=permission_failure,
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_internal_selection_failures_preserve_selected_mode() -> None:
+    """Async singleton selection reports the same truthful internal metadata."""
+    timing_state = State("hover")
+    timing_machine = AsyncStateMachine(timing_state, clock=lambda: 0.0)
+    timing_machine.add_transition(
+        "refresh", timing_state, timing_state, after=1, internal=True, priority=7
+    )
+    _assert_internal_selection_failure(
+        await timing_machine.trigger_async("refresh"), "selection"
+    )
+
+    class AsyncGuard(AsyncCondition):
+        __slots__ = ("_outcome",)
+
+        def __init__(self, outcome: bool | BaseException) -> None:
+            super().__init__("async-selection-guard", "phase 28 selection guard")
+            self._outcome = outcome
+
+        async def check_async(self, **_kwargs: object) -> bool:
+            if isinstance(self._outcome, BaseException):
+                raise self._outcome
+            return self._outcome
+
+    direct_guard_state = State("hover")
+    direct_guard_machine = AsyncStateMachine(direct_guard_state)
+    direct_guard_machine.add_transition(
+        "reject",
+        direct_guard_state,
+        direct_guard_state,
+        AsyncGuard(False),
+        internal=True,
+        priority=7,
+    )
+    direct_guard_failure = RuntimeError("async-direct-guard")
+    direct_guard_machine.add_transition(
+        "raise",
+        direct_guard_state,
+        direct_guard_state,
+        AsyncGuard(direct_guard_failure),
+        internal=True,
+        priority=7,
+    )
+    _assert_internal_selection_failure(
+        await direct_guard_machine.trigger_async("reject"), "guard"
+    )
+    _assert_internal_selection_failure(
+        await direct_guard_machine.trigger_async("raise"),
+        "guard",
+        cause=direct_guard_failure,
+    )
+
+    declarative_failure = RuntimeError("async-declarative-guard")
+
+    async def reject_declarative_guard(**_kwargs: object) -> bool:
+        return False
+
+    async def raise_declarative_guard(**_kwargs: object) -> bool:
+        raise declarative_failure
+
+    class DeclarativeSource(AsyncDeclarativeState):
+        __slots__ = ()
+
+        @transition(
+            "reject",
+            from_state="hover",
+            to_state="hover",
+            condition=reject_declarative_guard,
+        )
+        async def reject(self) -> None:
+            raise AssertionError("rejected declarative handler must not run")
+
+        @transition(
+            "raise",
+            from_state="hover",
+            to_state="hover",
+            condition=raise_declarative_guard,
+        )
+        async def raise_(self) -> None:
+            raise AssertionError("failing declarative handler must not run")
+
+    declarative_state = DeclarativeSource("hover")
+    declarative_machine = AsyncStateMachine(declarative_state)
+    for trigger in ("reject", "raise"):
+        declarative_machine.add_transition(
+            trigger,
+            declarative_state,
+            declarative_state,
+            internal=True,
+            priority=7,
+        )
+    _assert_internal_selection_failure(
+        await declarative_machine.trigger_async("reject"), "guard"
+    )
+    _assert_internal_selection_failure(
+        await declarative_machine.trigger_async("raise"),
+        "guard",
+        cause=declarative_failure,
+    )
+
+    permission_failure = RuntimeError("async-permission")
+
+    class PermissionSource(State):
+        __slots__ = ()
+
+        async def can_transition_async(
+            self, trigger: str, to_state: State, *args: object, **kwargs: object
+        ) -> bool:
+            if trigger == "raise":
+                raise permission_failure
+            return False
+
+    permission_state = PermissionSource("hover")
+    permission_machine = AsyncStateMachine(permission_state)
+    for trigger in ("reject", "raise"):
+        permission_machine.add_transition(
+            trigger,
+            permission_state,
+            permission_state,
+            internal=True,
+            priority=7,
+        )
+    _assert_internal_selection_failure(
+        await permission_machine.trigger_async("reject"), "state-permission"
+    )
+    _assert_internal_selection_failure(
+        await permission_machine.trigger_async("raise"),
+        "state-permission",
+        cause=permission_failure,
+    )
 
 
 @pytest.mark.parametrize(
