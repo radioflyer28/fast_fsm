@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: executing
-stopped_at: Completed 30-03-PLAN.md
-last_updated: "2026-09-17T19:57:28.925Z"
+stopped_at: Completed 30-04-PLAN.md
+last_updated: "2026-09-17T20:11:43.858Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 30 execution started
-state_head: 81db409a67d5137a6a3256b6c4d96458fd9345d3
+state_head: 7cefe909a6da2d2b161f599bc24d84e960f268cc
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 21
-  completed_plans: 18
+  completed_plans: 19
   percent: 57
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 30 execution started
 
@@ -77,6 +77,7 @@ Progress: [██████░░░░] 57%
 | Phase 30 P01 | 9 min | 2 tasks | 7 files |
 | Phase 30 P02 | 43 min | 2 tasks | 7 files |
 | Phase 30 P03 | 6 min | 2 tasks | 5 files |
+| Phase 30 P04 | 14 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 30]: Batch transition rows carry optional internal mode as their eighth field after timing and publish through the canonical request transaction.
 - [Phase 30]: Deprecated construction boundaries warn once before delegating to private compatibility workers.
 - [Phase 30]: Existing stubs and root exports remain unchanged because they already retain the v0.5.x compatibility signatures.
+- [Phase 30]: Topology dictionaries emit internal only as JSON true; missing or exact false remains external.
+- [Phase 30]: Clone replays canonical requests into independent mutable containers; snapshot v1 remains state-only and receiver-owned.
 
 ### Pending Todos
 
@@ -149,8 +152,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T19:57:28.831Z
-Stopped at: Completed 30-03-PLAN.md
+Last session: 2026-09-17T20:11:43.762Z
+Stopped at: Completed 30-04-PLAN.md
 Resume file: 
 
 None
