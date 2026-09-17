@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fast_fsm.core import (
+    CallbackState,
     DeclarativeState,
     FSMBuilder,
     State,
@@ -188,3 +189,105 @@ def test_internal_declaration_never_binds_an_external_manual_edge() -> None:
     assert result.success is True
     assert result.internal is False
     assert events == []
+
+
+def _exercise_final_and_internal_topology(machine: StateMachine) -> tuple[object, ...]:
+    """Return the observable contract shared by every construction adapter."""
+    events: list[str] = []
+    machine.enable_history()
+    machine.on_exit("source", lambda *_args, **_kwargs: events.append("exit"))
+    machine.on_enter("done", lambda *_args, **_kwargs: events.append("enter"))
+    machine.on_trigger(
+        "refresh", lambda *_args, **_kwargs: events.append("refresh-trigger")
+    )
+    machine.on_trigger(
+        "finish", lambda *_args, **_kwargs: events.append("finish-trigger")
+    )
+
+    refresh = machine.trigger("refresh")
+    refresh_events = tuple(events)
+    events.clear()
+    finish = machine.trigger("finish")
+
+    return (
+        (refresh.success, refresh.committed, refresh.priority, refresh.internal),
+        refresh_events,
+        machine.history[0].internal,
+        (finish.success, finish.committed, finish.priority, finish.internal),
+        tuple(events),
+        machine.current_state.name,
+        machine.is_terminated,
+        machine.history[1].internal,
+    )
+
+
+def test_construction_parity_covers_final_destination_and_internal_batch_row() -> None:
+    """Direct, batch, builder, declarative, and callback adapters agree visibly."""
+
+    def direct() -> StateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        machine = StateMachine(source)
+        machine.add_state(done)
+        machine.add_transition("refresh", source, source, priority=-2, internal=True)
+        machine.add_transition("finish", source, done, priority=4)
+        return machine
+
+    def batch() -> StateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        machine = StateMachine(source)
+        machine.add_state(done)
+        machine.add_transitions(
+            [
+                ("refresh", source, source, None, -2, None, None, True),
+                ("finish", source, done, None, 4),
+            ]
+        )
+        return machine
+
+    def builder() -> StateMachine:
+        source = State("source")
+        done = State("done", final=True)
+        return (
+            FSMBuilder(source)
+            .add_state(done)
+            .add_transition("refresh", "source", "source", priority=-2, internal=True)
+            .add_transition("finish", "source", "done", priority=4)
+            .build()
+        )
+
+    def declarative() -> StateMachine:
+        class Source(DeclarativeState):
+            @transition(
+                "refresh",
+                from_state="source",
+                to_state="source",
+                priority=-2,
+                internal=True,
+            )
+            def refresh(self, *_args: object, **_kwargs: object) -> bool:
+                return True
+
+            @transition("finish", from_state="source", to_state="done", priority=4)
+            def finish(self, *_args: object, **_kwargs: object) -> bool:
+                return True
+
+        return FSMBuilder(Source("source")).add_state(State("done", final=True)).build()
+
+    def callback() -> StateMachine:
+        source = CallbackState("source", lambda *_args, **_kwargs: None)
+        done = CallbackState("done", lambda *_args, **_kwargs: None, final=True)
+        machine = StateMachine(source)
+        machine.add_state(done)
+        machine.add_transition("refresh", source, source, priority=-2, internal=True)
+        machine.add_transition("finish", source, done, priority=4)
+        return machine
+
+    machines = (direct(), batch(), builder(), declarative(), callback())
+    expected = _exercise_final_and_internal_topology(machines[0])
+
+    for machine in machines:
+        assert machine._states["source"] is machine.initial_state
+        assert machine._states["done"].final is True
+        assert _exercise_final_and_internal_topology(machine) == expected
