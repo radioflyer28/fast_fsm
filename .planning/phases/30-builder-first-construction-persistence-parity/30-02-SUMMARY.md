@@ -12,9 +12,9 @@ provides:
   - Observable parity coverage across direct, batch, builder, declarative, and callback construction
 affects: [30-03, 30-04, 30-06, construction-parity, helper-compatibility, persistence]
 actuals:
-  tokens: 5274
+  tokens: 5394
   tasks: 2
-  commits: 4
+  commits: 5
 tech-stack:
   added: []
   patterns:
@@ -83,6 +83,7 @@ status: complete
 
 1. **Task 1: Complete declarative applicability, async detection, conflicts, and builder repair** — `922962d` (RED tests), `6dcf33f` (implementation)
 2. **Task 2: Expand construction parity through direct, batch, builder, declarative, and callback paths** — `bbfae6d` (RED tests), `1110fcf` (implementation)
+3. **Post-wave regression correction: Assert batch publication at its owning seam** — `617716d` (structural fix)
 
 ## Files Created/Modified
 
@@ -109,7 +110,15 @@ status: complete
 - **Verification:** Focused adapter suite, Ruff, and blocking mypy pass.
 - **Committed in:** `1110fcf`
 
-**Total deviations:** 1 auto-fixed (1 Rule 2 correctness gap).
+**2. [Rule 1 - Structural regression] Corrected the batch ownership assertion after full-suite execution**
+- **Found during:** Post-wave full-suite gate
+- **Issue:** The new structural test looked for publication inside `_transition_requests_from_rows()`, which intentionally only parses an immutable request tuple; the actual owner is `_add_transitions_owned()`.
+- **Fix:** Assert parsing remains publication-free and that its immediate owning adapter delegates to `_apply_transition_requests_owned()` exactly once, without adapter-specific normalization or repair.
+- **Files modified:** `tests/test_graph_invariants.py`.
+- **Verification:** Exact regression test, Plan 30-02 focused suite, Ruff, mypy, and the full sequential suite pass.
+- **Committed in:** `617716d`
+
+**Total deviations:** 2 auto-fixed (1 Rule 2 correctness gap, 1 Rule 1 structural regression).
 **Impact on plan:** The extension is additive, preserves all 3–7-field rows, and is required for BUILD-06 mode parity rather than a second construction path.
 
 ## Issues Encountered
@@ -127,8 +136,8 @@ The declarative builder and covered direct/batch/callback adapters now share fin
 ## Self-Check: PASSED
 
 - All seven declared implementation and test files exist.
-- Task commits `922962d`, `6dcf33f`, `bbfae6d`, and `1110fcf` exist in git history.
-- Plan-targeted tests, Ruff format/lint, and blocking mypy pass; ty remains the documented advisory only.
+- Task commits `922962d`, `6dcf33f`, `bbfae6d`, `1110fcf`, and `617716d` exist in git history.
+- Exact and plan-targeted tests, Ruff format/lint, blocking mypy, and the full sequential suite pass; ty remains the documented advisory only.
 
 ---
 *Phase: 30-builder-first-construction-persistence-parity*
