@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
-current_phase: 29
-current_phase_name: Expected Domain Rejection
-status: verifying
-stopped_at: Completed 29-04-PLAN.md
-last_updated: "2026-09-17T17:03:12.749Z"
+current_phase: 30
+current_phase_name: Builder-First Construction & Persistence Parity
+status: planning
+stopped_at: Phase 29 complete, ready to plan Phase 30
+last_updated: "2026-09-17T17:47:41.384Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 29 execution started
-state_head: ab1606a4e48a701787d5bad1dbcce86708e39906
+last_activity_desc: Phase 29 complete, transitioned to Phase 30
+state_head: 619bcbb4ccabf2581c98b40cfbb22dbb835abeb6
 progress:
   total_phases: 7
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 15
   completed_plans: 15
-  percent: 43
+  percent: 57
 ---
 
 # State: Fast FSM
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 29 (Expected Domain Rejection) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 29 execution started
+Phase: 30 — Builder-First Construction & Persistence Parity
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-17 — Phase 29 complete, transitioned to Phase 30
 
-Progress: [████░░░░░░] 43%
+Progress: [██████░░░░] 57%
 
 ## Performance Metrics
 
@@ -52,8 +52,9 @@ Progress: [████░░░░░░] 43%
 | 26 | 5 | - | - |
 | 27 | 3 | - | - |
 | 28 | 3 | - | - |
+| 29 | 4 | - | - |
 
-**Recent Trend:** Phases 26–28 are complete and independently verified; Phase 29 has four checker-approved execution plans.
+**Recent Trend:** Phases 26–29 are complete and independently verified; Phase 30 is ready for discussion and planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -140,7 +141,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-17T17:03:12.680Z
-Stopped at: Completed 29-04-PLAN.md
+Stopped at: Phase 29 complete, ready to plan Phase 30
 Resume file: 
 
 None
