@@ -5618,9 +5618,11 @@ def transition(
     if type(internal) is not bool:
         raise TypeError("internal must be an exact built-in bool")
     normalized_after, normalized_within = StateMachine._normalize_timing(after, within)
-    normalized_from_state = (
-        tuple(from_state) if isinstance(from_state, list) else from_state
-    )
+    normalized_from_state: Optional[Union[str, Tuple[str, ...]]]
+    if isinstance(from_state, list):
+        normalized_from_state = tuple(cast(List[str], from_state))
+    else:
+        normalized_from_state = cast(Optional[str], from_state)
 
     def decorator(func):
         declarations = tuple(getattr(func, "_fsm_declarations", ()))
