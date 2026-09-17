@@ -110,10 +110,44 @@ row `(trigger, source, target, condition, priority)`.
    :undoc-members:
 ```
 
+## Expected eligibility rejection
+
+`TransitionRejected(code)` is a control signal for an expected domain outcome
+while Fast FSM is deciding whether an edge is eligible. `code` must be an exact
+built-in `str`, contain 1–64 ASCII characters, and match
+`[a-z][a-z0-9_.-]*` without trimming, case-folding, or coercion. For example,
+`battery.low` and `mission.altitude_limit` are valid codes.
+
+The selector has three distinct outcomes: a false guard keeps scanning a local
+priority group; `TransitionRejected` stops that group with a failed result; an
+ordinary exception remains an ordinary staged failure. Cancellation also keeps
+its existing cancellation behavior. Fast FSM converts the signal only when it
+is raised by a transition guard, a declarative guard, or a state's permission
+hook. Signals raised by timing, lifecycle callbacks/listeners, declarative
+actions, trigger callbacks, after-transition listeners, observers, or trace
+redactors are not expected rejections; they retain the normal failure or
+process-control behavior of that boundary.
+
+An expected-rejection `TransitionResult` has `success=False`, `rejected=True`,
+the validated `rejection_code`, `cause=None`, and
+`error="Transition rejected: <code>"`. It is uncommitted and destination-free,
+but retains source, trigger, selection stage, priority, and internal-mode
+metadata. `raise_if_failed()` still raises `TransitionError` with the result
+attached. `can_trigger()` and `can_trigger_async()` instead return `False`
+without changing state or history and without trace or failure-observer work.
+
+Condition evaluation outside a machine propagates `TransitionRejected`
+normally. Debug logging records only the validated code; it never formats the
+signal, a traceback, or caller-provided values.
+
 ## Exceptions
 
 ```{eval-rst}
 .. autoclass:: fast_fsm.TransitionError
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fast_fsm.TransitionRejected
    :members:
    :show-inheritance:
 ```

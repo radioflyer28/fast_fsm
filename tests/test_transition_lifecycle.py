@@ -16,6 +16,7 @@ from fast_fsm.core import (
     State,
     StateMachine,
     TransitionError,
+    TransitionRejected,
     TransitionRecord,
     TransitionResult,
     transition,
@@ -616,6 +617,42 @@ def test_failure_observers_continue_after_baseexceptions_without_recursion(
         assert secret not in caplog.text
 
 
+def test_expected_rejection_outside_selection_keeps_lifecycle_cause_truth() -> None:
+    """A lifecycle or observer signal cannot relabel an already selected result."""
+    lifecycle_signal = TransitionRejected("battery.low")
+    observer_signal = TransitionRejected("link.lost")
+    observer_events: list[str] = []
+
+    def reject_on_exit(*_args: object, **_kwargs: object) -> None:
+        raise lifecycle_signal
+
+    source = CallbackState("source", on_exit=reject_on_exit)
+    destination = State("destination")
+    machine = StateMachine(source, name="expected-rejection-lifecycle-boundary")
+    machine.add_state(destination)
+    machine.add_transition("advance", source, destination, priority=-7)
+
+    def rejecting_observer(*_args: object, **_kwargs: object) -> None:
+        observer_events.append("rejecting-observer")
+        raise observer_signal
+
+    machine.on_failed(rejecting_observer)
+    machine.on_failed(lambda *_args, **_kwargs: observer_events.append("later"))
+
+    result = machine.trigger("advance")
+
+    assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.stage == "source-exit"
+    assert result.cause is lifecycle_signal
+    assert result.committed is False
+    assert result.priority == -7
+    assert result.internal is False
+    assert machine.current_state is source
+    assert observer_events == ["rejecting-observer", "later"]
+
+
 def test_failure_observer_registration_starts_with_the_next_sync_failure() -> None:
     """Owned observer registration rejects; external registration stays ordered."""
     machine = StateMachine(State("source"), name="observer-snapshot-sync")
@@ -945,13 +982,18 @@ def test_sync_lifecycle_runs_the_locked_order_and_preserves_registration_order()
         ("after-transition", True),
     ),
 )
+@pytest.mark.parametrize("failure_kind", ("runtime", "expected-rejection"))
 def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
-    failing_stage: str, expected_committed: bool
+    failing_stage: str, expected_committed: bool, failure_kind: str
 ) -> None:
     """Every synchronous callback slot yields one truthful fail-fast result."""
     events: list[str] = []
     termination_seen_during_entry: list[bool] = []
-    failure = RuntimeError(f"{failing_stage}-secret")
+    failure: BaseException
+    if failure_kind == "expected-rejection":
+        failure = TransitionRejected(f"lifecycle.{failing_stage}")
+    else:
+        failure = RuntimeError(f"{failing_stage}-secret")
 
     def callback(stage: str):
         def run(*_args: object, **_kwargs: object) -> None:
@@ -995,6 +1037,8 @@ def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
     result = machine.trigger("advance")
 
     assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
     assert result.committed is expected_committed
     assert result.stage == failing_stage
     assert result.cause is failure
@@ -1013,6 +1057,7 @@ def test_sync_lifecycle_callback_failure_stops_the_suffix_at_its_stage(
         (TransitionResult(False, error="handler-result-secret"), None),
         ("invalid", None),
         (RuntimeError("handler-exception-secret"), "exception"),
+        (TransitionRejected("handler.domain"), "exception"),
     ),
 )
 def test_sync_declarative_failure_is_postcommit_and_finalized_once(
@@ -1044,6 +1089,8 @@ def test_sync_declarative_failure_is_postcommit_and_finalized_once(
 
     assert invocations == ["handler"]
     assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
     assert result.committed is True
     assert result.stage == "declarative-handler"
     assert result.cause is (outcome if expected_cause is not None else None)

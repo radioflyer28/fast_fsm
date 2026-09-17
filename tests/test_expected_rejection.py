@@ -317,6 +317,137 @@ def test_reject_02_logging_uses_only_debug_code_metadata(
 
 
 @pytest.mark.parametrize(
+    ("surface", "stage", "committed"),
+    [
+        ("source_exit", "source-exit", False),
+        ("destination_enter", "destination-enter", True),
+    ],
+)
+def test_reject_09_outside_boundary_lifecycle_signal_stays_an_ordinary_failure(
+    surface: str, stage: str, committed: bool
+) -> None:
+    """REJECT-09: lifecycle signals never use selector-only rejection metadata."""
+    signal = TransitionRejected("battery.low")
+    events: list[str] = []
+
+    class Source(State):
+        def on_exit(
+            self, to_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            if surface == "source_exit":
+                raise signal
+            super().on_exit(to_state, trigger, *args, **kwargs)
+
+    class Destination(State):
+        def on_enter(
+            self, from_state: State, trigger: str, *args: object, **kwargs: object
+        ) -> None:
+            if surface == "destination_enter":
+                raise signal
+            super().on_enter(from_state, trigger, *args, **kwargs)
+
+    source = Source("source")
+    destination = Destination("destination")
+    fallback = State("fallback")
+    machine = StateMachine(source, name=f"outside-boundary-{surface}")
+    machine.add_state(destination)
+    machine.add_state(fallback)
+    machine.enable_history()
+    machine.add_transition("go", source, destination, priority=-2)
+    machine.add_transition(
+        "go",
+        source,
+        fallback,
+        lambda: events.append("fallback") or True,
+        priority=4,
+    )
+    machine.on_failed(lambda *_args, **_kwargs: events.append("observer"))
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.cause is signal
+    assert result.stage == stage
+    assert result.committed is committed
+    assert result.priority == -2
+    assert result.internal is False
+    assert result.to_state == ("destination" if committed else None)
+    assert machine.current_state is (destination if committed else source)
+    assert len(machine.history) == int(committed)
+    assert events == ["observer"]
+
+
+def test_reject_09_timing_signal_stays_an_ordinary_selection_failure() -> None:
+    """REJECT-09: timing evaluation is not an approved conversion boundary."""
+    signal = TransitionRejected("battery.low")
+    source = State("source")
+    target = State("target")
+    fallback = State("fallback")
+
+    clock_calls = 0
+
+    def reject_clock() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls > 1:
+            raise signal
+        return 0.0
+
+    machine = StateMachine(source, name="outside-boundary-timing", clock=reject_clock)
+    machine.add_state(target)
+    machine.add_state(fallback)
+    machine.enable_history()
+    machine.add_transition("go", source, target, after=0)
+    machine.add_transition("go", source, fallback, priority=3)
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.cause is signal
+    assert result.stage == "selection"
+    assert result.committed is False
+    assert result.priority is None
+    assert result.internal is False
+    assert result.to_state is None
+    assert machine.current_state is source
+    assert machine.history == []
+
+
+def test_reject_07_observer_signal_remains_isolated_from_trigger_result() -> None:
+    """REJECT-07/09: observer signals cannot relabel an ordinary failure."""
+    source = State("source")
+    target = State("target")
+    original_cause = RuntimeError("guard failure")
+    observer_signal = TransitionRejected("battery.low")
+    events: list[str] = []
+    machine = StateMachine(source, name="outside-boundary-observer")
+    machine.add_state(target)
+    machine.add_transition(
+        "go", source, target, lambda: (_ for _ in ()).throw(original_cause)
+    )
+
+    def rejecting_observer(*_args: object, **_kwargs: object) -> None:
+        events.append("rejecting-observer")
+        raise observer_signal
+
+    machine.on_failed(rejecting_observer)
+    machine.on_failed(lambda *_args, **_kwargs: events.append("later-observer"))
+
+    result = machine.trigger("go")
+
+    assert result.success is False
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.cause is original_cause
+    assert result.stage == "guard"
+    assert events == ["rejecting-observer", "later-observer"]
+
+
+@pytest.mark.parametrize(
     "boundary", ("transition_guard", "declarative_guard", "state_permission")
 )
 @pytest.mark.parametrize("topology", ("singleton", "grouped"))

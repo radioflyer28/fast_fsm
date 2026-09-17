@@ -19,6 +19,25 @@ The operators `&`, `|`, and `~` create the same canonical composition types.
 They preserve ordinary left-to-right short-circuiting, so a failed left side of
 an `AndCondition` does not evaluate its right side.
 
+## Expected domain rejection
+
+Conditions may raise `TransitionRejected(code)` to report a bounded, expected
+domain reason that an otherwise considered transition must not take. This is
+different from returning `False`: false remains ordinary boolean eligibility
+and may fall through to the next candidate in a priority group.
+
+`AndCondition` and `OrCondition` stop immediately and propagate the same
+signal without evaluating a later child. `NotCondition` and the deprecated
+`NegatedCondition` also propagate it unchanged; they negate only boolean
+results. The rule applies to nested and deferred asynchronous composition, and
+does not alter cancellation propagation.
+
+Direct condition evaluation lets the signal propagate normally. A machine
+converts it only from a transition guard, declarative guard, or state
+permission hook; timing and lifecycle code retain their ordinary error or
+cancellation behavior. See the [core API](core.md#expected-eligibility-rejection)
+for the resulting `TransitionResult` contract.
+
 ```python
 from fast_fsm import FuncCondition
 

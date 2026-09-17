@@ -20,6 +20,7 @@ from fast_fsm.core import (
     FSMTraceEvent,
     State,
     StateMachine,
+    TransitionRejected,
     configure_fsm_logging,
     set_fsm_logging_level,
     transition,
@@ -191,6 +192,61 @@ def _sync_trace_machine(
         sensitive=KEYWORD_SENTINEL,
     ).success
     return success_machine, failure_machine
+
+
+def test_expected_rejection_logs_only_validated_debug_metadata() -> None:
+    """Expected rejection never formats the signal or caller-provided payload."""
+
+    class HostileSignal(TransitionRejected):
+        def __repr__(self) -> str:
+            return REPR_SENTINEL
+
+    logger_name = _logger_name("expected-rejection")
+    logger = logging.getLogger(logger_name)
+    handler = CaptureHandler()
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    source = State("source")
+    destination = State("destination")
+    machine = StateMachine(source, name="expected-rejection", logger_name=logger_name)
+    machine.add_state(destination)
+
+    def reject(*_args: object, **_kwargs: object) -> bool:
+        raise HostileSignal("battery.low")
+
+    machine.add_transition("advance", source, destination, reject)
+    hostile_payload = HostileRepr()
+
+    try:
+        result = machine.trigger("advance", payload=hostile_payload)
+
+        assert result.rejected is True
+        assert result.rejection_code == "battery.low"
+        assert hostile_payload.repr_calls == 0
+        expected_records = [
+            record
+            for record in handler.records
+            if record[0] == "Transition rejected code=%s"
+        ]
+        assert len(expected_records) == 1
+        message, args, _record_dict, formatted = expected_records[0]
+        assert message == "Transition rejected code=%s"
+        assert args == ("battery.low",)
+        assert formatted == "DEBUG:Transition rejected code=battery.low"
+        assert all(record[2]["levelno"] < logging.WARNING for record in handler.records)
+        for message, args, record_dict, formatted in handler.records:
+            assert REPR_SENTINEL not in formatted
+            assert not _contains_raw_secret(message, REPR_SENTINEL)
+            assert not _contains_raw_secret(args, REPR_SENTINEL)
+            assert not _contains_raw_secret(record_dict, REPR_SENTINEL)
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(prior_level)
+        logger.propagate = prior_propagate
 
 
 def _exercise_standard_trace_confidentiality(
