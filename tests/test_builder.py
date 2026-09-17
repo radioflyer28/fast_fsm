@@ -130,7 +130,12 @@ def _machine_topology_fingerprint(machine):
                 source,
                 trigger,
                 tuple(
-                    (id(entry.to_state), id(entry.condition), entry.priority)
+                    (
+                        id(entry.to_state),
+                        id(entry.condition),
+                        entry.priority,
+                        entry.internal,
+                    )
                     for entry in (
                         slot.entries if isinstance(slot, _TransitionGroup) else (slot,)
                     )
@@ -158,6 +163,7 @@ def builder_staging_fingerprint(builder):
                 request.condition_ref,
                 request.after,
                 request.within,
+                request.internal,
             )
             for request in builder._transitions
         ),
@@ -276,6 +282,26 @@ def test_builder_stages_and_builds_an_internal_self_transition():
     machine = builder.build()
 
     assert machine._transitions["idle"]["refresh"].internal is True
+
+
+def test_builder_fingerprints_include_internal_transition_mode():
+    """Atomicity fixtures distinguish otherwise-identical transition modes."""
+    idle = State("idle")
+    external_builder = FSMBuilder(idle)
+    internal_builder = FSMBuilder(idle)
+    external_builder.add_transition("refresh", "idle", "idle", internal=False)
+    internal_builder.add_transition("refresh", "idle", "idle", internal=True)
+
+    assert builder_staging_fingerprint(external_builder) != builder_staging_fingerprint(
+        internal_builder
+    )
+
+    external_machine = external_builder.build()
+    internal_machine = internal_builder.build()
+
+    assert _machine_topology_fingerprint(
+        external_machine
+    ) != _machine_topology_fingerprint(internal_machine)
 
 
 @pytest.mark.parametrize("internal", (1, 0, "true", object()))
