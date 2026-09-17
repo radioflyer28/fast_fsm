@@ -549,6 +549,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "priority",
             "after",
             "within",
+            "internal",
         },
         "_DeclarativeHandler": {
             "method",
@@ -559,6 +560,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "priority",
             "after",
             "within",
+            "internal",
         },
     }.items():
         node = classes.get(name)
@@ -620,6 +622,35 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         "within",
         "internal",
     ]
+
+
+def test_declarative_transition_mode_contract_keeps_raw_runtime_input() -> None:
+    """The public stub is strict while compiled runtime validates raw mode input."""
+    runtime_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    stub_tree = ast.parse(CORE_PYI.read_text(encoding="utf-8"), filename=str(CORE_PYI))
+
+    runtime_transition = next(
+        node
+        for node in runtime_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "transition"
+    )
+    stub_transition = next(
+        node
+        for node in stub_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "transition"
+    )
+
+    runtime_internal = next(
+        arg for arg in runtime_transition.args.kwonlyargs if arg.arg == "internal"
+    )
+    stub_internal = next(
+        arg for arg in stub_transition.args.kwonlyargs if arg.arg == "internal"
+    )
+    assert ast.unparse(runtime_internal.annotation) == "object"
+    assert ast.unparse(stub_internal.annotation) == "bool"
+    assert ast.unparse(runtime_transition).index(
+        "type(internal) is not bool"
+    ) < ast.unparse(runtime_transition).index("_DeclarativeHandlerMetadata")
 
 
 def test_phase24_diagnostic_projection_stays_scalar_and_cold() -> None:

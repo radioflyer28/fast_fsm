@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from fast_fsm.core import DeclarativeState, FSMBuilder, State, transition
 
 
@@ -51,6 +53,8 @@ def test_declarative_builder_internal_transition_executes_exactly_once() -> None
 
     result = machine.trigger("refresh")
 
+    entry = machine._transitions["hover"]["refresh"]
+    assert entry.condition is None
     assert result.success is True
     assert result.committed is True
     assert result.internal is True
@@ -59,3 +63,49 @@ def test_declarative_builder_internal_transition_executes_exactly_once() -> None
     assert calls == {"guard": 1, "handler": 1}
     assert events == ["handler", "trigger"]
     assert builder.build() is machine
+
+
+def test_declarative_builder_failure_keeps_staging_and_cache_unchanged() -> None:
+    """Late canonical final/mode failures cannot mutate the reusable builder."""
+
+    class NonSelfInternal(DeclarativeState):
+        @transition("refresh", to_state="other", internal=True)
+        def refresh(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    invalid_mode = FSMBuilder(NonSelfInternal("hover")).add_state(State("other"))
+    mode_before = (
+        tuple((name, id(state)) for name, state in invalid_mode._states.items()),
+        tuple(id(request) for request in invalid_mode._transitions),
+        invalid_mode._machine,
+    )
+
+    with pytest.raises(ValueError, match="identical canonical source and target"):
+        invalid_mode.build()
+
+    assert (
+        tuple((name, id(state)) for name, state in invalid_mode._states.items()),
+        tuple(id(request) for request in invalid_mode._transitions),
+        invalid_mode._machine,
+    ) == mode_before
+
+    class FinalSource(DeclarativeState):
+        @transition("refresh", to_state="done")
+        def refresh(self, *_args: object, **_kwargs: object) -> bool:
+            return True
+
+    invalid_final = FSMBuilder(FinalSource("done", final=True))
+    final_before = (
+        tuple((name, id(state)) for name, state in invalid_final._states.items()),
+        tuple(id(request) for request in invalid_final._transitions),
+        invalid_final._machine,
+    )
+
+    with pytest.raises(ValueError, match="final state cannot be a transition source"):
+        invalid_final.build()
+
+    assert (
+        tuple((name, id(state)) for name, state in invalid_final._states.items()),
+        tuple(id(request) for request in invalid_final._transitions),
+        invalid_final._machine,
+    ) == final_before

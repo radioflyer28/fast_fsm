@@ -353,6 +353,25 @@ def test_retained_transition_adapters_use_the_canonical_request_transaction() ->
         assert "_commit_transition_plan" not in adapter_source
 
 
+def test_declarative_builder_derives_into_one_canonical_transaction() -> None:
+    """Builder declaration import owns no normalization, commit, or registry seam."""
+    core_source = (
+        Path(__file__).parents[1] / "src" / "fast_fsm" / "core.py"
+    ).read_text()
+    builder_start = core_source.index("class FSMBuilder:")
+    build_start = core_source.index("    def build(", builder_start)
+    build_end = core_source.index("    @property\n    def machine_type", build_start)
+    build_source = core_source[build_start:build_end]
+
+    assert "_DeclarativeHandler" not in build_source
+    assert "_TransitionRequest" in build_source
+    assert build_source.count("_apply_transition_requests_owned") == 1
+    assert "_normalize_transition_request" not in build_source
+    assert "_commit_transition_plan" not in build_source
+    assert "candidate._transitions" not in build_source
+    assert "self._transitions.append" not in build_source
+
+
 def test_priority_selectors_do_not_call_the_cold_projection_helper() -> None:
     """Phase 22 keeps direct singleton/group selection independently guarded."""
     core_source = (
@@ -1055,6 +1074,10 @@ def test_construction_hot_path_symbols_are_absent_from_runtime_regions() -> None
     for region in regions:
         assert "_TransitionRequest" not in region
         assert "_apply_transition_requests_owned" not in region
+        assert "_fsm_declarations" not in region
+        assert "_discover_handlers" not in region
+        assert "_DeclarativeHandlerMetadata" not in region
+        assert "warnings.warn" not in region
 
 
 def test_equal_priority_conflict_rolls_back_all_staged_replacements() -> None:

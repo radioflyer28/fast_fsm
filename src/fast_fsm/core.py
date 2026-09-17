@@ -5946,7 +5946,7 @@ class DeclarativeState(State):
     def _discover_handlers(self) -> None:
         """Discover every decorated candidate and publish one immutable table."""
         discovered: Dict[str, List[_DeclarativeHandler]] = {}
-        identities: List[Tuple[str, Any, Any, int]] = []
+        identities: List[Tuple[str, Any, Any, int, bool]] = []
         for attr_name in dir(self):
             if not attr_name.startswith("_"):
                 attr = getattr(self, attr_name)
