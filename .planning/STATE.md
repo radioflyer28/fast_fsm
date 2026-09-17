@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: executing
-stopped_at: Completed 30-01-PLAN.md
-last_updated: "2026-09-17T19:18:57.515Z"
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-09-17T19:38:29.092Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 30 execution started
-state_head: e5b6ed1d0371782085599c27baa1068006fa5462
+state_head: 1110fcfa784c8f776dcccce409ae35942ac44e94
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 21
-  completed_plans: 16
+  completed_plans: 17
   percent: 57
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 30 execution started
 
@@ -75,6 +75,7 @@ Progress: [██████░░░░] 57%
 | Phase 29 P03 | 8min | 1 tasks | 5 files |
 | Phase 29 P04 | 11min | 2 tasks | 4 files |
 | Phase 30 P01 | 9 min | 2 tasks | 7 files |
+| Phase 30 P02 | 43 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -122,6 +123,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 29]: Phase 29: Classify expected rejection dynamically only after one of the six selector eligibility hooks raises, preserving interpreted subclasses under mypyc without success-path work.
 - [Phase 30]: Declarative builder rows are derived afresh at build time and joined with explicit rows in the one canonical transaction. — Preserves reusable builder staging, canonical validation, and one publication seam.
 - [Phase 30]: Decorator guards remain state-owned and selected-entry matching includes internal mode. — Prevents double guard evaluation while preserving exact internal/external lifecycle behavior.
+- [Phase 30]: Declarative async preflight follows exact staged-owner applicability; foreign source constraints cannot reclassify or reject a builder.
+- [Phase 30]: Batch transition rows carry optional internal mode as their eighth field after timing and publish through the canonical request transaction.
 
 ### Pending Todos
 
@@ -143,8 +146,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T19:18:57.423Z
-Stopped at: Completed 30-01-PLAN.md
+Last session: 2026-09-17T19:38:28.995Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: 
 
 None

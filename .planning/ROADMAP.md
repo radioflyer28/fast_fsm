@@ -171,7 +171,7 @@ Plans:
 **Plans**: TBD
 
 - [x] 30-01-PLAN.md
-- [ ] 30-02-PLAN.md
+- [x] 30-02-PLAN.md
 - [ ] 30-03-PLAN.md
 - [ ] 30-04-PLAN.md
 - [ ] 30-05-PLAN.md
@@ -238,7 +238,7 @@ Plans:
 | 27. Explicit Final States | v0.5.0 | 3/3 | Complete    | 2026-09-15 |
 | 28. Same-State Transition Modes | v0.5.0 | 3/3 | Complete    | 2026-09-16 |
 | 29. Expected Domain Rejection | v0.5.0 | 4/4 | Complete    | 2026-09-17 |
-| 30. Builder-First Construction & Persistence Parity | v0.5.0 | 1/6 | In Progress|  |
+| 30. Builder-First Construction & Persistence Parity | v0.5.0 | 2/6 | In Progress|  |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 0/TBD | Not started | - |
 | 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |
 
