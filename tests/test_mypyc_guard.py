@@ -516,6 +516,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "after",
             "within",
             "statically_unconditional",
+            "internal",
         },
         "_GraphSnapshot": {
             "name",
@@ -536,6 +537,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "condition_ref",
             "after",
             "within",
+            "internal",
         },
         "_TransitionGroup": {"entries"},
         "_DeclarativeHandlerMetadata": {
@@ -605,6 +607,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
         "condition_ref",
         "after",
         "within",
+        "internal",
     }
 
 
@@ -1896,7 +1899,7 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     ]
     assert fields[:5] == ["success", "from_state", "to_state", "trigger", "error"]
-    assert fields[5:] == ["committed", "stage", "cause", "priority"]
+    assert fields[5:] == ["committed", "stage", "cause", "priority", "internal"]
 
     raise_if_failed = next(
         node
@@ -2065,6 +2068,7 @@ def test_priority_runtime_records_remain_compact_and_private() -> None:
         "to_state",
         "timestamp",
         "priority",
+        "internal",
     ]
     package_tree = ast.parse(
         PACKAGE_INIT.read_text(encoding="utf-8"), filename=str(PACKAGE_INIT)
