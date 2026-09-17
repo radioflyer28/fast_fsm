@@ -5306,6 +5306,28 @@ class AsyncStateMachine(StateMachine):
                         priority=entry.priority,
                         internal=entry.internal,
                     )
+            except TransitionRejected as signal:
+                rejection_code = _revalidate_transition_rejection_code(signal)
+                if rejection_code is not None:
+                    return self._build_rejection_result(
+                        current_name,
+                        trigger,
+                        rejection_code,
+                        stage=_LIFECYCLE_STAGE_GUARD,
+                        priority=entry.priority,
+                        internal=entry.internal,
+                    )
+                if for_query:
+                    raise signal
+                return self._build_failure_result(
+                    current_name,
+                    trigger,
+                    "Transition guard raised an exception",
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    cause=signal,
+                    priority=entry.priority,
+                    internal=entry.internal,
+                )
             except Exception as cause:
                 if for_query:
                     raise
@@ -5324,6 +5346,26 @@ class AsyncStateMachine(StateMachine):
                 _async_selection_lifecycle_stage.set(_LIFECYCLE_STAGE_GUARD)
             declarative_guard_passed = await self._evaluate_declarative_condition_async(
                 prepared, raise_on_error=True
+            )
+        except TransitionRejected as signal:
+            rejection_code = _revalidate_transition_rejection_code(signal)
+            if rejection_code is not None:
+                return self._build_rejection_result(
+                    current_name,
+                    trigger,
+                    rejection_code,
+                    stage=_LIFECYCLE_STAGE_GUARD,
+                    priority=entry.priority,
+                    internal=entry.internal,
+                )
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "Transition guard raised an exception",
+                stage=_LIFECYCLE_STAGE_GUARD,
+                cause=signal,
+                priority=entry.priority,
+                internal=entry.internal,
             )
         except Exception as cause:
             return self._build_failure_result(
@@ -5352,6 +5394,28 @@ class AsyncStateMachine(StateMachine):
                 _async_selection_lifecycle_stage.set(_LIFECYCLE_STAGE_STATE_PERMISSION)
             can_proceed = await self._can_transition_after_declarative_guard_async(
                 source_state, trigger, entry.to_state, args, kwargs
+            )
+        except TransitionRejected as signal:
+            rejection_code = _revalidate_transition_rejection_code(signal)
+            if rejection_code is not None:
+                return self._build_rejection_result(
+                    current_name,
+                    trigger,
+                    rejection_code,
+                    stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                    priority=entry.priority,
+                    internal=entry.internal,
+                )
+            if for_query:
+                raise signal
+            return self._build_failure_result(
+                current_name,
+                trigger,
+                "State permission raised an exception",
+                stage=_LIFECYCLE_STAGE_STATE_PERMISSION,
+                cause=signal,
+                priority=entry.priority,
+                internal=entry.internal,
             )
         except Exception as cause:
             if for_query:
