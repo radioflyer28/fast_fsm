@@ -549,21 +549,21 @@ The initial sandboxed `uv run` probes could not access the user cache; the same 
 |---|-------|---------|---------------|
 | — | None. All factual claims are grounded in locked context, opened repository source/artifacts, local tool probes, or official Python/mypyc documentation. | — | — |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **How should one class-level declaration apply to multiple source-state instances?**
    - What we know: runtime matching reads the handlers on the canonical source object and checks whether its own name matches `from_state`. [VERIFIED: `src/fast_fsm/core.py:5651-5670`]
    - What's unclear: current tests include a declaration on one `DeclarativeState("idle")` whose `from_state` names other generic states, but that row is manually mirrored and its handler cannot resolve from those generic states. [VERIFIED: `tests/test_builder.py:1129-1155`]
-   - Recommendation: preserve state ownership. Import one request from each staged declarative object only when the metadata applies to that object's name; to cover a plural source constraint with handler execution, stage declarative instances for each source. Do not add a machine-wide handler table or a bound-handler field to every hot-path entry in this phase.
+   - **RESOLVED:** Preserve state ownership. Import one request from each staged declarative object only when the metadata applies to that object's name; to cover a plural source constraint with handler execution, stage declarative instances for each source. Do not add a machine-wide handler table or a bound-handler field to every hot-path entry in this phase. Adopted by Plan 30-02 Task 1.
 
 2. **What should a destination-less declaration do in builder topology?**
    - What we know: `to_state` is optional and direct `handle_event*()` compatibility is locked. [VERIFIED: `src/fast_fsm/core.py:5591-5612`; locked D-08]
    - What's unclear: a destination-less event handler cannot define an FSM edge.
-   - Recommendation: retain it for direct compatibility and skip topology derivation. Document that builder-imported declarations must be topology-complete; do not invent a self-transition because external versus internal self semantics are explicit.
+   - **RESOLVED:** Retain it for direct compatibility and skip topology derivation. Document that builder-imported declarations must be topology-complete; do not invent a self-transition because external versus internal self semantics are explicit. Adopted by Plan 30-02 Task 1.
 
 3. **Should explicit `internal: false` be accepted in dictionaries?**
    - What we know: D-13 permits absence or explicit false as external, and agent discretion allows the exact input choice provided both read as external.
-   - Recommendation: accept exact false. It is natural JSON, enables hand-authored configs, and costs no output compatibility because false remains omitted.
+   - **RESOLVED:** Accept exact false. It is natural JSON, enables hand-authored configs, and costs no output compatibility because false remains omitted. Adopted by Plan 30-04 Task 1.
 
 ## Sources
 
