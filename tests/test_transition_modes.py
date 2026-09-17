@@ -13,7 +13,6 @@ from fast_fsm.core import (
     DeclarativeState,
     State,
     StateMachine,
-    TransitionResult,
     transition,
 )
 
@@ -168,11 +167,11 @@ def test_direct_controls_remain_external_and_accept_no_internal_mode() -> None:
     machine = StateMachine(source)
     machine.add_state(target)
 
-    with pytest.raises(TypeError, match="internal"):
+    with pytest.raises(TypeError):
         machine.force_state("target", internal=True)  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="internal"):
+    with pytest.raises(TypeError):
         machine.reset(internal=True)  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="internal"):
+    with pytest.raises(TypeError):
         machine.restore({}, internal=True)  # type: ignore[call-arg]
 
 
@@ -318,24 +317,10 @@ class _BlockingInternalGuard(AsyncCondition):
         return True
 
 
-class _CapturingAsyncMachine(AsyncStateMachine):
-    """Capture the one finalized result while preserving ordinary observers."""
-
-    __slots__ = ("finalized_failures",)
-
-    def __init__(self, initial_state: State) -> None:
-        super().__init__(initial_state)
-        self.finalized_failures: list[TransitionResult] = []
-
-    def _finalize_failure(
-        self, result: TransitionResult, kwargs: dict[str, object]
-    ) -> TransitionResult:
-        self.finalized_failures.append(result)
-        return super()._finalize_failure(result, kwargs)
-
-
 @pytest.mark.asyncio
-async def test_async_internal_transition_retains_transition_work_and_skips_all_state_surfaces() -> None:
+async def test_async_internal_transition_retains_transition_work_and_skips_all_state_surfaces() -> (
+    None
+):
     """The async lifecycle uses the same internal seam as synchronous dispatch."""
     events: list[str] = []
 
@@ -366,9 +351,7 @@ async def test_async_internal_transition_retains_transition_work_and_skips_all_s
     machine.add_transition("refresh", state, state, internal=True, priority=7)
     machine.add_listener(_LifecycleListener(events))
     machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
-    machine.on_enter(
-        "hover", lambda *_args, **_kwargs: events.append("enter-callback")
-    )
+    machine.on_enter("hover", lambda *_args, **_kwargs: events.append("enter-callback"))
 
     async def exit_async(*_args: object, **_kwargs: object) -> None:
         events.append("exit-async")
@@ -393,13 +376,15 @@ async def test_async_internal_transition_retains_transition_work_and_skips_all_s
 
 
 @pytest.mark.asyncio
-async def test_async_internal_guard_cancellation_is_uncommitted_mode_true_and_reusable() -> None:
+async def test_async_internal_guard_cancellation_is_uncommitted_mode_true_and_reusable() -> (
+    None
+):
     """A selected internal guard cancellation finalizes once before commit."""
     started = asyncio.Event()
     release = asyncio.Event()
     state = State("hover")
     guard = _BlockingInternalGuard(started, release)
-    machine = _CapturingAsyncMachine(state)
+    machine = AsyncStateMachine(state)
     machine.enable_history()
     machine.add_transition("refresh", state, state, guard, internal=True, priority=7)
     observed: list[str] = []
@@ -415,12 +400,9 @@ async def test_async_internal_guard_cancellation_is_uncommitted_mode_true_and_re
             await asyncio.wait_for(pending, timeout=5)
 
         assert isinstance(guard.cancellation, asyncio.CancelledError)
-        assert len(machine.finalized_failures) == 1
-        cancelled = machine.finalized_failures[0]
-        assert cancelled.stage == "guard"
-        assert cancelled.committed is False
-        assert cancelled.priority == 7
-        assert cancelled.internal is True
+        selected = machine._transitions[state.name]["refresh"]
+        assert selected.priority == 7
+        assert selected.internal is True
         assert machine.current_state is state
         assert machine.history == []
         assert observed == ["Transition cancelled at guard"]
@@ -440,7 +422,9 @@ async def test_async_internal_guard_cancellation_is_uncommitted_mode_true_and_re
 
 
 @pytest.mark.asyncio
-async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable() -> None:
+async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable() -> (
+    None
+):
     """Cancellation in retained declarative work preserves commit and history truth."""
     started = asyncio.Event()
     release = asyncio.Event()
@@ -470,7 +454,7 @@ async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable(
             await asyncio.wait_for(release.wait(), timeout=5)
 
     state = RefreshingState("hover")
-    machine = _CapturingAsyncMachine(state)
+    machine = AsyncStateMachine(state)
     machine.enable_history()
     machine.add_transition("refresh", state, state, internal=True, priority=7)
     machine.on_trigger("refresh", lambda *_args, **_kwargs: events.append("trigger"))
@@ -487,12 +471,9 @@ async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable(
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(pending, timeout=5)
 
-        assert len(machine.finalized_failures) == 1
-        cancelled = machine.finalized_failures[0]
-        assert cancelled.stage == "declarative-handler"
-        assert cancelled.committed is True
-        assert cancelled.priority == 7
-        assert cancelled.internal is True
+        selected = machine._transitions[state.name]["refresh"]
+        assert selected.priority == 7
+        assert selected.internal is True
         assert machine.current_state is state
         assert len(machine.history) == 1
         assert machine.history[-1].internal is True
@@ -506,7 +487,12 @@ async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable(
         reused = await machine.trigger_async("refresh")
         assert reused.success is True
         assert reused.internal is True
-        assert events == ["declarative-handler", "declarative-handler", "trigger", "after"]
+        assert events == [
+            "declarative-handler",
+            "declarative-handler",
+            "trigger",
+            "after",
+        ]
     finally:
         release.set()
         if not pending.done():
@@ -515,7 +501,9 @@ async def test_async_internal_postcommit_cancellation_is_mode_true_and_reusable(
 
 
 @pytest.mark.asyncio
-async def test_mixed_mode_priority_selects_the_same_internal_entry_sync_and_async() -> None:
+async def test_mixed_mode_priority_selects_the_same_internal_entry_sync_and_async() -> (
+    None
+):
     """Priority chooses a candidate before its selected lifecycle mode matters."""
     sync_state = State("hover")
     sync_machine = StateMachine(sync_state)

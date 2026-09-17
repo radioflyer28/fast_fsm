@@ -98,9 +98,9 @@ _async_selection_priority: contextvars.ContextVar[Optional[int]] = (
 # permission check awaits.  The owned cancellation boundary can then produce a
 # truthful failure result before a _PreparedDispatch is available, without
 # storing mutable per-dispatch state on the machine.
-_async_selection_internal: contextvars.ContextVar[bool] = contextvars.ContextVar[
-    bool
-]("_async_selection_internal", default=False)
+_async_selection_internal: contextvars.ContextVar[bool] = contextvars.ContextVar[bool](
+    "_async_selection_internal", default=False
+)
 
 
 # Stable lifecycle labels are deliberately strings so callers can inspect a

@@ -38,6 +38,7 @@ from types import ModuleType
 import pytest
 
 CORE_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.py"
+CORE_PYI = Path(__file__).parent.parent / "src" / "fast_fsm" / "core.pyi"
 CONDITIONS_PY = Path(__file__).parent.parent / "src" / "fast_fsm" / "conditions.py"
 PACKAGE_INIT = Path(__file__).parent.parent / "src" / "fast_fsm" / "__init__.py"
 SETUP_PY = Path(__file__).parent.parent / "setup.py"
@@ -2088,6 +2089,202 @@ def test_priority_runtime_records_remain_compact_and_private() -> None:
     }
 
 
+def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> None:
+    """Mode is one trailing scalar from authoring through async cancellation."""
+    runtime_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"), filename=str(CORE_PY))
+    stub_tree = ast.parse(CORE_PYI.read_text(encoding="utf-8"), filename=str(CORE_PYI))
+    runtime_classes = {
+        node.name: node
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+    stub_classes = {
+        node.name: node
+        for node in ast.walk(stub_tree)
+        if isinstance(node, ast.ClassDef)
+    }
+
+    expected_runtime_fields = {
+        "_GraphTransition": [
+            "from_state",
+            "trigger",
+            "to_state",
+            "condition",
+            "from_state_name",
+            "to_state_name",
+            "condition_name",
+            "priority",
+            "condition_ref",
+            "after",
+            "within",
+            "statically_unconditional",
+            "internal",
+        ],
+        "_TransitionRequest": [
+            "trigger",
+            "sources",
+            "to_state",
+            "condition",
+            "unless",
+            "priority",
+            "condition_ref",
+            "after",
+            "within",
+            "internal",
+        ],
+        "_PreparedTransition": [
+            "trigger",
+            "sources",
+            "target",
+            "condition",
+            "priority",
+            "condition_ref",
+            "after",
+            "within",
+            "internal",
+        ],
+        "TransitionResult": [
+            "success",
+            "from_state",
+            "to_state",
+            "trigger",
+            "error",
+            "committed",
+            "stage",
+            "cause",
+            "priority",
+            "internal",
+        ],
+    }
+    for class_name, expected_fields in expected_runtime_fields.items():
+        node = runtime_classes[class_name]
+        assert [
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        ] == expected_fields
+
+    entry = runtime_classes["TransitionEntry"]
+    entry_slots = next(
+        node.value
+        for node in entry.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(entry_slots, ast.Tuple)
+    assert [
+        item.value for item in entry_slots.elts if isinstance(item, ast.Constant)
+    ] == [
+        "to_state",
+        "condition",
+        "priority",
+        "condition_ref",
+        "after",
+        "within",
+        "internal",
+    ]
+
+    record = runtime_classes["TransitionRecord"]
+    record_slots = next(
+        node.value
+        for node in record.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__slots__"
+            for target in node.targets
+        )
+    )
+    assert isinstance(record_slots, ast.Tuple)
+    assert [
+        item.value for item in record_slots.elts if isinstance(item, ast.Constant)
+    ] == [
+        "from_state",
+        "trigger",
+        "to_state",
+        "timestamp",
+        "priority",
+        "internal",
+    ]
+
+    for class_name, expected_fields in {
+        "_GraphTransition": expected_runtime_fields["_GraphTransition"],
+        "TransitionResult": expected_runtime_fields["TransitionResult"],
+        "TransitionRecord": [
+            "from_state",
+            "trigger",
+            "to_state",
+            "timestamp",
+            "priority",
+            "internal",
+        ],
+        "TransitionEntry": [
+            "to_state",
+            "condition",
+            "priority",
+            "condition_ref",
+            "after",
+            "within",
+            "internal",
+        ],
+    }.items():
+        node = stub_classes[class_name]
+        assert [
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        ] == expected_fields
+
+    for class_name in ("StateMachine", "FSMBuilder"):
+        add_transition = next(
+            node
+            for node in stub_classes[class_name].body
+            if isinstance(node, ast.FunctionDef) and node.name == "add_transition"
+        )
+        internal_index = add_transition.args.kwonlyargs.index(
+            next(
+                argument
+                for argument in add_transition.args.kwonlyargs
+                if argument.arg == "internal"
+            )
+        )
+        annotation = add_transition.args.kwonlyargs[internal_index].annotation
+        default = add_transition.args.kw_defaults[internal_index]
+        assert isinstance(annotation, ast.Name) and annotation.id == "bool"
+        assert isinstance(default, ast.Constant) and default.value is False
+
+    normalize = next(
+        node
+        for node in ast.walk(runtime_tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_normalize_transition_request"
+    )
+    normalize_source = ast.unparse(normalize)
+    assert "type(internal) is not bool" in normalize_source
+    assert normalize_source.index(
+        "type(internal) is not bool"
+    ) < normalize_source.index("_resolve_canonical_state")
+
+    async_runner = next(
+        node
+        for node in runtime_classes["AsyncStateMachine"].body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_execute_transition_async"
+    )
+    async_runner_source = ast.unparse(async_runner)
+    assert async_runner_source.count("prepared.entry.internal") == 1
+    assert "_execute_internal_transition_async" in async_runner_source
+    assert "sorted(" not in async_runner_source
+    assert "getattr(" not in async_runner_source
+    assert "_TransitionRequest" not in async_runner_source
+
+    selection_source = CORE_PY.read_text(encoding="utf-8")
+    assert "_async_selection_internal.set(entry.internal)" in selection_source
+    assert "_async_selection_internal.get()" in selection_source
+
+
 def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None:
     """The same narrow winner/history/query oracle runs in both core modes."""
     spec = importlib.util.find_spec("fast_fsm.core")
@@ -2095,7 +2292,7 @@ def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None
     if os.environ.get("FAST_FSM_BUILD_MODE") == "compiled":
         assert spec.origin.endswith((".so", ".pyd"))
 
-    from fast_fsm.core import AsyncStateMachine, State, StateMachine
+    from fast_fsm.core import AsyncStateMachine, FSMBuilder, State, StateMachine
 
     class Source(State):
         __slots__ = ("permissions",)
@@ -2160,6 +2357,96 @@ def test_priority_selector_semantic_probe_matches_pure_and_native_core() -> None
         ]
 
     asyncio.run(run_async_probe())
+
+    lifecycle: list[str] = []
+
+    def record_exit(*_args: object, **_kwargs: object) -> None:
+        lifecycle.append("exit")
+
+    def record_enter(*_args: object, **_kwargs: object) -> None:
+        lifecycle.append("enter")
+
+    mode_state = State.create("mode", on_exit=record_exit, on_enter=record_enter)
+    mode_machine = StateMachine(mode_state)
+    mode_machine.enable_history()
+    mode_machine.add_transition("external", mode_state, mode_state, priority=5)
+    mode_machine.add_transition(
+        "internal", mode_state, mode_state, internal=True, priority=-1
+    )
+    mode_machine.add_transition("mixed", mode_state, mode_state, priority=5)
+    mode_machine.add_transition(
+        "mixed", mode_state, mode_state, internal=True, priority=-1
+    )
+
+    external_result = mode_machine.trigger("external")
+    assert (
+        external_result.success,
+        external_result.priority,
+        external_result.internal,
+    ) == (
+        True,
+        5,
+        False,
+    )
+    assert lifecycle == ["exit", "enter"]
+    lifecycle.clear()
+    internal_result = mode_machine.trigger("internal")
+    assert (
+        internal_result.success,
+        internal_result.priority,
+        internal_result.internal,
+    ) == (
+        True,
+        -1,
+        True,
+    )
+    assert lifecycle == []
+    assert [record.internal for record in mode_machine.history] == [False, True]
+    mixed_result = mode_machine.trigger("mixed")
+    assert (mixed_result.priority, mixed_result.internal) == (-1, True)
+
+    clone = mode_machine.clone()
+    assert clone._transitions["mode"]["internal"].internal is True
+    assert clone._transitions["mode"]["mixed"].entries[0].internal is True
+
+    builder = FSMBuilder(State("builder"))
+    builder.add_transition("refresh", "builder", "builder", internal=True)
+    built = builder.build()
+    builder_result = built.trigger("refresh")
+    assert (builder_result.success, builder_result.internal) == (True, True)
+
+    async def run_mode_probe() -> None:
+        async_lifecycle: list[str] = []
+        async_state = State.create(
+            "async-mode",
+            on_exit=lambda *_args, **_kwargs: async_lifecycle.append("exit"),
+            on_enter=lambda *_args, **_kwargs: async_lifecycle.append("enter"),
+        )
+        async_machine = AsyncStateMachine(async_state)
+        async_machine.enable_history()
+        async_machine.add_transition("external", async_state, async_state, priority=5)
+        async_machine.add_transition(
+            "internal", async_state, async_state, internal=True, priority=-1
+        )
+
+        async_external = await async_machine.trigger_async("external")
+        assert (
+            async_external.success,
+            async_external.priority,
+            async_external.internal,
+        ) == (True, 5, False)
+        assert async_lifecycle == ["exit", "enter"]
+        async_lifecycle.clear()
+        async_internal = await async_machine.trigger_async("internal")
+        assert (
+            async_internal.success,
+            async_internal.priority,
+            async_internal.internal,
+        ) == (True, -1, True)
+        assert async_lifecycle == []
+        assert [record.internal for record in async_machine.history] == [False, True]
+
+    asyncio.run(run_mode_probe())
 
 
 def test_phase23_construction_projection_and_callback_probe_is_mode_invariant() -> None:
