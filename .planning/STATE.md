@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: executing
-stopped_at: Phase 30 context gathered
-last_updated: "2026-09-17T19:06:15.010Z"
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-09-17T19:18:57.515Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 29 complete, transitioned to Phase 30
-state_head: 4c62cecd7ad909d938fd3b8ec6b4dc9c9a114c04
+last_activity_desc: Phase 30 execution started
+state_head: e5b6ed1d0371782085599c27baa1068006fa5462
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 21
-  completed_plans: 15
+  completed_plans: 16
   percent: 57
 ---
 
@@ -25,14 +25,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Preserve direct O(1) singleton dispatch and its installed compiled ≥200,000 operations/sec floor while adding explicit, finite flat-FSM semantics.
-**Current focus:** Phase 29 — Expected Domain Rejection
+**Current focus:** Phase 30 — Builder-First Construction & Persistence Parity
 
 ## Current Position
 
-Phase: 30 (Builder-First Construction & Persistence Parity) — READY TO EXECUTE
-Plan: Not started
+Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 29 complete, transitioned to Phase 30
+Last activity: 2026-09-17 — Phase 30 execution started
 
 Progress: [██████░░░░] 57%
 
@@ -74,6 +74,7 @@ Progress: [██████░░░░] 57%
 | Phase 29 P02 | 4 min | 2 tasks | 3 files |
 | Phase 29 P03 | 8min | 1 tasks | 5 files |
 | Phase 29 P04 | 11min | 2 tasks | 4 files |
+| Phase 30 P01 | 9 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 29]: Only approved selector eligibility seams convert TransitionRejected; lifecycle and observer signals remain ordinary failures.
 - [Phase 29]: Phase 29 API docs expose the bounded rejection contract without adding tutorial material owned by Phase 32.
 - [Phase 29]: Phase 29: Classify expected rejection dynamically only after one of the six selector eligibility hooks raises, preserving interpreted subclasses under mypyc without success-path work.
+- [Phase 30]: Declarative builder rows are derived afresh at build time and joined with explicit rows in the one canonical transaction. — Preserves reusable builder staging, canonical validation, and one publication seam.
+- [Phase 30]: Decorator guards remain state-owned and selected-entry matching includes internal mode. — Prevents double guard evaluation while preserving exact internal/external lifecycle behavior.
 
 ### Pending Todos
 
@@ -140,10 +143,10 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T17:52:37.673Z
-Stopped at: Phase 30 context gathered
+Last session: 2026-09-17T19:18:57.423Z
+Stopped at: Completed 30-01-PLAN.md
 Resume file: 
 
-.planning/phases/30-builder-first-construction-persistence-parity/30-CONTEXT.md
+None
 
 - Complete the Phase 27 review/gap cycle, post-execution gates, and goal verification.
