@@ -1,9 +1,9 @@
 ---
 phase: 30
 slug: builder-first-construction-persistence-parity
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-09-17
 ---
 
@@ -39,19 +39,19 @@ created: 2026-09-17
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 30-01-01 | 01 | 1 | BUILD-02, BUILD-06 | T-30-01, T-30-02, T-30-07 | Tracer oracle proves canonical declarative import, exactly-once execution, and atomic failure | unit + integration | `uv run pytest tests/test_construction_parity.py tests/test_builder.py -x -q -k "declarative and (builder or internal or exactly_once or immutable or direct_handle)"` | 🆕 create + extend | ⬜ pending |
-| 30-01-02 | 01 | 1 | BUILD-02, BUILD-06 | T-30-01, T-30-07, T-30-08 | Runtime, stub, carrier fields, canonical publication, and hot-path structure agree without a registrar bypass | structural | `uv run pytest tests/test_construction_parity.py tests/test_graph_invariants.py tests/test_mypyc_guard.py -x -q -k "declarative or construction or adapter or hot_path"` | ✅ extend | ⬜ pending |
-| 30-02-01 | 02 | 2 | BUILD-02, BUILD-06 | T-30-01, T-30-02, T-30-07 | Declarative applicability, async detection, collisions, cache, and repaired retry preserve state-owned exactly-once semantics | unit + integration | `uv run pytest tests/test_builder.py tests/test_transition_modes.py -x -q -k "declarative and (builder or source or target or conflict or repair or cache or async or internal or exactly_once)"` | ✅ extend | ⬜ pending |
-| 30-02-02 | 02 | 2 | BUILD-06 | T-30-07, T-30-08 | Direct, batch, builder, declarative, and callback construction produce the same observable final/internal truth and atomic failure | integration + structural | `uv run pytest tests/test_construction_parity.py tests/test_final_states.py tests/test_transition_modes.py tests/test_graph_invariants.py -x -q -k "construction_parity or adapter or declarative or callback or final_source or internal"` | ✅ extend | ⬜ pending |
-| 30-03-01 | 03 | 3 | BUILD-03 | T-30-03, T-30-04 | Each deprecated public surface emits one fixed caller-attributed warning and preserves behavior | unit | `uv run pytest tests/test_builder.py -x -q -k "deprecat or warning or quick_build or from_states or simple_fsm or quick_fsm"` | ✅ extend | ⬜ pending |
-| 30-03-02 | 03 | 3 | BUILD-03, BUILD-06 | T-30-03, T-30-07 | Deprecated helpers remain exported, typed, subclass-safe, atomic, and semantically equivalent throughout v0.5.x | integration + static | `uv run pytest tests/test_builder.py tests/test_final_states.py tests/test_construction_parity.py -x -q -k "deprecat or quick or from_states or simple_fsm or construction_parity"` | ✅ extend | ⬜ pending |
-| 30-04-01 | 04 | 4 | BUILD-06, BUILD-07 | T-30-04, T-30-05, T-30-07 | Exact dictionary types, true-only output, legacy defaults, semantic round trips, and atomic malformed-input failure are locked | integration | `uv run pytest tests/test_advanced_functionality.py tests/test_final_states.py tests/test_transition_modes.py -x -q -k "from_dict or to_dict or roundtrip or serialization or legacy or internal or final"` | ✅ extend | ⬜ pending |
-| 30-04-02 | 04 | 4 | BUILD-06, BUILD-07, BUILD-08 | T-30-06, T-30-07, T-30-08 | Clone isolation, exact snapshot-v1 ownership, and complete retained-adapter parity are locked | integration + structural | `uv run pytest tests/test_advanced_functionality.py tests/test_final_states.py tests/test_graph_invariants.py tests/test_construction_parity.py -x -q -k "clone or snapshot or restore or construction_parity or adapter or internal or final"` | ✅ extend | ⬜ pending |
-| 30-05-01 | 05 | 5 | BUILD-01, BUILD-03 | T-30-04 | README, Quick Start, Tutorial, and cross-FSM teaching paths lead with builder and move warned helpers into bounded compatibility guidance | docs + executable examples | `uv run pytest tests/test_readme_examples.py -x -q -k "active_construction_guidance_uses_builder and (readme or quick_start or tutorial or cross_fsm_demo)" && uv run pytest tests/test_examples_smoke.py -x -q -k "cross_fsm_demo" && task docs-check && task docs-test` | ✅ extend | ⬜ pending |
-| 30-05-02 | 05 | 5 | BUILD-01, BUILD-02, BUILD-03, BUILD-07, BUILD-08 | T-30-04, T-30-07, T-30-08 | Core/validation/visualization API examples and contributor architecture agree on builder-first hierarchy, canonical ownership, directional persistence, clone, and snapshot contracts | docs + doctest | `uv run pytest tests/test_readme_examples.py -x -q -k "active_construction_guidance_uses_builder and (api_visualization or api_validation)" && task docs-check && task docs-test` | ✅ extend | ⬜ pending |
-| 30-06-01 | 06 | 6 | BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08 | T-30-03, T-30-04, T-30-05, T-30-06, T-30-07, T-30-08 | Normative SPR matches the focused public hierarchy, compatibility window, canonical transaction, directional persistence, clone, snapshot, and dispatch-exclusion contracts before structural closure | docs + doctest | `task docs-check && task docs-test` | ✅ extend | ⬜ pending |
-| 30-06-02 | 06 | 6 | BUILD-02, BUILD-06, BUILD-07, BUILD-08 | T-30-01, T-30-02, T-30-07, T-30-08 | Final parity-oracle and mypyc structural edits receive immediate focused feedback before heavyweight closure | unit + structural | `uv run pytest tests/test_construction_parity.py tests/test_mypyc_guard.py -x -q -k "construction_parity or declarative or adapter or hot_path"` | ✅ extend | ⬜ pending |
-| 30-06-03 | 06 | 6 | BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08 | T-30-01, T-30-02, T-30-03, T-30-04, T-30-05, T-30-06, T-30-07, T-30-08 | Pure/native semantics, static authority, performance floor, source restoration, documentation, and full regressions all agree | release closure | Plan closure sequence after SPR sync and the focused check: Ruff; mypy/visible ty/slots/docs; asserted pure oracle; trapped fresh native build/oracle/benchmark; exact shadow restoration; final pure-origin assertion; full suite | ✅ harness | ⬜ pending |
+| 30-01-01 | 01 | 1 | BUILD-02, BUILD-06 | T-30-01, T-30-02, T-30-07 | Tracer oracle proves canonical declarative import, exactly-once execution, and atomic failure | unit + integration | `uv run pytest tests/test_construction_parity.py tests/test_builder.py -x -q -k "declarative and (builder or internal or exactly_once or immutable or direct_handle)"` | ✅ present | ✅ green |
+| 30-01-02 | 01 | 1 | BUILD-02, BUILD-06 | T-30-01, T-30-07, T-30-08 | Runtime, stub, carrier fields, canonical publication, and hot-path structure agree without a registrar bypass | structural | `uv run pytest tests/test_construction_parity.py tests/test_graph_invariants.py tests/test_mypyc_guard.py -x -q -k "declarative or construction or adapter or hot_path"` | ✅ present | ✅ green |
+| 30-02-01 | 02 | 2 | BUILD-02, BUILD-06 | T-30-01, T-30-02, T-30-07 | Declarative applicability, async detection, collisions, cache, and repaired retry preserve state-owned exactly-once semantics | unit + integration | `uv run pytest tests/test_builder.py tests/test_transition_modes.py -x -q -k "declarative and (builder or source or target or conflict or repair or cache or async or internal or exactly_once)"` | ✅ present | ✅ green |
+| 30-02-02 | 02 | 2 | BUILD-06 | T-30-07, T-30-08 | Direct, batch, builder, declarative, and callback construction produce the same observable final/internal truth and atomic failure | integration + structural | `uv run pytest tests/test_construction_parity.py tests/test_final_states.py tests/test_transition_modes.py tests/test_graph_invariants.py -x -q -k "construction_parity or adapter or declarative or callback or final_source or internal"` | ✅ present | ✅ green |
+| 30-03-01 | 03 | 3 | BUILD-03 | T-30-03, T-30-04 | Each deprecated public surface emits one fixed caller-attributed warning and preserves behavior | unit | `uv run pytest tests/test_builder.py -x -q -k "deprecat or warning or quick_build or from_states or simple_fsm or quick_fsm"` | ✅ present | ✅ green |
+| 30-03-02 | 03 | 3 | BUILD-03, BUILD-06 | T-30-03, T-30-07 | Deprecated helpers remain exported, typed, subclass-safe, atomic, and semantically equivalent throughout v0.5.x | integration + static | `uv run pytest tests/test_builder.py tests/test_final_states.py tests/test_construction_parity.py -x -q -k "deprecat or quick or from_states or simple_fsm or construction_parity"` | ✅ present | ✅ green |
+| 30-04-01 | 04 | 4 | BUILD-06, BUILD-07 | T-30-04, T-30-05, T-30-07 | Exact dictionary types, true-only output, legacy defaults, semantic round trips, and atomic malformed-input failure are locked | integration | `uv run pytest tests/test_advanced_functionality.py tests/test_final_states.py tests/test_transition_modes.py -x -q -k "from_dict or to_dict or roundtrip or serialization or legacy or internal or final"` | ✅ present | ✅ green |
+| 30-04-02 | 04 | 4 | BUILD-06, BUILD-07, BUILD-08 | T-30-06, T-30-07, T-30-08 | Clone isolation, exact snapshot-v1 ownership, and complete retained-adapter parity are locked | integration + structural | `uv run pytest tests/test_advanced_functionality.py tests/test_final_states.py tests/test_graph_invariants.py tests/test_construction_parity.py -x -q -k "clone or snapshot or restore or construction_parity or adapter or internal or final"` | ✅ present | ✅ green |
+| 30-05-01 | 05 | 5 | BUILD-01, BUILD-03 | T-30-04 | README, Quick Start, Tutorial, and cross-FSM teaching paths lead with builder and move warned helpers into bounded compatibility guidance | docs + executable examples | `uv run pytest tests/test_readme_examples.py -x -q -k "active_construction_guidance_uses_builder and (readme or quick_start or tutorial or cross_fsm_demo)" && uv run pytest tests/test_examples_smoke.py -x -q -k "cross_fsm_demo" && task docs-check && task docs-test` | ✅ present | ✅ green |
+| 30-05-02 | 05 | 5 | BUILD-01, BUILD-02, BUILD-03, BUILD-07, BUILD-08 | T-30-04, T-30-07, T-30-08 | Core/validation/visualization API examples and contributor architecture agree on builder-first hierarchy, canonical ownership, directional persistence, clone, and snapshot contracts | docs + doctest | `uv run pytest tests/test_readme_examples.py -x -q -k "active_construction_guidance_uses_builder and (api_visualization or api_validation)" && task docs-check && task docs-test` | ✅ present | ✅ green |
+| 30-06-01 | 06 | 6 | BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08 | T-30-03, T-30-04, T-30-05, T-30-06, T-30-07, T-30-08 | Normative SPR matches the focused public hierarchy, compatibility window, canonical transaction, directional persistence, clone, snapshot, and dispatch-exclusion contracts before structural closure | docs + doctest | `task docs-check && task docs-test` | ✅ present | ✅ green |
+| 30-06-02 | 06 | 6 | BUILD-02, BUILD-06, BUILD-07, BUILD-08 | T-30-01, T-30-02, T-30-07, T-30-08 | Final parity-oracle and mypyc structural edits receive immediate focused feedback before heavyweight closure | unit + structural | `uv run pytest tests/test_construction_parity.py tests/test_mypyc_guard.py -x -q -k "construction_parity or declarative or adapter or hot_path"` | ✅ present | ✅ green |
+| 30-06-03 | 06 | 6 | BUILD-01, BUILD-02, BUILD-03, BUILD-06, BUILD-07, BUILD-08 | T-30-01, T-30-02, T-30-03, T-30-04, T-30-05, T-30-06, T-30-07, T-30-08 | Pure/native semantics, static authority, performance floor, source restoration, documentation, and full regressions all agree | release closure | Plan closure sequence after SPR sync and the focused check: Ruff; mypy/visible ty/slots/docs; asserted pure oracle; trapped fresh native build/oracle/benchmark; exact shadow restoration; final pure-origin assertion; full suite | ✅ harness | ✅ green |
 
 *The planner replaces TBD plan/wave labels and may split rows while preserving every requirement and threat mapping.*
 
@@ -73,10 +73,10 @@ created: 2026-09-17
 
 ## Wave 0 Requirements
 
-- [ ] Add or isolate a central Phase 30 construction/persistence parity oracle that runs unchanged in pure and native modes.
-- [ ] Extend `tests/test_mypyc_guard.py` exact field sets for declarative metadata/handlers, including `internal`.
-- [ ] Add exact warning category, count, fixed text, and call-site attribution tests for all four deprecated surfaces.
-- [ ] Add exact dictionary type, legacy-default, and true-only transition-mode tests while preserving existing external-row output.
+- [x] Add or isolate a central Phase 30 construction/persistence parity oracle that runs unchanged in pure and native modes.
+- [x] Extend `tests/test_mypyc_guard.py` exact field sets for declarative metadata/handlers, including `internal`.
+- [x] Add exact warning category, count, fixed text, and call-site attribution tests for all four deprecated surfaces.
+- [x] Add exact dictionary type, legacy-default, and true-only transition-mode tests while preserving existing external-row output.
 
 No new framework, dependency, configuration, or shared fixture module is required.
 
@@ -103,14 +103,49 @@ All Phase 30 behaviors have automated verification routes.
 
 ---
 
+## Validation Audit 2026-09-17
+
+| Metric | Count |
+|--------|-------|
+| Task rows executed | 13 |
+| Requirements covered | 6/6 |
+| Decisions covered | 20/20 |
+| Threat controls covered | 8/8 |
+| Gaps found | 1 |
+| Resolved | 1 |
+| Escalated | 0 |
+
+The adversarial full-suite run exposed a stale synthetic source-archive fixture:
+`tests/test_installed_artifacts.py` omitted the new interpreted
+`src/fast_fsm/_construction_compat.py` module even though the release-evidence
+inspector correctly requires it. The fixture was updated, its focused test
+passed on the first repair iteration, and the complete pure-source suite then
+passed. The same Phase 30 semantic oracle passed from a freshly compiled mypyc
+origin, the compiled singleton throughput gate passed, and both verified core
+extension shadows were moved to a recoverable temporary backup before exact
+pure-source origin was reasserted.
+
+The visible `task typecheck-ty` advisory remains the documented unresolved
+relative-import limitation for `.conditions` and `._construction_compat`;
+blocking mypy, Ruff, slots, strict Sphinx, doctests, focused tests, native
+tests, throughput, source restoration, and the full sequential suite are green.
+
+### Debug Log
+
+| Gap | Iteration | Error Type | Action | Result |
+|-----|-----------|------------|--------|--------|
+| Sdist fixture omitted `_construction_compat.py` | 1/3 | Fixture/expectation drift | Added the required module to `_SDIST_PACKAGE_SOURCES` | green |
+
+---
+
 ## Validation Sign-Off
 
-- [ ] Every final plan task has an automated verify route or an explicit Wave 0 dependency.
-- [ ] Sampling continuity has no three consecutive implementation tasks without automated verification.
-- [ ] Wave 0 covers every missing test reference.
-- [ ] Commands use no watch-mode flags.
-- [ ] Ordinary-task feedback latency remains below 60 seconds.
-- [ ] Pure/native closure restores and reasserts the pure source origin on every exit.
-- [ ] `nyquist_compliant: true` is set after the post-execution gap audit succeeds.
+- [x] Every final plan task has an automated verify route or an explicit Wave 0 dependency.
+- [x] Sampling continuity has no three consecutive implementation tasks without automated verification.
+- [x] Wave 0 covers every missing test reference.
+- [x] Commands use no watch-mode flags.
+- [x] Ordinary-task feedback latency remains below 60 seconds.
+- [x] Pure/native closure restores and reasserts the pure source origin on every exit.
+- [x] `nyquist_compliant: true` is set after the post-execution gap audit succeeds.
 
-**Approval:** pending execution and Nyquist audit.
+**Approval:** validated; all Phase 30 requirements have automated green evidence.
