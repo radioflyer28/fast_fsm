@@ -2405,3 +2405,181 @@ class TestPrioritySerialization:
                 }
             )
         assert commits == 1
+
+    def test_to_dict_emits_internal_only_for_internal_self_transition(self):
+        """Internal topology metadata is additive and uses JSON ``true`` only."""
+        idle = State("idle")
+        running = State("running")
+        fsm = StateMachine(idle)
+        fsm.add_state(running)
+        fsm.add_transition("stay", "idle", "idle", internal=True)
+        fsm.add_transition("start", "idle", "running")
+
+        records = fsm.to_dict()["transitions"]
+        internal_record = next(
+            record for record in records if record["trigger"] == "stay"
+        )
+        external_record = next(
+            record for record in records if record["trigger"] == "start"
+        )
+        assert internal_record["internal"] is True
+        assert "internal" not in external_record
+
+        restored = StateMachine.from_dict(fsm.to_dict())
+        internal_result = restored.trigger("stay")
+        assert internal_result.success
+        assert internal_result.internal is True
+
+    @pytest.mark.parametrize("value", [0, 1, "true", object()])
+    def test_from_dict_rejects_non_exact_internal_boolean(self, value):
+        with pytest.raises((TypeError, ValueError), match=r"transition\[0\].*internal"):
+            StateMachine.from_dict(
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {
+                            "trigger": "stay",
+                            "from": "idle",
+                            "to": "idle",
+                            "internal": value,
+                        }
+                    ],
+                }
+            )
+
+    def test_dictionary_roundtrip_preserves_final_internal_timing_and_guard_ref(self):
+        """The persisted topology retains semantics without serializing guard code."""
+        import json
+
+        from fast_fsm import FuncCondition
+
+        ready = FuncCondition(lambda **_kwargs: True, name="ready")
+        config = json.loads(
+            json.dumps(
+                {
+                    "initial": "idle",
+                    "states": ["idle", "done"],
+                    "final_states": ["done"],
+                    "transitions": [
+                        {
+                            "trigger": "refresh",
+                            "from": "idle",
+                            "to": "idle",
+                            "priority": -2,
+                            "condition_ref": "ready",
+                            "after": 0.5,
+                            "within": 3.0,
+                            "internal": True,
+                        },
+                        {
+                            "trigger": "finish",
+                            "from": "idle",
+                            "to": "done",
+                            "priority": 4,
+                        },
+                    ],
+                }
+            )
+        )
+        restored = StateMachine.from_dict(config, conditions={"ready": ready})
+        refresh_row = next(
+            row
+            for row in restored.to_dict()["transitions"]
+            if row["trigger"] == "refresh"
+        )
+
+        assert refresh_row == {
+            "trigger": "refresh",
+            "from": "idle",
+            "to": "idle",
+            "priority": -2,
+            "condition_ref": "ready",
+            "after": 0.5,
+            "within": 3.0,
+            "internal": True,
+        }
+        assert restored._states["done"].final is True
+        serialized = restored.to_dict()
+        replayed = StateMachine.from_dict(
+            json.loads(json.dumps(serialized)), conditions={"ready": ready}
+        )
+        assert replayed.to_dict() == serialized
+
+    def test_from_dict_false_or_absent_internal_remains_external(self):
+        """Both legacy and explicit false rows retain the pre-v0.5 lifecycle mode."""
+        for config in (
+            {
+                "initial": "idle",
+                "transitions": [{"trigger": "stay", "from": "idle", "to": "idle"}],
+            },
+            {
+                "initial": "idle",
+                "transitions": [
+                    {"trigger": "stay", "from": "idle", "to": "idle", "internal": False}
+                ],
+            },
+        ):
+            restored = StateMachine.from_dict(config)
+
+            result = restored.trigger("stay")
+
+            assert result.success is True
+            assert result.internal is False
+            assert "internal" not in restored.to_dict()["transitions"][0]
+
+    @pytest.mark.parametrize(
+        "config, pattern",
+        [
+            (
+                type("DictionarySubclass", (dict,), {})({"initial": "idle"}),
+                r"config",
+            ),
+            (
+                {
+                    "initial": type("StringSubclass", (str,), {})("idle"),
+                    "transitions": [],
+                },
+                r"initial",
+            ),
+            (
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        type("RowSubclass", (dict,), {})(
+                            {"trigger": "go", "from": "idle", "to": "done"}
+                        )
+                    ],
+                },
+                r"transition\[0\]",
+            ),
+            (
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {
+                            "trigger": "go",
+                            "from": type("StringSubclass", (str,), {})("idle"),
+                            "to": "done",
+                        }
+                    ],
+                },
+                r"transition\[0\].*from",
+            ),
+            (
+                {
+                    "initial": "idle",
+                    "transitions": [
+                        {
+                            "trigger": "go",
+                            "from": type("ListSubclass", (list,), {})(["idle"]),
+                            "to": "done",
+                        }
+                    ],
+                },
+                r"transition\[0\].*from",
+            ),
+        ],
+    )
+    def test_from_dict_rejects_subclassed_serialized_shape(self, config, pattern):
+        with pytest.raises((TypeError, ValueError), match=pattern):
+            StateMachine.from_dict(config)

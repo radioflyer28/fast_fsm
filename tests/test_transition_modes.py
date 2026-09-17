@@ -169,6 +169,39 @@ def test_internal_self_transition_commits_without_state_lifecycle_or_payload_inj
     assert events == ["before", "trigger-callback", "after"]
 
 
+def test_dictionary_reconstructed_internal_transition_retains_lifecycle_mode() -> None:
+    """Deserialization selects the retained internal lifecycle path, not a no-op."""
+    events: list[str] = []
+    machine = StateMachine.from_dict(
+        {
+            "initial": "hover",
+            "transitions": [
+                {
+                    "trigger": "refresh",
+                    "from": "hover",
+                    "to": "hover",
+                    "internal": True,
+                }
+            ],
+        }
+    )
+    machine.enable_history()
+    machine.add_listener(_LifecycleListener(events))
+    machine.on_exit("hover", lambda *_args, **_kwargs: events.append("exit-callback"))
+    machine.on_enter("hover", lambda *_args, **_kwargs: events.append("enter-callback"))
+    machine.on_trigger(
+        "refresh", lambda *_args, **_kwargs: events.append("trigger-callback")
+    )
+
+    result = machine.trigger("refresh")
+
+    assert result.success is True
+    assert result.committed is True
+    assert result.internal is True
+    assert machine.history[-1].internal is True
+    assert events == ["before", "trigger-callback", "after"]
+
+
 def test_batch_internal_row_commits_with_the_same_mode_and_history_truth() -> None:
     """The retained batch adapter carries internal mode into canonical selection."""
     state = State("hover")

@@ -413,3 +413,31 @@ class TestFinalControlCloneAndPersistence:
         assert machine._states["done"].final is True
         assert clone._states["done"] is machine._states["done"]
         assert clone.is_terminated is False
+
+    @pytest.mark.asyncio
+    async def test_async_from_dict_preserves_finality_and_internal_mode(self) -> None:
+        machine = AsyncStateMachine.from_dict(
+            {
+                "initial": "idle",
+                "states": ["idle", "done"],
+                "final_states": ["done"],
+                "transitions": [
+                    {
+                        "trigger": "refresh",
+                        "from": "idle",
+                        "to": "idle",
+                        "internal": True,
+                    },
+                    {"trigger": "finish", "from": "idle", "to": "done"},
+                ],
+            }
+        )
+
+        refresh = await machine.trigger_async("refresh")
+        finish = await machine.trigger_async("finish")
+
+        assert isinstance(machine, AsyncStateMachine)
+        assert refresh.success is True
+        assert refresh.internal is True
+        assert finish.success is True
+        assert machine.is_terminated is True
