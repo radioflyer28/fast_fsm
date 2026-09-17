@@ -5,16 +5,16 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: executing
-stopped_at: Completed 30-02-PLAN.md
-last_updated: "2026-09-17T19:38:29.092Z"
+stopped_at: Completed 30-03-PLAN.md
+last_updated: "2026-09-17T19:57:28.925Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 30 execution started
-state_head: 1110fcfa784c8f776dcccce409ae35942ac44e94
+state_head: 81db409a67d5137a6a3256b6c4d96458fd9345d3
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 21
-  completed_plans: 17
+  completed_plans: 18
   percent: 57
 ---
 
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 ## Current Position
 
 Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 30 execution started
 
@@ -76,6 +76,7 @@ Progress: [██████░░░░] 57%
 | Phase 29 P04 | 11min | 2 tasks | 4 files |
 | Phase 30 P01 | 9 min | 2 tasks | 7 files |
 | Phase 30 P02 | 43 min | 2 tasks | 7 files |
+| Phase 30 P03 | 6 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,8 @@ Decisions are logged in PROJECT.md Key Decisions table. Current milestone decisi
 - [Phase 30]: Decorator guards remain state-owned and selected-entry matching includes internal mode. — Prevents double guard evaluation while preserving exact internal/external lifecycle behavior.
 - [Phase 30]: Declarative async preflight follows exact staged-owner applicability; foreign source constraints cannot reclassify or reject a builder.
 - [Phase 30]: Batch transition rows carry optional internal mode as their eighth field after timing and publish through the canonical request transaction.
+- [Phase 30]: Deprecated construction boundaries warn once before delegating to private compatibility workers.
+- [Phase 30]: Existing stubs and root exports remain unchanged because they already retain the v0.5.x compatibility signatures.
 
 ### Pending Todos
 
@@ -146,8 +149,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T19:38:28.995Z
-Stopped at: Completed 30-02-PLAN.md
+Last session: 2026-09-17T19:57:28.831Z
+Stopped at: Completed 30-03-PLAN.md
 Resume file: 
 
 None

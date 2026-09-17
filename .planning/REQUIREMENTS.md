@@ -39,7 +39,7 @@
 
 - [ ] **BUILD-01**: Users are guided to `FSMBuilder` as the primary construction interface, direct machine construction as the advanced interface, and `from_dict` as the serialization adapter.
 - [x] **BUILD-02**: Users can author declarative behavior through the canonical construction machinery without a separate topology implementation.
-- [ ] **BUILD-03**: Users of `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` receive documented deprecation guidance and a supported compatibility cycle.
+- [x] **BUILD-03**: Users of `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and `StateMachine.from_states` receive documented deprecation guidance and a supported compatibility cycle.
 - [x] **BUILD-04**: Maintainers can enforce all retained construction semantics through one private normalization and validation seam.
 - [x] **BUILD-05**: Users can retry or inspect construction after a failed registration, build, or deserialization without partial topology, stale indexes, or corrupted reusable builders.
 - [x] **BUILD-06**: Users receive identical final-state and transition-mode validation through direct, batch, builder, factory, declarative, helper, callback, clone, and deserialization paths.
@@ -123,7 +123,7 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | REJECT-09 | Phase 29 | Complete |
 | BUILD-01 | Phase 30 | Pending |
 | BUILD-02 | Phase 30 | Complete |
-| BUILD-03 | Phase 30 | Pending |
+| BUILD-03 | Phase 30 | Complete |
 | BUILD-04 | Phase 26 | Complete |
 | BUILD-05 | Phase 26 | Complete |
 | BUILD-06 | Phase 30 | Complete |
