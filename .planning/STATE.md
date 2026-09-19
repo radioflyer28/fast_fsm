@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
-current_phase: 31
-current_phase_name: Semantic Diagnostics & Visualization
-status: verifying
-stopped_at: Phase 31 context gathered
-last_updated: "2026-09-19T18:51:44.738Z"
+current_phase: 32
+current_phase_name: Performance, Artifact & Progressive Guidance Proof
+status: planning
+stopped_at: Phase 31 complete, ready to plan Phase 32
+last_updated: "2026-09-19T22:30:28.162Z"
 last_activity: 2026-09-19
-last_activity_desc: Phase 31 execution started
-state_head: f5f494f4bf77859bcb815ff8c4a7e5d352dae645
+last_activity_desc: Phase 31 complete, transitioned to Phase 32
+state_head: 74d83ed59f1c57fc60dadd1f1852bf9083d6fc86
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 26
   completed_plans: 26
-  percent: 71
+  percent: 86
 ---
 
 # State: Fast FSM
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 31 (Semantic Diagnostics & Visualization) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
-Last activity: 2026-09-19 — Phase 31 execution started
+Phase: 32 — Performance, Artifact & Progressive Guidance Proof
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-19 — Phase 31 complete, transitioned to Phase 32
 
 Progress: [███████░░░] 71%
 
@@ -54,6 +54,7 @@ Progress: [███████░░░] 71%
 | 28 | 3 | - | - |
 | 29 | 4 | - | - |
 | 30 | 6 | - | - |
+| 31 | 5 | - | - |
 
 **Recent Trend:** Phases 26–30 are complete and independently verified; Phase 31 is ready for discussion and planning.
 **Per-Plan Metrics:**
@@ -164,7 +165,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-09-19T17:20:40.496Z
-Stopped at: Phase 31 context gathered
+Stopped at: Phase 31 complete, ready to plan Phase 32
 Resume file: .planning/phases/31-semantic-diagnostics-visualization/31-CONTEXT.md
 
 - Phase 30's full suite, verifier, review, security, and native parity gates

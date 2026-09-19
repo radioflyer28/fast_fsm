@@ -48,9 +48,9 @@
 
 ### Diagnostics and Visualization
 
-- [ ] **DIAG-01**: Users can interpret finality, transition mode, and expected rejection consistently in results, history, validation, tracing, and JSON output wherever each concept applies.
-- [ ] **DIAG-02**: Users can distinguish final states, internal transitions, and non-final sink states in Mermaid and PlantUML output.
-- [ ] **DIAG-03**: Users receive deterministic, bounded diagnostic fields suitable for logs, tests, and serialized evidence.
+- [x] **DIAG-01**: Users can interpret finality, transition mode, and expected rejection consistently in results, history, validation, tracing, and JSON output wherever each concept applies.
+- [x] **DIAG-02**: Users can distinguish final states, internal transitions, and non-final sink states in Mermaid and PlantUML output.
+- [x] **DIAG-03**: Users receive deterministic, bounded diagnostic fields suitable for logs, tests, and serialized evidence.
 
 ### Performance and Release Evidence
 
@@ -129,9 +129,9 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | BUILD-06 | Phase 30 | Complete |
 | BUILD-07 | Phase 30 | Complete |
 | BUILD-08 | Phase 30 | Complete |
-| DIAG-01 | Phase 31 | Pending |
-| DIAG-02 | Phase 31 | Pending |
-| DIAG-03 | Phase 31 | Pending |
+| DIAG-01 | Phase 31 | Complete |
+| DIAG-02 | Phase 31 | Complete |
+| DIAG-03 | Phase 31 | Complete |
 | PERF-01 | Phase 32 | Pending |
 | PERF-02 | Phase 32 | Pending |
 | PERF-03 | Phase 32 | Pending |

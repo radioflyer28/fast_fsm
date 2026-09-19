@@ -87,7 +87,7 @@ The two related tasks were committed together as `e8d4edb` after both focused te
 ## Verification
 
 - `uv run pytest tests/test_validation.py tests/test_diagnostic_contracts.py -x -q --disable-warnings` — passed.
-- `uv run ruff check src/fast_fsm/validation.py tests/test_validation.py` — passed.
+- Ruff lint on the validator and its test module — passed.
 - `task typecheck-mypy` — passed.
 
 ## Decisions Made

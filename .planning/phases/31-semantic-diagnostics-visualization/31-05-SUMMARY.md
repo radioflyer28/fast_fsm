@@ -73,7 +73,7 @@ status: complete
 ## Accomplishments
 
 - Extended final-state, transition-mode, expected-rejection, and structural tests to check current-state authority, result/history continuity, shared cold snapshot use, disabled TRACE, and unchanged singleton selection structure.
-- Asserted pure `src/fast_fsm/core.py` origin, ran the nine-module focused matrix, built a fresh compiled extension, asserted `src/fast_fsm/core.cpython-312-darwin.so` origin, and ran the identical matrix. The native shadow was moved to a recoverable backup at `/var/folders/34/yzc9zf6903x_8krb7b8s6tlr0000gn/T//fast-fsm-phase31-native-backup.LgI3wP`; pure source origin was reasserted afterward.
+- Asserted pure `src/fast_fsm/core.py` origin, ran the nine-module focused matrix, built a fresh compiled extension, asserted its exact extension origin, and ran the identical matrix. The native shadow was moved to a recoverable backup at `/var/folders/34/yzc9zf6903x_8krb7b8s6tlr0000gn/T//fast-fsm-phase31-native-backup.LgI3wP`; pure source origin was reasserted afterward.
 - Kept the installed compiled throughput floor at 200,000 ops/sec and removed unnecessary disabled-TRACE argument projection at both trigger call sites after the full suite exposed a load-sensitive floor miss.
 
 ## Task Commits
