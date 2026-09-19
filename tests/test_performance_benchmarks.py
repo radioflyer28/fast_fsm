@@ -11,9 +11,11 @@ import contextlib
 import gc
 import importlib.util
 import io
+import json
 import logging
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -393,6 +395,131 @@ def test_priority_group_reporter_labels_each_environmental_observation() -> None
         assert row["group_depth"] == 2
         assert row["sample_count"] == 1
         assert row["operations_per_second"] > 0
+
+
+def test_semantic_observation_reporter_separates_feature_costs_and_provenance() -> None:
+    """Each optional semantic publishes a finite, environment-labelled row."""
+    performance_demo = _load_performance_demo()
+    rows = performance_demo.collect_semantic_observations(
+        environment_label="pytest-semantic-observation",
+        sample_count=1,
+        iterations=2,
+    )
+
+    assert {row["scenario"] for row in rows} == {
+        "final_entry",
+        "internal_self",
+        "external_self",
+        "expected_rejection",
+    }
+    required_fields = {
+        "scenario",
+        "environment_label",
+        "core_origin",
+        "core_mode",
+        "distribution_version",
+        "python",
+        "implementation",
+        "platform",
+        "uv_version",
+        "clock",
+        "statistic",
+        "sample_count",
+        "iterations",
+        "operation_count",
+        "guard_evaluations_per_operation",
+        "operations_per_second",
+    }
+    for row in rows:
+        assert required_fields <= row.keys()
+        assert row["environment_label"] == "pytest-semantic-observation"
+        assert row["sample_count"] == 1
+        assert row["iterations"] == 2
+        assert row["operation_count"] == 2
+        assert row["clock"] == "perf_counter_ns"
+        assert row["statistic"] == "median"
+        assert row["operations_per_second"] > 0
+        assert row["guard_evaluations_per_operation"] in {0, 1}
+
+
+@pytest.mark.parametrize(
+    ("environment_label", "sample_count", "iterations"),
+    (("", 1, 1), ("valid", 0, 1), ("valid", 1, 0)),
+)
+def test_semantic_observation_reporter_rejects_invalid_controls(
+    environment_label: str, sample_count: int, iterations: int
+) -> None:
+    """Descriptive timings reject empty labels and nonpositive sample controls."""
+    performance_demo = _load_performance_demo()
+    with pytest.raises(ValueError):
+        performance_demo.collect_semantic_observations(
+            environment_label=environment_label,
+            sample_count=sample_count,
+            iterations=iterations,
+        )
+
+
+def test_performance_demo_cli_emits_all_semantic_rows_for_named_environment() -> None:
+    """The runnable reporter labels every semantic row without claiming a ratio."""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "benchmarks" / "performance_demo.py"),
+            "--environment-label",
+            "pytest-cli",
+            "--sample-count",
+            "1",
+            "--iterations",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rows = [
+        json.loads(line.removeprefix("SEMANTIC_OBSERVATION "))
+        for line in completed.stdout.splitlines()
+        if line.startswith("SEMANTIC_OBSERVATION ")
+    ]
+    assert len(rows) == 4
+    assert {row["scenario"] for row in rows} == {
+        "final_entry",
+        "internal_self",
+        "external_self",
+        "expected_rejection",
+    }
+    assert {row["environment_label"] for row in rows} == {"pytest-cli"}
+
+
+def test_performance_demo_cli_rejects_mismatched_expected_core_mode() -> None:
+    """An asserted loader mode fails before any descriptive timing begins."""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "benchmarks" / "performance_demo.py"),
+            "--environment-label",
+            "pytest-mismatch",
+            "--sample-count",
+            "1",
+            "--iterations",
+            "1",
+            "--expected-core-mode",
+            "not-a-runtime-mode",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    assert "expected core mode" in completed.stderr
+
+
+def test_taskfile_benchmark_commands_name_their_runtime_and_native_assertion() -> None:
+    """Task shortcuts cannot present a pure run as the compiled observation."""
+    taskfile = (ROOT / "Taskfile.yml").read_text()
+    assert "--environment-label task-active-runtime" in taskfile
+    assert "--environment-label task-compiled-build" in taskfile
+    assert "--expected-core-mode compiled-native" in taskfile
 
 
 def test_add_state_constant_registry_lookup_and_writes_across_topology_sizes() -> None:
