@@ -188,7 +188,7 @@ Plans:
   2. Mermaid and PlantUML diagrams distinguish explicit final states, internal transitions, external self-transitions, and non-final sink states.
   3. Every new diagnostic field and rendering remains deterministic, bounded, escaped, and suitable for logs, tests, and serialized evidence.
 
-**Plans**: 1/5 plans executed in 3 waves
+**Plans**: 2/5 plans executed in 3 waves
 
 **Wave 1**
 
@@ -196,7 +196,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 31-02-PLAN.md — distinguish explicit finals and non-final sinks in validator findings and scores.
+- [x] 31-02-PLAN.md — distinguish explicit finals and non-final sinks in validator findings and scores.
 - [ ] 31-03-PLAN.md — render truthful final markers and self-transition modes in Mermaid and PlantUML.
 - [ ] 31-04-PLAN.md — add safe semantic metadata to matched synchronous/asynchronous trace paths.
 
@@ -253,7 +253,7 @@ Plans:
 | 28. Same-State Transition Modes | v0.5.0 | 3/3 | Complete    | 2026-09-16 |
 | 29. Expected Domain Rejection | v0.5.0 | 4/4 | Complete    | 2026-09-17 |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 6/6 | Complete    | 2026-09-19 |
-| 31. Semantic Diagnostics & Visualization | v0.5.0 | 1/5 | In Progress|  |
+| 31. Semantic Diagnostics & Visualization | v0.5.0 | 2/5 | In Progress|  |
 | 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |
 
 ---
