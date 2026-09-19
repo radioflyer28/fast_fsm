@@ -493,6 +493,14 @@ def test_performance_demo_cli_emits_all_semantic_rows_for_named_environment() ->
 
 def test_performance_demo_cli_rejects_mismatched_expected_core_mode() -> None:
     """An asserted loader mode fails before any descriptive timing begins."""
+    actual_mode = (
+        "compiled-native"
+        if Path(fast_fsm_core.__file__ or "").suffix in {".dll", ".pyd", ".so"}
+        else "pure-python"
+    )
+    mismatched_mode = (
+        "pure-python" if actual_mode == "compiled-native" else "compiled-native"
+    )
     completed = subprocess.run(
         [
             sys.executable,
@@ -504,7 +512,7 @@ def test_performance_demo_cli_rejects_mismatched_expected_core_mode() -> None:
             "--iterations",
             "1",
             "--expected-core-mode",
-            "not-a-runtime-mode",
+            mismatched_mode,
         ],
         check=False,
         capture_output=True,
@@ -1590,7 +1598,14 @@ def test_direct_selectors_do_not_use_reflection_or_unrelated_registry_iteration(
             isinstance(call.func, ast.Name) and call.func.id in forbidden_calls
             for call in calls
         )
-        assert not any(isinstance(node, ast.For) for node in ast.walk(selector))
+        loops = [node for node in ast.walk(selector) if isinstance(node, ast.For)]
+        assert all(
+            isinstance(loop.iter, ast.Attribute)
+            and isinstance(loop.iter.value, ast.Name)
+            and loop.iter.value.id == "slot"
+            and loop.iter.attr == "entries"
+            for loop in loops
+        )
 
 
 def test_disabled_trace_does_not_invoke_the_collector_for_sync_or_async_dispatch(

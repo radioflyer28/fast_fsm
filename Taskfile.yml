@@ -207,16 +207,16 @@ tasks:
   # ─────────────────────────────────────────────
 
   benchmark:
-    desc: Run environment-labelled priority-group performance observations
+    desc: Run environment-labelled priority and optional-semantic observations
     cmds:
-      - uv run python benchmarks/performance_demo.py
+      - uv run python benchmarks/performance_demo.py --environment-label task-active-runtime
 
   benchmark-compiled:
-    desc: "Observe priority groups with a mypyc build (clean → build → reporter)"
+    desc: "Observe priority and semantic costs with a mypyc build (clean → build → reporter)"
     cmds:
       - task: clean
       - task: build
-      - uv run python benchmarks/performance_demo.py
+      - uv run python benchmarks/performance_demo.py --environment-label task-compiled-build --expected-core-mode compiled-native
 
   benchmark-compare:
     desc: "Manually collect environment-labelled observational FSM comparisons"
