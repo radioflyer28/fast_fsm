@@ -328,6 +328,123 @@ controller feeding one telemetry event into priority candidates and issuing
 simulated aircraft commands only after the selected transition commits. It is
 training software, not flight-control or safety-certified software.
 
+## Make flat-FSM semantics explicit
+
+Three pairs of outcomes can look alike in a diagram or in a state name, but
+their public behavior differs. An explicit final state reports
+`is_terminated` as `True`; a non-final sink with no outgoing edge does not. A false
+guard is ordinary ineligibility and can fall through to a lower-priority
+candidate. An expected rejection stops selection with a bounded
+`TransitionRejected` code, while an unexpected failure exposes a distinct
+`cause` and lifecycle `stage`. Finally, an internal self transition commits
+without state exit/entry; an external self transition re-enters the same state.
+
+<!-- docs-exec:semantic-contrasts -->
+```python
+from fast_fsm import FSMBuilder, State, TransitionRejected
+
+# Explicit finality is not inferred from a dead-end topology node.
+finished = (
+    FSMBuilder(State("start"), name="Finality")
+    .add_state(State("done", final=True))
+    .add_transition("finish", "start", "done")
+    .build()
+)
+final_result = finished.trigger("finish")
+assert final_result.success and final_result.committed
+assert finished.is_terminated is True
+
+sink = (
+    FSMBuilder(State("start"), name="Sink")
+    .add_state(State("sink"))
+    .add_transition("finish", "start", "sink")
+    .build()
+)
+sink_result = sink.trigger("finish")
+assert sink_result.success and sink_result.committed
+assert sink.is_terminated is False
+
+# A false guard falls through to the next candidate in the same priority group.
+fallthrough = (
+    FSMBuilder(State("mission"), name="Fallthrough")
+    .add_state(State("return_home"))
+    .add_transition(
+        "telemetry_tick", "mission", "return_home", condition=lambda **_: False, priority=0
+    )
+    .add_transition("telemetry_tick", "mission", "return_home", priority=10)
+    .build()
+)
+fallthrough_result = fallthrough.trigger("telemetry_tick")
+assert fallthrough_result.success and fallthrough_result.priority == 10
+assert fallthrough_result.rejected is False
+
+def reject_navigation(**_):
+    raise TransitionRejected("navigation.conflict")
+
+
+rejection = (
+    FSMBuilder(State("mission"), name="Rejection")
+    .add_state(State("return_home"))
+    .add_transition(
+        "telemetry_tick", "mission", "return_home", condition=reject_navigation, priority=0
+    )
+    .add_transition("telemetry_tick", "mission", "return_home", priority=10)
+    .build()
+)
+rejected = rejection.trigger("telemetry_tick")
+assert rejected.rejected and rejected.rejection_code == "navigation.conflict"
+assert rejected.committed is False and rejection.is_in("mission")
+
+def unexpected_bug(**_):
+    raise RuntimeError("illustrative guard failure")
+
+
+failed = (
+    FSMBuilder(State("mission"), name="UnexpectedFailure")
+    .add_state(State("return_home"))
+    .add_transition("telemetry_tick", "mission", "return_home", condition=unexpected_bug)
+    .build()
+).trigger("telemetry_tick")
+assert failed.rejected is False and failed.stage == "guard"
+assert isinstance(failed.cause, RuntimeError) and failed.committed is False
+
+# Both self transitions retain the state name; lifecycle and result fields differ.
+internal_events = []
+internal_hover = State.create(
+    "hover",
+    on_exit=lambda *_args, **_kwargs: internal_events.append("exit"),
+    on_enter=lambda *_args, **_kwargs: internal_events.append("enter"),
+)
+internal_machine = (
+    FSMBuilder(internal_hover, name="InternalSelf")
+    .add_transition("telemetry_tick", "hover", "hover", internal=True)
+    .build()
+)
+internal = internal_machine.trigger("telemetry_tick")
+assert internal.success and internal.committed and internal.internal is True
+assert internal_machine.is_in("hover") and internal_events == []
+
+external_events = []
+external_hover = State.create(
+    "hover",
+    on_exit=lambda *_args, **_kwargs: external_events.append("exit"),
+    on_enter=lambda *_args, **_kwargs: external_events.append("enter"),
+)
+external_machine = (
+    FSMBuilder(external_hover, name="ExternalSelf")
+    .add_transition("telemetry_tick", "hover", "hover")
+    .build()
+)
+external = external_machine.trigger("telemetry_tick")
+assert external.success and external.committed and external.internal is False
+assert external_machine.is_in("hover") and external_events == ["exit", "enter"]
+```
+
+The [drone failsafe example](examples/drone_failsafes.py) applies these same
+rules in a deterministic controller-owned telemetry loop: its one
+`telemetry_tick` has prioritized guards, and aircraft commands run only after
+the selected transition commits.
+
 ## Attach behavior to the transition lifecycle
 
 Use state callbacks for behavior owned by one state, machine callbacks for
