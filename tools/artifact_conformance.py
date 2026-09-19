@@ -92,6 +92,34 @@ _SCENARIO_DEFINITIONS = (
         for dimension in ("work", "results", "dense_cells", "path_expansions")
     ),
     {
+        "id": "final.explicit-versus-sink",
+        "family": "finality",
+        "fields": (
+            "id",
+            "family",
+            "final_state",
+            "final_success",
+            "final_committed",
+            "final_terminated",
+            "sink_state",
+            "sink_success",
+            "sink_committed",
+            "sink_terminated",
+            "redacted",
+        ),
+        "required_values": {
+            "final_state": "done",
+            "final_success": True,
+            "final_committed": True,
+            "final_terminated": True,
+            "sink_state": "sink",
+            "sink_success": True,
+            "sink_committed": True,
+            "sink_terminated": False,
+            "redacted": True,
+        },
+    },
+    {
         "id": "graph.guard-rejection",
         "family": "graph-guard",
         "fields": (
@@ -639,6 +667,47 @@ def _graph_guard_rejection() -> dict[str, Any]:
         "guard_context_observed": guard_context_observed,
         "rejected_topology_unchanged": rejected_topology_unchanged,
         "redacted": "caller-secret" not in repr(result),
+    }
+
+
+def _final_explicit_versus_sink() -> dict[str, Any]:
+    """Prove finality is committed state metadata, not missing topology."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+
+    final_source = core.State("start")
+    final_destination = core.State("done", final=True)
+    final_machine = core.StateMachine(
+        final_source, name="artifact-conformance-explicit-final"
+    )
+    final_machine.add_state(final_destination)
+    final_machine.add_transition("advance", final_source, final_destination)
+
+    sink_source = core.State("start")
+    sink_destination = core.State("sink")
+    sink_machine = core.StateMachine(
+        sink_source, name="artifact-conformance-non-final-sink"
+    )
+    sink_machine.add_state(sink_destination)
+    sink_machine.add_transition("advance", sink_source, sink_destination)
+
+    final_result = final_machine.trigger("advance", payload="caller-secret")
+    sink_result = sink_machine.trigger("advance", payload="caller-secret")
+    return {
+        "id": "final.explicit-versus-sink",
+        "family": "finality",
+        "final_state": final_machine.current_state.name,
+        "final_success": final_result.success,
+        "final_committed": final_result.committed,
+        "final_terminated": final_machine.is_terminated,
+        "sink_state": sink_machine.current_state.name,
+        "sink_success": sink_result.success,
+        "sink_committed": sink_result.committed,
+        "sink_terminated": sink_machine.is_terminated,
+        "redacted": all(
+            sentinel not in repr(result)
+            for result in (final_result, sink_result)
+            for sentinel in _PAYLOAD_SENTINELS
+        ),
     }
 
 
@@ -1818,6 +1887,7 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
         lambda: _diagnostic_boundary("results"),
         lambda: _diagnostic_boundary("dense_cells"),
         lambda: _diagnostic_boundary("path_expansions"),
+        _final_explicit_versus_sink,
         _graph_guard_rejection,
         _logging_metadata_redaction,
         _priority_sync_winner,
