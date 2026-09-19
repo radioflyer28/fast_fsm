@@ -9,7 +9,7 @@ created: 2026-09-19
 
 # Phase 31 — Validation Strategy
 
-> Draft per-phase sampling contract. The planner must replace provisional task IDs and wave labels with its final PLAN.md mapping; `$gsd-validate-phase 31` sets the validated status only after execution evidence.
+> Draft per-phase sampling contract. Final plan/task/wave IDs are mapped below; `$gsd-validate-phase 31` sets the validated status only after execution evidence.
 
 ---
 
@@ -38,11 +38,16 @@ created: 2026-09-19
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 31-TBD-01 | TBD | TBD | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Snapshot copies immutable final/mode scalars once without mixed epochs or budget bypass | unit + structural | `uv run pytest tests/test_diagnostic_contracts.py tests/test_output_safety.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-TBD-02 | TBD | TBD | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Validators and JSON distinguish explicit finals from non-final sinks while preserving topology legacy fields | unit + integration | `uv run pytest tests/test_validation.py tests/test_diagnostic_contracts.py tests/test_visualization.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-TBD-03 | TBD | TBD | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Both diagrams mark only true finals, label self modes, escape hostile names, and fail on exact budget exhaustion | unit | `uv run pytest tests/test_visualization.py tests/test_output_safety.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-TBD-04 | TBD | TBD | DIAG-01, DIAG-03 | T-31-04 | Trace uses bounded metadata-only code/mode/finality, keeps redactor fail-closed, and matches sync/async paths | unit + async | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-TBD-05 | TBD | TBD | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Cross-surface pure/native truth, source origin, docs, and full regression suite agree | integration + release closure | `uv run pytest tests/ -x -q` plus fresh-native oracle and source-origin assertion | ✅ harness exists | ⬜ pending |
+| 31-01-01 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | One snapshot captures final/mode scalars and JSON projects explicit facts without changing legacy topology | unit + integration | `uv run pytest tests/test_diagnostic_contracts.py -x -q -k "snapshot or json"` | ✅ existing module | ⬜ pending |
+| 31-01-02 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Late mutation, ordering, and exact new-field budgets cannot yield mixed or partial output | unit + structural | `uv run pytest tests/test_diagnostic_contracts.py -x -q` | ✅ existing module | ⬜ pending |
+| 31-02-01 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Explicit final and non-final sink reports preserve topology-only dead-state compatibility | unit | `uv run pytest tests/test_validation.py -x -q -k "dead or complete or report or export"` | ✅ existing module | ⬜ pending |
+| 31-02-02 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01 | Intentional finals no longer incur dead-end findings or scoring penalties | unit + integration | `uv run pytest tests/test_validation.py tests/test_diagnostic_contracts.py -x -q` | ✅ existing modules | ⬜ pending |
+| 31-03-01 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Mermaid and PlantUML mark only explicit finals and distinguish self-transition modes | unit | `uv run pytest tests/test_visualization.py -x -q -k "mermaid or plantuml or final or terminal"` | ✅ existing module | ⬜ pending |
+| 31-03-02 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Hostile text is escaped and every new diagram line is budgeted before output | unit + safety | `uv run pytest tests/test_visualization.py tests/test_output_safety.py -x -q` | ✅ existing modules | ⬜ pending |
+| 31-04-01 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Sync and async trace finalizers emit the same bounded semantic fields | unit + async | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q -k "trace or rejection"` | ✅ existing modules | ⬜ pending |
+| 31-04-02 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Disabled trace stays cheap and redactor failure remains metadata-only | unit + safety | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q` | ✅ existing modules | ⬜ pending |
+| 31-05-01 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Cross-surface runtime facts and source structure agree | structural + integration | `uv run pytest tests/test_mypyc_guard.py tests/test_final_states.py tests/test_transition_modes.py tests/test_expected_rejection.py -x -q -k "final or mode or rejection or diagnostic or trace or hot_path or snapshot"` | ✅ existing modules | ⬜ pending |
+| 31-05-02 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Pure/native oracle, origin restoration, docs, typing, slots, and full suite agree | release closure | `uv run pytest tests/ -x -q` plus Plan 31-05 native/origin gate | ✅ harness exists | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
