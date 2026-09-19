@@ -99,6 +99,7 @@ class TelemetrySample:
     home_reached: bool = False
     on_ground: bool = False
     critical_fault: bool = False
+    reenter_mission: bool = False
 
 
 class TelemetryPolicy:
@@ -181,7 +182,19 @@ def touchdown_detected(telemetry_policy: TelemetryPolicy, **_) -> bool:
     return telemetry_policy.sample.on_ground
 
 
-def create_drone_fsm(aircraft: AircraftCommands):
+def mission_reentry_requested(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Request an external Mission self-transition with full re-entry effects."""
+    return telemetry_policy.sample.reenter_mission
+
+
+def mission_update_requested(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Commit a routine in-Mission update without restarting state residency."""
+    return not telemetry_policy.sample.reenter_mission
+
+
+def create_drone_fsm(
+    aircraft: AircraftCommands, *, clock: Callable[[], float] = monotonic
+):
     """Build the controller's ground, mission, return, and emergency FSM."""
     pre_arm = State("PreArm")
     armed = State("Armed")
@@ -190,10 +203,11 @@ def create_drone_fsm(aircraft: AircraftCommands):
     return_home = State("ReturnHome")
     landing = State("Landing")
     emergency_landing = State("EmergencyLanding")
-    landed = State("Landed")
+    landed = State("Landed", final=True)
+    emergency_landed = State("EmergencyLanded", final=True)
 
     builder = (
-        FSMBuilder(pre_arm, name="DroneSafety")
+        FSMBuilder(pre_arm, name="DroneSafety", clock=clock)
         .add_state(armed)
         .add_state(takeoff)
         .add_state(mission)
@@ -201,6 +215,7 @@ def create_drone_fsm(aircraft: AircraftCommands):
         .add_state(landing)
         .add_state(emergency_landing)
         .add_state(landed)
+        .add_state(emergency_landed)
         # Ground checks: only complete, acceptable telemetry may arm the drone.
         .add_transition(
             "arm",
@@ -250,12 +265,40 @@ def create_drone_fsm(aircraft: AircraftCommands):
         )
         .add_transition(
             "telemetry_tick",
-            ["Landing", "EmergencyLanding"],
+            "Landing",
             "Landed",
             condition=FuncCondition(touchdown_detected, name="touchdown_detected"),
             priority=30,
         )
-        .add_transition("prepare_next_flight", "Landed", "PreArm")
+        # Mission semantics are ordinary candidate transitions on the same
+        # telemetry event. A requested re-entry comes before the routine
+        # internal update, but both remain below every safety candidate.
+        .add_transition(
+            "telemetry_tick",
+            "Mission",
+            "Mission",
+            condition=FuncCondition(
+                mission_reentry_requested, name="mission_reentry_requested"
+            ),
+            priority=50,
+        )
+        .add_transition(
+            "telemetry_tick",
+            "Mission",
+            "Mission",
+            condition=FuncCondition(
+                mission_update_requested, name="mission_update_requested"
+            ),
+            priority=60,
+            internal=True,
+        )
+        .add_transition(
+            "telemetry_tick",
+            "EmergencyLanding",
+            "EmergencyLanded",
+            condition=FuncCondition(touchdown_detected, name="touchdown_detected"),
+            priority=30,
+        )
     )
 
     entry_commands = {
@@ -266,6 +309,7 @@ def create_drone_fsm(aircraft: AircraftCommands):
         "Landing": aircraft.command_begin_landing,
         "EmergencyLanding": aircraft.command_emergency_land,
         "Landed": aircraft.command_disarm_motors,
+        "EmergencyLanded": aircraft.command_disarm_motors,
     }
     for state_name in (
         "PreArm",
@@ -276,13 +320,16 @@ def create_drone_fsm(aircraft: AircraftCommands):
         "Landing",
         "EmergencyLanding",
         "Landed",
+        "EmergencyLanded",
     ):
         builder.on_enter(state_name, report_state_entry(state_name))
         command = entry_commands.get(state_name)
         if command is not None:
             builder.on_enter(state_name, issue_aircraft_command(command))
 
-    return builder.build()
+    machine = builder.build()
+    machine.enable_history()
+    return machine
 
 
 class DroneController:
@@ -294,12 +341,14 @@ class DroneController:
         self,
         aircraft: AircraftCommands,
         telemetry_policy: TelemetryPolicy | None = None,
+        *,
+        fsm_clock: Callable[[], float] = monotonic,
     ) -> None:
         self._aircraft = aircraft
         self._telemetry_policy = (
             TelemetryPolicy() if telemetry_policy is None else telemetry_policy
         )
-        self._fsm = create_drone_fsm(aircraft)
+        self._fsm = create_drone_fsm(aircraft, clock=fsm_clock)
 
     @property
     def current_state_name(self) -> str:
@@ -335,14 +384,22 @@ class DroneController:
     def _report(self, result: TransitionResult) -> TransitionResult:
         """Print one FSM result without attempting a fallback trigger."""
         if result.success:
-            print(f"✓ {result.trigger}: {result.from_state} -> {result.to_state}")
+            if result.internal:
+                mode = "internal update"
+            elif result.from_state == result.to_state:
+                mode = "external self re-entry"
+            else:
+                mode = "state change"
+            print(
+                f"✓ {result.trigger}: {result.from_state} -> {result.to_state} [{mode}]"
+            )
         else:
-            print("• no state transition")
+            print("• no eligible transition")
         return result
 
 
 def simulated_telemetry() -> list[TelemetrySample]:
-    """Return a deterministic sequence that resembles a live telemetry stream."""
+    """Return the first deterministic training flight's telemetry sequence."""
     ready = {
         "battery_pct": 82,
         "gps_fix": True,
@@ -353,34 +410,57 @@ def simulated_telemetry() -> list[TelemetrySample]:
     }
     return [
         TelemetrySample(**{**ready, "battery_pct": 74}),
-        TelemetrySample(**{**ready, "battery_pct": 22}),
-        TelemetrySample(**{**ready, "battery_pct": 20, "home_reached": True}),
-        TelemetrySample(**{**ready, "battery_pct": 20, "on_ground": True}),
         TelemetrySample(**ready),
-        TelemetrySample(**{**ready, "critical_fault": True}),
+        TelemetrySample(**{**ready, "reenter_mission": True}),
+        TelemetrySample(**{**ready, "battery_pct": 22}),
+        TelemetrySample(**{**ready, "home_reached": True}),
         TelemetrySample(**{**ready, "on_ground": True}),
     ]
 
 
 def main() -> None:
-    """Run a simulated stream through the state machine one packet at a time."""
+    """Run two deterministic flights through independently owned controllers."""
     print("Drone safety state-machine telemetry-loop simulation")
-    print("This example is not flight-control software.\n")
+    print(
+        "This example is deterministic training software, not flight-control software.\n"
+    )
 
-    aircraft = SimulatedAircraft()
-    drone = DroneController(aircraft)
+    normal_aircraft = SimulatedAircraft()
+    normal_flight = DroneController(normal_aircraft)
 
     for index, sample in enumerate(simulated_telemetry(), start=1):
-        print(f"--- Telemetry tick {index} ---")
-        drone.update_from_telemetry(sample)
-        if index in (1, 5):
-            if index == 5:
-                drone.perform_operator_action("prepare_next_flight")
+        print(f"--- Normal-flight telemetry tick {index} ---")
+        normal_flight.update_from_telemetry(sample)
+        if index == 1:
             for action in ("arm", "takeoff", "begin_mission"):
-                drone.perform_operator_action(action)
+                normal_flight.perform_operator_action(action)
 
-    print(f"\nFinal state: {drone.current_state_name}")
-    print(f"Commands issued: {', '.join(aircraft.commands)}")
+    print(f"Normal flight final state: {normal_flight.current_state_name}")
+    print(f"Normal-flight commands: {', '.join(normal_aircraft.commands)}\n")
+
+    print("--- Second flight: a fresh controller owns a new adapter ---")
+    emergency_aircraft = SimulatedAircraft()
+    emergency_flight = DroneController(emergency_aircraft)
+    ready = {
+        "battery_pct": 82,
+        "gps_fix": True,
+        "home_position_set": True,
+        "propellers_clear": True,
+        "geofence_loaded": True,
+        "launch_area_clear": True,
+    }
+    emergency_flight.update_from_telemetry(TelemetrySample(**ready))
+    for action in ("arm", "takeoff", "begin_mission"):
+        emergency_flight.perform_operator_action(action)
+    emergency_flight.update_from_telemetry(
+        TelemetrySample(**{**ready, "critical_fault": True})
+    )
+    emergency_flight.update_from_telemetry(
+        TelemetrySample(**{**ready, "on_ground": True})
+    )
+
+    print(f"Emergency flight final state: {emergency_flight.current_state_name}")
+    print(f"Emergency-flight commands: {', '.join(emergency_aircraft.commands)}")
 
 
 if __name__ == "__main__":
