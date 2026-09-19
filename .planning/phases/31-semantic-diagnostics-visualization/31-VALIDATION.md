@@ -1,15 +1,15 @@
 ---
 phase: 31
 slug: semantic-diagnostics-visualization
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-09-19
 ---
 
 # Phase 31 — Validation Strategy
 
-> Draft per-phase sampling contract. Final plan/task/wave IDs are mapped below; `$gsd-validate-phase 31` sets the validated status only after execution evidence.
+> Post-execution Nyquist audit: all mapped tasks have automated, passing evidence in pure source and the focused native matrix.
 
 ---
 
@@ -38,16 +38,16 @@ created: 2026-09-19
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 31-01-01 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | One snapshot captures final/mode scalars and JSON projects explicit facts without changing legacy topology | unit + integration | `uv run pytest tests/test_diagnostic_contracts.py -x -q -k "snapshot or json"` | ✅ existing module | ⬜ pending |
-| 31-01-02 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Late mutation, ordering, and exact new-field budgets cannot yield mixed or partial output | unit + structural | `uv run pytest tests/test_diagnostic_contracts.py -x -q` | ✅ existing module | ⬜ pending |
-| 31-02-01 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Explicit final and non-final sink reports preserve topology-only dead-state compatibility | unit | `uv run pytest tests/test_validation.py -x -q -k "dead or complete or report or export"` | ✅ existing module | ⬜ pending |
-| 31-02-02 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01 | Intentional finals no longer incur dead-end findings or scoring penalties | unit + integration | `uv run pytest tests/test_validation.py tests/test_diagnostic_contracts.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-03-01 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Mermaid and PlantUML mark only explicit finals and distinguish self-transition modes | unit | `uv run pytest tests/test_visualization.py -x -q -k "mermaid or plantuml or final or terminal"` | ✅ existing module | ⬜ pending |
-| 31-03-02 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Hostile text is escaped and every new diagram line is budgeted before output | unit + safety | `uv run pytest tests/test_visualization.py tests/test_output_safety.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-04-01 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Sync and async trace finalizers emit the same bounded semantic fields | unit + async | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q -k "trace or rejection"` | ✅ existing modules | ⬜ pending |
-| 31-04-02 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Disabled trace stays cheap and redactor failure remains metadata-only | unit + safety | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q` | ✅ existing modules | ⬜ pending |
-| 31-05-01 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Cross-surface runtime facts and source structure agree | structural + integration | `uv run pytest tests/test_mypyc_guard.py tests/test_final_states.py tests/test_transition_modes.py tests/test_expected_rejection.py -x -q -k "final or mode or rejection or diagnostic or trace or hot_path or snapshot"` | ✅ existing modules | ⬜ pending |
-| 31-05-02 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Pure/native oracle, origin restoration, docs, typing, slots, and full suite agree | release closure | `uv run pytest tests/ -x -q` plus Plan 31-05 native/origin gate | ✅ harness exists | ⬜ pending |
+| 31-01-01 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | One snapshot captures final/mode scalars and JSON projects explicit facts without changing legacy topology | unit + integration | `uv run pytest tests/test_diagnostic_contracts.py -x -q -k "snapshot or json"` | ✅ existing module | ✅ green |
+| 31-01-02 | 01 | 1 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Late mutation, ordering, and exact new-field budgets cannot yield mixed or partial output | unit + structural | `uv run pytest tests/test_diagnostic_contracts.py -x -q` | ✅ existing module | ✅ green |
+| 31-02-01 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01, T-31-03 | Explicit final and non-final sink reports preserve topology-only dead-state compatibility | unit | `uv run pytest tests/test_validation.py -x -q -k "dead or complete or report or export"` | ✅ existing module | ✅ green |
+| 31-02-02 | 02 | 2 | DIAG-01, DIAG-03 | T-31-01 | Intentional finals no longer incur dead-end findings or scoring penalties | unit + integration | `uv run pytest tests/test_validation.py tests/test_diagnostic_contracts.py -x -q` | ✅ existing modules | ✅ green |
+| 31-03-01 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Mermaid and PlantUML mark only explicit finals and distinguish self-transition modes | unit | `uv run pytest tests/test_visualization.py -x -q -k "mermaid or plantuml or final or terminal"` | ✅ existing module | ✅ green |
+| 31-03-02 | 03 | 2 | DIAG-02, DIAG-03 | T-31-02, T-31-03 | Hostile text is escaped and every new diagram line is budgeted before output | unit + safety | `uv run pytest tests/test_visualization.py tests/test_output_safety.py -x -q` | ✅ existing modules | ✅ green |
+| 31-04-01 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Sync and async trace finalizers emit the same bounded semantic fields | unit + async | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q -k "trace or rejection"` | ✅ existing modules | ✅ green |
+| 31-04-02 | 04 | 2 | DIAG-01, DIAG-03 | T-31-04 | Disabled trace stays cheap and redactor failure remains metadata-only | unit + safety | `uv run pytest tests/test_logging_config.py tests/test_expected_rejection.py -x -q` | ✅ existing modules | ✅ green |
+| 31-05-01 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Cross-surface runtime facts and source structure agree | structural + integration | `uv run pytest tests/test_mypyc_guard.py tests/test_final_states.py tests/test_transition_modes.py tests/test_expected_rejection.py -x -q -k "final or mode or rejection or diagnostic or trace or hot_path or snapshot"` | ✅ existing modules | ✅ green |
+| 31-05-02 | 05 | 3 | DIAG-01, DIAG-02, DIAG-03 | T-31-01–T-31-04 | Pure/native oracle, origin restoration, docs, typing, slots, and full suite agree | release closure | `uv run pytest tests/ -x -q` plus Plan 31-05 native/origin gate | ✅ harness exists | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -67,10 +67,10 @@ created: 2026-09-19
 
 ## Wave 0 Requirements
 
-- [ ] Extend existing focused test modules with failing Phase 31 semantic projections before implementation.
-- [ ] Update old PlantUML sink-arrow expectations to explicit-final semantics and add corresponding Mermaid expectations.
-- [ ] Add exact budget and hostile-text cases for every new output row/field.
-- [ ] Add pure/native oracle coverage for copied snapshot final flags and edge mode.
+- [x] Extend existing focused test modules with Phase 31 semantic projections.
+- [x] Update old PlantUML sink-arrow expectations to explicit-final semantics and add corresponding Mermaid expectations.
+- [x] Add exact budget and hostile-text cases for every new output row/field.
+- [x] Add pure/native oracle coverage for copied snapshot final flags and edge mode.
 
 No new test framework, dependency, or shared fixture module is required.
 
@@ -95,12 +95,22 @@ All Phase 31 behavior must have automated tests. Optional visual rendering may s
 
 ## Validation Sign-Off
 
-- [ ] Every final PLAN task has an automated verify route or an explicit Wave 0 dependency.
-- [ ] Sampling continuity has no three consecutive tasks without automated verification.
-- [ ] Wave 0 covers every missing test reference.
-- [ ] No watch-mode flags.
-- [ ] Ordinary-task feedback latency is proportionate to the change.
-- [ ] Pure/native closure restores and reasserts the pure source origin.
-- [ ] `nyquist_compliant: true` is set only after the post-execution gap audit.
+- [x] Every final PLAN task has an automated verify route or an explicit Wave 0 dependency.
+- [x] Sampling continuity has no three consecutive tasks without automated verification.
+- [x] Wave 0 covers every missing test reference.
+- [x] No watch-mode flags.
+- [x] Ordinary-task feedback latency is proportionate to the change.
+- [x] Pure/native closure restores and reasserts the pure source origin.
+- [x] `nyquist_compliant: true` is set only after the post-execution gap audit.
 
-**Approval:** pending.
+**Approval:** validated by the 2026-09-19 post-execution audit.
+
+## Validation Audit 2026-09-19
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+DIAG-01 through DIAG-03 each have direct green tests in the mapped modules. The nine-module focused matrix passed under asserted pure and fresh native origins; the full sequential suite passed after review closure, including the installed compiled throughput floor. `31-VERIFICATION.md` independently reports 18/18 must-haves, no behavior-unverified items, and no human checks.
