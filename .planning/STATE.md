@@ -5,11 +5,11 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 31
 current_phase_name: Semantic Diagnostics & Visualization
 status: planning
-stopped_at: Phase 30 complete, ready to plan Phase 31
-last_updated: "2026-09-19T17:07:09.427Z"
+stopped_at: Phase 31 context gathered
+last_updated: "2026-09-19T17:20:40.696Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 30 complete, transitioned to Phase 31
-state_head: 9b275212f3c01b2285ecfddf57f1d9b985d8e9c5
+state_head: c0b61744f305a6db15d848d45eb77401bf30a3ed
 progress:
   total_phases: 7
   completed_phases: 5
@@ -158,11 +158,12 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-19T17:07:09Z
-Stopped at: Phase 30 verified and complete; Phase 31 is next
-Resume file: None (previous one-shot handoff consumed)
+Last session: 2026-09-19T17:20:40.496Z
+Stopped at: Phase 31 context gathered
+Resume file: .planning/phases/31-semantic-diagnostics-visualization/31-CONTEXT.md
 
 - Phase 30's full suite, verifier, review, security, and native parity gates
   passed; the former offline-cache blocker is closed.
+
 - Next: discuss, plan, and execute Phase 31, then continue through Phase 32
   and milestone audit/completion under the milestone workflow.
