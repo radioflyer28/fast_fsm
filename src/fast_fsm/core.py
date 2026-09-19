@@ -6775,8 +6775,19 @@ class FSMBuilder:
             )
 
         # A topology-complete declarative handler is ordinary builder input.
-        # Derive it afresh for this private candidate so failed builds leave
-        # staging reusable, then publish it beside explicit requests below.
+        # Keep the explicit rows separate while deriving declarations: a
+        # pre-builder compatibility pattern paired a decorated handler with an
+        # explicit row so it could own priority, timing, or transition mode.
+        # Such a row must remain the one topology candidate when its selected
+        # entry resolves to this exact state-owned handler.  In particular, do
+        # not infer a default decorator row beside a legacy internal or timed
+        # row: doing so changes selection order and can evaluate one handler
+        # guard twice during ordinary candidate fallthrough.
+        explicit_requests = tuple(bound_requests)
+
+        # Derive all other declarations afresh for this private candidate so
+        # failed builds leave staging reusable, then publish them beside the
+        # explicit requests below.
         for state in self._states.values():
             if not isinstance(state, DeclarativeState):
                 continue
@@ -6788,6 +6799,22 @@ class FSMBuilder:
                         continue
                     target = handler.to_state
                     bound_target = self._states.get(target, target)
+                    if isinstance(bound_target, State) and any(
+                        source is state
+                        and request.trigger == trigger
+                        and request.to_state is bound_target
+                        and _resolve_declarative_handler(
+                            state,
+                            trigger,
+                            bound_target,
+                            request.priority,
+                            request.internal,
+                        )
+                        is handler
+                        for request in explicit_requests
+                        for source in request.sources
+                    ):
+                        continue
                     bound_requests.append(
                         _TransitionRequest(
                             trigger,

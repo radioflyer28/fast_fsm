@@ -22,6 +22,18 @@ from fast_fsm.core import (
 )
 
 
+class _CompatibilityClock:
+    """Small deterministic clock for legacy-builder timing coverage."""
+
+    __slots__ = ("now",)
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def test_declarative_builder_internal_transition_executes_exactly_once() -> None:
     """A complete declaration becomes one internal builder-owned edge."""
     events: list[str] = []
@@ -78,6 +90,90 @@ def test_declarative_builder_internal_transition_executes_exactly_once() -> None
     assert calls == {"guard": 1, "handler": 1}
     assert events == ["handler", "trigger"]
     assert builder.build() is machine
+
+
+def test_legacy_explicit_declarative_row_owns_topology_and_guard_once() -> None:
+    """A legacy explicit row overrides declaration scalars without a second row."""
+    clock = _CompatibilityClock()
+    calls = {"guard": 0, "handler": 0}
+
+    def false_then_true(*_args: object, **_kwargs: object) -> bool:
+        calls["guard"] += 1
+        return calls["guard"] == 2
+
+    class Source(DeclarativeState):
+        @transition("refresh", to_state="source", condition=false_then_true)
+        def refresh(self, *_args: object, **_kwargs: object) -> bool:
+            calls["handler"] += 1
+            return True
+
+    source = Source("source")
+    machine = (
+        FSMBuilder(source, clock=clock)
+        .add_transition(
+            "refresh",
+            source,
+            source,
+            priority=5,
+            after=2,
+            within=5,
+            internal=True,
+        )
+        .build()
+    )
+
+    slot = machine._transitions["source"]["refresh"]
+    entries = slot.entries if hasattr(slot, "entries") else (slot,)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.priority == 5
+    assert entry.after == 2.0
+    assert entry.within == 5.0
+    assert entry.internal is True
+
+    clock.now = 2
+    first = machine.trigger("refresh")
+    second = machine.trigger("refresh")
+
+    assert first.success is False
+    assert first.committed is False
+    assert second.success is True
+    assert second.committed is True
+    assert second.internal is True
+    assert calls == {"guard": 2, "handler": 1}
+
+
+def test_legacy_explicit_declarative_row_keeps_distinct_candidates() -> None:
+    """Only the matching legacy declaration is suppressed during derivation."""
+    calls: list[str] = []
+
+    class Source(DeclarativeState):
+        @transition("go", to_state="declarative")
+        def go(self, *_args: object, **_kwargs: object) -> bool:
+            calls.append("declarative")
+            return True
+
+    source = Source("source")
+    machine = (
+        FSMBuilder(source)
+        .add_state(State("explicit"))
+        .add_state(State("declarative"))
+        .add_transition("go", source, "explicit", priority=-1)
+        .build()
+    )
+
+    entries = machine._transitions["source"]["go"].entries
+    assert [(entry.to_state.name, entry.priority) for entry in entries] == [
+        ("explicit", -1),
+        ("declarative", 0),
+    ]
+
+    result = machine.trigger("go")
+
+    assert result.success is True
+    assert result.to_state == "explicit"
+    assert machine.current_state is machine._states["explicit"]
+    assert calls == []
 
 
 def test_declarative_builder_failure_keeps_staging_and_cache_unchanged() -> None:
