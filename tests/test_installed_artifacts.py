@@ -229,6 +229,35 @@ def test_tracer_installs_exact_artifact_and_matches_clean_source_record(
         assert record["performance"] is None
 
 
+@pytest.mark.integration
+def test_phase32_final_pure_wheel_preserves_exact_origin_finality_oracle(
+    tracer_wheels: dict[str, Path],
+    clean_source_conformance: dict[str, object],
+) -> None:
+    """The pure installed tracer is accepted only after provenance checks pass."""
+    wheel = tracer_wheels["pure"]
+    installed = release_evidence.verify_installed_wheel(
+        wheel,
+        expected_mode="pure",
+        build_intent="pure",
+        collect_performance=False,
+    )
+
+    assert installed["artifact"]["expected_mode"] == "pure"
+    assert installed["artifact"]["build_intent"] == "pure"
+    assert installed["runtime"]["expected_mode"] == "pure"
+    assert installed["runtime"]["core_loader"] == "SourceFileLoader"
+    assert (
+        artifact_conformance.compare_conformance(
+            clean_source_conformance, installed["conformance"]
+        )
+        == []
+    )
+    records = {record["id"]: record for record in installed["conformance"]["scenarios"]}
+    assert records["final.explicit-versus-sink"]["final_terminated"] is True
+    assert records["final.explicit-versus-sink"]["sink_terminated"] is False
+
+
 def test_direct_artifact_task_captures_one_clean_source_record_for_both_wheels() -> (
     None
 ):

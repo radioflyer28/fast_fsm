@@ -18,6 +18,41 @@ if str(ROOT) not in sys.path:
 from tools import artifact_conformance  # noqa: E402
 
 
+def test_phase32_final_explicit_finality_differs_from_non_final_sink() -> None:
+    """The portable oracle records finality, not merely outgoing topology."""
+    payload = artifact_conformance.collect_conformance()
+    records = {record["id"]: record for record in payload["scenarios"]}
+
+    assert records["final.explicit-versus-sink"] == {
+        "id": "final.explicit-versus-sink",
+        "family": "finality",
+        "final_state": "done",
+        "final_success": True,
+        "final_committed": True,
+        "final_terminated": True,
+        "sink_state": "sink",
+        "sink_success": True,
+        "sink_committed": True,
+        "sink_terminated": False,
+        "redacted": True,
+    }
+
+
+def test_phase32_final_rehashed_required_value_mutation_fails_closed() -> None:
+    """A matching digest never makes a contradicted finality fact trustworthy."""
+    payload = copy.deepcopy(artifact_conformance.collect_conformance())
+    record = next(
+        item
+        for item in payload["scenarios"]
+        if item["id"] == "final.explicit-versus-sink"
+    )
+    record["final_terminated"] = False
+    _rehash(payload)
+
+    with pytest.raises(artifact_conformance.ConformanceError, match="contradicted"):
+        artifact_conformance.validate_conformance(payload)
+
+
 REQUIRED_FAMILIES = {
     "graph-guard",
     "lifecycle-result-history",
