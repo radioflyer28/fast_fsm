@@ -137,6 +137,7 @@ def test_example_uses_builtin_ordered_entry_callbacks_without_state_subclassing(
         "Landing",
         "EmergencyLanding",
         "Landed",
+        "EmergencyLanded",
     ):
         assert len(fsm._state_enter_callbacks[state_name]) == 2
 
@@ -260,6 +261,8 @@ def test_link_loss_beats_low_battery_and_ineligible_tick_issues_no_command():
     result = controller.update_from_telemetry(_ready_sample(example, battery_pct=80))
 
     assert not result.success
+    assert result.rejected is False
+    assert result.rejection_code is None
     assert controller.current_state_name == "ReturnHome"
     assert aircraft.commands == ["command_return_to_home"]
 
@@ -364,3 +367,83 @@ def test_normal_and_emergency_landings_are_final_and_require_new_controllers():
         "EmergencyLanding",
         "EmergencyLanded",
     ]
+
+
+def test_false_navigation_guard_falls_through_to_the_internal_mission_update():
+    """A false tutorial candidate advances to the later eligible candidate."""
+    example = _load_example_module()
+    aircraft = _RecordingAircraft()
+    controller = example.DroneController(aircraft)
+    aircraft.state_provider = lambda: controller.current_state_name
+    _fly_to_mission(example, controller)
+    aircraft.commands.clear()
+    aircraft.states_when_commanded.clear()
+
+    result = controller.update_from_telemetry(_ready_sample(example))
+
+    assert result.success is True
+    assert result.rejected is False
+    assert result.rejection_code is None
+    assert result.priority == 60
+    assert result.internal is True
+    assert aircraft.commands == []
+
+
+def test_navigation_conflict_rejects_without_committing_or_exposing_payload(capsys):
+    """A bounded rejection aborts candidate selection and leaves effects inert."""
+    example = _load_example_module()
+    aircraft = _RecordingAircraft()
+    controller = example.DroneController(aircraft)
+    aircraft.state_provider = lambda: controller.current_state_name
+    _fly_to_mission(example, controller)
+    aircraft.commands.clear()
+    aircraft.states_when_commanded.clear()
+    history_before = list(controller._fsm.history)
+    capsys.readouterr()
+
+    result = controller.update_from_telemetry(
+        _ready_sample(example, navigation_conflict=True, reenter_mission=True)
+    )
+    transcript = capsys.readouterr().out
+
+    assert result.success is False
+    assert result.rejected is True
+    assert result.rejection_code == "navigation-conflict"
+    assert result.committed is False
+    assert result.priority == 40
+    assert result.stage == "guard"
+    assert controller.current_state_name == "Mission"
+    assert controller._fsm.history == history_before
+    assert aircraft.commands == []
+    assert aircraft.states_when_commanded == []
+    assert "expected rejection: navigation-conflict" in transcript
+    assert "Transition rejected:" not in transcript
+    assert "TelemetrySample" not in transcript
+
+
+def test_safety_failsafe_outranks_navigation_conflict_rejection():
+    """Tutorial policy cannot hide a selected safety transition."""
+    example = _load_example_module()
+    aircraft = _RecordingAircraft()
+    controller = example.DroneController(aircraft)
+    aircraft.state_provider = lambda: controller.current_state_name
+    _fly_to_mission(example, controller)
+    aircraft.commands.clear()
+    aircraft.states_when_commanded.clear()
+
+    result = controller.update_from_telemetry(
+        _ready_sample(
+            example,
+            battery_pct=20,
+            link_ok=False,
+            critical_fault=True,
+            navigation_conflict=True,
+        )
+    )
+
+    assert result.success is True
+    assert result.rejected is False
+    assert result.priority == 0
+    assert controller.current_state_name == "EmergencyLanding"
+    assert aircraft.commands == ["command_emergency_land"]
+    assert aircraft.states_when_commanded == ["EmergencyLanding"]
