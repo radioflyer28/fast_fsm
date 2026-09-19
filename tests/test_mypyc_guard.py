@@ -2019,6 +2019,7 @@ def test_transition_result_keeps_its_additive_slots_and_chained_error_boundary()
         "priority",
         "internal",
         "rejection_code",
+        "_selected_external_self",
     ]
 
     raise_if_failed = next(
@@ -2101,7 +2102,11 @@ def test_expected_rejection_contract_is_a_read_only_result_tail_and_public_expor
             for node in result.body
             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
         ]
-        assert fields[-2:] == ["internal", "rejection_code"]
+        assert fields[-3:] == [
+            "internal",
+            "rejection_code",
+            "_selected_external_self",
+        ]
         rejected = next(
             node
             for node in result.body
@@ -2375,6 +2380,7 @@ def test_phase28_mode_carriers_and_async_selection_keep_one_exact_contract() -> 
             "priority",
             "internal",
             "rejection_code",
+            "_selected_external_self",
         ],
     }
     for class_name, expected_fields in expected_runtime_fields.items():

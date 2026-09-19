@@ -328,7 +328,7 @@ def _emit_fsm_trace(
         mode: Optional[str] = None
     elif transition_result.internal:
         mode = "internal"
-    elif (
+    elif transition_result._selected_external_self or (
         transition_result.from_state is not None
         and transition_result.to_state is not None
         and transition_result.from_state == transition_result.to_state
@@ -343,6 +343,12 @@ def _emit_fsm_trace(
         except (TypeError, ValueError):
             rejection_code = None
 
+    try:
+        current_final: Optional[bool] = machine._current_state.final
+    except Exception:
+        # Optional logging cannot replace an already computed transition result.
+        current_final = None
+
     trace_fields: Dict[str, object] = {
         "trace_operation": operation,
         "trace_stage": stage,
@@ -352,7 +358,7 @@ def _emit_fsm_trace(
         "trace_priority": priority,
         "trace_mode": mode,
         "trace_rejection_code": rejection_code,
-        "trace_current_final": machine._current_state.final,
+        "trace_current_final": current_final,
     }
     redactor = _library_trace_redactor(logger)
     if redactor is not None:
@@ -675,6 +681,7 @@ class TransitionResult:
     priority: Optional[int] = field(default=None, compare=False)
     internal: bool = field(default=False, compare=False)
     rejection_code: Optional[str] = field(default=None, compare=False)
+    _selected_external_self: bool = field(default=False, repr=False, compare=False)
 
     @property
     def rejected(self) -> bool:
@@ -3012,6 +3019,10 @@ class StateMachine:
                     now=selection_now,
                 )
                 if selected is not None:
+                    if isinstance(selected, TransitionResult):
+                        selected._selected_external_self = (
+                            not entry.internal and entry.to_state.name == current_name
+                        )
                     return selected
             return self._build_failure_result(
                 current_name,
@@ -3033,6 +3044,10 @@ class StateMachine:
             now=selection_now,
         )
         assert selected_singleton is not None
+        if isinstance(selected_singleton, TransitionResult):
+            selected_singleton._selected_external_self = (
+                not singleton.internal and singleton.to_state.name == current_name
+            )
         return selected_singleton
 
     def _select_sync_candidate(
@@ -4535,6 +4550,10 @@ class StateMachine:
             return self._finalize_failure(prepared, kwargs)
         result = self._execute_transition(prepared, kwargs)
         if not result.success:
+            result._selected_external_self = (
+                not prepared.entry.internal
+                and prepared.entry.to_state.name == prepared.current_name
+            )
             return self._finalize_failure(result, kwargs)
         return result
 
@@ -5343,6 +5362,10 @@ class AsyncStateMachine(StateMachine):
                     now=selection_now,
                 )
                 if selected is not None:
+                    if isinstance(selected, TransitionResult):
+                        selected._selected_external_self = (
+                            not entry.internal and entry.to_state.name == current_name
+                        )
                     return selected
             return self._build_failure_result(
                 current_name,
@@ -5364,6 +5387,10 @@ class AsyncStateMachine(StateMachine):
             now=selection_now,
         )
         assert selected_singleton is not None
+        if isinstance(selected_singleton, TransitionResult):
+            selected_singleton._selected_external_self = (
+                not singleton.internal and singleton.to_state.name == current_name
+            )
         return selected_singleton
 
     async def _select_async_candidate(
@@ -5682,6 +5709,10 @@ class AsyncStateMachine(StateMachine):
                 kwargs=kwargs,
             )
             if not result.success:
+                result._selected_external_self = (
+                    not prepared.entry.internal
+                    and prepared.entry.to_state.name == prepared.current_name
+                )
                 return self._finalize_failure(result, kwargs)
             return result
         except asyncio.CancelledError as cancellation:

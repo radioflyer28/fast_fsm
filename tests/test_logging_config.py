@@ -546,6 +546,43 @@ async def test_trace_semantics_reflect_selected_mode_rejection_and_current_final
             "external_self",
         )
 
+        def reject() -> bool:
+            raise TransitionRejected("battery.low")
+
+        for failure_kind in ("guard_false", "rejected", "permission_false"):
+            if failure_kind == "permission_false":
+
+                class DenyingSource(State):
+                    def can_transition(
+                        self,
+                        trigger_name: str,
+                        to_state: State,
+                        *args: object,
+                        **kwargs: object,
+                    ) -> bool:
+                        return False
+
+                machine_type = AsyncStateMachine if async_mode else StateMachine
+                failed_self = machine_type(
+                    DenyingSource("source"), logger_name=logger_name
+                )
+                condition = None
+            else:
+                failed_self = new_machine()
+                condition = reject if failure_kind == "rejected" else lambda: False
+            failed_self.add_transition(
+                "reenter", "source", "source", condition, priority=4
+            )
+            result, fields = await attempt(failed_self, "reenter")
+            assert not result.success and result.to_state is None
+            assert (fields["trace_priority"], fields["trace_mode"]) == (
+                4,
+                "external_self",
+            )
+            assert fields["trace_rejection_code"] == (
+                "battery.low" if failure_kind == "rejected" else None
+            )
+
         final_machine = new_machine(final_target=True)
         final_machine.add_transition("finish", "source", "target", priority=7)
         result, fields = await attempt(final_machine, "finish")
@@ -556,9 +593,6 @@ async def test_trace_semantics_reflect_selected_mode_rejection_and_current_final
         )
 
         rejected = new_machine()
-
-        def reject() -> bool:
-            raise TransitionRejected("battery.low")
 
         rejected.add_transition("reject", "source", "target", reject, priority=5)
         result, fields = await attempt(rejected, "reject")
@@ -638,6 +672,21 @@ async def test_trace_semantics_reflect_selected_mode_rejection_and_current_final
         assert fields["trace_mode"] == "external"
         assert fields["trace_rejection_code"] is None
         assert fields["trace_current_final"] is True
+        assert EXCEPTION_SENTINEL not in str(fields)
+
+        class ExplosiveFinalState(State):
+            @property
+            def final(self) -> bool:
+                raise RuntimeError(EXCEPTION_SENTINEL)
+
+        machine_type = AsyncStateMachine if async_mode else StateMachine
+        explosive_final = machine_type(State("source"), logger_name=logger_name)
+        explosive_final.add_state(ExplosiveFinalState("target"))
+        explosive_final.add_transition("finish", "source", "target")
+        result, fields = await attempt(explosive_final, "finish")
+        assert result.success and result.committed
+        assert explosive_final.current_state_name == "target"
+        assert fields["trace_current_final"] is None
         assert EXCEPTION_SENTINEL not in str(fields)
 
         result, fields = await attempt(final_machine, "unknown")

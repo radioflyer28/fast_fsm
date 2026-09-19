@@ -139,6 +139,7 @@ class TransitionResult:
     priority: int | None = field(default=None, compare=False)
     internal: bool = field(default=False, compare=False)
     rejection_code: str | None = field(default=None, compare=False)
+    _selected_external_self: bool = field(default=False, repr=False, compare=False)
 
     @property
     def rejected(self) -> bool: ...
