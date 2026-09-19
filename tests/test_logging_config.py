@@ -20,6 +20,7 @@ from fast_fsm.core import (
     FSMTraceEvent,
     State,
     StateMachine,
+    TransitionResult,
     TransitionRejected,
     configure_fsm_logging,
     set_fsm_logging_level,
@@ -655,20 +656,17 @@ def test_disabled_trace_does_not_inspect_result_or_current_final() -> None:
     logger.setLevel(logging.WARNING)
     logger.propagate = False
 
-    class ExplosiveResult:
+    class ExplosiveState(State):
         @property
-        def priority(self) -> int:
-            raise AssertionError("disabled trace inspected selected priority")
-
-    class ExplosiveMachine:
-        @property
-        def _current_state(self) -> State:
+        def final(self) -> bool:
             raise AssertionError("disabled trace inspected current finality")
+
+    machine = StateMachine(ExplosiveState("source"))
 
     _emit_fsm_trace(
         logger,
-        machine=ExplosiveMachine(),  # type: ignore[arg-type]
-        transition_result=ExplosiveResult(),  # type: ignore[arg-type]
+        machine=machine,
+        transition_result=TransitionResult(False),
         operation="trigger",
         stage="complete",
         result="failure",
