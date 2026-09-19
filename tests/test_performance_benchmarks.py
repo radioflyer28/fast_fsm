@@ -6,6 +6,7 @@ while being compatible with mypyc compilation.
 """
 
 import ast
+import asyncio
 import contextlib
 import gc
 import importlib.util
@@ -1395,6 +1396,106 @@ def test_disabled_trace_never_builds_or_inspects_a_payload_event():
         assert condition.str_calls == 0
     finally:
         handle.restore()
+
+
+def _method_node(tree: ast.AST, class_name: str, method_name: str) -> ast.AST:
+    """Return one method node from the source-tree class definition."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if item.name == method_name:
+                        return item
+    raise AssertionError(f"{class_name}.{method_name} was not found")
+
+
+@pytest.mark.parametrize(
+    ("class_name", "method_name"),
+    (("StateMachine", "trigger"), ("AsyncStateMachine", "trigger_async")),
+)
+def test_semantic_trace_preparation_is_dominated_by_the_trace_enabled_branch(
+    class_name: str, method_name: str
+) -> None:
+    """TRACE-only result semantics stay below the explicit enablement branch."""
+    tree = ast.parse((ROOT / "src" / "fast_fsm" / "core.py").read_text())
+    method = _method_node(tree, class_name, method_name)
+    trace_branches = [
+        node
+        for node in ast.walk(method)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Call)
+        and isinstance(node.test.func, ast.Attribute)
+        and node.test.func.attr == "isEnabledFor"
+    ]
+    assert len(trace_branches) == 1
+    trace_branch = trace_branches[0]
+    trace_calls = [
+        node
+        for node in ast.walk(trace_branch)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_emit_fsm_trace"
+    ]
+    assert len(trace_calls) == 1
+    semantic_keywords = {keyword.arg for keyword in trace_calls[0].keywords}
+    assert {
+        "stage",
+        "result",
+        "source_state",
+        "destination_state",
+        "positional_args",
+        "keyword_args",
+        "error",
+    } <= semantic_keywords
+
+
+def test_direct_selectors_do_not_use_reflection_or_unrelated_registry_iteration() -> None:
+    """The no-feature selector stays direct in both synchronous execution modes."""
+    tree = ast.parse((ROOT / "src" / "fast_fsm" / "core.py").read_text())
+    selectors = (
+        _method_node(tree, "StateMachine", "_select_transition_sync"),
+        _method_node(tree, "AsyncStateMachine", "_select_transition_async"),
+    )
+    forbidden_calls = {"getattr", "hasattr", "vars", "dir", "inspect"}
+    for selector in selectors:
+        calls = [node for node in ast.walk(selector) if isinstance(node, ast.Call)]
+        assert not any(
+            isinstance(call.func, ast.Name) and call.func.id in forbidden_calls
+            for call in calls
+        )
+        assert not any(isinstance(node, ast.For) for node in ast.walk(selector))
+
+
+def test_disabled_trace_does_not_invoke_the_collector_for_sync_or_async_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No semantic trace collector work occurs while TRACE is disabled."""
+    calls = 0
+
+    def forbidden_collector(*_args: object, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("disabled TRACE must not invoke the collector")
+
+    monkeypatch.setattr(fast_fsm_core, "_emit_fsm_trace", forbidden_collector)
+
+    sync_source = State("sync-source")
+    sync_destination = State("sync-destination")
+    sync_machine = StateMachine(sync_source, name="disabled-sync-trace")
+    sync_machine.add_state(sync_destination)
+    sync_machine.add_transition("go", sync_source, sync_destination)
+    sync_machine._logger.setLevel(logging.WARNING)
+    assert sync_machine.trigger("go").success
+
+    async_source = State("async-source")
+    async_destination = State("async-destination")
+    async_machine = AsyncStateMachine(async_source, name="disabled-async-trace")
+    async_machine.add_state(async_destination)
+    async_machine.add_transition("go", async_source, async_destination)
+    async_machine._logger.setLevel(logging.WARNING)
+    assert asyncio.run(async_machine.trigger_async("go")).success
+
+    assert calls == 0
 
 
 if __name__ == "__main__":
