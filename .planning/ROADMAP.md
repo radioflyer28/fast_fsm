@@ -218,6 +218,20 @@ Plans:
   5. README and Sphinx guidance progress from builder-first construction to advanced direct use, explain the deprecation migration, and clearly distinguish finality, dead ends, rejection, guard ineligibility, and self-transition modes.
 
 **Plans**: TBD
+**Wave 1**
+
+- [ ] 32-01-PLAN.md
+- [ ] 32-03-PLAN.md
+- [ ] 32-04-PLAN.md
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 32-05-PLAN.md
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 32-02-PLAN.md
+- [ ] 32-06-PLAN.md
 
 ## Requirement Coverage
 
@@ -254,7 +268,7 @@ Plans:
 | 29. Expected Domain Rejection | v0.5.0 | 4/4 | Complete    | 2026-09-17 |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 6/6 | Complete    | 2026-09-19 |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 5/5 | Complete    | 2026-09-19 |
-| 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |
+| 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/6 | Planned    |  |
 
 ---
 *Roadmap created: 2026-09-15 for v0.5.0 Explicit Flat-FSM Semantics*

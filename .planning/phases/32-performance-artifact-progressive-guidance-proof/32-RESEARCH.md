@@ -216,10 +216,10 @@ These task names and the test filename are verbatim in the repository's Taskfile
 |---|---|---|---|
 | A1 | [ASSUMED] The current machine can build and test all requested native modes in one local session despite sandbox restrictions and architecture-specific release cells. | Environment Availability | Planner may need a hosted/authorized proof step and should not claim full release-matrix completion from local evidence. |
 
-## Open Questions
+## Resolved Questions
 
-1. **Which release-artifact evidence is available before publication?** Local release projection is explicitly non-authorizing and records `"tag": "unreleased"`; full hosted release authorization needs its complete matrix. Plan local release-intent candidate proof now and distinguish it from a later hosted release matrix; do not claim a prior version's artifact proves new semantics. [VERIFIED: tools/release_evidence.py:292-333; Taskfile.yml:382-405,467-470]
-2. **Can the runner access its normal uv cache?** The installed `uv` binary exists, but a read-only `uv run` probe in this sandbox returned `EPERM` opening its standard cache. This is an execution-environment permission issue, not evidence for changing the project's uv workflow; plan an authorized normal-environment run of expensive artifact tests. [VERIFIED: `uv --version` and `uv run python -V` command outputs, 2026-09-19; .github/copilot-instructions.md:87-96]
+1. **RESOLVED — release-artifact evidence before publication:** `task release-evidence-local-check` builds current local release-intent candidates and asserts `scope=local-non-authorizing` with `authorizes_release=false`; its provenance records `"tag": "unreleased"`. The separate hosted release profile requires a complete authorizing matrix. Phase 32 proves local candidates under the fixed oracle but makes no publication claim and does not substitute an older published artifact. [VERIFIED: tools/release_evidence.py:292-333,989-991; Taskfile.yml:382-405,467-470,585]
+2. **RESOLVED — normal uv cache access:** The prior `EPERM` arose in the restricted research sandbox, not from project dependency policy. The project uses `uv.lock` and `uv sync --locked --all-groups`; authorized execution uses the ordinary uv cache, with no required uv patch pin, offline flag, or custom cache path. If a sandbox cannot access its cache, use its authorized filesystem path for the run rather than changing repository configuration. [VERIFIED: `uv --version` and `uv run python -V` research observations, 2026-09-19; .github/copilot-instructions.md:77-80; Taskfile.yml:134,144]
 
 ## Environment Availability
 
