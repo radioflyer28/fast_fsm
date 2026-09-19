@@ -150,6 +150,35 @@ def test_documented_builder_migration_replacements_execute(path: Path) -> None:
     exec(compile(source, str(path), "exec"), {"__name__": "__docs_example__"})
 
 
+@pytest.mark.parametrize("path", _GUIDE_PATHS)
+def test_public_entry_guides_name_each_flat_fsm_semantic_contrast(
+    path: Path,
+) -> None:
+    """Paired examples explain semantics that a state name cannot reveal."""
+    source = path.read_text(encoding="utf-8")
+
+    for phrase in (
+        "explicit final state",
+        "non-final sink",
+        "false guard",
+        "expected rejection",
+        "unexpected failure",
+        "internal self",
+        "external self",
+        "`is_terminated`",
+        "`TransitionRejected`",
+    ):
+        assert phrase in source
+
+
+@pytest.mark.parametrize("path", _GUIDE_PATHS)
+def test_documented_flat_fsm_semantic_contrasts_execute(path: Path) -> None:
+    """Both guides assert finality, selection, failure, and self-mode facts."""
+    source = _marked_python_region(path, "semantic-contrasts")
+
+    exec(compile(source, str(path), "exec"), {"__name__": "__docs_example__"})
+
+
 class TestReadmeExamples:
     """Test examples from README documentation"""
 
