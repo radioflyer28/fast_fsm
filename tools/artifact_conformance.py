@@ -155,6 +155,62 @@ _SCENARIO_DEFINITIONS = (
         ),
     },
     {
+        "id": "mode.external-self",
+        "family": "transition-mode",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "state",
+            "result_internal",
+            "history_internal",
+            "exit_count",
+            "enter_count",
+            "history_count",
+            "redacted",
+        ),
+        "required_values": {
+            "success": True,
+            "committed": True,
+            "state": "hover",
+            "result_internal": False,
+            "history_internal": False,
+            "exit_count": 1,
+            "enter_count": 1,
+            "history_count": 1,
+            "redacted": True,
+        },
+    },
+    {
+        "id": "mode.internal-self",
+        "family": "transition-mode",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "state",
+            "result_internal",
+            "history_internal",
+            "exit_count",
+            "enter_count",
+            "history_count",
+            "redacted",
+        ),
+        "required_values": {
+            "success": True,
+            "committed": True,
+            "state": "hover",
+            "result_internal": True,
+            "history_internal": True,
+            "exit_count": 0,
+            "enter_count": 0,
+            "history_count": 1,
+            "redacted": True,
+        },
+    },
+    {
         "id": "priority.sync.winner",
         "family": "priority-selection",
         "fields": (
@@ -441,6 +497,42 @@ _SCENARIO_DEFINITIONS = (
         },
     },
     {
+        "id": "rejection.false-versus-terminal",
+        "family": "expected-rejection-selection",
+        "fields": (
+            "id",
+            "family",
+            "success",
+            "committed",
+            "state",
+            "stage",
+            "priority",
+            "rejected",
+            "rejection_code",
+            "false_guard_calls",
+            "rejection_guard_calls",
+            "lower_guard_calls",
+            "lower_command_calls",
+            "history_count",
+            "redacted",
+        ),
+        "required_values": {
+            "success": False,
+            "committed": False,
+            "state": "source",
+            "stage": "guard",
+            "priority": 0,
+            "rejected": True,
+            "rejection_code": "battery.low",
+            "false_guard_calls": 1,
+            "rejection_guard_calls": 1,
+            "lower_guard_calls": 0,
+            "lower_command_calls": 0,
+            "history_count": 0,
+            "redacted": True,
+        },
+    },
+    {
         "id": "sync-async.equivalence",
         "family": "sync-async",
         "fields": (
@@ -708,6 +800,115 @@ def _final_explicit_versus_sink() -> dict[str, Any]:
             for result in (final_result, sink_result)
             for sentinel in _PAYLOAD_SENTINELS
         ),
+    }
+
+
+def _self_transition_mode(*, internal: bool) -> dict[str, Any]:
+    """Record one self-transition's committed lifecycle without payload output."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    exit_count = 0
+    enter_count = 0
+
+    def count_exit(*_args: object, **_kwargs: object) -> None:
+        nonlocal exit_count
+        exit_count += 1
+
+    def count_enter(*_args: object, **_kwargs: object) -> None:
+        nonlocal enter_count
+        enter_count += 1
+
+    state = core.State("hover")
+    machine = core.StateMachine(state, name="artifact-conformance-self-mode")
+    machine.enable_history()
+    machine.add_transition("refresh", state, state, internal=internal)
+    machine.on_exit("hover", count_exit)
+    machine.on_enter("hover", count_enter)
+    result = machine.trigger("refresh", payload="caller-secret")
+    history = machine.history
+    return {
+        "id": "mode.internal-self" if internal else "mode.external-self",
+        "family": "transition-mode",
+        "success": result.success,
+        "committed": result.committed,
+        "state": machine.current_state.name,
+        "result_internal": result.internal,
+        "history_internal": history[0].internal if history else None,
+        "exit_count": exit_count,
+        "enter_count": enter_count,
+        "history_count": len(history),
+        "redacted": all(
+            sentinel not in repr(value)
+            for value in (result, history)
+            for sentinel in _PAYLOAD_SENTINELS
+        ),
+    }
+
+
+def _mode_internal_self() -> dict[str, Any]:
+    """Collect the lifecycle-suppressed internal self-transition outcome."""
+    return _self_transition_mode(internal=True)
+
+
+def _mode_external_self() -> dict[str, Any]:
+    """Collect the default external self-transition re-entry outcome."""
+    return _self_transition_mode(internal=False)
+
+
+def _rejection_false_versus_terminal() -> dict[str, Any]:
+    """Distinguish ordinary fallthrough from a terminal expected rejection."""
+    core = importlib.import_module(_CORE_MODULE_NAME)
+    false_guard_calls = 0
+    rejection_guard_calls = 0
+    lower_guard_calls = 0
+    lower_command_calls = 0
+    source = core.State("source")
+    rejected = core.State("rejected")
+    lower = core.State("lower")
+    machine = core.StateMachine(source, name="artifact-conformance-rejection")
+    machine.add_state(rejected)
+    machine.add_state(lower)
+    machine.enable_history()
+
+    def false_guard(*_args: object, **_kwargs: object) -> bool:
+        nonlocal false_guard_calls
+        false_guard_calls += 1
+        return False
+
+    def reject_guard(*_args: object, **_kwargs: object) -> bool:
+        nonlocal rejection_guard_calls
+        rejection_guard_calls += 1
+        raise core.TransitionRejected("battery.low")
+
+    def lower_guard(*_args: object, **_kwargs: object) -> bool:
+        nonlocal lower_guard_calls
+        lower_guard_calls += 1
+        return True
+
+    def lower_command(*_args: object, **_kwargs: object) -> None:
+        nonlocal lower_command_calls
+        lower_command_calls += 1
+
+    machine.add_transition("advance", source, rejected, false_guard, priority=-8)
+    machine.add_transition("advance", source, rejected, reject_guard, priority=0)
+    machine.add_transition("advance", source, lower, lower_guard, priority=8)
+    machine.on_enter("lower", lower_command)
+    result = machine.trigger("advance", payload="caller-secret")
+    return {
+        "id": "rejection.false-versus-terminal",
+        "family": "expected-rejection-selection",
+        "success": result.success,
+        "committed": result.committed,
+        "state": machine.current_state.name,
+        "stage": result.stage,
+        "priority": result.priority,
+        "rejected": result.rejected,
+        "rejection_code": result.rejection_code,
+        "false_guard_calls": false_guard_calls,
+        "rejection_guard_calls": rejection_guard_calls,
+        "lower_guard_calls": lower_guard_calls,
+        "lower_command_calls": lower_command_calls,
+        "history_count": len(machine.history),
+        "redacted": "caller-secret" not in repr(result),
     }
 
 
@@ -1890,6 +2091,8 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
         _final_explicit_versus_sink,
         _graph_guard_rejection,
         _logging_metadata_redaction,
+        _mode_internal_self,
+        _mode_external_self,
         _priority_sync_winner,
         _priority_sync_exhaustion,
         _priority_sync_guard_exception,
@@ -1903,6 +2106,7 @@ def _scenario_collectors() -> tuple[Callable[[], dict[str, Any]], ...]:
         _ownership_async_task_serialization,
         _ownership_cross_loop_rejection,
         _ownership_mutator_baseexception_release,
+        _rejection_false_versus_terminal,
         _sync_async_equivalence,
     )
 
