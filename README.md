@@ -142,11 +142,22 @@ transition from each source.
 
 ### Compatibility migration
 
-`simple_fsm()`, `quick_fsm()`, `StateMachine.quick_build()`, and
-`StateMachine.from_states()` remain callable, but each is a warned
-compatibility surface throughout v0.5.x and may be removed no earlier than
-v0.6.0. Replace them with `FSMBuilder` for programmatic construction. Use
-`StateMachine.from_dict()` only when reconstructing serialized topology.
+The four historical convenience helpers remain available for compatibility
+through v0.5.x. Each public call emits one `DeprecationWarning` per public call
+(subject to the application's warnings filter), and removal is no earlier than v0.6.0.
+New programmatic machines should use the builder replacement that matches the old helper's
+intent:
+
+| Warned helper | Builder replacement | Preserve this intent |
+|---|---|---|
+| `simple_fsm` | `FSMBuilder(State("idle"))` plus `.add_state(...)` | Create named plain states; set the initial state by passing it first. |
+| `quick_fsm` | `FSMBuilder(State("idle"))` plus one `.add_transition(...)` per row | Expand each transition row explicitly so topology stays visible. |
+| `StateMachine.quick_build` | `FSMBuilder(initial_state)` plus `.add_state(...)` and `.add_transition(...)` | Keep caller-owned `State` objects and add any extra states before building. |
+| `StateMachine.from_states` | `FSMBuilder(State("idle"))` plus `.add_state(...)` | Build a transition-free named-state machine deliberately. |
+
+The table is a migration map, not a removal notice: direct `StateMachine` and
+`AsyncStateMachine` constructors remain supported advanced interfaces, and
+`StateMachine.from_dict()` remains the supported adapter for persisted topology.
 
 ### Advanced: direct machine control
 
@@ -822,6 +833,58 @@ binds exact bytes to the recorded evidence, not publisher authenticity.
 
 See the [testing guide](docs/dev/testing.md) and
 [release guide](docs/dev/releasing.md) for the complete evidence model.
+
+### Executable migration recipes
+
+The table in [Compatibility migration](#compatibility-migration) is the short
+map. These builder-side replacements are executable without calling a warned
+helper. Use a direct constructor when an advanced workflow deliberately
+assembles topology incrementally, and use `from_dict()` only for serialized
+topology.
+
+<!-- docs-exec:builder-migrations -->
+```python
+from fast_fsm import FSMBuilder, State
+
+# A named-state factory becomes explicit caller-owned State objects.
+simple = (
+    FSMBuilder(State("idle"), name="Simple")
+    .add_state(State("running"))
+    .add_state(State("done"))
+    .build()
+)
+assert simple.is_in("idle")
+
+# A transition-row factory becomes one readable builder call per edge.
+quick = (
+    FSMBuilder(State("idle"), name="Quick")
+    .add_state(State("running"))
+    .add_transition("start", "idle", "running")
+    .add_transition("stop", "running", "idle")
+    .build()
+)
+assert quick.trigger("start").success
+
+# Preserve a caller-owned initial state and extra state identities explicitly.
+initial_state = State("idle")
+quick_build = (
+    FSMBuilder(initial_state, name="QuickBuild")
+    .add_state(State("running"))
+    .add_state(State("paused"))
+    .add_transition("start", "idle", "running")
+    .build()
+)
+assert quick_build.trigger("start").success
+
+# A named-state list has the same explicit builder form when it has no edges.
+from_states = (
+    FSMBuilder(State("idle"), name="NamedStates")
+    .add_state(State("running"))
+    .add_state(State("done"))
+    .build()
+)
+assert from_states.is_in("idle")
+```
 
 ## Development
 
