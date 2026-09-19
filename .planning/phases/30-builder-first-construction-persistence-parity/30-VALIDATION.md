@@ -163,3 +163,24 @@ tools absent from this host's uv cache. On 2026-09-19, a retry fetched those
 exact packages into the normal cache, the previously failing isolated test
 passed, and `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q` passed in
 full. The Phase 30 completion blocker is closed.
+
+## Retroactive Nyquist Audit (2026-09-19)
+
+| Metric | Count |
+|--------|-------|
+| Plan task rows audited | 13/13 |
+| Assigned requirements with automated coverage | 6/6 |
+| Threat controls represented in the validation map | 8/8 |
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated/manual-only | 0 |
+
+All six Phase 30 PLAN/SUMMARY pairs were cross-checked against the existing
+per-task map. The mapped test files and post-review CR-01/WR-01 regressions
+exist. The quick construction/persistence selection, structural selection,
+builder-first documentation/example selection, and three post-review
+regression tests were rerun and passed. The exact full sequential suite and
+the identical fresh-native Phase 30 oracle passed during Phase 30 closure;
+`30-VERIFICATION.md` records those heavier gates and source restoration.
+No validation gap requires a new test, manual-only entry, or implementation
+change. `status: validated` and `nyquist_compliant: true` remain justified.
