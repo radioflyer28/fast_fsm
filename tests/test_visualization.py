@@ -422,9 +422,9 @@ class TestToPlantUMLBasic:
         assert "s1 --> s2 : start" in out
         assert "s2 --> s0 : finish" in out
 
-    def test_terminal_state_marked(self, simple_fsm):
+    def test_non_final_terminal_is_not_marked_complete(self, simple_fsm):
         out = to_plantuml(simple_fsm)
-        assert "s0 --> [*]" in out
+        assert "s0 --> [*]" not in out
 
     def test_cyclic_no_terminal_states(self, cyclic_fsm):
         out = to_plantuml(cyclic_fsm)
@@ -461,7 +461,7 @@ class TestToPlantUMLEdgeCases:
         fsm = StateMachine(State("lonely"), name="Solo")
         out = to_plantuml(fsm)
         assert "[*] --> s0" in out
-        assert "s0 --> [*]" in out
+        assert "s0 --> [*]" not in out
 
     def test_works_with_async_state_machine(self):
         from fast_fsm import AsyncStateMachine
@@ -472,7 +472,37 @@ class TestToPlantUMLEdgeCases:
         out = to_plantuml(fsm)
         assert "[*] --> s1" in out
         assert "s1 --> s0 : go" in out
-        assert "s0 --> [*]" in out
+        assert "s0 --> [*]" not in out
+
+
+@pytest.mark.parametrize("renderer", [to_mermaid, to_plantuml])
+def test_diagram_marks_only_explicit_finals_and_labels_self_modes(renderer):
+    source = State("start")
+    machine = StateMachine(source)
+    machine.add_state(State("done", final=True))
+    machine.add_state(State("sink"))
+    machine.add_state(State("unreachable"))
+    guard = FuncCondition(lambda: True, name="safe-guard")
+    machine.add_transition("internal", source, source, guard, priority=2, internal=True)
+    machine.add_transition("external-self", source, source, priority=3)
+    machine.add_transition("finish", source, "done", priority=4)
+    machine.add_transition("stray", source, "sink", priority=5)
+
+    output = renderer(machine)
+    assert output.count("s0 --> [*]") == 1
+    assert "s1 --> [*]" not in output
+    assert "s3 --> [*]" not in output
+    assert "internal [safe-guard] [internal] [priority 2]" in output
+    assert "external-self [external self] [priority 3]" in output
+    assert "finish [priority 4]" in output
+    assert "stray [priority 5]" in output
+
+
+@pytest.mark.parametrize("renderer", [to_mermaid, to_plantuml])
+def test_initial_only_final_has_start_and_completion_markers(renderer):
+    output = renderer(StateMachine(State("only", final=True)))
+    assert "[*] --> s0" in output
+    assert output.count("s0 --> [*]") == 1
 
 
 # ---------------------------------------------------------------------------

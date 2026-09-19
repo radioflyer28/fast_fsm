@@ -94,6 +94,7 @@ def _transition_label(
     condition_name: str | None,
     priority: int,
     *,
+    self_mode: str | None,
     show_conditions: bool,
     escape: Any,
 ) -> str:
@@ -101,6 +102,8 @@ def _transition_label(
     label = escape(trigger)
     if show_conditions and condition_name is not None:
         label = f"{label} [{escape(condition_name)}]"
+    if self_mode is not None:
+        label = f"{label} [{self_mode}]"
     return f"{label} [priority {priority}]"
 
 
@@ -155,6 +158,13 @@ def _to_mermaid_from_snapshot(
             edge.trigger,
             edge.condition_name,
             edge.priority,
+            self_mode=(
+                "internal"
+                if edge.internal
+                else "external self"
+                if edge.from_index == edge.to_index
+                else None
+            ),
             show_conditions=show_conditions,
             escape=_escape_mermaid_text,
         )
@@ -164,6 +174,16 @@ def _to_mermaid_from_snapshot(
             stage="mermaid.edge",
             line=f"    {state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}",
         )
+
+    for state_index, is_final in enumerate(graph.state_finals):
+        budget.reserve_work(stage="mermaid.final-state")
+        if is_final:
+            _append_rendered_line(
+                lines,
+                budget,
+                stage="mermaid.final-state",
+                line=f"    {state_ids[state_index]} --> [*]",
+            )
 
     return "\n".join(lines)
 
@@ -205,14 +225,19 @@ def _to_plantuml_from_snapshot(
             line=f"[*] --> {state_ids[graph.initial_index]}",
         )
 
-    has_outgoing = [False] * len(graph.state_names)
     for edge in graph.edges:
         budget.reserve_work(stage="plantuml.edge")
-        has_outgoing[edge.from_index] = True
         label = _transition_label(
             edge.trigger,
             edge.condition_name,
             edge.priority,
+            self_mode=(
+                "internal"
+                if edge.internal
+                else "external self"
+                if edge.from_index == edge.to_index
+                else None
+            ),
             show_conditions=show_conditions,
             escape=_escape_plantuml_text,
         )
@@ -223,13 +248,13 @@ def _to_plantuml_from_snapshot(
             line=f"{state_ids[edge.from_index]} --> {state_ids[edge.to_index]} : {label}",
         )
 
-    for state_index, has_edge in enumerate(has_outgoing):
-        if not has_edge:
-            budget.reserve_work(stage="plantuml.terminal")
+    for state_index, is_final in enumerate(graph.state_finals):
+        budget.reserve_work(stage="plantuml.final-state")
+        if is_final:
             _append_rendered_line(
                 lines,
                 budget,
-                stage="plantuml.terminal",
+                stage="plantuml.final-state",
                 line=f"{state_ids[state_index]} --> [*]",
             )
 
@@ -256,12 +281,14 @@ def to_mermaid(
         title: Optional diagram title (rendered as a Mermaid ``%%`` comment).
         show_conditions: When ``True``, condition names are appended to
             transition labels in ``[brackets]``. Candidate priorities are
-            always shown. Defaults to ``True``.
+            always shown. Self-transitions additionally show their internal or
+            external-self mode. Defaults to ``True``.
         limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
         A Mermaid ``stateDiagram-v2`` string ready to paste into any Mermaid
-        renderer (GitHub README, VS Code Markdown Preview, mermaid.live, etc.)
+        renderer (GitHub README, VS Code Markdown Preview, mermaid.live, etc.).
+        Only explicit final states receive completion arrows.
 
     Example::
 
@@ -303,11 +330,13 @@ def to_plantuml(
         title: Optional diagram title (rendered with the ``title`` keyword).
         show_conditions: When ``True``, condition names are appended to
             transition labels in ``[brackets]``. Candidate priorities are
-            always shown. Defaults to ``True``.
+            always shown. Self-transitions additionally show their internal or
+            external-self mode. Defaults to ``True``.
         limits: Optional finite diagnostic budget for this one captured graph.
 
     Returns:
-        A PlantUML ``@startuml`` / ``@enduml`` string.
+        A PlantUML ``@startuml`` / ``@enduml`` string. Only explicit final
+        states receive completion arrows.
 
     Example::
 

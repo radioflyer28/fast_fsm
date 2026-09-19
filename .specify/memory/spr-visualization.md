@@ -2,7 +2,7 @@
 
 **Category**: visualization  
 **Created**: 2026-03-06  
-**Updated**: 2026-09-03
+**Updated**: 2026-09-19
 
 - `visualization.py` has no module-import dependency on `validation.py`; the legacy quality adapter imports it lazily while adjacency data remains a plain `dict`, never a validator object.
 - `to_mermaid(fsm, *, title=None, show_conditions=True, limits=None)` — returns raw Mermaid `stateDiagram-v2` string, no fences.
@@ -20,3 +20,6 @@
 - `to_json()` captures once and returns snapshot-ordered topology with declared `initial`, separate runtime `current`, sparse adjacency, SCC membership, structural depth plus interpretation, and scalar `diagnostic_status`; exhaustion is explicit rather than a `quality=None` fallback.
 - `to_mermaid_fenced()` and `to_mermaid_document()` compose private from-snapshot helpers, so fences and documents do not call public renderers or recapture. Markdown headings and table cells use their own inert one-line encoders; fenced content is the already-rendered Mermaid string.
 - Dense adjacency is absent from JSON and documents by default. `include_adjacency=True` reserves dense cells before allocation; a caller-supplied `adjacency_matrix` must fully match states, edges, events, and every matrix cell of the captured graph or raises `ValueError("adjacency matrix does not match captured snapshot")`.
+- Phase 31 completion markers derive only from copied `graph.state_finals`: Mermaid and PlantUML each emit `sN --> [*]` for explicit finals, including an initial-only final, and never infer completion from a no-outgoing non-final sink. Marker visits reserve work and each physical marker line reserves one result before append.
+- Self-edge labels retain escaped trigger, optional escaped guard name, and exact priority while adding fixed `[internal]` or `[external self]` wording. Non-self external labels are unchanged. IDs remain opaque `sN`; hostile text cannot inject a marker or diagram directive.
+- JSON adds ordered `topology.final_states`, `analysis.reachability.non_final_sinks`, and a `mode` string (`internal`, `external_self`, `external`) on each transition. Legacy `terminal` still means topological no-outgoing. The copied scalar graph and one operation budget drive all fields; exact limits succeed and one-less work/result caps raise before returning partial output.

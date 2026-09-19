@@ -52,21 +52,36 @@ captured snapshot and is byte-stable when that snapshot is reused. There is no
 parser-validation promise and no condition object is evaluated, stringified,
 or `repr`-formatted while rendering.
 
-Each output grammar has an independent final-sink boundary. Mermaid encoding
+Each output grammar has an independent text-encoding boundary. Mermaid encoding
 handles diagram titles, state labels, triggers, and scalar condition names for
 Mermaid syntax; PlantUML encoding does the same for PlantUML syntax; Markdown
 heading and table-cell encoding is separate again. All make caller text a
 single inert physical line, so controls, quotes, brackets, comment markers,
 directives, fences, Unicode, and punctuation cannot become grammar syntax.
 
+Mermaid and PlantUML draw an end arrow (`sN --> [*]`) **only** for a declared
+`State(..., final=True)`. A state with no outgoing transition but `final=False`
+does not gain a completion marker, whether reachable or not. The initial-only
+final machine has both a start arrow and an end arrow. Self-transitions carry
+the fixed label `[internal]` for internal mode or `[external self]` for external
+mode, before `[priority N]`; an ordinary non-self transition keeps its prior
+label. The escaped trigger and optional guard name remain visible.
+
 `to_json()` returns snapshot-ordered `topology` with `states`, declared
-`initial`, runtime `current`, `transitions`, and sparse `sparse_adjacency`.
+`initial`, runtime `current`, `final_states`, `transitions`, and sparse
+`sparse_adjacency`. Each transition row adds `mode`: `internal`,
+`external_self`, or `external`.
 Its `analysis` contains `reachability`, `cycles`, `cyclic_components`,
 `structural_depth`, `depth_interpretation`, scalar `diagnostic_status`, and
 `quality`. Sparse adjacency is the default `O(V + E)` representation. Set
 `include_adjacency=True` only when a dense `V²` matrix is required; it is
 preflighted against `max_dense_cells` before allocation. A cyclic depth uses
 `condensation_dag_depth`, not an exact simple longest path.
+`analysis.reachability.terminal` retains its topology-only no-outgoing
+meaning, while `analysis.reachability.non_final_sinks` lists only no-outgoing
+states that are not explicitly final. The added lists use stable captured-state
+order; transitions use captured candidate order. Each new result entry and
+diagram marker is reserved against the same operation budget before output.
 
 `to_mermaid_document(..., adjacency_matrix=None, include_adjacency=False,
 limits=None)` omits dense data by default. When supplied, `adjacency_matrix`

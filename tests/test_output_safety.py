@@ -515,3 +515,72 @@ def test_composed_mermaid_output_shares_the_result_ledger(
         renderer(machine, limits=DiagnosticLimits(max_results=required_results - 1))
     assert raised.value.status.exhausted_dimension == "max_results"
     assert raised.value.status.result_count == required_results - 1
+
+
+@pytest.mark.parametrize("renderer", DIAGRAM_RENDERER_NAMES)
+@pytest.mark.parametrize("hostile", ["line\n@startuml", "```mermaid\n%%", "🙂|[x]"])
+def test_final_markers_and_self_modes_keep_hostile_text_inert(
+    renderer: str, hostile: str
+) -> None:
+    source = State(f"source-{hostile}")
+    machine = StateMachine(source)
+    machine.add_state(State(f"done-{hostile}", final=True))
+    machine.add_state(State(f"sink-{hostile}"))
+    guard = FuncCondition(lambda: True, name=f"guard-{hostile}")
+    machine.add_transition(f"internal-{hostile}", source, source, guard, internal=True)
+    machine.add_transition(f"external-{hostile}", source, source)
+    machine.add_transition(f"finish-{hostile}", source, f"done-{hostile}")
+
+    output = _render(renderer, machine, hostile)
+    _assert_physical_line_containment(renderer, output)
+    assert hostile not in output
+    assert len(re.findall(r"^\s*s\d+ --> \[\*\]$", output, re.MULTILINE)) == 1
+    assert "[internal] [priority 0]" in output
+    assert "[external self] [priority 0]" in output
+    assert len(re.findall(r"\bas s\d+$", output, re.MULTILINE)) == 3
+    assert output == _render(renderer, machine, hostile)
+
+
+@pytest.mark.parametrize(
+    "renderer", [to_mermaid, to_plantuml, to_mermaid_fenced, to_mermaid_document]
+)
+def test_explicit_final_rows_have_exact_result_budget(renderer: object) -> None:
+    machine = StateMachine(State("start"))
+    machine.add_state(State("done", final=True))
+    machine.add_transition("finish", "start", "done")
+    assert callable(renderer)
+
+    output = renderer(machine)
+    required = len(output.split("\n"))
+    assert required > 0
+    assert renderer(machine, limits=DiagnosticLimits(max_results=required)) == output
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        renderer(machine, limits=DiagnosticLimits(max_results=required - 1))
+    assert raised.value.status.exhausted_dimension == "max_results"
+    assert raised.value.status.result_count == required - 1
+
+
+@pytest.mark.parametrize("renderer", [to_mermaid, to_plantuml])
+def test_explicit_final_marker_visit_has_exact_work_budget(renderer: object) -> None:
+    machine = StateMachine(State("start"))
+    machine.add_state(State("done", final=True))
+    machine.add_transition("finish", "start", "done")
+    _, graph, budget = visualization._capture_diagnostic_graph(machine, None)
+    if renderer is to_mermaid:
+        visualization._to_mermaid_from_snapshot(
+            None, graph, budget, title=None, show_conditions=True
+        )
+    else:
+        visualization._to_plantuml_from_snapshot(
+            None, graph, budget, title=None, show_conditions=True
+        )
+    required = budget.status.work_count
+    assert required > len(graph.state_names)
+    assert callable(renderer)
+    assert isinstance(
+        renderer(machine, limits=DiagnosticLimits(max_work=required)), str
+    )
+    with pytest.raises(DiagnosticBudgetExceeded) as raised:
+        renderer(machine, limits=DiagnosticLimits(max_work=required - 1))
+    assert raised.value.status.exhausted_dimension == "max_work"
+    assert raised.value.status.work_count == required - 1
