@@ -3197,23 +3197,40 @@ def test_deprecated_construction_wrappers_keep_public_runtime_provenance() -> No
     import fast_fsm.core as core
 
     boundaries = (
-        ("simple_fsm", core.simple_fsm, "simple_fsm"),
-        ("quick_fsm", core.quick_fsm, "quick_fsm"),
-        ("from_states", StateMachine.from_states, "StateMachine.from_states"),
-        ("quick_build", StateMachine.quick_build, "StateMachine.quick_build"),
+        (
+            "simple_fsm",
+            core.simple_fsm,
+            "simple_fsm",
+            ("state_names", "initial", "name", "clock"),
+        ),
+        (
+            "quick_fsm",
+            core.quick_fsm,
+            "quick_fsm",
+            ("initial_state", "transitions", "name", "clock"),
+        ),
+        (
+            "from_states",
+            StateMachine.from_states,
+            "StateMachine.from_states",
+            ("state_names", "initial", "name", "clock"),
+        ),
+        (
+            "quick_build",
+            StateMachine.quick_build,
+            "StateMachine.quick_build",
+            ("initial_state", "transitions", "states", "name", "clock"),
+        ),
     )
 
-    for expected_name, boundary, expected_qualname in boundaries:
+    for expected_name, boundary, expected_qualname, expected_parameters in boundaries:
         assert boundary.__module__ == "fast_fsm.core"
         assert boundary.__name__ == expected_name
         assert boundary.__qualname__ == expected_qualname
-        assert boundary.__doc__ == boundary.__wrapped__.__doc__
-        wrapped_signature = inspect.signature(boundary.__wrapped__)
-        if expected_name in {"from_states", "quick_build"}:
-            parameters = tuple(wrapped_signature.parameters.values())
-            if parameters and parameters[0].name == "cls":
-                wrapped_signature = wrapped_signature.replace(parameters=parameters[1:])
-        assert inspect.signature(boundary) == wrapped_signature
+        assert boundary.__doc__
+        if hasattr(boundary, "__wrapped__"):
+            assert boundary.__doc__ == boundary.__wrapped__.__doc__
+        assert tuple(inspect.signature(boundary).parameters) == expected_parameters
         assert typing.get_type_hints(boundary)
 
     assert pickle.loads(pickle.dumps(core.simple_fsm)) is core.simple_fsm

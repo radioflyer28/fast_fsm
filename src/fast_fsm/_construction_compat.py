@@ -21,6 +21,7 @@ from typing import (
     Sequence,
     Union,
     cast,
+    get_type_hints,
 )
 
 if TYPE_CHECKING:
@@ -128,6 +129,12 @@ def install_construction_compat(
     # Besides inspection and autodoc, the module-level identity makes pickle
     # resolve simple_fsm/quick_fsm through fast_fsm.core rather than this local
     # installer frame.
+    annotations = {
+        "from_states": get_type_hints(from_states),
+        "quick_build": get_type_hints(quick_build),
+        "simple_fsm": get_type_hints(simple_fsm),
+        "quick_fsm": get_type_hints(quick_fsm),
+    }
     from_states = update_wrapper(
         from_states, _callable_metadata_source(original_from_states)
     )
@@ -136,6 +143,32 @@ def install_construction_compat(
     )
     simple_fsm = update_wrapper(simple_fsm, original_simple_fsm)
     quick_fsm = update_wrapper(quick_fsm, original_quick_fsm)
+    for public_name, wrapper, original in (
+        ("from_states", from_states, _callable_metadata_source(original_from_states)),
+        ("quick_build", quick_build, _callable_metadata_source(original_quick_build)),
+        ("simple_fsm", simple_fsm, original_simple_fsm),
+        ("quick_fsm", quick_fsm, original_quick_fsm),
+    ):
+        wrapper.__module__ = "fast_fsm.core"
+        wrapper.__name__ = public_name
+        wrapper.__qualname__ = (
+            f"StateMachine.{public_name}"
+            if public_name in {"from_states", "quick_build"}
+            else public_name
+        )
+        if wrapper.__doc__ is None:
+            wrapper.__doc__ = (
+                f"Retained {public_name} compatibility constructor; "
+                "use FSMBuilder for new programmatic construction."
+            )
+        # inspect.signature() can follow a pure Python original, but a mypyc
+        # builtin has no inspectable signature. In that case the interpreted
+        # wrapper itself is the signature authority.
+        if not hasattr(original, "__code__"):
+            delattr(wrapper, "__wrapped__")
+        # Bound classmethods lack __globals__; evaluated annotations keep
+        # get_type_hints() usable even when mypyc exposes a native __wrapped__.
+        wrapper.__annotations__ = annotations[public_name]
 
     setattr(state_machine, "from_states", classmethod(from_states))
     setattr(state_machine, "quick_build", classmethod(quick_build))
