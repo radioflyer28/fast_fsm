@@ -24,6 +24,7 @@ from fast_fsm.core import (
     configure_fsm_logging,
     set_fsm_logging_level,
     transition,
+    _emit_fsm_trace,
 )
 from fast_fsm.conditions import FuncCondition
 
@@ -480,6 +481,207 @@ async def test_default_trace_records_are_metadata_only_for_async_results(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("async_mode", [False, True], ids=["sync", "async"])
+async def test_trace_semantics_reflect_selected_mode_rejection_and_current_final(
+    async_mode: bool,
+) -> None:
+    logger_name = _logger_name(f"semantic-{async_mode}")
+    logger = logging.getLogger(logger_name)
+    capture = CaptureHandler()
+    logger.addHandler(capture)
+    handle = configure_fsm_logging(TRACE_LEVEL, logger_name, propagate=False)
+
+    async def attempt(machine, trigger: str):
+        capture.records.clear()
+        if async_mode:
+            result = await machine.trigger_async(trigger)
+            operation = "trigger_async"
+        else:
+            result = machine.trigger(trigger)
+            operation = "trigger"
+        records = [
+            fields
+            for _message, _args, fields, _formatted in capture.records
+            if fields.get("trace_operation") == operation
+        ]
+        assert len(records) == 1
+        assert {key for key in records[0] if key.startswith("trace_")} == {
+            "trace_operation",
+            "trace_stage",
+            "trace_result",
+            "trace_arg_count",
+            "trace_keyword_names",
+            "trace_priority",
+            "trace_mode",
+            "trace_rejection_code",
+            "trace_current_final",
+        }
+        return result, records[0]
+
+    def new_machine(*, final_target: bool = False):
+        source = State("source")
+        machine_type = AsyncStateMachine if async_mode else StateMachine
+        machine = machine_type(source, logger_name=logger_name)
+        machine.add_state(State("target", final=final_target))
+        return machine
+
+    try:
+        internal = new_machine()
+        internal.add_transition(
+            "update", "source", "source", internal=True, priority=-2
+        )
+        result, fields = await attempt(internal, "update")
+        assert result.success
+        assert (fields["trace_priority"], fields["trace_mode"]) == (-2, "internal")
+        assert fields["trace_rejection_code"] is None
+        assert fields["trace_current_final"] is False
+
+        external_self = new_machine()
+        external_self.add_transition("reenter", "source", "source", priority=3)
+        result, fields = await attempt(external_self, "reenter")
+        assert result.success
+        assert (fields["trace_priority"], fields["trace_mode"]) == (
+            3,
+            "external_self",
+        )
+
+        final_machine = new_machine(final_target=True)
+        final_machine.add_transition("finish", "source", "target", priority=7)
+        result, fields = await attempt(final_machine, "finish")
+        assert result.success
+        assert (fields["trace_mode"], fields["trace_current_final"]) == (
+            "external",
+            True,
+        )
+
+        rejected = new_machine()
+
+        def reject() -> bool:
+            raise TransitionRejected("battery.low")
+
+        rejected.add_transition("reject", "source", "target", reject, priority=5)
+        result, fields = await attempt(rejected, "reject")
+        assert result.rejection_code == "battery.low"
+        assert result.to_state is None
+        assert fields["trace_rejection_code"] == "battery.low"
+        assert (fields["trace_priority"], fields["trace_mode"]) == (5, "external")
+        assert fields["trace_current_final"] is False
+
+        for boundary in ("declarative_guard", "state_permission"):
+            if boundary == "declarative_guard":
+
+                class Source(DeclarativeState):
+                    @transition("go", to_state="target", condition=reject)
+                    def go(self) -> None:
+                        raise AssertionError("rejected handler must not run")
+
+            else:
+
+                class Source(State):  # type: ignore[no-redef]
+                    def can_transition(
+                        self,
+                        trigger_name: str,
+                        to_state: State,
+                        *args: object,
+                        **kwargs: object,
+                    ) -> bool:
+                        return reject()
+
+            source = Source("source")
+            machine_type = AsyncStateMachine if async_mode else StateMachine
+            seam_machine = machine_type(source, logger_name=logger_name)
+            seam_machine.add_state(State("target"))
+            seam_machine.add_transition("go", source, "target", priority=11)
+            result, fields = await attempt(seam_machine, "go")
+            assert result.rejection_code == "battery.low"
+            assert result.to_state is None
+            assert (fields["trace_priority"], fields["trace_mode"]) == (
+                11,
+                "external",
+            )
+            assert fields["trace_rejection_code"] == "battery.low"
+            assert fields["trace_current_final"] is False
+
+        false_guard = new_machine()
+        false_guard.add_transition("false", "source", "target", lambda: False)
+        result, fields = await attempt(false_guard, "false")
+        assert not result.success and not result.rejected
+        assert (fields["trace_mode"], fields["trace_rejection_code"]) == (
+            "external",
+            None,
+        )
+
+        unexpected = new_machine()
+
+        def raise_unexpected() -> bool:
+            raise RuntimeError(EXCEPTION_SENTINEL)
+
+        unexpected.add_transition("error", "source", "target", raise_unexpected)
+        result, fields = await attempt(unexpected, "error")
+        assert not result.success and result.cause is not None
+        assert (fields["trace_mode"], fields["trace_rejection_code"]) == (
+            "external",
+            None,
+        )
+        assert EXCEPTION_SENTINEL not in str(fields)
+
+        post_commit = new_machine(final_target=True)
+        post_commit.add_transition("finish", "source", "target")
+
+        def fail_after_commit(*_args, **_kwargs) -> None:
+            raise RuntimeError(EXCEPTION_SENTINEL)
+
+        post_commit.on_enter("target", fail_after_commit)
+        result, fields = await attempt(post_commit, "finish")
+        assert result.committed is True and result.success is False
+        assert fields["trace_mode"] == "external"
+        assert fields["trace_rejection_code"] is None
+        assert fields["trace_current_final"] is True
+        assert EXCEPTION_SENTINEL not in str(fields)
+
+        result, fields = await attempt(final_machine, "unknown")
+        assert not result.success
+        assert (fields["trace_priority"], fields["trace_mode"]) == (None, None)
+        assert fields["trace_rejection_code"] is None
+        assert fields["trace_current_final"] is True
+    finally:
+        handle.restore()
+        logger.removeHandler(capture)
+        capture.close()
+
+
+def test_disabled_trace_does_not_inspect_result_or_current_final() -> None:
+    logger = logging.getLogger(_logger_name("disabled-semantic-probe"))
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+
+    class ExplosiveResult:
+        @property
+        def priority(self) -> int:
+            raise AssertionError("disabled trace inspected selected priority")
+
+    class ExplosiveMachine:
+        @property
+        def _current_state(self) -> State:
+            raise AssertionError("disabled trace inspected current finality")
+
+    _emit_fsm_trace(
+        logger,
+        machine=ExplosiveMachine(),  # type: ignore[arg-type]
+        transition_result=ExplosiveResult(),  # type: ignore[arg-type]
+        operation="trigger",
+        stage="complete",
+        result="failure",
+        trigger=TRIGGER_SENTINEL,
+        source_state=SOURCE_SENTINEL,
+        destination_state=None,
+        positional_args=(),
+        keyword_args={},
+        error=None,
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_trace_suppresses_legacy_failure_warnings(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -763,6 +965,9 @@ def test_trace_priority_is_one_scalar_for_default_and_redacted_attempts(
         ]
         assert len(default_records) == 1
         assert default_records[0]["trace_priority"] == -8
+        assert default_records[0]["trace_mode"] == "external"
+        assert default_records[0]["trace_rejection_code"] is None
+        assert default_records[0]["trace_current_final"] is False
         default_handle.restore()
         application_handler.records.clear()
 
@@ -783,6 +988,9 @@ def test_trace_priority_is_one_scalar_for_default_and_redacted_attempts(
         ]
         assert len(redacted_records) == 1
         assert redacted_records[0]["trace_priority"] == -8
+        assert redacted_records[0]["trace_mode"] == "external"
+        assert redacted_records[0]["trace_rejection_code"] is None
+        assert redacted_records[0]["trace_current_final"] is False
         _assert_no_raw_payload(
             application_handler, hostile_payload, capsys.readouterr().err
         )
@@ -886,6 +1094,20 @@ def test_redactor_failure_is_fixed_category_or_suppression_without_raw_fallback(
                 record_dict.get("trace_operation") == "redaction_failure"
                 or not application_handler.records
             )
+            assert {key for key in record_dict if key.startswith("trace_")} == {
+                "trace_operation",
+                "trace_stage",
+                "trace_result",
+                "trace_arg_count",
+                "trace_keyword_names",
+                "trace_priority",
+                "trace_mode",
+                "trace_rejection_code",
+                "trace_current_final",
+            }
+            assert record_dict["trace_mode"] is None
+            assert record_dict["trace_rejection_code"] is None
+            assert record_dict["trace_current_final"] is None
         handle.restore()
     finally:
         logger.removeHandler(application_handler)

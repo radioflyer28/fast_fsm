@@ -307,6 +307,8 @@ def _trace_configuration_active(logger: logging.Logger) -> bool:
 def _emit_fsm_trace(
     logger: logging.Logger,
     *,
+    machine: "StateMachine",
+    transition_result: "TransitionResult",
     operation: str,
     stage: str,
     result: str,
@@ -316,11 +318,30 @@ def _emit_fsm_trace(
     positional_args: Tuple[Any, ...],
     keyword_args: Mapping[str, Any],
     error: Optional[BaseException],
-    priority: Optional[int],
 ) -> None:
     """Emit metadata-only trace output or an explicitly redacted variant."""
     if not logger.isEnabledFor(_FSM_TRACE_LEVEL):
         return
+
+    priority = transition_result.priority
+    if priority is None:
+        mode: Optional[str] = None
+    elif transition_result.internal:
+        mode = "internal"
+    elif (
+        transition_result.from_state is not None
+        and transition_result.to_state is not None
+        and transition_result.from_state == transition_result.to_state
+    ):
+        mode = "external_self"
+    else:
+        mode = "external"
+    rejection_code = transition_result.rejection_code
+    if rejection_code is not None:
+        try:
+            rejection_code = _validate_transition_rejection_code(rejection_code)
+        except (TypeError, ValueError):
+            rejection_code = None
 
     trace_fields: Dict[str, object] = {
         "trace_operation": operation,
@@ -329,6 +350,9 @@ def _emit_fsm_trace(
         "trace_arg_count": len(positional_args),
         "trace_keyword_names": _trace_keyword_names(keyword_args),
         "trace_priority": priority,
+        "trace_mode": mode,
+        "trace_rejection_code": rejection_code,
+        "trace_current_final": machine._current_state.final,
     }
     redactor = _library_trace_redactor(logger)
     if redactor is not None:
@@ -359,6 +383,9 @@ def _emit_fsm_trace(
                 "trace_arg_count": 0,
                 "trace_keyword_names": (),
                 "trace_priority": None,
+                "trace_mode": None,
+                "trace_rejection_code": None,
+                "trace_current_final": None,
             }
         else:
             for key, value in output.items():
@@ -4477,6 +4504,8 @@ class StateMachine:
                 trace_result = self._trigger_owned(trigger, *args, **kwargs)
                 _emit_fsm_trace(
                     self._logger,
+                    machine=self,
+                    transition_result=trace_result,
                     operation="trigger",
                     stage=(
                         trace_result.stage
@@ -4490,7 +4519,6 @@ class StateMachine:
                     positional_args=args,
                     keyword_args=kwargs,
                     error=trace_result.cause,
-                    priority=trace_result.priority,
                 )
                 return trace_result
             finally:
@@ -5588,6 +5616,8 @@ class AsyncStateMachine(StateMachine):
                 trace_result = await self._trigger_async_owned(trigger, *args, **kwargs)
                 _emit_fsm_trace(
                     self._logger,
+                    machine=self,
+                    transition_result=trace_result,
                     operation="trigger_async",
                     stage=(
                         trace_result.stage
@@ -5601,7 +5631,6 @@ class AsyncStateMachine(StateMachine):
                     positional_args=args,
                     keyword_args=kwargs,
                     error=trace_result.cause,
-                    priority=trace_result.priority,
                 )
                 return trace_result
             finally:

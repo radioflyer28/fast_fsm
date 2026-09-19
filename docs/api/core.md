@@ -183,23 +183,36 @@ signal, a traceback, or caller-provided values.
 `FSMTraceEvent` is a frozen, slotted, ephemeral input for an explicit
 `FSMTraceRedactor`. Its complete field set is `operation`, `stage`, `result`,
 `trigger`, `source_state`, `destination_state`, `positional_args`,
-`keyword_args`, and `error`. Fast FSM constructs this event only for an
-explicit redactor; the default trace path never exposes it in a `LogRecord`.
+`keyword_args`, `error`, and nullable `priority`. Fast FSM constructs this
+event only for an explicit redactor; the default trace path never exposes it
+in a `LogRecord`.
 
 At `logging.DEBUG - 5`, default trace records contain only fixed
 `trace_operation`, `trace_stage`, and `trace_result` categories,
-`trace_arg_count`, and capped sanitized `trace_keyword_names`. They never
+`trace_arg_count`, capped sanitized `trace_keyword_names`, nullable
+`trace_priority`, nullable `trace_mode`, nullable `trace_rejection_code`, and
+Boolean `trace_current_final`. `trace_mode` is `internal`, `external_self`, or
+`external` when a candidate was selected, and `None` when selection is unknown.
+An expected rejection exposes only its validated ASCII code (at most 64
+characters); ordinary false or unexpected failures use `None`.
+`trace_current_final` reads the canonical **current** state's explicit final
+flag after an owned attempt. On a pre-commit rejection it does not claim that
+the destination is final. The selected priority and mode can still be known
+when the destination is withheld from a rejection result. These fields never
 contain trigger/state names, positional or keyword values, exception payloads,
 or object representations in the message, arguments, `extra`, or formatted
 record. The trace enablement check happens before allocating an event,
 traversing values/keys, looking up handlers, or invoking a redactor.
 
 `FSMTraceRedactor = Callable[[FSMTraceEvent], Mapping[str, object] | None]`.
-Its output may contain only scalar `operation`, `stage`, `result`, and
-`detail` values, with strings at most 200 characters. An ordinary `Exception`
+Its output may contain only scalar `operation`, `stage`, `result`, `detail`,
+and `priority` values, with strings at most 200 characters. An ordinary `Exception`
 raised by a redactor, a non-mapping or `None` result, a forbidden key, a
 non-scalar value, or an oversized string fails closed: Fast FSM emits only
 fixed `redaction_failure` metadata and never falls back to raw payloads.
+That fallback has `None` for priority, mode, rejection code, and current-final
+fields; it does not reuse potentially sensitive facts from the failed redactor.
+Disabled TRACE performs no semantic projection or current-final read.
 Non-`Exception` `BaseException` subclasses (including `KeyboardInterrupt`,
 `SystemExit`, and `asyncio.CancelledError`) are not converted: they emit no
 trace record and are re-raised.
