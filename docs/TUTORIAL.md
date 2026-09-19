@@ -1,687 +1,286 @@
-# 🎓 Fast FSM Tutorial Mode
+# Fast FSM tutorial
 
-**Learn Fast FSM step by step, from beginner to expert**
+This tutorial starts with the construction path used by the public examples:
+create the states you own, describe the complete topology with `FSMBuilder`,
+then build it once. Each lesson adds one flat-FSM concept. Stop at the first
+level that solves your problem; the later sections are precise semantics, not a
+requirement to make every machine complicated.
 
-This tutorial guides you through Fast FSM's capabilities in progressive complexity levels. Each level builds on the previous, so you can stop when you've learned what you need.
+```{contents}
+:local:
+:depth: 2
+```
 
----
+## 1. Build a small machine
 
-## 📊 Tutorial Roadmap
+`FSMBuilder` is the primary API for a new programmatic machine. It makes the
+initial state, additional states, and each edge visible at construction time.
 
-| Level | What You'll Learn | Time | When to Use |
-|-------|------------------|------|-------------|
-| **🟢 Level 1: Basics** | Create simple FSMs, transitions | 5 min | First-time users |
-| **🟡 Level 2: Control** | Conditions, error handling | 10 min | Business logic needed |
-| **🟠 Level 3: Advanced** | Callbacks, complex patterns | 15 min | Production applications |
-| **🔴 Level 4: Expert** | Async, performance, validation | 20 min | High-performance systems |
-
----
-
-## 🟢 Level 1: The Basics (5 minutes)
-
-**Goal:** Create your first working FSM and understand core concepts.
-
-### Step 1.1: Your First State Machine
-```python
+```{testcode}
 from fast_fsm import FSMBuilder, State
 
-# Create caller-owned states and publish one complete topology.
 off = State("off")
 on = State("on")
 light = (
-    FSMBuilder(off, name="LightSwitch")
+    FSMBuilder(off, name="Light")
     .add_state(on)
     .add_transition("flip", "off", "on")
     .add_transition("flip", "on", "off")
     .build()
 )
 
-# Use it
-print(f"Light is: {light.current_state}")  # off
-light.trigger('flip')
-print(f"Light is: {light.current_state}")  # on
+result = light.trigger("flip")
+print(result.success, result.from_state, result.to_state)
 ```
 
-**🎯 Key Concept:** FSMs have states and transitions. `trigger()` moves between states.
-
-### Step 1.2: Understanding Results
-```python
-# trigger() returns a result object
-result = light.trigger('flip')
-print(f"Success: {result.success}")      # True
-print(f"From: {result.from_state}")      # on  
-print(f"To: {result.to_state}")          # off
-
-# What happens with invalid transitions?
-result = light.trigger('explode')
-print(f"Success: {result.success}")      # False
-print(f"Error: {result.error}")          # No transition 'explode' from state 'off'
+```{testoutput}
+True off on
 ```
 
-**🎯 Key Concept:** Always check results. Failed transitions return helpful error messages.
+`trigger()` returns a `TransitionResult`. Read its public fields rather than
+inferring a result from a state name or a diagram. An unknown trigger or an
+otherwise ineligible transition is an ordinary unsuccessful result:
 
-### Step 1.3: Multiple States
-```python
+```{testcode}
 from fast_fsm import FSMBuilder, State
 
-# Traffic light with three caller-owned states.
-red = State("red")
-yellow = State("yellow")
-green = State("green")
-traffic = (
-    FSMBuilder(red, name="Traffic")
-    .add_state(yellow)
-    .add_state(green)
-    .add_transition("timer", "red", "green")
-    .add_transition("timer", "green", "yellow")
-    .add_transition("timer", "yellow", "red")
+idle = State("idle")
+done = State("done")
+machine = FSMBuilder(idle).add_state(done).add_transition("finish", "idle", "done").build()
+result = machine.trigger("missing")
+print(result.success, result.committed, result.rejected)
+```
+
+```{testoutput}
+False False False
+```
+
+## 2. Put eligibility and priority in the FSM
+
+Guards answer whether one candidate is eligible. If a trigger intentionally
+has several candidates, give them explicit `priority=` values: lower exact
+built-in integers run first. This keeps precedence in the finite topology
+instead of duplicating it in caller-side `if`/`elif` routing.
+
+```{testcode}
+from fast_fsm import FSMBuilder, FuncCondition, State
+
+flying = State("flying")
+returning = State("returning")
+emergency = State("emergency")
+drone = (
+    FSMBuilder(flying)
+    .add_state(returning)
+    .add_state(emergency)
+    .add_transition(
+        "telemetry_tick", "flying", "emergency",
+        FuncCondition(lambda **t: t["critical_fault"]), priority=0,
+    )
+    .add_transition(
+        "telemetry_tick", "flying", "returning",
+        FuncCondition(lambda **t: not t["link_ok"]), priority=10,
+    )
     .build()
 )
 
-# Cycle through states
-for i in range(6):
-    print(f"Light: {traffic.current_state}")
-    traffic.trigger('timer')
+result = drone.trigger("telemetry_tick", critical_fault=False, link_ok=False)
+print(result.to_state, result.priority)
 ```
 
-**🎯 Key Concept:** FSMs can have any number of states and transitions.
-
-### ✅ Level 1 Complete!
-**You now know:** Basic FSM creation, transitions, and result handling.
-**Performance note:** These operations are O(1) - instant even with thousands of states.
-
----
-
-## 🟡 Level 2: Adding Control (10 minutes)
-
-**Goal:** Add business logic with conditions and handle errors gracefully.
-
-### Step 2.1: Conditional Transitions
-```python
-from fast_fsm import StateMachine, State
-
-def can_afford(price=0, money=0, **kwargs):
-    return money >= price
-
-# Vending machine
-waiting = State('waiting')
-dispensing = State('dispensing')
-
-vending = StateMachine(waiting, name='VendingMachine')
-vending.add_state(dispensing)
-
-# Only dispense if customer has enough money
-vending.add_transition('buy', 'waiting', 'dispensing', condition=can_afford)
-vending.add_transition('complete', 'dispensing', 'waiting')
-
-# Test with different amounts
-result = vending.trigger('buy', price=150, money=100)
-print(f"Purchase: {result.success}")  # False - not enough money
-
-result = vending.trigger('buy', price=150, money=200)  
-print(f"Purchase: {result.success}")  # True - enough money
+```{testoutput}
+returning 10
 ```
 
-**🎯 Key Concept:** Conditions control when transitions can happen. They receive all trigger arguments.
+A false guard is not an error: selection falls through to a lower-priority
+candidate when one exists. A guard exception is different—it aborts selection
+so a broken higher-priority safety rule is not silently treated as false.
 
-### Step 2.2: Complex Conditions
-```python
-def can_login(username="", password="", attempts=0, **kwargs):
-    # Multiple checks in one condition
-    valid_user = username == "admin"
-    valid_pass = password == "secret"  
-    not_locked = attempts < 3
-    return valid_user and valid_pass and not_locked
+## 3. Choose same-state lifecycle semantics explicitly
 
-# Login system
-logged_out = State('logged_out')
-logged_in = State('logged_in')
-locked = State('locked')
+Two transitions may share the same source and destination state but still mean
+different things. The default is **external**: exit and entry callbacks run,
+and the state gets a new residency interval. Set `internal=True` for an
+in-place update that commits and records a result without exit/entry re-entry.
 
-auth = StateMachine(logged_out, name='AuthSystem')
-auth.add_state(logged_in)
-auth.add_state(locked)
-
-auth.add_transition('login', 'logged_out', 'logged_in', condition=can_login)
-auth.add_transition('logout', 'logged_in', 'logged_out')
-auth.add_transition('lock', 'logged_out', 'locked')
-
-# Test login attempts
-auth.trigger('login', username="admin", password="wrong", attempts=1)
-print(f"Status: {auth.current_state}")  # logged_out
-
-auth.trigger('login', username="admin", password="secret", attempts=1)  
-print(f"Status: {auth.current_state}")  # logged_in
-```
-
-**🎯 Key Concept:** Conditions can be as complex as needed. They're just Python functions.
-
-### Step 2.3: Deterministic Candidate Priority
-
-Conditions may contain any domain logic you need. When several guarded
-transitions intentionally share one event, keep each condition focused and let
-the FSM define their precedence:
-
-```python
-from fast_fsm import FuncCondition, State, StateMachine
-
-online = State("online")
-degraded = State("degraded")
-offline = State("offline")
-service = StateMachine(online)
-service.add_state(degraded)
-service.add_state(offline)
-
-service.add_transition(
-    "status_tick", "online", "offline",
-    FuncCondition(lambda **s: s.get("fatal", False)),
-    priority=0,
-)
-service.add_transition(
-    "status_tick", "online", "degraded",
-    FuncCondition(lambda **s: s.get("latency_ms", 0) > 500),
-    priority=10,
-)
-
-result = service.trigger("status_tick", fatal=False, latency_ms=900)
-print(result.to_state, result.priority)  # degraded 10
-```
-
-The machine evaluates candidates by ascending priority and commits only the
-first eligible one. Ordinary rejection falls through. Exceptions and async
-cancellation abort selection, because treating an evaluation failure as
-ineligibility could hide a higher-priority fault. Priorities are exact built-in
-integers and must be unique within a source/trigger slot.
-
-**🎯 Key Concept:** Guards decide eligibility; `priority=` makes conflicts
-deterministic without moving transition selection into caller-side dispatch
-logic.
-
-### Step 2.4: Safe Operations
-```python
-# safe_trigger won't throw exceptions
-result = auth.safe_trigger('invalid_action')
-print(f"Safe result: {result.success}")  # False
-print(f"Error: {result.error}")          # Helpful error message
-
-# Check before triggering
-if auth.can_trigger('logout'):
-    auth.trigger('logout')
-    print("Logged out successfully")
-
-# Exception-based alternative — raise_if_failed() raises TransitionError on failure
-from fast_fsm import TransitionError
-try:
-    auth.trigger('logout').raise_if_failed()
-except TransitionError as exc:
-    print(f"Transition failed: {exc.result.error}")
-
-# Chain directly when you need the destination
-target = auth.trigger('login', user='alice').raise_if_failed().to_state
-```
-
-**🎯 Key Concept:** Use `safe_trigger()` / `can_trigger()` for result-based flow, or `raise_if_failed()` + `TransitionError` for exception-based flow.
-
-### Step 2.5: Multiple Source States
-```python
-# Emergency transitions from multiple states
-auth.add_transition('emergency_reset', ['logged_in', 'locked'], 'logged_out')
-
-# Demonstrate from locked state — move there via the defined 'lock' transition
-auth.trigger('lock')
-auth.trigger('emergency_reset')
-print(f"After reset: {auth.current_state}")  # logged_out
-```
-
-**🎯 Key Concept:** One transition can apply to multiple source states.
-
-### ✅ Level 2 Complete!
-**You now know:** Conditional logic, error handling, and multiple source transitions.
-**Performance note:** Condition evaluation is O(1) and cached when possible.
-
----
-
-## 🟠 Level 3: Advanced Patterns (15 minutes)
-
-**Goal:** Use callbacks, build complex FSMs, and handle real-world scenarios.
-
-### Step 3.1: State Callbacks
-```python
-from fast_fsm import State
-
-# Track execution with callbacks
-execution_log = []
-
-def log_enter(from_state, trigger, *args, **kwargs):
-    execution_log.append(f"Entered from {from_state.name if from_state else 'start'}")
-
-def log_exit(to_state, trigger, *args, **kwargs):
-    execution_log.append(f"Exiting to {to_state.name}")
-
-# Create states with callbacks
-processing = State.create(
-    'processing',
-    on_enter=log_enter,
-    on_exit=log_exit
-)
-
-idle = State('idle')
-done = State('done')
-
-workflow = StateMachine(idle, name='Workflow')
-workflow.add_state(processing)
-workflow.add_state(done)
-
-workflow.add_transition('start', 'idle', 'processing')
-workflow.add_transition('finish', 'processing', 'done')
-
-# Watch callbacks in action
-workflow.trigger('start')
-workflow.trigger('finish')
-
-print("Execution log:")
-for entry in execution_log:
-    print(f"  {entry}")
-```
-
-**🎯 Key Concept:** Callbacks let you run code during state transitions. Perfect for logging, cleanup, notifications.
-
-### Step 3.2: Builder Pattern for Complex FSMs
-```python
+```{testcode}
 from fast_fsm import FSMBuilder, State
 
-# Complex order processing system
-class OrderState(State):
-    def on_enter(self, from_state, trigger, order_id=None, **kwargs):
-        print(f"📦 Order {order_id}: Entered {self.name}")
+events = []
+mission = State("mission")
+machine = (
+    FSMBuilder(mission)
+    .on_enter("mission", lambda *_args, **_kwargs: events.append("enter"))
+    .on_exit("mission", lambda *_args, **_kwargs: events.append("exit"))
+    .add_transition("update", "mission", "mission", internal=True)
+    .add_transition("restart", "mission", "mission")
+    .build()
+)
 
-def has_payment(payment_method=None, **kwargs):
-    return payment_method is not None
-
-def has_inventory(item_id=None, inventory=None, **kwargs):
-    return inventory and inventory.get(item_id, 0) > 0
-
-def can_ship(shipping_address=None, **kwargs):
-    return shipping_address and len(shipping_address) > 10
-
-# Build complex FSM with fluent interface
-order_processor = (FSMBuilder(OrderState('pending'), name='OrderProcessor')
-    .add_state(OrderState('payment_verified'))
-    .add_state(OrderState('inventory_checked'))  
-    .add_state(OrderState('ready_to_ship'))
-    .add_state(OrderState('shipped'))
-    .add_state(OrderState('cancelled'))
-    
-    # Happy path
-    .add_transition('verify_payment', 'pending', 'payment_verified', condition=has_payment)
-    .add_transition('check_inventory', 'payment_verified', 'inventory_checked', condition=has_inventory)
-    .add_transition('prepare_shipping', 'inventory_checked', 'ready_to_ship', condition=can_ship)
-    .add_transition('ship', 'ready_to_ship', 'shipped')
-    
-    # Error handling
-    .add_transition('cancel', ['pending', 'payment_verified', 'inventory_checked'], 'cancelled')
-    
-    .build())
-
-# Process an order
-mock_inventory = {'WIDGET-123': 5}
-
-result = order_processor.trigger('verify_payment', 
-                                order_id='ORD-001', 
-                                payment_method='credit_card')
-
-result = order_processor.trigger('check_inventory', 
-                                order_id='ORD-001',
-                                item_id='WIDGET-123', 
-                                inventory=mock_inventory)
-
-result = order_processor.trigger('prepare_shipping',
-                                order_id='ORD-001',
-                                shipping_address='123 Main St, City, State 12345')
-
-print(f"Order status: {order_processor.current_state}")
+internal = machine.trigger("update")
+external = machine.trigger("restart")
+print(internal.internal, external.internal, events)
 ```
 
-**🎯 Key Concept:** Builder pattern creates complex FSMs with clean, readable code.
+```{testoutput}
+True False ['exit', 'enter']
+```
 
-### Step 3.3: Bulk Operations
-```python
-# Add multiple transitions at once
-transitions = [
-    ('event1', 'state_a', 'state_b'),
-    ('event2', 'state_b', 'state_c'), 
-    ('event3', 'state_c', 'state_a'),
-    ('reset', ['state_a', 'state_b', 'state_c'], 'state_a')
-]
+The entry callback does not run at builder construction, so only the external
+transition contributes the shown `exit`, `enter` lifecycle pair. Equal endpoint
+names alone never tell you which mode was selected; inspect `result.internal`.
 
-# Build the transition list through the primary builder.
+## 4. Model completion with an explicit final state
+
+A state is final because it was declared `State(name, final=True)`, not because
+it happens to have no outgoing edges. A non-final sink may represent an
+incomplete topology that can be extended later; a final state records domain
+completion and makes `is_terminated` true.
+
+```{testcode}
 from fast_fsm import FSMBuilder, State
 
-states = {name: State(name) for name in ("state_a", "state_b", "state_c")}
-builder = FSMBuilder(states["state_a"], name="BulkDemo")
-for state in (states["state_b"], states["state_c"]):
-    builder.add_state(state)
-for trigger, source, target in transitions:
-    builder.add_transition(trigger, source, target)
-bulk_fsm = builder.build()
+start = State("start")
+sink = State("sink")
+complete = State("complete", final=True)
+sink_machine = FSMBuilder(start).add_state(sink).add_transition("go", "start", "sink").build()
+final_machine = FSMBuilder(start).add_state(complete).add_transition("finish", "start", "complete").build()
 
-print(f"States: {bulk_fsm.states}")
-print(f"Can trigger 'event1': {bulk_fsm.can_trigger('event1')}")
+sink_machine.trigger("go")
+final_machine.trigger("finish")
+print(sink_machine.is_terminated, final_machine.is_terminated)
 ```
 
-**🎯 Key Concept:** Bulk operations speed up FSM construction for complex systems.
-
-### Step 3.4: Emergency and Bidirectional Transitions
-```python
-# Add emergency transitions (from any state to target)
-order_processor.add_emergency_transition('system_shutdown', 'cancelled')
-
-# Add bidirectional transitions (A <-> B)
-maintenance = State('maintenance')
-order_processor.add_state(maintenance)
-order_processor.add_bidirectional_transition('enter_maintenance', 'exit_maintenance', 
-                                           'ready_to_ship', 'maintenance')
-
-# Test emergency transition
-order_processor.trigger('system_shutdown')
-print(f"Emergency state: {order_processor.current_state}")  # cancelled
+```{testoutput}
+False True
 ```
 
-**🎯 Key Concept:** Special transition types handle common patterns efficiently.
+After a final state commits, a trigger cannot start another workflow on that
+machine. Create a new controller or machine for the next owned workflow.
 
-### ✅ Level 3 Complete!
-**You now know:** Callbacks, builder pattern, bulk operations, and special transitions.
-**Performance note:** Builder pattern has no runtime overhead - all optimization happens at build time.
+## 5. Separate a false guard, an expected rejection, and a bug
 
----
+A false guard means “this candidate is not eligible” and can fall through.
+Raise `TransitionRejected("bounded-code")` inside a guard for a known terminal
+domain outcome. It returns a non-committed result with `rejected=True` and the
+public `rejection_code`. Any other exception is an unexpected failure, exposed
+through `result.cause`; it is not a rejection and it must not be hidden as a
+false guard.
 
-## 🔴 Level 4: Expert Features (20 minutes)
+```{testcode}
+from fast_fsm import FSMBuilder, FuncCondition, State, TransitionRejected
 
-**Goal:** Handle async operations, optimize performance, and validate complex systems.
+idle = State("idle")
+next_state = State("next")
 
-### Step 4.1: Async State Machines
-```python
-import asyncio
-from fast_fsm import AsyncStateMachine, AsyncCondition, State
+def reject_if_conflicting(*, conflicting=False, **_):
+    if conflicting:
+        raise TransitionRejected("navigation-conflict")
+    return False
 
-class DatabaseCheck(AsyncCondition):
-    def __init__(self, table_name):
-        super().__init__(f"check_{table_name}")
-        self.table_name = table_name
-    
-    async def check_async(self, user_id=None, **kwargs):
-        # Simulate async database call
-        await asyncio.sleep(0.1)  
-        # Mock: user exists in database
-        return user_id and user_id.startswith('user_')
+machine = (
+    FSMBuilder(idle)
+    .add_state(next_state)
+    .add_transition("go", "idle", "next", FuncCondition(reject_if_conflicting), priority=0)
+    .add_transition("go", "idle", "next", priority=10)
+    .build()
+)
 
-class APICall(AsyncCondition):
-    def __init__(self, endpoint):
-        super().__init__(f"api_{endpoint}")
-        self.endpoint = endpoint
-    
-    async def check_async(self, **kwargs):
-        # Simulate async API call
-        await asyncio.sleep(0.2)
-        return True  # Mock success
+ordinary = machine.trigger("go", conflicting=False)
+print(ordinary.success, ordinary.committed, ordinary.rejected)
 
-async def async_demo():
-    # Create async FSM
-    initializing = State('initializing')
-    validating = State('validating') 
-    processing = State('processing')
-    complete = State('complete')
-    
-    async_fsm = AsyncStateMachine(initializing, name='AsyncProcessor')
-    async_fsm.add_state(validating)
-    async_fsm.add_state(processing)
-    async_fsm.add_state(complete)
-    
-    # Add async transitions
-    async_fsm.add_transition('validate', 'initializing', 'validating', 
-                           condition=DatabaseCheck('users'))
-    async_fsm.add_transition('process', 'validating', 'processing',
-                           condition=APICall('process_data'))
-    async_fsm.add_transition('finish', 'processing', 'complete')
-    
-    # Execute async transitions
-    print(f"Starting: {async_fsm.current_state}")
-    
-    result = await async_fsm.trigger_async('validate', user_id='user_123')
-    print(f"After validate: {async_fsm.current_state}, Success: {result.success}")
-    
-    result = await async_fsm.trigger_async('process')
-    print(f"After process: {async_fsm.current_state}, Success: {result.success}")
-    
-    result = await async_fsm.trigger_async('finish')
-    print(f"Final: {async_fsm.current_state}, Success: {result.success}")
-
-# Run the async demo
-asyncio.run(async_demo())
+blocked = FSMBuilder(idle).add_state(next_state).add_transition(
+    "go", "idle", "next", FuncCondition(reject_if_conflicting)
+).build().trigger("go", conflicting=True)
+print(blocked.success, blocked.committed, blocked.rejected, blocked.rejection_code)
 ```
 
-**🎯 Key Concept:** AsyncStateMachine handles async conditions transparently. Perfect for I/O operations.
-
-### Step 4.2: Performance Optimization
-```python
-import time
-from fast_fsm import State, StateMachine
-
-# Performance test: Create large FSM
-def performance_demo():
-    print("🚀 Performance Demo")
-    
-    # Create FSM with many states (still fast!)
-    num_states = 1000
-    states = [State(f'state_{i}') for i in range(num_states)]
-    
-    perf_fsm = StateMachine(states[0], name='PerfTest')
-    
-    # Add all states - O(1) per operation
-    start_time = time.perf_counter()
-    for state in states[1:]:
-        perf_fsm.add_state(state)
-    add_time = time.perf_counter() - start_time
-    
-    # Add many transitions - O(1) per operation  
-    start_time = time.perf_counter()
-    for i in range(num_states - 1):
-        perf_fsm.add_transition(f'next_{i}', f'state_{i}', f'state_{i+1}')
-    transition_time = time.perf_counter() - start_time
-    
-    # Test transition speed - O(1) per trigger
-    start_time = time.perf_counter()
-    for i in range(100):  # 100 transitions
-        trigger_name = f'next_{i % (num_states - 1)}'
-        if perf_fsm.can_trigger(trigger_name):
-            perf_fsm.trigger(trigger_name)
-    trigger_time = time.perf_counter() - start_time
-    
-    print(f"Added {num_states} states in {add_time*1000:.2f}ms")
-    print(f"Added {num_states-1} transitions in {transition_time*1000:.2f}ms") 
-    print(f"Executed 100 transitions in {trigger_time*1000:.2f}ms")
-    print(f"Transition rate: {100/trigger_time:.0f} transitions/sec")
-
-performance_demo()
+```{testoutput}
+True True False
+False False True navigation-conflict
 ```
 
-**🎯 Key Concept:** Fast FSM maintains O(1) performance even with thousands of states/transitions.
+See the [core API semantic contrasts](api/core.md#flat-fsm-semantic-contrasts)
+for a compact executable example that also shows an unexpected failure.
 
-### Step 4.3: Advanced Builder with Auto-Detection
-```python
-from fast_fsm import FSMBuilder, AsyncCondition
+## 6. Use diagnostics after the topology is clear
 
-class SmartSensor(AsyncCondition):
-    async def check_async(self, **kwargs):
-        await asyncio.sleep(0.1)
-        return True
+Runtime selection should stay small and direct. Analysis is opt-in design-time
+work: use the validator and visualization tools to inspect a finished topology,
+not to decide what a dispatch should do. Diagnostics can expose finality,
+transition modes, and expected-rejection facts, but never change transition
+eligibility or priority.
 
-# Builder auto-detects async requirements
-smart_fsm = (FSMBuilder(State('monitoring'), name='SmartSystem')
-    .add_state(State('alerting'))
-    .add_state(State('responding'))
-    .add_transition('check', 'monitoring', 'alerting', condition=SmartSensor())
-    .add_transition('respond', 'alerting', 'responding')
-    .build())  # Automatically creates AsyncStateMachine!
+For a compact example, see [Diagnostics and visualization](examples/index.md#diagnostics_and_visualizationpy--design-time-tooling).
 
-print(f"Auto-detected type: {type(smart_fsm).__name__}")  # AsyncStateMachine
+## 7. Learn the controller-owned drone workflow
 
-# You can also force the type
-sync_fsm = (FSMBuilder(State('start'), name='ForcedSync')
-    .add_state(State('end'))
-    .add_transition('go', 'start', 'end')
-    .force_sync()  # Force StateMachine even if async components added
-    .build())
+The [drone failsafes example](examples/index.md#drone_failsafespy--controller-owned-telemetry)
+combines the earlier ideas in one deterministic integration story:
 
-print(f"Forced type: {type(sync_fsm).__name__}")  # StateMachine
-```
+- `DroneController` owns the machine and a replaceable aircraft-command adapter.
+- Every normalized telemetry sample produces one `telemetry_tick`; its guards,
+  including failsafe precedence, live in the FSM.
+- `TelemetryPolicy` retains only observable facts such as heartbeat age. It does
+  not decide state-dependent transitions.
+- Mission demonstrates both internal updates and external re-entry. Landing is
+  explicit finality, and a navigation conflict is an expected rejection.
+- Aircraft commands are attached to destination entry callbacks, so they run
+  only after a successful transition commits.
 
-**🎯 Key Concept:** FSMBuilder intelligently chooses the right machine type based on your components.
+The script is deterministic training software, not hardware, certification, or
+real-time flight-control guidance. It has an independent smoke test; the Sphinx
+gallery inclusion only displays the source.
 
-### Step 4.4: Validation and Testing
-```python
-from fast_fsm.validation import validate_fsm, quick_validation_report
+## 8. Supported advanced construction paths
 
-# Create a complex FSM for validation
-complex_fsm = (FSMBuilder(State('start'), name='ComplexSystem')
-    .add_state(State('processing'))
-    .add_state(State('waiting'))
-    .add_state(State('error'))
-    .add_state(State('complete'))
-    .add_state(State('isolated'))  # This will be unreachable
-    
-    # Add transitions
-    .add_transition('begin', 'start', 'processing')
-    .add_transition('wait', 'processing', 'waiting')
-    .add_transition('resume', 'waiting', 'processing') 
-    .add_transition('error_out', 'processing', 'error')
-    .add_transition('recover', 'error', 'processing')
-    .add_transition('finish', 'processing', 'complete')
-    # Note: 'isolated' state has no transitions to/from it
-    
-    .build())
+`FSMBuilder` is the starting point when your application declares a new
+topology. The following paths are supported but serve distinct advanced roles:
 
-# Quick validation report
-print("📋 Quick Validation Report:")
-quick_validation_report(complex_fsm)
+- Direct `StateMachine` or `AsyncStateMachine` construction is for intentional
+  incremental topology control.
+- `FSMBuilder` automatically selects `AsyncStateMachine` when it receives an
+  `AsyncCondition`; use `trigger_async()` on the resulting async machine.
+- `StateMachine.from_dict()` reconstructs serialized topology. It is a
+  persistence adapter, not an alternative general-purpose builder.
+- Declarative state classes are supported when state-local handlers make the
+  topology easier to read; they are not deprecated.
 
-# Detailed validation
-print("\n🔍 Detailed Validation:")
-validator = validate_fsm(complex_fsm)
+## 9. Migrate the four historical convenience helpers
 
-# Check completeness
-completeness = validator.validate_completeness()
-print(f"Complete FSM: {completeness['is_complete']}")
-print(f"Unreachable states: {completeness['unreachable_states']}")
-print(f"Dead end states: {completeness['dead_states']}")
+`simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and
+`StateMachine.from_states` each emit one compatibility warning per call through
+v0.5.x. They will be removed no earlier than v0.6.0. New code should make the
+same construction explicit with `FSMBuilder`:
 
-# Generate test scenarios
-print(f"\n🧪 Generated Test Scenarios:")
-test_paths = validator.generate_test_paths(max_length=4)
-for i, path in enumerate(test_paths[:3]):
-    scenario = " -> ".join([f"{s}[{e}]" for s, e, _ in path])
-    print(f"Scenario {i+1}: {scenario}")
+| Warned helper | Builder replacement |
+| --- | --- |
+| `simple_fsm` | `FSMBuilder(State("idle"))` plus `.add_state(...)` |
+| `quick_fsm` | `FSMBuilder(State("idle"))` plus one `.add_transition(...)` per edge |
+| `StateMachine.quick_build` | `FSMBuilder(initial_state)` plus explicit states and transitions |
+| `StateMachine.from_states` | `FSMBuilder(State("idle"))` plus `.add_state(...)` for a named state-only topology |
 
-# Check determinism
-determinism = validator.check_determinism()
-print(f"\nDeterministic: {determinism['is_deterministic']}")
-if not determinism['is_deterministic']:
-    for pair in determinism['non_deterministic_transitions']:
-        print(f"Conflict: {pair}")
-```
+These warnings do **not** deprecate direct constructors, `from_dict()`, or
+declarative state APIs. For complete executable migration snippets, see
+[Compatibility migration](../README.md#compatibility-migration) and
+[Quick Start](QUICK_START.md#construction-roles).
 
-**🎯 Key Concept:** Validation helps catch design issues before deployment. Use it for complex systems.
+## 10. Artifact and performance proof
 
-### Step 4.5: Memory and Performance Monitoring
-```python
-import sys
-from fast_fsm import StateMachine, State
+Fast FSM preserves a direct O(1) singleton dispatch path when new semantics
+are unused. The supported durable floor is measured on a fresh installed
+compiled artifact; feature costs for finality, self-transition mode, and
+rejection are recorded as separate environment-labelled observations. Do not
+generalize a local timing result into a universal speed claim.
 
-def memory_demo():
-    print("💾 Memory Efficiency Demo")
-    
-    # Compare with/without slots
-    class RegularState:
-        def __init__(self, name):
-            self.name = name
-    
-    # Create equivalent states
-    fast_state = State('test')
-    regular_state = RegularState('test')
-    
-    # Check memory usage (approximate)
-    fast_size = sys.getsizeof(fast_state)
-    regular_size = sys.getsizeof(regular_state) + sys.getsizeof(regular_state.__dict__)
-    
-    print(f"Fast FSM State: {fast_size} bytes")
-    print(f"Regular State: {regular_size} bytes") 
-    print(f"Memory savings: {regular_size/fast_size:.1f}x more efficient")
-    
-    # Test with many states
-    num_states = 1000
-    fast_states = [State(f'state_{i}') for i in range(num_states)]
-    total_fast = sum(sys.getsizeof(s) for s in fast_states)
-    
-    regular_states = [RegularState(f'state_{i}') for i in range(num_states)]
-    total_regular = sum(sys.getsizeof(s) + sys.getsizeof(s.__dict__) for s in regular_states)
-    
-    print(f"\n{num_states} Fast States: {total_fast/1024:.1f} KB")
-    print(f"{num_states} Regular States: {total_regular/1024:.1f} KB")
-    print(f"Total savings: {total_regular/total_fast:.1f}x more efficient")
+Before a release candidate is accepted, the same fixed semantic oracle checks
+pure source, fresh native core, installed pure and compiled wheels, and release
+artifacts with exact origin and build-intent checks. The normal contributor
+workflow uses `uv.lock` and `uv sync --locked`; it does not require a custom
+cache, offline mode, or a particular `uv` patch release.
 
-memory_demo()
-```
+## Where next?
 
-**🎯 Key Concept:** Slots optimization provides massive memory savings, especially important for large systems.
-
-### ✅ Level 4 Complete!
-**You now know:** Async operations, performance optimization, auto-detection, validation, and memory efficiency.
-**Performance note:** All advanced features maintain O(1) performance characteristics.
-
----
-
-## 🏆 Graduation: You're Now a Fast FSM Expert!
-
-**Congratulations!** You've mastered all levels of Fast FSM. You now know:
-
-### 🟢 **Level 1 Skills:** Basic FSM creation and transitions
-### 🟡 **Level 2 Skills:** Conditional logic and error handling  
-### 🟠 **Level 3 Skills:** Callbacks, builder pattern, complex scenarios
-### 🔴 **Level 4 Skills:** Async operations, performance optimization, validation
-
-## 🎯 Next Steps
-
-### **For Real Projects:**
-1. Start with Level 1-2 for MVP
-2. Add Level 3 features as complexity grows
-3. Use Level 4 for production systems
-
-### **Performance Guidelines:**
-- **Small FSMs** (< 10 states): Any approach works
-- **Medium FSMs** (10-100 states): Use builder pattern
-- **Large FSMs** (100+ states): Add validation and performance monitoring
-- **Async FSMs**: Always use AsyncStateMachine for I/O operations
-
-### **Common Patterns by Use Case:**
-- **Web APIs**: Level 2 (conditions for validation)
-- **Game AI**: Level 3 (callbacks for actions) 
-- **IoT Devices**: Level 4 (async sensors, memory optimization)
-- **Trading Systems**: Level 4 (performance critical)
-- **Workflow Engines**: Level 3-4 (complex logic, validation)
-
-## 📚 Additional Resources
-
-- **[QUICK_START.md](QUICK_START.md)** - Fast reference guide
-- **[Tiered examples](examples/index.md)** - Progressive, feature-focused scripts
-- **[Core API](api/core.md)** - Complete class and method reference
-- **[Conditions API](api/conditions.md)** - Guard interfaces and templates
-- **[Validation API](api/validation.md)** - Design-time analysis
-- **[Visualization API](api/visualization.md)** - Mermaid, PlantUML, and JSON
-
-## 🚀 Go Build Something Amazing!
-
-You now have the knowledge to build high-performance, maintainable state machines for any use case. Fast FSM gives you the tools - use them to create something awesome!
-
-**Remember:** Start simple, add complexity only when needed, and always measure performance for critical applications.
-
-**Happy state machining!** 🎉
+- [Examples](examples/index.md) for runnable, feature-focused scripts.
+- [Core API](api/core.md) for exact result fields and lifecycle contracts.
+- [Conditions API](api/conditions.md) for reusable guard composition.
+- [Validation API](api/validation.md) for design-time graph analysis.

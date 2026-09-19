@@ -44,17 +44,40 @@ Use `DeclarativeState`, `AsyncDeclarativeState`, and `@transition` when event
 handlers belong next to state definitions. It shows one synchronous and one
 asynchronous machine without unrelated logging setup.
 
-### `drone_failsafes.py` — priority candidates
+### `drone_failsafes.py` — controller-owned telemetry
 
-A deterministic training simulation of drone pre-arm checks and in-flight
-failsafes. `DroneController` owns an FSM and a replaceable aircraft command
-adapter. One `telemetry_tick` lets guarded transition candidates resolve
-critical fault, link loss, low battery, arrival, and touchdown in fixed
-priority order. Destination entry callbacks issue commands only after a
-transition commits.
+This is the progressive integration example for the flat-FSM semantics taught
+by the Tutorial. It is a deterministic training simulation of pre-arm checks
+and in-flight failsafes, not an aircraft integration.
+
+`DroneController` owns both its `FSMBuilder`-built machine and a replaceable
+aircraft-command adapter. Every normalized sample becomes exactly one
+`telemetry_tick`; all state-dependent guard logic and fixed precedence remain
+in the machine rather than in controller-side `if`/`elif` routing:
+
+- priorities choose critical fault, link loss, low battery, home arrival, and
+  touchdown deterministically;
+- a Mission update is an internal self-transition, while an explicit Mission
+  re-entry runs the external lifecycle;
+- normal and emergency landing are explicit final states, not merely nodes
+  with no displayed outgoing edge;
+- an ordinary false navigation guard falls through, while a bounded
+  `TransitionRejected("navigation-conflict")` is a terminal, command-free
+  domain result; and
+- entry callbacks issue adapter commands only after the selected transition
+  commits.
+
+`TelemetryPolicy` only retains measured facts, including heartbeat age. It
+does not choose states or events. The source below is displayed with
+`literalinclude`; its independent execution proof is
+`tests/test_drone_failsafes_example.py` and the runnable script:
+
+```bash
+uv run python examples/drone_failsafes.py
+```
 
 This example is educational software. It neither controls hardware nor
-provides certified or real-time flight-control guidance.
+provides certified, real-time, or flight-control guidance.
 
 ## Tier 3 — Compose larger systems
 
@@ -106,6 +129,9 @@ own example.
 | Reusable, composed, and custom conditions | `condition_toolkit.py` | `custom_conditions.py` |
 | Entry-relative transition timing | `condition_toolkit.py` | `workflow_persistence.py` |
 | Ordered priority candidates | `drone_failsafes.py` | `async_sensor_example.py` |
+| Final states and termination | `drone_failsafes.py` | `workflow_persistence.py` |
+| Internal versus external self transitions | `drone_failsafes.py` | `async_service_controller.py` |
+| Expected rejection versus guard ineligibility | `drone_failsafes.py` | `condition_toolkit.py` |
 | Declarative handlers | `declarative_state_example.py` | — |
 | Async guards and dispatch | `async_sensor_example.py` | `enhanced_builder_example.py` |
 | Cross-FSM composition | `cross_fsm_demo.py` | — |
@@ -118,5 +144,5 @@ own example.
 
 ```{literalinclude} ../../examples/drone_failsafes.py
 :language: python
-:caption: Controller-owned, single-event telemetry routing simulation
+:caption: Controller-owned, single-event deterministic telemetry training simulation
 ```
