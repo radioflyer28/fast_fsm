@@ -5,10 +5,10 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 30
 current_phase_name: Builder-First Construction & Persistence Parity
 status: verifying
-stopped_at: Completed 30-06-PLAN.md
-last_updated: "2026-09-17T21:06:49.921Z"
-last_activity: 2026-09-17
-last_activity_desc: Phase 30 execution started
+stopped_at: Phase 30 review clean; full offline artifact gate pending cache availability
+last_updated: "2026-09-19T16:35:20Z"
+last_activity: 2026-09-19
+last_activity_desc: Phase 30 review fixes passed pure/native oracle and broad suite
 state_head: 11b5774867197a678e67045ed0eab9ea3b3763bb
 progress:
   total_phases: 7
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-09-15)
 
 ## Current Position
 
-Phase: 30 (Builder-First Construction & Persistence Parity) — EXECUTING
+Phase: 30 (Builder-First Construction & Persistence Parity) — VERIFYING
 Plan: 6 of 6
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 30 execution started
+Status: Review clean; isolated offline artifact tests pending host cache availability
+Last activity: 2026-09-19 — Phase 30 pure/native review fixes verified
 
 Progress: [██████░░░░] 57%
 
@@ -143,6 +143,12 @@ None yet.
 
 ### Blockers/Concerns
 
+- Phase 30 full-suite artifact checks invoke `uv build --offline` with pinned
+  `setuptools==80.9.0`, `wheel==0.45.1`, and `mypy[mypyc]==1.17.1`. The host's
+  uv cache lacks those build packages; standard locked sync did not populate
+  them, and an isolated fetch retried without network success. The broad
+  sequential suite excluding only artifact modules passed. Do not mark Phase
+  30 complete until the exact full suite and verifier gates pass.
 - v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
 - Exact feature-local performance remains unmeasured until Phase 32; only the installed compiled singleton floor is durable policy.
 
@@ -157,10 +163,11 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-17T21:51:39.386Z
-Stopped at: Phase 30 code-review fixer interrupted with four uncommitted intended files
-Resume file: .planning/phases/30-builder-first-construction-persistence-parity/.continue-here.md
+Last session: 2026-09-19T16:35:20Z
+Stopped at: Phase 30 review clean; full offline artifact gate pending cache availability
+Resume file: None (previous one-shot handoff consumed)
 
-None
-
-- Resume CR-01/WR-01 from the existing four-file uncommitted diff; verify, commit atomically, re-review, then run regression and goal verification.
+- Obtain/cache the three exact pinned build dependencies in the normal uv
+  cache, then rerun `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q`.
+- If the full suite passes, run final Phase 30 verifier/phase-complete gates,
+  then proceed to Phase 31 discussion, planning, and execution.

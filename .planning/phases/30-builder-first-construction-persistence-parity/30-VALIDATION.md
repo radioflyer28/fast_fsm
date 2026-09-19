@@ -149,3 +149,16 @@ tests, throughput, source restoration, and the full sequential suite are green.
 - [x] `nyquist_compliant: true` is set after the post-execution gap audit succeeds.
 
 **Approval:** validated; all Phase 30 requirements have automated green evidence.
+
+## Post-Review Revalidation (2026-09-19)
+
+CR-01 and WR-01 fixes passed the same focused oracle in pure and freshly
+compiled modes, the compiled singleton throughput test, Ruff, mypy,
+runtime auditability/slots policy, strict Sphinx, and doctests. Generated native
+shadows were recoverably relocated and exact pure-source origin was reasserted.
+The broad sequential suite excluding `test_build_modes.py` and
+`test_installed_artifacts.py` passed. The exact full suite is not yet green:
+its isolated `uv build --offline` checks cannot resolve pinned build tools
+absent from this host's uv cache, and a normal-cache fetch retried without
+network success. This is a Phase 30 completion blocker, not a semantic-oracle
+failure; rerun the exact full suite when those packages are available.

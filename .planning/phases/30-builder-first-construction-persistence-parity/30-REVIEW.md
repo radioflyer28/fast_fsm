@@ -1,6 +1,6 @@
 ---
 phase: 30-builder-first-construction-persistence-parity
-reviewed: 2026-09-17T21:41:01Z
+reviewed: 2026-09-19T16:34:35Z
 depth: deep
 files_reviewed: 21
 files_reviewed_list:
@@ -26,30 +26,29 @@ files_reviewed_list:
   - tests/test_readme_examples.py
   - tests/test_transition_modes.py
 findings:
-  critical: 1
-  warning: 1
+  critical: 0
+  warning: 0
   info: 0
-  total: 2
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 30: Code Review Report
 
-**Reviewed:** 2026-09-17T21:41:01Z
+**Reviewed:** 2026-09-19T16:34:35Z
 **Depth:** deep
 **Files Reviewed:** 21
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-The Phase 30 implementation needs fixes before it ships. The canonical
-construction and persistence paths pass the committed focused suite, but an
-uncovered legacy builder shape now creates an additional declarative candidate
-and silently changes priority/mode selection. The interpreted compatibility
-wrappers also no longer behave like top-level public functions for runtime
-introspection and pickling.
+Both original findings are resolved. A legacy explicit row now owns its
+matching state-owned declaration instead of gaining a second candidate, and
+interpreted compatibility wrappers retain public metadata in pure and freshly
+compiled imports. The review is clean; the separate phase verification gate
+still has an environment-limited offline artifact test (noted in STATE.md).
 
-Verification performed:
+Original review evidence, before the fixes:
 
 - The 193-test focused Phase 30 selection passed.
 - A direct regression probe produced two candidates, `(priority=0,
@@ -66,7 +65,7 @@ Verification performed:
 
 ### CR-01: Declarative auto-import duplicates legacy explicit builder topology
 
-**Classification:** BLOCKER
+**Classification:** RESOLVED
 
 **File:** `src/fast_fsm/core.py:6780-6801`
 
@@ -101,7 +100,7 @@ guard assertion proving one evaluation per trigger attempt.
 
 ### WR-01: Interpreted warning wrappers lose public-function provenance
 
-**Classification:** WARNING
+**Classification:** RESOLVED
 
 **File:** `src/fast_fsm/_construction_compat.py:47-107`
 
@@ -126,8 +125,29 @@ resolve at runtime. Add pure/native assertions for `typing.get_type_hints()`,
 public module/qualified names, docstrings/signatures, and pickle round trips of
 `simple_fsm` and `quick_fsm`.
 
+## Resolution Evidence
+
+- CR-01: `5ff4083` suppresses only the derived handler matching an explicitly
+  owned source/trigger/target request; `68a5564` keeps the regression fixture
+  within the builder's name-based public API. The test proves one candidate,
+  exact nondefault priority/timing/internal scalars, one guard evaluation per
+  trigger, and preservation of a genuinely distinct candidate.
+- WR-01: `d85c9c3` and `a11efc9` preserve public wrapper identity, signatures,
+  resolvable annotations, docstrings, and module-function pickle round trips.
+  Native builtins are not advertised as inspectable `__wrapped__` targets; the
+  interpreted wrapper remains the public signature authority.
+- The same Phase 30 focused oracle passed from asserted pure source and a fresh
+  mypyc extension. The compiled singleton throughput gate passed. Verified
+  extension shadows were moved to a recoverable temporary backup, and exact
+  `src/fast_fsm/core.py` origin was reasserted.
+- Ruff, mypy, runtime auditability/slots, strict Sphinx, doctests, and the
+  broad sequential non-artifact suite passed. Advisory `ty` still reports the
+  documented relative-import diagnostics. The separate full-suite artifact
+  gate remains blocked because pinned offline build dependencies are missing
+  from this host's uv cache and network fetch retries failed.
+
 ---
 
-_Reviewed: 2026-09-17T21:41:01Z_
-_Reviewer: the agent (gsd-code-reviewer)_
+_Re-reviewed: 2026-09-19T16:34:35Z_
+_Reviewer: Codex inline follow-up_
 _Depth: deep_
