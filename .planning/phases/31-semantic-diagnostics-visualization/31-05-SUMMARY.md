@@ -14,13 +14,13 @@ affects: [phase-32]
 actuals:
   tokens: 17000
   tasks: 2
-  commits: 3
+  commits: 4
 tech-stack:
   added: []
   patterns: [assert one semantic graph across surfaces, skip disabled TRACE projection at the caller]
 key-files:
   created: []
-  modified: [tests/test_mypyc_guard.py, tests/test_final_states.py, tests/test_transition_modes.py, tests/test_expected_rejection.py, tests/test_logging_config.py, src/fast_fsm/core.py]
+  modified: [tests/test_mypyc_guard.py, tests/test_final_states.py, tests/test_transition_modes.py, tests/test_expected_rejection.py, tests/test_logging_config.py, src/fast_fsm/core.py, src/fast_fsm/core.pyi]
 key-decisions:
   - "Both trigger entry points check TRACE enablement before preparing semantic trace arguments; the trace helper still guards itself."
   - "The installed compiled throughput floor remains unchanged; the disabled-path optimization repaired the full-suite failure."
@@ -81,6 +81,7 @@ status: complete
 - `c28d51f` — cross-surface structural and runtime tests.
 - `4646136` — use actual typed machine/result values in the native TRACE early-return test.
 - `764d29a` — skip TRACE projection at sync/async callers when disabled.
+- `b3536fd` — close review findings for failed external-self TRACE mode and throwing finality getters.
 
 ## Verification
 
@@ -90,6 +91,7 @@ status: complete
 - Pure and fresh native focused suites (`test_diagnostic_contracts`, `test_validation`, `test_visualization`, `test_output_safety`, `test_logging_config`, `test_mypyc_guard`, `test_final_states`, `test_transition_modes`, `test_expected_rejection`) — passed; pure mode had six expected native-only skips.
 - The first two full-suite attempts failed at the installed compiled throughput floor; the exact compiled installed-artifact test passed in isolation. After the caller-side disabled-TRACE optimization, `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q --disable-warnings` passed in full, including the installed-wheel gate.
 - Exact pure origin and `task pure-source-check` passed after native shadow relocation. No release evidence baseline was written.
+- Post-review, the same nine-module focused matrix passed under a freshly built native core and the full sequential pure-mode suite passed again, including the installed compiled throughput floor. Both `core` and `core__mypyc` native shadows were recoverably relocated to `/tmp/fast-fsm-phase31-review-native.AwalIG`, and pure source origin was reasserted.
 
 ## Deviations from Plan
 
@@ -98,6 +100,8 @@ The full regression gate found a load-sensitive installed-wheel performance regr
 ## Issues Encountered
 
 The installed performance error reports only that the median is below the floor, not the measured value, so this run proves gate pass after the optimization but does not quantify the margin. The existing advisory ty import-resolution issue remains visible.
+
+The Phase 31 standard code review found two TRACE correctness gaps. Both were fixed in `b3536fd`; an independent re-review recorded zero open findings in `31-REVIEW.md`.
 
 ## User Setup Required
 
