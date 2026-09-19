@@ -88,6 +88,7 @@ class _DiagnosticEdge:
     priority: int
     has_guard: bool
     statically_unconditional: bool
+    internal: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +96,7 @@ class _DiagnosticGraph:
     """Tuple-backed scalar graph projection for interpreted diagnostics."""
 
     state_names: tuple[str, ...]
+    state_finals: tuple[bool, ...]
     edges: tuple[_DiagnosticEdge, ...]
     forward: tuple[tuple[int, ...], ...]
     reverse: tuple[tuple[int, ...], ...]
@@ -207,6 +209,7 @@ def _graph_from_snapshot(snapshot: _GraphSnapshot) -> _DiagnosticGraph:
             transition.priority,
             transition.condition is not None,
             transition.statically_unconditional,
+            transition.internal,
         )
         for transition in snapshot.transitions
     )
@@ -217,6 +220,7 @@ def _graph_from_snapshot(snapshot: _GraphSnapshot) -> _DiagnosticGraph:
         reverse_lists[edge.to_index].append(edge_index)
     return _DiagnosticGraph(
         state_names=state_names,
+        state_finals=snapshot.state_finals,
         edges=edges,
         forward=tuple(tuple(indices) for indices in forward_lists),
         reverse=tuple(tuple(indices) for indices in reverse_lists),

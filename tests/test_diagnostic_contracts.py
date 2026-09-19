@@ -214,6 +214,8 @@ def test_snapshot_captures_immutable_scalar_labels() -> None:
     assert snapshot.transitions[0].from_state_name == "initial"
     assert snapshot.transitions[0].to_state_name == "middle"
     assert snapshot.transitions[0].condition_name == "condition-label"
+    assert snapshot.state_finals == (False, False, False)
+    assert snapshot.transitions[0].internal is False
 
 
 def test_validator_captures_once_and_reachability_uses_only_the_snapshot(
@@ -827,6 +829,120 @@ def test_json_captures_one_snapshot_and_never_rereads_live_topology(
     payload = to_json(machine)
     assert calls == 1
     assert payload["analysis"]["diagnostic_status"]["complete"] is True
+
+
+def test_json_distinguishes_explicit_final_sink_and_transition_modes() -> None:
+    machine = StateMachine(State("start"), name="semantic-json")
+    machine.add_state(State("done", final=True))
+    machine.add_state(State("sink"))
+    machine.add_state(State("unreachable"))
+    machine.add_transition("internal", "start", "start", internal=True)
+    machine.add_transition("external-self", "start", "start")
+    machine.add_transition("finish", "start", "done")
+    machine.add_transition("stray", "start", "sink")
+
+    payload = to_json(machine)
+    topology = payload["topology"]
+    reachability = payload["analysis"]["reachability"]
+
+    assert topology["states"] == ["done", "sink", "start", "unreachable"]
+    assert topology["final_states"] == ["done"]
+    assert reachability["terminal"] == ["done", "sink", "unreachable"]
+    assert reachability["non_final_sinks"] == ["sink", "unreachable"]
+    assert {row["trigger"]: row["mode"] for row in topology["transitions"]} == {
+        "internal": "internal",
+        "external-self": "external_self",
+        "finish": "external",
+        "stray": "external",
+    }
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_json_semantics_use_one_capture_after_live_graph_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = State("start")
+    done = State("done", final=True)
+    machine = StateMachine(start)
+    machine.add_state(done)
+    machine.add_transition("stay", start, start, internal=True)
+    machine.add_transition("finish", start, done)
+    original_snapshot = StateMachine._graph_snapshot
+    calls = 0
+
+    def capture_then_mutate(self: StateMachine):
+        nonlocal calls
+        calls += 1
+        captured = original_snapshot(self)
+        start.name = "changed-start"
+        done.name = "changed-done"
+        self.add_state(State("late-state"))
+        return captured
+
+    monkeypatch.setattr(StateMachine, "_graph_snapshot", capture_then_mutate)
+    payload = to_json(machine)
+    assert calls == 1
+    assert payload["topology"]["states"] == ["done", "start"]
+    assert payload["topology"]["final_states"] == ["done"]
+    assert payload["analysis"]["reachability"]["non_final_sinks"] == []
+    assert [row["mode"] for row in payload["topology"]["transitions"]] == [
+        "external",
+        "internal",
+    ]
+
+
+def test_json_initial_only_final_has_no_invented_edge() -> None:
+    machine = StateMachine(State("only", final=True))
+    payload = to_json(machine)
+    assert payload["topology"]["final_states"] == ["only"]
+    assert payload["topology"]["transitions"] == []
+    assert payload["analysis"]["reachability"] == {
+        "reachable": ["only"],
+        "unreachable": [],
+        "terminal": ["only"],
+        "non_final_sinks": [],
+    }
+
+
+def test_json_semantics_have_stable_order_and_exact_budget_boundaries() -> None:
+    def make_machine() -> StateMachine:
+        machine = StateMachine(State("start"))
+        machine.add_state(State("done", final=True))
+        machine.add_state(State("sink"))
+        machine.add_transition("self", "start", "start", internal=True)
+        machine.add_transition("finish", "start", "done")
+        return machine
+
+    baseline = to_json(make_machine(), include_adjacency=True)
+    assert json.dumps(to_json(make_machine(), include_adjacency=True)) == json.dumps(
+        baseline
+    )
+    assert baseline["topology"]["states"] == ["done", "sink", "start"]
+    assert baseline["topology"]["final_states"] == ["done"]
+    assert baseline["analysis"]["reachability"]["non_final_sinks"] == ["sink"]
+    status = baseline["analysis"]["diagnostic_status"]
+
+    for dimension, limit_name in (
+        ("work_count", "max_work"),
+        ("result_count", "max_results"),
+    ):
+        needed = status[dimension]
+        assert needed > 0
+        exact = to_json(
+            make_machine(),
+            include_adjacency=True,
+            limits=DiagnosticLimits(**{limit_name: needed}),
+        )
+        assert exact["analysis"]["diagnostic_status"][dimension] == needed
+        with pytest.raises(DiagnosticBudgetExceeded) as raised:
+            to_json(
+                make_machine(),
+                include_adjacency=True,
+                limits=DiagnosticLimits(**{limit_name: needed - 1}),
+            )
+        assert raised.value.status.complete is False
+        assert raised.value.status.exhausted_dimension == limit_name
+        assert getattr(raised.value.status, dimension) == needed - 1
 
 
 def test_candidate_adapters_preserve_same_target_priority_and_path_identity() -> None:

@@ -99,6 +99,7 @@ class _GraphSnapshot:
     initial_state_name: str
     current_state_name: str
     state_names: tuple[str, ...]
+    state_finals: tuple[bool, ...]
 
 @dataclass(frozen=True, slots=True)
 class FSMTraceEvent:

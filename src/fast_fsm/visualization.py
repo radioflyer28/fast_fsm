@@ -409,14 +409,24 @@ def _to_json_from_snapshot(
     reachable_set = set(reachable_indices)
     unreachable: list[str] = []
     terminal: list[str] = []
+    final_states: list[str] = []
+    non_final_sinks: list[str] = []
     for state_index, state_name in enumerate(graph.state_names):
         budget.reserve_work(stage="json.state")
+        budget.reserve_work(stage="json.final_state")
+        if graph.state_finals[state_index]:
+            budget.reserve_result(stage="json.final_state")
+            final_states.append(state_name)
         if state_index not in reachable_set:
             budget.reserve_result(stage="json.unreachable")
             unreachable.append(state_name)
         if not graph.forward[state_index]:
             budget.reserve_result(stage="json.terminal")
             terminal.append(state_name)
+            if not graph.state_finals[state_index]:
+                budget.reserve_work(stage="json.non_final_sink")
+                budget.reserve_result(stage="json.non_final_sink")
+                non_final_sinks.append(state_name)
 
     components = _strongly_connected_components(graph, budget)
     depth = _structural_depth(graph, budget)
@@ -440,11 +450,19 @@ def _to_json_from_snapshot(
                 "to": graph.state_names[edge.to_index],
                 "has_guard": edge.has_guard,
                 "priority": edge.priority,
+                "mode": (
+                    "internal"
+                    if edge.internal
+                    else "external_self"
+                    if edge.from_index == edge.to_index
+                    else "external"
+                ),
             }
         )
 
     topology: dict[str, object] = {
         "states": list(graph.state_names),
+        "final_states": final_states,
         "initial": graph.initial_state_name,
         "current": graph.current_state_name,
         "transitions": transitions,
@@ -465,6 +483,7 @@ def _to_json_from_snapshot(
                 "reachable": [graph.state_names[index] for index in reachable_indices],
                 "unreachable": unreachable,
                 "terminal": terminal,
+                "non_final_sinks": non_final_sinks,
             },
             "cycles": {
                 "has_cycles": bool(components),

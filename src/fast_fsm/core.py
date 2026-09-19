@@ -854,6 +854,7 @@ class _GraphSnapshot:
     initial_state_name: str
     current_state_name: str
     state_names: Tuple[str, ...]
+    state_finals: Tuple[bool, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1922,6 +1923,7 @@ class StateMachine:
         """Capture canonical topology while a caller holds the read boundary."""
         states = tuple(state for _, state in sorted(self._states.items()))
         state_names = tuple(state.name for state in states)
+        state_finals = tuple(state.final for state in states)
         transitions: List[_GraphTransition] = []
         for from_name, entries in sorted(self._transitions.items()):
             source_state = self._states[from_name]
@@ -1955,6 +1957,7 @@ class StateMachine:
             self._initial_state.name,
             self._current_state.name,
             state_names,
+            state_finals,
         )
 
     def _resolve_canonical_state(self, state: Any, *, role: str) -> State:
