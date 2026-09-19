@@ -531,6 +531,7 @@ def test_private_graph_records_are_frozen_slot_dataclasses() -> None:
             "initial_state_name",
             "current_state_name",
             "state_names",
+            "state_finals",
         },
         "_PreparedTransition": {
             "trigger",
@@ -683,6 +684,7 @@ def test_phase24_diagnostic_projection_stays_scalar_and_cold() -> None:
         "priority",
         "has_guard",
         "statically_unconditional",
+        "internal",
     }
     diagnostic_decorator = next(
         node
@@ -719,6 +721,8 @@ def test_phase24_diagnostic_projection_stays_scalar_and_cold() -> None:
     assert "transition.priority" in projection_source
     assert "transition.condition is not None" in projection_source
     assert "transition.statically_unconditional" in projection_source
+    assert "transition.internal" in projection_source
+    assert "snapshot.state_finals" in projection_source
 
     validation_path = repository_root / "src" / "fast_fsm" / "validation.py"
     validation_tree = ast.parse(
@@ -1069,6 +1073,69 @@ def test_phase19_trace_event_and_disabled_guard_stay_structural() -> None:
         and node.func.id == "FSMTraceEvent"
     )
     assert event_call.lineno > guard.lineno
+
+
+def test_phase31_snapshot_and_trace_projection_remain_cold_and_stub_aligned() -> None:
+    """Semantic diagnostics cannot become singleton dispatch work or stale data."""
+    runtime_tree = ast.parse(CORE_PY.read_text(encoding="utf-8"))
+    stub_tree = ast.parse(CORE_PYI.read_text(encoding="utf-8"))
+    for tree in (runtime_tree, stub_tree):
+        snapshot = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "_GraphSnapshot"
+        )
+        fields = [
+            node.target.id
+            for node in snapshot.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        ]
+        assert fields[-2:] == ["state_names", "state_finals"]
+
+    machine = next(
+        node
+        for node in runtime_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "StateMachine"
+    )
+    async_machine = next(
+        node
+        for node in runtime_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AsyncStateMachine"
+    )
+    capture = next(
+        node
+        for node in machine.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_graph_snapshot_owned"
+    )
+    capture_source = ast.unparse(capture)
+    assert "state_finals = tuple" in capture_source
+    assert "state.final for state in states" in capture_source
+    for owner, trigger_name in ((machine, "trigger"), (async_machine, "trigger_async")):
+        trigger = next(
+            node
+            for node in owner.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == trigger_name
+        )
+        source = ast.unparse(trigger)
+        assert "machine=self" in source
+        assert "transition_result=trace_result" in source
+        assert "_graph_snapshot" not in source
+        assert "_diagnostics" not in source
+
+    emit = next(
+        node
+        for node in runtime_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_emit_fsm_trace"
+    )
+    guard = next(node for node in emit.body if isinstance(node, ast.If))
+    projection = ast.unparse(emit)
+    assert projection.index("if not logger.isEnabledFor") < projection.index(
+        "machine._current_state.final"
+    )
+    assert "trace_rejection_code" in projection
+    assert "trace_mode" in projection
+    assert any(isinstance(node, ast.Return) for node in guard.body)
 
 
 def test_phase19_logging_marker_and_handle_stay_slotted_and_owned() -> None:

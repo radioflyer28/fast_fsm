@@ -1,6 +1,10 @@
 """Behavioral contract for explicit final-state semantics."""
 
+from dataclasses import fields
+
 import pytest
+
+from fast_fsm import FSMValidator, to_json, to_mermaid, to_plantuml
 
 from fast_fsm.core import (
     AsyncDeclarativeState,
@@ -54,6 +58,10 @@ class TestTerminationQuery:
 
         assert machine.current_state is done
         assert machine.is_terminated is True
+        assert FSMValidator(machine).validate_completeness()["final_states"] == ["done"]
+        assert to_json(machine)["analysis"]["reachability"]["non_final_sinks"] == []
+        assert "s0 --> [*]" in to_mermaid(machine)
+        assert "s0 --> [*]" in to_plantuml(machine)
 
     def test_async_machine_inherits_the_same_termination_query(self) -> None:
         machine = AsyncStateMachine(State("done", final=True))
@@ -72,6 +80,62 @@ class TestTerminationQuery:
 
         assert result.success is True
         assert machine.current_state is done
+        assert machine.is_terminated is True
+
+    def test_final_sink_mode_and_history_agree_across_public_diagnostics(self) -> None:
+        source = State("start")
+        machine = StateMachine(source)
+        machine.add_state(State("done", final=True))
+        machine.add_state(State("sink"))
+        machine.add_state(State("unreachable"))
+        machine.enable_history()
+        machine.add_transition("internal", source, source, internal=True)
+        machine.add_transition("external-self", source, source)
+        machine.add_transition("finish", source, "done")
+        machine.add_transition("stray", source, "sink")
+
+        internal = machine.trigger("internal")
+        external_self = machine.trigger("external-self")
+        finished = machine.trigger("finish")
+        assert [result.internal for result in (internal, external_self, finished)] == [
+            True,
+            False,
+            False,
+        ]
+        assert [record.internal for record in machine.history] == [True, False, False]
+        assert machine.is_terminated is True
+        assert finished.committed is True
+        assert all("final" not in field.name for field in fields(finished))
+        assert machine.snapshot() == {"state": "done", "version": 1}
+
+        report = FSMValidator(machine).validate_completeness()
+        payload = to_json(machine)
+        assert report["final_states"] == payload["topology"]["final_states"] == ["done"]
+        assert (
+            report["non_final_sinks"]
+            == payload["analysis"]["reachability"]["non_final_sinks"]
+            == ["sink", "unreachable"]
+        )
+        assert report["dead_states"] == {"done", "sink", "unreachable"}
+        assert {
+            row["trigger"]: row["mode"] for row in payload["topology"]["transitions"]
+        } == {
+            "internal": "internal",
+            "external-self": "external_self",
+            "finish": "external",
+            "stray": "external",
+        }
+        for diagram in (to_mermaid(machine), to_plantuml(machine)):
+            assert diagram.count("s0 --> [*]") == 1
+            assert "s1 --> [*]" not in diagram
+            assert "s3 --> [*]" not in diagram
+            assert "[internal] [priority 0]" in diagram
+            assert "[external self] [priority 0]" in diagram
+
+        final_snapshot = machine.snapshot()
+        machine.force_state("sink")
+        assert machine.is_terminated is False
+        machine.restore(final_snapshot)
         assert machine.is_terminated is True
 
 

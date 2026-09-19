@@ -17,6 +17,8 @@ from fast_fsm import (
     TransitionRejected,
     TransitionResult,
     transition,
+    FSMValidator,
+    to_json,
 )
 
 
@@ -128,6 +130,43 @@ def test_reject_03_transition_guard_converts_signal_to_terminal_result() -> None
     assert result.priority == -5
     assert result.internal is False
     assert machine.current_state is source
+
+
+def test_selected_rejection_keeps_final_destination_out_of_runtime_state() -> None:
+    source = State("armed")
+    machine = StateMachine(source)
+    machine.add_state(State("done", final=True))
+    machine.enable_history()
+
+    def reject() -> bool:
+        raise TransitionRejected("battery.low")
+
+    def unexpected() -> bool:
+        raise RuntimeError("sensitive failure")
+
+    machine.add_transition("reject", source, "done", reject, priority=-3)
+    machine.add_transition("false", source, "done", lambda: False, priority=2)
+    machine.add_transition("unexpected", source, "done", unexpected, priority=4)
+
+    rejected = machine.trigger("reject")
+    false_guard = machine.trigger("false")
+    failed = machine.trigger("unexpected")
+    assert rejected.rejection_code == "battery.low"
+    assert rejected.priority == -3
+    assert rejected.to_state is None
+    assert rejected.committed is False
+    assert false_guard.rejection_code is None
+    assert failed.rejection_code is None
+    assert failed.cause is not None
+    assert machine.is_terminated is False
+    assert machine.history == []
+
+    report = FSMValidator(machine).validate_completeness()
+    payload = to_json(machine)
+    assert report["final_states"] == payload["topology"]["final_states"] == ["done"]
+    assert payload["topology"]["current"] == "armed"
+    assert payload["analysis"]["reachability"]["non_final_sinks"] == []
+    assert {row["mode"] for row in payload["topology"]["transitions"]} == {"external"}
 
 
 def test_reject_02_corrupt_signal_stays_an_unexpected_guard_failure() -> None:

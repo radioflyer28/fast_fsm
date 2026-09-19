@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from fast_fsm import to_json, to_mermaid, to_plantuml
 from fast_fsm.conditions import AsyncCondition, FuncCondition
 from fast_fsm.core import (
     AsyncDeclarativeState,
@@ -215,6 +216,39 @@ def test_batch_internal_row_commits_with_the_same_mode_and_history_truth() -> No
     assert result.priority == -2
     assert result.internal is True
     assert machine.history[-1].internal is True
+
+
+def test_selected_self_modes_match_json_and_both_diagrams() -> None:
+    state = State("hover")
+    machine = StateMachine(state)
+    machine.enable_history()
+    machine.add_transition(
+        "telemetry",
+        state,
+        state,
+        FuncCondition(lambda: True, name="healthy"),
+        priority=-2,
+        internal=True,
+    )
+    machine.add_transition("reenter", state, state, priority=4)
+
+    internal = machine.trigger("telemetry")
+    external = machine.trigger("reenter")
+    assert (internal.priority, internal.internal) == (-2, True)
+    assert (external.priority, external.internal) == (4, False)
+    assert [(row.priority, row.internal) for row in machine.history] == [
+        (-2, True),
+        (4, False),
+    ]
+    assert machine.is_terminated is False
+    assert {
+        row["trigger"]: row["mode"]
+        for row in to_json(machine)["topology"]["transitions"]
+    } == {"telemetry": "internal", "reenter": "external_self"}
+    for diagram in (to_mermaid(machine), to_plantuml(machine)):
+        assert "telemetry [healthy] [internal] [priority -2]" in diagram
+        assert "reenter [external self] [priority 4]" in diagram
+        assert "s0 --> [*]" not in diagram
 
 
 def test_internal_transition_retains_only_transition_surfaces_in_exact_order() -> None:
