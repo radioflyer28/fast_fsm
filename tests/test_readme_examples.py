@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from fast_fsm.core import StateMachine, State, TransitionError
+from fast_fsm.core import FSMBuilder, StateMachine, State, TransitionError
 from fast_fsm.conditions import Condition, FuncCondition
 
 
@@ -22,6 +22,29 @@ def _active_python_regions(path: Path) -> str:
     if path.suffix == ".py":
         return source
     return "\n".join(_PYTHON_FENCE.findall(source))
+
+
+_GUIDE_PATHS = (
+    pytest.param(PROJECT_ROOT / "README.md", id="readme"),
+    pytest.param(PROJECT_ROOT / "docs" / "QUICK_START.md", id="quick_start"),
+)
+
+
+def _first_python_region(path: Path) -> str:
+    """Return the first runnable Python fence from a public entry guide."""
+    regions = _PYTHON_FENCE.findall(path.read_text(encoding="utf-8"))
+    assert regions, f"{path} has no runnable Python fence"
+    return regions[0]
+
+
+def _marked_python_region(path: Path, marker: str) -> str:
+    """Extract one deliberately self-contained documentation regression block."""
+    source = path.read_text(encoding="utf-8")
+    marker_index = source.index(f"<!-- docs-exec:{marker} -->")
+    fence_start = source.index("```python\n", marker_index)
+    content_start = fence_start + len("```python\n")
+    fence_end = source.index("```", content_start)
+    return source[content_start:fence_end]
 
 
 @pytest.mark.parametrize(
@@ -49,6 +72,82 @@ def test_active_construction_guidance_uses_builder(path: Path) -> None:
 
     assert "FSMBuilder" in regions
     assert _DEPRECATED_CONSTRUCTION.search(regions) is None
+
+
+@pytest.mark.parametrize("path", _GUIDE_PATHS)
+def test_public_entry_guides_start_with_a_small_builder_recipe(path: Path) -> None:
+    """The first construction a new reader can run stays on the primary path."""
+    first_recipe = _first_python_region(path)
+
+    assert "FSMBuilder(" in first_recipe
+    assert "StateMachine(" not in first_recipe
+    assert "from_dict(" not in first_recipe
+
+
+def test_readme_establishes_builder_before_advanced_construction() -> None:
+    """README density grows from the builder path into advanced interfaces."""
+    source = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert source.index("## Start with the builder") < source.index(
+        "## Choose the construction path"
+    )
+    assert source.index("### Primary: fluent builder") < source.index(
+        "### Advanced: direct machine control"
+    )
+    assert source.index("### Advanced: direct machine control") < source.index(
+        "### Topology serialization"
+    )
+
+
+def test_quick_start_establishes_builder_before_construction_roles() -> None:
+    """Quick Start keeps the short builder path ahead of denser alternatives."""
+    source = (PROJECT_ROOT / "docs" / "QUICK_START.md").read_text(encoding="utf-8")
+
+    assert source.index("## 🎯 Your First FSM") < source.index("## Construction roles")
+    assert source.index("## Construction roles") < source.index(
+        "## 🔄 Common Patterns"
+    )
+
+
+@pytest.mark.parametrize("path", _GUIDE_PATHS)
+@pytest.mark.parametrize(
+    ("legacy_name", "builder_replacement"),
+    (
+        ("`simple_fsm`", "`FSMBuilder(State(\"idle\"))` plus `.add_state(...)`"),
+        (
+            "`quick_fsm`",
+            "`FSMBuilder(State(\"idle\"))` plus one `.add_transition(...)` per row",
+        ),
+        (
+            "`StateMachine.quick_build`",
+            "`FSMBuilder(initial_state)` plus `.add_state(...)` and `.add_transition(...)`",
+        ),
+        (
+            "`StateMachine.from_states`",
+            "`FSMBuilder(State(\"idle\"))` plus `.add_state(...)`",
+        ),
+    ),
+)
+def test_compatibility_migration_maps_each_warned_helper_to_builder(
+    path: Path, legacy_name: str, builder_replacement: str
+) -> None:
+    """Every warned convenience helper has a literal replacement path."""
+    source = path.read_text(encoding="utf-8")
+
+    assert legacy_name in source
+    assert builder_replacement in source
+    assert "one `DeprecationWarning` per public call" in source
+    assert "through v0.5.x" in source
+    assert "no earlier than v0.6.0" in source
+
+
+@pytest.mark.parametrize("path", _GUIDE_PATHS)
+def test_documented_builder_migration_replacements_execute(path: Path) -> None:
+    """The exact builder-side migration block in each guide remains runnable."""
+    source = _marked_python_region(path, "builder-migrations")
+
+    assert _DEPRECATED_CONSTRUCTION.search(source) is None
+    exec(compile(source, str(path), "exec"), {"__name__": "__docs_example__"})
 
 
 class TestReadmeExamples:
