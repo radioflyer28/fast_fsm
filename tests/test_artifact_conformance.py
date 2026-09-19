@@ -53,6 +53,99 @@ def test_phase32_final_rehashed_required_value_mutation_fails_closed() -> None:
         artifact_conformance.validate_conformance(payload)
 
 
+def test_phase32_mode_and_rejection_rows_are_exact_and_payload_safe() -> None:
+    """Self lifecycle and terminal rejection remain fixed portable facts."""
+    records = {
+        record["id"]: record
+        for record in artifact_conformance.collect_conformance()["scenarios"]
+    }
+
+    assert records["mode.internal-self"] == {
+        "id": "mode.internal-self",
+        "family": "transition-mode",
+        "success": True,
+        "committed": True,
+        "state": "hover",
+        "result_internal": True,
+        "history_internal": True,
+        "exit_count": 0,
+        "enter_count": 0,
+        "history_count": 1,
+        "redacted": True,
+    }
+    assert records["mode.external-self"] == {
+        "id": "mode.external-self",
+        "family": "transition-mode",
+        "success": True,
+        "committed": True,
+        "state": "hover",
+        "result_internal": False,
+        "history_internal": False,
+        "exit_count": 1,
+        "enter_count": 1,
+        "history_count": 1,
+        "redacted": True,
+    }
+    assert records["rejection.false-versus-terminal"] == {
+        "id": "rejection.false-versus-terminal",
+        "family": "expected-rejection-selection",
+        "success": False,
+        "committed": False,
+        "state": "source",
+        "stage": "guard",
+        "priority": 0,
+        "rejected": True,
+        "rejection_code": "battery.low",
+        "false_guard_calls": 1,
+        "rejection_guard_calls": 1,
+        "lower_guard_calls": 0,
+        "lower_command_calls": 0,
+        "history_count": 0,
+        "redacted": True,
+    }
+
+
+def test_phase32_each_semantic_required_value_rejects_rehashed_mutation() -> None:
+    """A recomputed digest cannot conceal any changed Phase 32 semantic fact."""
+    payload = artifact_conformance.collect_conformance()
+    definitions = {
+        definition["id"]: definition
+        for definition in artifact_conformance._SCENARIO_DEFINITIONS
+        if definition["id"]
+        in {
+            "final.explicit-versus-sink",
+            "mode.internal-self",
+            "mode.external-self",
+            "rejection.false-versus-terminal",
+        }
+    }
+    records = {record["id"]: record for record in payload["scenarios"]}
+
+    assert set(definitions) == {
+        "final.explicit-versus-sink",
+        "mode.internal-self",
+        "mode.external-self",
+        "rejection.false-versus-terminal",
+    }
+    for identifier, definition in definitions.items():
+        required_values = definition["required_values"]
+        assert set(required_values) == set(records[identifier]) - {"id", "family"}
+        for field, value in required_values.items():
+            mutated = copy.deepcopy(payload)
+            record = next(
+                item for item in mutated["scenarios"] if item["id"] == identifier
+            )
+            if isinstance(value, bool):
+                record[field] = not value
+            elif isinstance(value, int):
+                record[field] = value + 1
+            else:
+                record[field] = "wrong-value"
+            _rehash(mutated)
+            with pytest.raises(artifact_conformance.ConformanceError):
+                artifact_conformance.validate_conformance(mutated)
+
+
 REQUIRED_FAMILIES = {
     "graph-guard",
     "lifecycle-result-history",
@@ -63,6 +156,9 @@ REQUIRED_FAMILIES = {
     "diagnostic-budget",
     "output-containment",
     "logging-redaction",
+    "finality",
+    "transition-mode",
+    "expected-rejection-selection",
 }
 
 _PRIORITY_REQUIRED_VALUES = (
