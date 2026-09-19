@@ -6,7 +6,9 @@ All tests use real components — no mocking.
 """
 
 import inspect
+import pickle
 from pathlib import Path
+import typing
 
 import pytest
 
@@ -3188,3 +3190,37 @@ def test_deprecated_construction_public_surface_remains_typed_exported_and_subcl
     assert "def quick_build(" in stub
     assert "def simple_fsm(" in stub
     assert "def quick_fsm(" in stub
+
+
+def test_deprecated_construction_wrappers_keep_public_runtime_provenance() -> None:
+    """The interpreted warning boundaries remain ordinary public callables."""
+    import fast_fsm.core as core
+
+    boundaries = (
+        ("simple_fsm", core.simple_fsm, "simple_fsm"),
+        ("quick_fsm", core.quick_fsm, "quick_fsm"),
+        ("from_states", StateMachine.from_states, "StateMachine.from_states"),
+        ("quick_build", StateMachine.quick_build, "StateMachine.quick_build"),
+    )
+
+    for expected_name, boundary, expected_qualname in boundaries:
+        assert boundary.__module__ == "fast_fsm.core"
+        assert boundary.__name__ == expected_name
+        assert boundary.__qualname__ == expected_qualname
+        assert boundary.__doc__ == boundary.__wrapped__.__doc__
+        wrapped_signature = inspect.signature(boundary.__wrapped__)
+        if expected_name in {"from_states", "quick_build"}:
+            parameters = tuple(wrapped_signature.parameters.values())
+            if parameters and parameters[0].name == "cls":
+                wrapped_signature = wrapped_signature.replace(parameters=parameters[1:])
+        assert inspect.signature(boundary) == wrapped_signature
+        assert typing.get_type_hints(boundary)
+
+    assert pickle.loads(pickle.dumps(core.simple_fsm)) is core.simple_fsm
+    assert pickle.loads(pickle.dumps(core.quick_fsm)) is core.quick_fsm
+
+    class DerivedMachine(StateMachine):
+        pass
+
+    assert DerivedMachine.from_states("idle").__class__ is DerivedMachine
+    assert DerivedMachine.quick_build("idle", []).__class__ is DerivedMachine
