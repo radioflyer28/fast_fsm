@@ -40,6 +40,40 @@ def _fly_to_mission(example, controller):
     assert controller.current_state_name == "Mission"
 
 
+class _RecordingAircraft:
+    """Capture adapter effects and the committed state that caused each one."""
+
+    def __init__(self):
+        self.commands = []
+        self.states_when_commanded = []
+        self.state_provider = None
+
+    def _record(self, command):
+        self.commands.append(command)
+        self.states_when_commanded.append(self.state_provider())
+
+    def command_arm_motors(self):
+        self._record("command_arm_motors")
+
+    def command_takeoff(self):
+        self._record("command_takeoff")
+
+    def command_start_mission(self):
+        self._record("command_start_mission")
+
+    def command_return_to_home(self):
+        self._record("command_return_to_home")
+
+    def command_begin_landing(self):
+        self._record("command_begin_landing")
+
+    def command_emergency_land(self):
+        self._record("command_emergency_land")
+
+    def command_disarm_motors(self):
+        self._record("command_disarm_motors")
+
+
 def test_link_loss_guard_uses_the_policy_heartbeat_age():
     """A guard may use a temporal telemetry fact without selecting an event."""
     example = _load_example_module()
@@ -228,3 +262,105 @@ def test_link_loss_beats_low_battery_and_ineligible_tick_issues_no_command():
     assert not result.success
     assert controller.current_state_name == "ReturnHome"
     assert aircraft.commands == ["command_return_to_home"]
+
+
+def test_telemetry_tick_distinguishes_internal_and_external_mission_self_modes():
+    """One event makes the FSM own self-mode selection and its lifecycle effects."""
+    example = _load_example_module()
+    now = [0.0]
+    aircraft = _RecordingAircraft()
+    controller = example.DroneController(
+        aircraft,
+        example.TelemetryPolicy(clock=lambda: now[0]),
+        fsm_clock=lambda: now[0],
+    )
+    aircraft.state_provider = lambda: controller.current_state_name
+    _fly_to_mission(example, controller)
+    aircraft.commands.clear()
+    aircraft.states_when_commanded.clear()
+    mission_entered_at = controller._fsm._state_entered_at
+
+    now[0] = 5.0
+    internal = controller.update_from_telemetry(_ready_sample(example))
+
+    assert internal.success is True
+    assert internal.committed is True
+    assert internal.priority == 60
+    assert internal.internal is True
+    assert controller._fsm._state_entered_at == mission_entered_at
+    assert aircraft.commands == []
+    assert controller._fsm.history[-1].internal is True
+
+    now[0] = 12.0
+    external = controller.update_from_telemetry(
+        _ready_sample(example, reenter_mission=True)
+    )
+
+    assert external.success is True
+    assert external.committed is True
+    assert external.priority == 50
+    assert external.internal is False
+    assert controller._fsm._state_entered_at == 12.0
+    assert aircraft.commands == ["command_start_mission"]
+    assert aircraft.states_when_commanded == ["Mission"]
+    assert controller._fsm.history[-1].internal is False
+
+
+def test_normal_and_emergency_landings_are_final_and_require_new_controllers():
+    """Touchdown ends each flight without reopening a final state."""
+    example = _load_example_module()
+    normal_aircraft = _RecordingAircraft()
+    normal = example.DroneController(normal_aircraft)
+    normal_aircraft.state_provider = lambda: normal.current_state_name
+    _fly_to_mission(example, normal)
+    normal_aircraft.commands.clear()
+    normal_aircraft.states_when_commanded.clear()
+
+    assert (
+        normal.update_from_telemetry(_ready_sample(example, battery_pct=20)).priority
+        == 20
+    )
+    assert normal.update_from_telemetry(
+        _ready_sample(example, home_reached=True)
+    ).success
+    touchdown = normal.update_from_telemetry(_ready_sample(example, on_ground=True))
+
+    assert touchdown.success is True
+    assert normal.current_state_name == "Landed"
+    assert normal._fsm.is_terminated is True
+    assert normal_aircraft.commands[-1] == "command_disarm_motors"
+    assert normal_aircraft.states_when_commanded[-1] == "Landed"
+    commands_before_final_attempt = list(normal_aircraft.commands)
+    post_final = normal.perform_operator_action("prepare_next_flight")
+    assert post_final.success is False
+    assert normal.current_state_name == "Landed"
+    assert normal_aircraft.commands == commands_before_final_attempt
+
+    emergency_aircraft = _RecordingAircraft()
+    emergency = example.DroneController(emergency_aircraft)
+    emergency_aircraft.state_provider = lambda: emergency.current_state_name
+    _fly_to_mission(example, emergency)
+    emergency_aircraft.commands.clear()
+    emergency_aircraft.states_when_commanded.clear()
+
+    assert (
+        emergency.update_from_telemetry(
+            _ready_sample(example, critical_fault=True)
+        ).priority
+        == 0
+    )
+    emergency_touchdown = emergency.update_from_telemetry(
+        _ready_sample(example, on_ground=True)
+    )
+
+    assert emergency_touchdown.success is True
+    assert emergency.current_state_name == "EmergencyLanded"
+    assert emergency._fsm.is_terminated is True
+    assert emergency_aircraft.commands == [
+        "command_emergency_land",
+        "command_disarm_motors",
+    ]
+    assert emergency_aircraft.states_when_commanded == [
+        "EmergencyLanding",
+        "EmergencyLanded",
+    ]
