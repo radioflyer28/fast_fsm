@@ -4502,24 +4502,25 @@ class StateMachine:
             owner_thread_id = self._acquire_sync_ownership("trigger")
             try:
                 trace_result = self._trigger_owned(trigger, *args, **kwargs)
-                _emit_fsm_trace(
-                    self._logger,
-                    machine=self,
-                    transition_result=trace_result,
-                    operation="trigger",
-                    stage=(
-                        trace_result.stage
-                        if trace_result.stage in _LIFECYCLE_STAGES
-                        else "complete"
-                    ),
-                    result="success" if trace_result.success else "failure",
-                    trigger=trigger,
-                    source_state=trace_result.from_state,
-                    destination_state=trace_result.to_state,
-                    positional_args=args,
-                    keyword_args=kwargs,
-                    error=trace_result.cause,
-                )
+                if self._logger.isEnabledFor(_FSM_TRACE_LEVEL):
+                    _emit_fsm_trace(
+                        self._logger,
+                        machine=self,
+                        transition_result=trace_result,
+                        operation="trigger",
+                        stage=(
+                            trace_result.stage
+                            if trace_result.stage in _LIFECYCLE_STAGES
+                            else "complete"
+                        ),
+                        result="success" if trace_result.success else "failure",
+                        trigger=trigger,
+                        source_state=trace_result.from_state,
+                        destination_state=trace_result.to_state,
+                        positional_args=args,
+                        keyword_args=kwargs,
+                        error=trace_result.cause,
+                    )
                 return trace_result
             finally:
                 self._release_sync_ownership(owner_thread_id)
@@ -5614,24 +5615,25 @@ class AsyncStateMachine(StateMachine):
             )
             try:
                 trace_result = await self._trigger_async_owned(trigger, *args, **kwargs)
-                _emit_fsm_trace(
-                    self._logger,
-                    machine=self,
-                    transition_result=trace_result,
-                    operation="trigger_async",
-                    stage=(
-                        trace_result.stage
-                        if trace_result.stage in _LIFECYCLE_STAGES
-                        else "complete"
-                    ),
-                    result="success" if trace_result.success else "failure",
-                    trigger=trigger,
-                    source_state=trace_result.from_state,
-                    destination_state=trace_result.to_state,
-                    positional_args=args,
-                    keyword_args=kwargs,
-                    error=trace_result.cause,
-                )
+                if self._logger.isEnabledFor(_FSM_TRACE_LEVEL):
+                    _emit_fsm_trace(
+                        self._logger,
+                        machine=self,
+                        transition_result=trace_result,
+                        operation="trigger_async",
+                        stage=(
+                            trace_result.stage
+                            if trace_result.stage in _LIFECYCLE_STAGES
+                            else "complete"
+                        ),
+                        result="success" if trace_result.success else "failure",
+                        trigger=trigger,
+                        source_state=trace_result.from_state,
+                        destination_state=trace_result.to_state,
+                        positional_args=args,
+                        keyword_args=kwargs,
+                        error=trace_result.cause,
+                    )
                 return trace_result
             finally:
                 self._release_async_ownership(owner_task, owner_root, token)
