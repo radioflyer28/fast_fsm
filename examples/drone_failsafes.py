@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Callable, Protocol
 
-from fast_fsm import FSMBuilder, FuncCondition, State, TransitionResult
+from fast_fsm import (
+    FSMBuilder,
+    FuncCondition,
+    State,
+    TransitionRejected,
+    TransitionResult,
+)
 
 
 class AircraftCommands(Protocol):
@@ -100,6 +106,7 @@ class TelemetrySample:
     on_ground: bool = False
     critical_fault: bool = False
     reenter_mission: bool = False
+    navigation_conflict: bool = False
 
 
 class TelemetryPolicy:
@@ -192,6 +199,13 @@ def mission_update_requested(telemetry_policy: TelemetryPolicy, **_) -> bool:
     return not telemetry_policy.sample.reenter_mission
 
 
+def reject_navigation_conflict(telemetry_policy: TelemetryPolicy, **_) -> bool:
+    """Signal a bounded terminal outcome for incompatible navigation facts."""
+    if telemetry_policy.sample.navigation_conflict:
+        raise TransitionRejected("navigation-conflict")
+    return False
+
+
 def create_drone_fsm(
     aircraft: AircraftCommands, *, clock: Callable[[], float] = monotonic
 ):
@@ -269,6 +283,18 @@ def create_drone_fsm(
             "Landed",
             condition=FuncCondition(touchdown_detected, name="touchdown_detected"),
             priority=30,
+        )
+        # This guard is deliberately false for ordinary Mission telemetry so
+        # selection falls through to its routine candidates. A conflict is a
+        # distinct terminal domain outcome: it never selects a command path.
+        .add_transition(
+            "telemetry_tick",
+            "Mission",
+            "Mission",
+            condition=FuncCondition(
+                reject_navigation_conflict, name="reject_navigation_conflict"
+            ),
+            priority=40,
         )
         # Mission semantics are ordinary candidate transitions on the same
         # telemetry event. A requested re-entry comes before the routine
@@ -393,6 +419,10 @@ class DroneController:
             print(
                 f"✓ {result.trigger}: {result.from_state} -> {result.to_state} [{mode}]"
             )
+        elif result.rejected:
+            print(f"! expected rejection: {result.rejection_code}")
+        elif result.cause is not None:
+            print("✗ unexpected transition failure")
         else:
             print("• no eligible transition")
         return result
@@ -412,6 +442,7 @@ def simulated_telemetry() -> list[TelemetrySample]:
         TelemetrySample(**{**ready, "battery_pct": 74}),
         TelemetrySample(**ready),
         TelemetrySample(**{**ready, "reenter_mission": True}),
+        TelemetrySample(**{**ready, "navigation_conflict": True}),
         TelemetrySample(**{**ready, "battery_pct": 22}),
         TelemetrySample(**{**ready, "home_reached": True}),
         TelemetrySample(**{**ready, "on_ground": True}),
