@@ -5,11 +5,11 @@ milestone_name: Explicit Flat-FSM Semantics (Planned)
 current_phase: 32
 current_phase_name: Performance, Artifact & Progressive Guidance Proof
 status: planning
-stopped_at: Phase 31 complete, ready to plan Phase 32
-last_updated: "2026-09-19T22:30:28.162Z"
+stopped_at: Phase 32 context gathered
+last_updated: "2026-09-19T22:34:49.729Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 31 complete, transitioned to Phase 32
-state_head: 74d83ed59f1c57fc60dadd1f1852bf9083d6fc86
+state_head: 63697e3aff3d13520f44faf3cfd50fc933332297
 progress:
   total_phases: 7
   completed_phases: 6
@@ -164,9 +164,9 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-19T17:20:40.496Z
-Stopped at: Phase 31 complete, ready to plan Phase 32
-Resume file: .planning/phases/31-semantic-diagnostics-visualization/31-CONTEXT.md
+Last session: 2026-09-19T22:34:49.480Z
+Stopped at: Phase 32 context gathered
+Resume file: .planning/phases/32-performance-artifact-progressive-guidance-proof/32-CONTEXT.md
 
 - Phase 30's full suite, verifier, review, security, and native parity gates
   passed; the former offline-cache blocker is closed.
