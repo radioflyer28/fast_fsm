@@ -112,8 +112,8 @@ def test_legacy_explicit_declarative_row_owns_topology_and_guard_once() -> None:
         FSMBuilder(source, clock=clock)
         .add_transition(
             "refresh",
-            source,
-            source,
+            "source",
+            "source",
             priority=5,
             after=2,
             within=5,
@@ -158,7 +158,7 @@ def test_legacy_explicit_declarative_row_keeps_distinct_candidates() -> None:
         FSMBuilder(source)
         .add_state(State("explicit"))
         .add_state(State("declarative"))
-        .add_transition("go", source, "explicit", priority=-1)
+        .add_transition("go", "source", "explicit", priority=-1)
         .build()
     )
 
