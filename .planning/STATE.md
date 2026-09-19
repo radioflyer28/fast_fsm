@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v0.5.0
 milestone_name: Explicit Flat-FSM Semantics (Planned)
-current_phase: 30
-current_phase_name: Builder-First Construction & Persistence Parity
-status: verifying
-stopped_at: Phase 30 review clean; full offline artifact gate pending cache availability
-last_updated: "2026-09-19T16:35:20Z"
+current_phase: 31
+current_phase_name: Semantic Diagnostics & Visualization
+status: planning
+stopped_at: Phase 30 complete, ready to plan Phase 31
+last_updated: "2026-09-19T17:07:09.427Z"
 last_activity: 2026-09-19
-last_activity_desc: Phase 30 review fixes passed pure/native oracle and broad suite
-state_head: 11b5774867197a678e67045ed0eab9ea3b3763bb
+last_activity_desc: Phase 30 complete, transitioned to Phase 31
+state_head: 9b275212f3c01b2285ecfddf57f1d9b985d8e9c5
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 21
   completed_plans: 21
-  percent: 57
+  percent: 71
 ---
 
 # State: Fast FSM
@@ -25,16 +25,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-15)
 
 **Core value:** Preserve direct O(1) singleton dispatch and its installed compiled ≥200,000 operations/sec floor while adding explicit, finite flat-FSM semantics.
-**Current focus:** Phase 30 — Builder-First Construction & Persistence Parity
+**Current focus:** Phase 31 — Semantic Diagnostics & Visualization
 
 ## Current Position
 
-Phase: 30 (Builder-First Construction & Persistence Parity) — VERIFYING
-Plan: 6 of 6
-Status: Review clean; isolated offline artifact tests pending host cache availability
-Last activity: 2026-09-19 — Phase 30 pure/native review fixes verified
+Phase: 31 — Semantic Diagnostics & Visualization
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-19 — Phase 30 complete, transitioned to Phase 31
 
-Progress: [██████░░░░] 57%
+Progress: [███████░░░] 71%
 
 ## Performance Metrics
 
@@ -53,8 +53,9 @@ Progress: [██████░░░░] 57%
 | 27 | 3 | - | - |
 | 28 | 3 | - | - |
 | 29 | 4 | - | - |
+| 30 | 6 | - | - |
 
-**Recent Trend:** Phases 26–29 are complete and independently verified; Phase 30 is ready for discussion and planning.
+**Recent Trend:** Phases 26–30 are complete and independently verified; Phase 31 is ready for discussion and planning.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -143,12 +144,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- Phase 30 full-suite artifact checks invoke `uv build --offline` with pinned
-  `setuptools==80.9.0`, `wheel==0.45.1`, and `mypy[mypyc]==1.17.1`. The host's
-  uv cache lacks those build packages; standard locked sync did not populate
-  them, and an isolated fetch retried without network success. The broad
-  sequential suite excluding only artifact modules passed. Do not mark Phase
-  30 complete until the exact full suite and verifier gates pass.
 - v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
 - Exact feature-local performance remains unmeasured until Phase 32; only the installed compiled singleton floor is durable policy.
 
@@ -163,11 +158,11 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-19T16:35:20Z
-Stopped at: Phase 30 review clean; full offline artifact gate pending cache availability
+Last session: 2026-09-19T17:07:09Z
+Stopped at: Phase 30 verified and complete; Phase 31 is next
 Resume file: None (previous one-shot handoff consumed)
 
-- Obtain/cache the three exact pinned build dependencies in the normal uv
-  cache, then rerun `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q`.
-- If the full suite passes, run final Phase 30 verifier/phase-complete gates,
-  then proceed to Phase 31 discussion, planning, and execution.
+- Phase 30's full suite, verifier, review, security, and native parity gates
+  passed; the former offline-cache blocker is closed.
+- Next: discuss, plan, and execute Phase 31, then continue through Phase 32
+  and milestone audit/completion under the milestone workflow.

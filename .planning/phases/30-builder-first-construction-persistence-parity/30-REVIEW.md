@@ -45,8 +45,8 @@ status: clean
 Both original findings are resolved. A legacy explicit row now owns its
 matching state-owned declaration instead of gaining a second candidate, and
 interpreted compatibility wrappers retain public metadata in pure and freshly
-compiled imports. The review is clean; the separate phase verification gate
-still has an environment-limited offline artifact test (noted in STATE.md).
+compiled imports. The review is clean, and the separate full-suite artifact
+gate subsequently passed after its pinned build dependencies were cached.
 
 Original review evidence, before the fixes:
 
@@ -141,10 +141,10 @@ public module/qualified names, docstrings/signatures, and pickle round trips of
   extension shadows were moved to a recoverable temporary backup, and exact
   `src/fast_fsm/core.py` origin was reasserted.
 - Ruff, mypy, runtime auditability/slots, strict Sphinx, doctests, and the
-  broad sequential non-artifact suite passed. Advisory `ty` still reports the
-  documented relative-import diagnostics. The separate full-suite artifact
-  gate remains blocked because pinned offline build dependencies are missing
-  from this host's uv cache and network fetch retries failed.
+  exact full sequential pure-source suite passed. Advisory `ty` still reports
+  the documented relative-import diagnostics. The prior offline artifact
+  blocker cleared when the exact pinned build dependencies became available
+  in uv's normal cache.
 
 ---
 

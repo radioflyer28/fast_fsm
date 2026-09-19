@@ -30,7 +30,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
 - [x] **Phase 27: Explicit Final States** — make intentional completion immutable, queryable, and lifecycle-truthful. (completed 2026-09-15)
 - [x] **Phase 28: Same-State Transition Modes** — distinguish external re-entry from internal logical commits across sync and async execution. (completed 2026-09-16)
 - [x] **Phase 29: Expected Domain Rejection** — expose bounded structured rejection without priority fallthrough or lifecycle ambiguity. (completed 2026-09-17)
-- [ ] **Phase 30: Builder-First Construction & Persistence Parity** — simplify the public construction story and preserve semantics through every adapter and persisted form.
+- [x] **Phase 30: Builder-First Construction & Persistence Parity** — simplify the public construction story and preserve semantics through every adapter and persisted form. (completed 2026-09-19)
 - [ ] **Phase 31: Semantic Diagnostics & Visualization** — project finality, transition mode, and rejection truthfully through bounded tooling.
 - [ ] **Phase 32: Performance, Artifact & Progressive Guidance Proof** — prove installed parity, protect the fast path, and teach the complete workflow progressively.
 
@@ -238,7 +238,7 @@ Plans:
 | 27. Explicit Final States | v0.5.0 | 3/3 | Complete    | 2026-09-15 |
 | 28. Same-State Transition Modes | v0.5.0 | 3/3 | Complete    | 2026-09-16 |
 | 29. Expected Domain Rejection | v0.5.0 | 4/4 | Complete    | 2026-09-17 |
-| 30. Builder-First Construction & Persistence Parity | v0.5.0 | 6/6 | In Progress|  |
+| 30. Builder-First Construction & Persistence Parity | v0.5.0 | 6/6 | Complete    | 2026-09-19 |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 0/TBD | Not started | - |
 | 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/TBD | Not started | - |
 

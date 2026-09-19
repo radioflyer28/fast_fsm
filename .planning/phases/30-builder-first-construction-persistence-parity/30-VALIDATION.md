@@ -157,8 +157,9 @@ compiled modes, the compiled singleton throughput test, Ruff, mypy,
 runtime auditability/slots policy, strict Sphinx, and doctests. Generated native
 shadows were recoverably relocated and exact pure-source origin was reasserted.
 The broad sequential suite excluding `test_build_modes.py` and
-`test_installed_artifacts.py` passed. The exact full suite is not yet green:
-its isolated `uv build --offline` checks cannot resolve pinned build tools
-absent from this host's uv cache, and a normal-cache fetch retried without
-network success. This is a Phase 30 completion blocker, not a semantic-oracle
-failure; rerun the exact full suite when those packages are available.
+`test_installed_artifacts.py` passed. The exact full suite initially stopped
+because isolated `uv build --offline` checks could not resolve pinned build
+tools absent from this host's uv cache. On 2026-09-19, a retry fetched those
+exact packages into the normal cache, the previously failing isolated test
+passed, and `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q` passed in
+full. The Phase 30 completion blocker is closed.
