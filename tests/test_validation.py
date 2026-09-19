@@ -358,6 +358,65 @@ class TestFSMValidator:
         assert "error" in dead
         assert "orphaned" in dead
 
+    def test_completeness_report_separates_finals_from_topological_dead_states(self):
+        machine = StateMachine(State("start"))
+        machine.add_state(State("done", final=True))
+        machine.add_state(State("sink"))
+        machine.add_state(State("unreachable"))
+        machine.add_transition("finish", "start", "done")
+        machine.add_transition("stray", "start", "sink")
+
+        validator = FSMValidator(machine)
+        report = validator.validate_completeness()
+
+        assert validator.find_dead_states() == {"done", "sink", "unreachable"}
+        assert report["dead_states"] == {"done", "sink", "unreachable"}
+        assert report["has_dead_states"] is True
+        assert report["final_states"] == ["done"]
+        assert report["non_final_sinks"] == ["sink", "unreachable"]
+
+    def test_initial_only_final_report_has_no_non_final_sink(self):
+        report = FSMValidator(
+            StateMachine(State("only", final=True))
+        ).validate_completeness()
+        assert report["dead_states"] == {"only"}
+        assert report["final_states"] == ["only"]
+        assert report["non_final_sinks"] == []
+
+    def test_completeness_final_flags_are_captured_and_exactly_budgeted(self):
+        def make_machine() -> StateMachine:
+            result = StateMachine(State("start"))
+            result.add_state(State("done", final=True))
+            result.add_transition("finish", "start", "done")
+            return result
+
+        machine = make_machine()
+        validator = FSMValidator(machine)
+        machine.add_state(State("late-final", final=True))
+        baseline = validator.validate_completeness()
+        assert baseline["final_states"] == ["done"]
+        assert baseline["non_final_sinks"] == []
+        status = baseline["diagnostic_status"]
+
+        for dimension, limit_name in (
+            ("work_count", "max_work"),
+            ("result_count", "max_results"),
+        ):
+            required = getattr(status, dimension)
+            exact = FSMValidator(
+                make_machine(),
+                limits=DiagnosticLimits(**{limit_name: required}),
+            ).validate_completeness()
+            assert getattr(exact["diagnostic_status"], dimension) == required
+            exhausted = FSMValidator(
+                make_machine(),
+                limits=DiagnosticLimits(**{limit_name: required - 1}),
+            )
+            with pytest.raises(DiagnosticBudgetExceeded) as raised:
+                exhausted.validate_completeness()
+            assert raised.value.status.exhausted_dimension == limit_name
+            assert getattr(raised.value.status, dimension) == required - 1
+
     def test_missing_transitions(self, problematic_fsm):
         v = FSMValidator(problematic_fsm)
         missing = v.find_missing_transitions()
@@ -515,6 +574,54 @@ class TestValidationIssue:
 
 class TestEnhancedFSMValidator:
     """Tests for the EnhancedFSMValidator."""
+
+    def test_initial_final_has_no_missing_exit_issue_or_score_penalty(self):
+        validator = EnhancedFSMValidator(StateMachine(State("only", final=True)))
+        assert validator.issues == []
+        score = validator.get_validation_score()
+        assert score["structural_score"] == 100
+        assert score["completeness_score"] == 100
+        assert score["overall_score"] == 100
+
+    def test_final_destination_avoids_sink_and_return_findings(self):
+        def machine(*, final: bool) -> StateMachine:
+            result = StateMachine(State("start"))
+            result.add_state(State("destination", final=final))
+            result.add_transition("finish", "start", "destination")
+            return result
+
+        final = EnhancedFSMValidator(machine(final=True), completeness_weight=0.5)
+        sink = EnhancedFSMValidator(machine(final=False), completeness_weight=0.5)
+        assert not [issue for issue in final.issues if issue.location == "destination"]
+        assert any("dead end" in issue.description for issue in sink.issues)
+        assert any(
+            "no defined transitions" in issue.description for issue in sink.issues
+        )
+        assert any("cannot return" in issue.description for issue in sink.issues)
+        assert final.get_validation_score()["overall_score"] == 100
+        assert (
+            final.get_validation_score()["overall_score"]
+            > sink.get_validation_score()["overall_score"]
+        )
+
+        exported = json.loads(final.export_report(format="json"))
+        assert exported["final_states"] == ["destination"]
+        assert exported["non_final_sinks"] == []
+        markdown = final.export_report(format="markdown")
+        assert "Explicit final states: destination" in markdown
+        assert "Non-final sinks: None" in markdown
+        plain = final.export_report(format="text")
+        assert 'Explicit Final States: ["destination"]' in plain
+        assert "Non-final Sinks: []" in plain
+
+    def test_unreachable_final_keeps_reachability_finding_only(self):
+        machine = StateMachine(State("start"))
+        machine.add_state(State("unreachable-final", final=True))
+        validator = EnhancedFSMValidator(machine)
+        located = [
+            issue for issue in validator.issues if issue.location == "unreachable-final"
+        ]
+        assert [issue.category for issue in located] == ["reachability"]
 
     def test_name_override_propagates(self, well_designed_fsm):
         v = EnhancedFSMValidator(well_designed_fsm, name="CustomName")

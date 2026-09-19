@@ -9,8 +9,8 @@ overhead** to FSMs that don't use them.
 **dense** based on transition density (defined transitions ÷ possible
 state×event pairs).
 
-- **Dense** — grade and `overall_score` reflect all issues including missing
-  transitions.
+- **Dense** — grade and `overall_score` use the structural score by default;
+  `completeness_weight` can blend in missing-transition coverage.
 - **Sparse** — `overall_score` and `grade` are based on **structural** health
   only (reachability, determinism, dead states). Missing-transition issues are
   downgraded to `info` and reported separately in `completeness_score`.
@@ -18,6 +18,12 @@ state×event pairs).
 This means an intentionally sparse FSM — one where not every state handles
 every event by design — receives a fair structural grade instead of a
 misleading *D* for transition coverage.
+
+An explicit `State(..., final=True)` means intentional completion. It does not
+receive a missing-exit, dead-end, or cannot-return issue merely because it has
+no outgoing transition. A non-final state with no outgoing transition remains
+a reportable sink. An initial-only final machine is valid and need not define
+an event. Unreachable finals still receive reachability warnings.
 
 ```python
 from fast_fsm import EnhancedFSMValidator, FSMBuilder, State
@@ -136,7 +142,8 @@ raises `DiagnosticBudgetExceeded(status)` with the fixed message
 `validate_completeness(*, limits=None, include_dense=False)` returns
 `fsm_name`, `total_states`, `total_events`, `total_transitions`,
 `initial_state`, `current_state`, `unreachable_states`, `dead_states`,
-`missing_transitions`, `is_complete`, `is_reachable`, `has_dead_states`,
+`final_states`, `non_final_sinks`, `missing_transitions`, `is_complete`,
+`is_reachable`, `has_dead_states`,
 `cyclic_components`, flattened `states_in_cycles`, `structural_depth`,
 `depth_interpretation`, `sparse_adjacency`, and `diagnostic_status`. It adds
 `transition_matrix` only when `include_dense=True`. `get_sparse_adjacency(*,
@@ -144,6 +151,15 @@ limits=None)` is the normal `O(V + E)` result with snapshot-ordered `states`,
 ordered `events`, and ordered `edges`. `get_transition_matrix(*, limits=None)`
 preflights `V × events`, and `get_adjacency_matrix(*, limits=None)` preflights
 `V²`, before allocating either compatibility shape.
+
+`dead_states` remains the legacy *topological* set of states with no outgoing
+transition, even if a state is explicitly final. `has_dead_states` and
+`is_complete` retain their prior topology/transition-coverage meanings.
+The new `final_states` and `non_final_sinks` lists are in snapshot state order:
+they report explicit completion and non-final no-outgoing states separately.
+`EnhancedFSMValidator.export_report(format="json")` includes the same two
+ordered lists; Markdown and text reports label them explicitly. Neither
+finality nor transition mode is inferred from a missing edge.
 
 `find_cycles(*, limits=None)` is a path-shaped compatibility view derived from
 iterative SCC membership. SCCs include every member of a self-loop or larger

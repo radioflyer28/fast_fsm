@@ -231,6 +231,33 @@ class FSMValidator:
         """Find states with no outgoing transitions (potential dead ends)"""
         return set(self._dead_state_names(self._operation_budget(limits)))
 
+    def _completion_state_names(
+        self, budget: _DiagnosticBudget
+    ) -> tuple[list[str], list[str]]:
+        """Separate declared finals from non-final sinks in snapshot order."""
+        final_states: list[str] = []
+        non_final_sinks: list[str] = []
+        graph = self._diagnostic_graph
+        for index, state_name in enumerate(graph.state_names):
+            budget.reserve_work(stage="completion-state.visit")
+            if graph.state_finals[index]:
+                budget.reserve_result(stage="completion-state.final")
+                final_states.append(state_name)
+            elif not graph.forward[index]:
+                budget.reserve_result(stage="completion-state.non-final-sink")
+                non_final_sinks.append(state_name)
+        return final_states, non_final_sinks
+
+    def _final_name_set(self, budget: _DiagnosticBudget) -> set[str]:
+        """Read only captured final flags for enhanced issue classification."""
+        graph = self._diagnostic_graph
+        final_names: set[str] = set()
+        for index, state_name in enumerate(graph.state_names):
+            budget.reserve_work(stage="final-state.classification")
+            if graph.state_finals[index]:
+                final_names.add(state_name)
+        return final_names
+
     def _missing_transition_pairs(
         self, budget: _DiagnosticBudget
     ) -> List[Tuple[str, str]]:
@@ -325,6 +352,7 @@ class FSMValidator:
         }
         unreachable = self.states - reachable
         dead_states = set(self._dead_state_names(budget))
+        final_states, non_final_sinks = self._completion_state_names(budget)
         missing = self._missing_transition_pairs(budget)
         cyclic_components = _strongly_connected_components(
             self._diagnostic_graph, budget
@@ -340,6 +368,8 @@ class FSMValidator:
             "current_state": self.current_state,
             "unreachable_states": unreachable,
             "dead_states": dead_states,
+            "final_states": final_states,
+            "non_final_sinks": non_final_sinks,
             "missing_transitions": missing,
             "is_complete": len(missing) == 0,
             "is_reachable": len(unreachable) == 0,
@@ -543,6 +573,7 @@ class FSMValidator:
         validation = self.validate_completeness()
         determinism = self.check_determinism()
         cycles = self.find_cycles()
+        self._budget.reserve_result(stage="validation.print.completion-rows", amount=2)
 
         print(f"🔍 FSM Validation Report: {validation['fsm_name']}")
         print("=" * 50)
@@ -565,6 +596,8 @@ class FSMValidator:
         print(
             f"  Has Dead States: {'⚠️ Yes' if validation['has_dead_states'] else '✅ No'}"
         )
+        print(f"  Explicit Final States: {validation['final_states']}")
+        print(f"  Non-final Sinks: {validation['non_final_sinks']}")
 
         if validation["unreachable_states"]:
             print(f"\n⚠️ Unreachable States: {validation['unreachable_states']}")
@@ -721,8 +754,12 @@ class EnhancedFSMValidator(FSMValidator):
 
     def _analyze_structure(self) -> None:
         """Analyze basic FSM structure"""
+        initial_only_final = (
+            len(self._diagnostic_graph.state_names) == 1
+            and self._diagnostic_graph.state_finals[0]
+        )
         # Check for trivial FSMs
-        if len(self.states) == 1:
+        if len(self.states) == 1 and not initial_only_final:
             self.issues.append(
                 ValidationIssue(
                     "warning",
@@ -733,7 +770,7 @@ class EnhancedFSMValidator(FSMValidator):
             )
 
         # Check for isolated states
-        if len(self.events) == 0:
+        if len(self.events) == 0 and not initial_only_final:
             self.issues.append(
                 ValidationIssue(
                     "error",
@@ -774,8 +811,13 @@ class EnhancedFSMValidator(FSMValidator):
         """Enhanced reachability analysis"""
         reachable = self.get_reachable_states()
         unreachable = self.states - reachable
+        final_names = self._final_name_set(self._budget)
 
-        for state in unreachable:
+        for state in self._diagnostic_graph.state_names:
+            self._budget.reserve_work(stage="reachability.issue-scan")
+            if state not in unreachable:
+                continue
+            self._budget.reserve_result(stage="reachability.issue")
             self.issues.append(
                 ValidationIssue(
                     "warning",
@@ -788,7 +830,10 @@ class EnhancedFSMValidator(FSMValidator):
 
         # Check for states that can reach initial state (cycles)
         can_return_to_initial = set()
-        for state in reachable:
+        for state in self._diagnostic_graph.state_names:
+            self._budget.reserve_work(stage="reachability.return-scan")
+            if state not in reachable or state in final_names:
+                continue
             if state != self.initial_state:
                 state_reachable = self.get_reachable_states(state)
                 if self.initial_state in state_reachable:
@@ -796,7 +841,11 @@ class EnhancedFSMValidator(FSMValidator):
 
         if len(can_return_to_initial) < len(reachable) - 1:
             isolated_states = reachable - can_return_to_initial - {self.initial_state}
-            for state in isolated_states:
+            for state in self._diagnostic_graph.state_names:
+                self._budget.reserve_work(stage="reachability.no-return-scan")
+                if state not in isolated_states or state in final_names:
+                    continue
+                self._budget.reserve_result(stage="reachability.no-return-issue")
                 self.issues.append(
                     ValidationIssue(
                         "info",
@@ -811,8 +860,13 @@ class EnhancedFSMValidator(FSMValidator):
         """Enhanced completeness analysis"""
         dead_states = self.find_dead_states()
         missing_transitions = self.find_missing_transitions()
+        final_names = self._final_name_set(self._budget)
 
-        for state in dead_states:
+        for state in self._diagnostic_graph.state_names:
+            self._budget.reserve_work(stage="completeness.issue-scan")
+            if state not in dead_states or state in final_names:
+                continue
+            self._budget.reserve_result(stage="completeness.dead-end-issue")
             self.issues.append(
                 ValidationIssue(
                     "warning",
@@ -826,7 +880,9 @@ class EnhancedFSMValidator(FSMValidator):
         # Group missing transitions by type
         missing_by_state = defaultdict(list)
         for state, event in missing_transitions:
-            missing_by_state[state].append(event)
+            self._budget.reserve_work(stage="completeness.missing-scan")
+            if state not in final_names:
+                missing_by_state[state].append(event)
 
         is_sparse = self.metrics.get("design_style") == "sparse"
 
@@ -834,6 +890,7 @@ class EnhancedFSMValidator(FSMValidator):
             if len(events) == len(self.events):
                 # A state with zero transitions is always a defect regardless
                 # of design style — it can never exit.
+                self._budget.reserve_result(stage="completeness.missing-all-issue")
                 self.issues.append(
                     ValidationIssue(
                         "error",
@@ -847,6 +904,7 @@ class EnhancedFSMValidator(FSMValidator):
                 # For sparse FSMs, missing transitions are expected by design;
                 # downgrade to info so they don't inflate the structural score.
                 severity = "info" if is_sparse else "warning"
+                self._budget.reserve_result(stage="completeness.missing-many-issue")
                 self.issues.append(
                     ValidationIssue(
                         severity,
@@ -1075,6 +1133,7 @@ class EnhancedFSMValidator(FSMValidator):
     def _export_json(self) -> str:
         """Export as JSON with full adjacency matrix and stable transition indices."""
         adj = self.get_adjacency_matrix()
+        final_states, non_final_sinks = self._completion_state_names(self._budget)
         score = self.get_validation_score()
         json_score = {
             **score,
@@ -1099,6 +1158,8 @@ class EnhancedFSMValidator(FSMValidator):
                 ],
                 "recommendations": self.recommendations,
                 "states": adj["states"],
+                "final_states": final_states,
+                "non_final_sinks": non_final_sinks,
                 "events": adj["events"],
                 "transitions": adj["transitions"],
                 "adjacency_matrix": adj["matrix"],
@@ -1108,8 +1169,12 @@ class EnhancedFSMValidator(FSMValidator):
 
     def _export_markdown(self) -> str:
         """Export as Markdown with full adjacency table and numbered transitions."""
-        score = self.get_validation_score()
         adj = self.get_adjacency_matrix()
+        final_states, non_final_sinks = self._completion_state_names(self._budget)
+        self._budget.reserve_result(
+            stage="validation.markdown.completion-rows", amount=2
+        )
+        score = self.get_validation_score()
         sorted_states = adj["states"]
         transitions_list = adj["transitions"]
         matrix = adj["matrix"]
@@ -1134,6 +1199,8 @@ class EnhancedFSMValidator(FSMValidator):
             f"- Events: {self.metrics['total_events']}",
             f"- Transitions: {self.metrics['actual_transitions']}/{self.metrics['possible_transitions']}",
             f"- Density: {self.metrics['density']:.1%}",
+            f"- Explicit final states: {', '.join(_escape_markdown_text(name) for name in final_states) or 'None'}",
+            f"- Non-final sinks: {', '.join(_escape_markdown_text(name) for name in non_final_sinks) or 'None'}",
         ]
 
         # Full adjacency matrix table
@@ -1219,6 +1286,8 @@ class EnhancedFSMValidator(FSMValidator):
         self, show_details: bool = True, return_string: bool = False
     ) -> Optional[str]:
         """Print an enhanced validation report with recommendations"""
+        final_states, non_final_sinks = self._completion_state_names(self._budget)
+        self._budget.reserve_result(stage="validation.text.completion-rows", amount=2)
         score = self.get_validation_score()
 
         lines = []
@@ -1258,6 +1327,8 @@ class EnhancedFSMValidator(FSMValidator):
             f"{self.metrics['actual_transitions']} transitions "
             f"({self.metrics['density']:.1%} density)"
         )
+        lines.append(f"Explicit Final States: {json.dumps(final_states)}")
+        lines.append(f"Non-final Sinks: {json.dumps(non_final_sinks)}")
 
         if show_details and self.issues:
             lines.append("\n🔍 Issues Found:")
