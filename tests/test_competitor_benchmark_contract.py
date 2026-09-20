@@ -9,8 +9,12 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import tomllib
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
+    import tomli as tomllib
 
 import pytest
 import yaml

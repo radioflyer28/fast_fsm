@@ -48,7 +48,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
   3. Maintainers can run semantically preflighted comparison scenarios against exact isolated `python-statemachine` 2.5.0 and 3.2.1 installations, with versions, origins, and unsupported cells reported explicitly.
   4. Competitor results remain labelled manual or scheduled evidence and ordinary CI succeeds without installing or timing competitor packages.
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 
 Plans:
 **Wave 1**
@@ -168,7 +168,7 @@ Plans:
   4. Direct, batch, builder, factory, declarative, helper, callback, clone, and deserialization paths enforce identical final-state and transition-mode rules without partial publication.
   5. Clone and dictionary round trips preserve final and internal metadata, legacy dictionaries receive false/default semantics, and state-only snapshot v1 derives termination from the receiving machine.
 
-**Plans**: TBD
+**Plans**: 6/6 plans executed
 
 - [x] 30-01-PLAN.md
 - [x] 30-02-PLAN.md
@@ -217,7 +217,7 @@ Plans:
   4. The progressive controller-owned drone tutorial demonstrates prioritized telemetry guards, internal and external self-transitions, explicit landing finals, expected rejection, and committed aircraft commands without hidden scheduling machinery.
   5. README and Sphinx guidance progress from builder-first construction to advanced direct use, explain the deprecation migration, and clearly distinguish finality, dead ends, rejection, guard ineligibility, and self-transition modes.
 
-**Plans**: TBD
+**Plans**: 6/6 plans executed
 **Wave 1**
 
 - [x] 32-01-PLAN.md

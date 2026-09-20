@@ -231,9 +231,11 @@ async def test_reject_08_deferred_composition_keeps_signal_and_cancellation_term
     pending = asyncio.ensure_future(deferred_cancellation)
     await asyncio.wait_for(started.wait(), timeout=5)
     pending.cancel()
-    with pytest.raises(asyncio.CancelledError) as cancelled:
+    with pytest.raises(asyncio.CancelledError):
         await pending
-    assert cancellations == [cancelled.value]
+    # Python 3.10 may wrap the propagated cancellation in a new exception.
+    assert len(cancellations) == 1
+    assert isinstance(cancellations[0], asyncio.CancelledError)
     assert cancellation_calls == ["blocking"]
     assert cancellation_later_calls == []
 

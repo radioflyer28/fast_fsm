@@ -489,6 +489,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "ty" },
 ]
 docs = [
@@ -524,6 +525,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = ">=0.12.11" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "ty", specifier = ">=0.0.1a19" },
 ]
 docs = [

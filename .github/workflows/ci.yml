@@ -169,6 +169,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     env:
       FAST_FSM_BUILD_MODE: pure
+      PYTEST_ADDOPTS: --junitxml=ci-pytest.xml
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -187,6 +188,9 @@ jobs:
         run: uv run python tools/release_evidence.py verify-source --json
       - name: Run sequential test suite
         run: task test
+      - name: Annotate test failures
+        if: failure()
+        run: uv run python tools/ci_failure_annotations.py ci-pytest.xml
 
   ownership_native_probe:
     name: Ownership native probe · Python ${{ matrix.python-version }}
