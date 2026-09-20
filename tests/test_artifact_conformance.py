@@ -106,7 +106,7 @@ def test_phase32_mode_and_rejection_rows_are_exact_and_payload_safe() -> None:
 
 
 def test_phase32_each_semantic_required_value_rejects_rehashed_mutation() -> None:
-    """A recomputed digest cannot conceal any changed Phase 32 semantic fact."""
+    """A recomputed digest cannot conceal changed or wrongly typed facts."""
     payload = artifact_conformance.collect_conformance()
     definitions = {
         definition["id"]: definition
@@ -142,6 +142,35 @@ def test_phase32_each_semantic_required_value_rejects_rehashed_mutation() -> Non
             else:
                 record[field] = "wrong-value"
             _rehash(mutated)
+            with pytest.raises(artifact_conformance.ConformanceError):
+                artifact_conformance.validate_conformance(mutated)
+
+
+def test_phase32_required_scalars_reject_rehashed_equal_value_type_changes() -> None:
+    """Required booleans and counts retain their exact JSON scalar types."""
+    payload = artifact_conformance.collect_conformance()
+    definitions = {
+        definition["id"]: definition
+        for definition in artifact_conformance._SCENARIO_DEFINITIONS
+        if "required_values" in definition
+    }
+
+    for identifier, definition in definitions.items():
+        for field, required_value in definition["required_values"].items():
+            if type(required_value) is bool:
+                type_equivalent_value: object = int(required_value)
+            elif type(required_value) is int:
+                type_equivalent_value = float(required_value)
+            else:
+                continue
+
+            mutated = copy.deepcopy(payload)
+            record = next(
+                item for item in mutated["scenarios"] if item["id"] == identifier
+            )
+            record[field] = type_equivalent_value
+            _rehash(mutated)
+
             with pytest.raises(artifact_conformance.ConformanceError):
                 artifact_conformance.validate_conformance(mutated)
 

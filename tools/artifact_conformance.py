@@ -2228,7 +2228,11 @@ def _validate_scenarios(scenarios: Sequence[Mapping[str, Any]]) -> None:
                 f"Conformance scenario {identifier} has invalid required values."
             )
         for field, required_value in required_values.items():
-            if record.get(field) != required_value:
+            observed_value = record.get(field)
+            if (
+                type(observed_value) is not type(required_value)
+                or observed_value != required_value
+            ):
                 raise ConformanceError(
                     f"Conformance scenario {identifier} contradicted {field}."
                 )
