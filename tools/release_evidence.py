@@ -57,11 +57,15 @@ _PHASE32_REVIEWED_REFRESH_PATHS = (
     ("slots_policy", "registered_exceptions"),
     ("slots_policy", "measurements"),
 )
+_PHASE32_NONDECREASING_REFRESH_PATHS = (
+    ("quality_baseline", "coverage", "core_percent"),
+)
 
 _RELEASE_BASELINE_STABLE_REFRESH_PATHS = (
     ("quality_baseline", "tests", "collected"),
     ("quality_baseline", "tests", "passed"),
     *_PHASE32_REVIEWED_REFRESH_PATHS,
+    *_PHASE32_NONDECREASING_REFRESH_PATHS,
 )
 _RELEASE_BASELINE_RAW_REFRESH_PATHS = (
     *_RELEASE_BASELINE_STABLE_REFRESH_PATHS,
@@ -5974,6 +5978,25 @@ def _validate_phase32_reviewed_refresh(candidate: Mapping[str, Any]) -> None:
             )
 
 
+def _validate_phase32_non_decreasing_refresh(
+    snapshot: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> None:
+    """Allow the reviewed coverage floor to improve, never weaken."""
+    for path in _PHASE32_NONDECREASING_REFRESH_PATHS:
+        previous = _manifest_value_at_path(snapshot, path)
+        refreshed = _manifest_value_at_path(candidate, path)
+        if type(previous) not in (int, float) or type(refreshed) not in (int, float):
+            raise EvidenceError(
+                "Release baseline refresh requires "
+                f"{'.'.join(path)} to be a numeric coverage value."
+            )
+        if refreshed < previous:
+            raise EvidenceError(
+                "Release baseline refresh requires "
+                f"{'.'.join(path)} to be non-decreasing."
+            )
+
+
 def _manifest_without_paths(
     manifest: Mapping[str, Any], paths: Sequence[tuple[str, ...]]
 ) -> dict[str, Any]:
@@ -6026,6 +6049,7 @@ def _validate_release_baseline_refresh(
             _manifest_value_at_path(manifest, path)
 
     _validate_phase32_reviewed_refresh(candidate)
+    _validate_phase32_non_decreasing_refresh(snapshot, candidate)
 
     stable_differences = _projection_differences(
         _manifest_without_paths(
