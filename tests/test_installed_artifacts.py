@@ -391,6 +391,37 @@ def test_phase32_source_validation_keeps_builder_errors_explicit() -> None:
                 ],
             }
         )
+    with pytest.raises(ValueError, match="condition_ref.*non-empty string"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "done",
+                        "condition_ref": 1,
+                    }
+                ],
+            }
+        )
+    with pytest.raises(TypeError, match="condition registry value"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "done",
+                        "condition_ref": "invalid",
+                    }
+                ],
+            },
+            conditions={"invalid": object()},
+        )
+    with pytest.raises(TypeError, match="Condition must be Condition or callable"):
+        StateMachine(State("idle")).add_transitions([("go", "idle", "done", object())])
 
 
 @pytest.fixture(scope="module")
