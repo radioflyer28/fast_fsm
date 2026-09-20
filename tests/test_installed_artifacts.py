@@ -451,6 +451,7 @@ def test_tracer_installs_exact_artifact_and_matches_clean_source_record(
         wheel,
         expected_mode=mode,
         build_intent=mode,
+        collect_performance=False,
     )
 
     assert (
@@ -464,13 +465,9 @@ def test_tracer_installs_exact_artifact_and_matches_clean_source_record(
         )
         == []
     )
-    if mode == "compiled":
-        performance = record["performance"]
-        assert performance["core_loader"] == "ExtensionFileLoader"
-        assert performance["median_ops_per_second"] >= 200_000
-        assert len(performance["samples_ops_per_second"]) >= 3
-    else:
-        assert record["performance"] is None
+    # Dedicated benchmark and release gates own the throughput floor. This
+    # shared-runner test proves exact artifact identity and semantic parity.
+    assert record["performance"] is None
 
 
 @pytest.mark.integration
