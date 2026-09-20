@@ -23,6 +23,17 @@ requirements are covered by implementation, tests, and documentation.
 | All retained adapters share final/internal validation and atomic publication | The same Phase 30 construction-parity oracle passes in pure and freshly compiled modes; explicit/declarative legacy rows retain one candidate and one guard evaluation | Verified |
 | Clone, dictionary, and snapshot semantics retain metadata/defaults | `test_advanced_functionality.py`, final-state, transition-mode, and construction-parity matrices pass; snapshot v1 remains state-only | Verified |
 
+## Requirement coverage
+
+| Requirement | Source plans | Status | Evidence |
+|---|---|---|---|
+| BUILD-01 | 30-05, 30-06 | SATISFIED | Builder-first README/Quick Start/Tutorial ordering and executable guidance checks. |
+| BUILD-02 | 30-01, 30-02, 30-05, 30-06 | SATISFIED | Declarative definitions derive through `FSMBuilder` and the canonical request transaction; construction-parity tests pass. |
+| BUILD-03 | 30-03, 30-05, 30-06 | SATISFIED | Four convenience APIs emit actionable warnings while pure/native compatibility tests retain callable behavior. |
+| BUILD-06 | 30-01 through 30-06 | SATISFIED | Pure and freshly compiled construction-parity matrices cover final/internal validation and atomic failure across retained adapters. |
+| BUILD-07 | 30-04, 30-05, 30-06 | SATISFIED | Clone and dictionary round trips preserve final/internal metadata; older dictionaries receive defaults. |
+| BUILD-08 | 30-04, 30-05, 30-06 | SATISFIED | State-only snapshot v1 derives termination from the receiving machine; snapshot tests pass. |
+
 ## Closure Gates
 
 - `FAST_FSM_BUILD_MODE=pure uv run pytest tests/ -x -q` passed in full on
