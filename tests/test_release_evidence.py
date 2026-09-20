@@ -20,6 +20,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 import yaml
+from fast_fsm import State, StateMachine
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -4920,3 +4921,24 @@ def test_release_baseline_path_resolution_guards_relative_and_absolute_only(
         ("guarded", protected),
         ("generic", temporary),
     ]
+
+
+def test_phase32_source_validation_remains_covered_after_artifact_children() -> None:
+    """Late evidence checks retain core input-validation coverage after child tools."""
+    with pytest.raises(TypeError, match="condition registry value"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "done",
+                        "condition_ref": "invalid",
+                    }
+                ],
+            },
+            conditions={"invalid": object()},
+        )
+    with pytest.raises(TypeError, match="Condition must be Condition or callable"):
+        StateMachine(State("idle")).add_transitions([("go", "idle", "done", object())])
