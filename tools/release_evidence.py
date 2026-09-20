@@ -75,7 +75,7 @@ _RELEASE_BASELINE_RAW_REFRESH_PATHS = (
     ("pure_source_performance", "observations"),
 )
 
-_RELEASE_VERSION = "0.4.0"
+_RELEASE_VERSION = "0.5.0"
 _SUPPORTED_CPYTHON_MINORS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 _DIRECT_NATIVE_TARGETS = (
     ("linux", "x86_64"),
@@ -851,7 +851,7 @@ def _validate_matrix_record(
         )
         if _matrix_filename(
             parent["filename"], field="parent_sdist"
-        ) != "fast_fsm-0.4.0.tar.gz" or not _is_sha256(parent["sha256"]):
+        ) != f"fast_fsm-{_RELEASE_VERSION}.tar.gz" or not _is_sha256(parent["sha256"]):
             raise EvidenceError("matrix evidence sdist lineage is malformed.")
 
     conformance, _suite = _matrix_conformance_matches(
@@ -1468,7 +1468,7 @@ def validate_release_identity(
     checked_out_commit: str,
     tag_ref: str | None = None,
 ) -> dict[str, str]:
-    """Validate static v0.4.0 identity, with optional non-mutating tag equality."""
+    """Validate static release identity, with optional non-mutating tag equality."""
     root = repository_root.resolve()
     try:
         pyproject_text = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -1523,10 +1523,11 @@ def validate_release_identity(
         ("aggregate.package", aggregate_checked["package"]),
         ("aggregate.distribution_version", aggregate_checked["distribution_version"]),
     )
+    release_series = ".".join(_RELEASE_VERSION.split(".")[:2])
     for field, value in expected_values:
-        if value not in {_RELEASE_VERSION, "0.4", PACKAGE_NAME}:
+        if value not in {_RELEASE_VERSION, release_series, PACKAGE_NAME}:
             raise EvidenceError(f"release identity {field} is not {_RELEASE_VERSION}.")
-    if docs_identity["version"] != "0.4" or any(
+    if docs_identity["version"] != release_series or any(
         value != _RELEASE_VERSION
         for field, value in expected_values
         if field
@@ -1552,7 +1553,7 @@ def validate_release_identity(
             "release identity changelog section is missing or ambiguous."
         )
     required_claims = (
-        "v0.4.0",
+        f"v{_RELEASE_VERSION}",
         "installed-artifact",
         "SHA-256 binds exact bytes",
         "not publisher authenticity",
@@ -6270,7 +6271,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     identity_parser = commands.add_parser(
         "verify-release-identity",
-        help="validate static v0.4.0 identity and optional tag-to-commit equality",
+        help="validate static release identity and optional tag-to-commit equality",
     )
     identity_parser.add_argument(
         "--installed-identity",
@@ -6286,7 +6287,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     identity_parser.add_argument(
         "--tag-ref",
-        help="existing v0.4.0 tag to peel and compare (omitted for static mode)",
+        help="existing release tag to peel and compare (omitted for static mode)",
     )
     identity_parser.add_argument("--json", action="store_true")
 

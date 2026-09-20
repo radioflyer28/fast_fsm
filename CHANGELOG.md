@@ -7,6 +7,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 No unreleased changes.
 
+## [0.5.0] — 2026-09-20
+
+### Added
+
+- Explicit immutable final states and an O(1) termination query, distinct from
+  non-final states with no outgoing transition.
+- Internal same-state transitions that commit without state exit or re-entry;
+  external self-transitions retain the full lifecycle.
+- Bounded `TransitionRejected(code)` for expected pre-commit domain rejection,
+  distinct from false guards and unexpected execution failures.
+- A strict semantic oracle for source, native, and installed artifacts, plus
+  environment-labelled observations for optional feature costs.
+
+### Changed
+
+- `FSMBuilder` is the recommended construction path; direct construction and
+  `from_dict()` remain supported for advanced and persistence uses.
+- `simple_fsm`, `quick_fsm`, `StateMachine.quick_build`, and
+  `StateMachine.from_states` now warn with builder migration guidance. They
+  remain available through v0.5.x and will be removed no earlier than v0.6.0.
+- Diagnostics, serialization, visualization, and the drone training example
+  now preserve and explain finality, transition mode, and expected rejection.
+
 ## [0.4.0] — 2026-09-07
 
 ### Added

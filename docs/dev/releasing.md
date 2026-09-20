@@ -71,8 +71,8 @@ task release-baseline-check
 The baseline records exact test and coverage outcomes, the pure `.py` module
 origin, reviewed toolchain versions, a universal pure-wheel identity, and the
 recursively discovered slots inventory. The only registered instance-`__dict__`
-exceptions are `CompiledFuncCondition`, `TransitionError`, and
-`DiagnosticBudgetExceeded`; their independent measurements and rationales are
+exceptions are `CompiledFuncCondition`, `TransitionError`,
+`TransitionRejected`, and `DiagnosticBudgetExceeded`; their independent measurements and rationales are
 part of the evidence.
 
 ## Release History and Hosted Proof
@@ -132,7 +132,7 @@ Do not infer native-runner availability from workflow YAML or a local result.
 Before any tag operation, an authorized maintainer must manually run the
 read-only **Release Evidence** workflow for one reviewed full SHA, then obtain
 its run ID from GitHub Actions. Its `ref` input must be that SHA and its `tag`
-input must be `v0.4.0`; the workflow itself has read-only contents permission
+input must be `v0.5.0`; the workflow itself has read-only contents permission
 and contains no release job.
 
 After the run is terminal and successful, inspect it without mutation:
@@ -151,7 +151,7 @@ runner, a queued/cancelled/non-evidence run, wrong head SHA, or a detached
 record fails closed. This repository has not treated that external checkpoint
 as passed merely because its local workflow contract tests pass.
 
-Only after that inspection passes may a separately authorized `v0.4.0` tag be
+Only after that inspection passes may a separately authorized `v0.5.0` tag be
 created. The tag-only release workflow then independently peels the tag and
 requires it, the checkout, and the aggregate commit to be identical before its
 sole `contents: write` GitHub-release job can run. The evidence workflow and

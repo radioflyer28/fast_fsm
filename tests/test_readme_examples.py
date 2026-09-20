@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from fast_fsm.core import FSMBuilder, StateMachine, State, TransitionError
+from fast_fsm.core import StateMachine, State, TransitionError
 from fast_fsm.conditions import Condition, FuncCondition
 
 
@@ -104,19 +104,17 @@ def test_quick_start_establishes_builder_before_construction_roles() -> None:
     source = (PROJECT_ROOT / "docs" / "QUICK_START.md").read_text(encoding="utf-8")
 
     assert source.index("## 🎯 Your First FSM") < source.index("## Construction roles")
-    assert source.index("## Construction roles") < source.index(
-        "## 🔄 Common Patterns"
-    )
+    assert source.index("## Construction roles") < source.index("## 🔄 Common Patterns")
 
 
 @pytest.mark.parametrize("path", _GUIDE_PATHS)
 @pytest.mark.parametrize(
     ("legacy_name", "builder_replacement"),
     (
-        ("`simple_fsm`", "`FSMBuilder(State(\"idle\"))` plus `.add_state(...)`"),
+        ("`simple_fsm`", '`FSMBuilder(State("idle"))` plus `.add_state(...)`'),
         (
             "`quick_fsm`",
-            "`FSMBuilder(State(\"idle\"))` plus one `.add_transition(...)` per row",
+            '`FSMBuilder(State("idle"))` plus one `.add_transition(...)` per row',
         ),
         (
             "`StateMachine.quick_build`",
@@ -124,7 +122,7 @@ def test_quick_start_establishes_builder_before_construction_roles() -> None:
         ),
         (
             "`StateMachine.from_states`",
-            "`FSMBuilder(State(\"idle\"))` plus `.add_state(...)`",
+            '`FSMBuilder(State("idle"))` plus `.add_state(...)`',
         ),
     ),
 )

@@ -943,7 +943,7 @@ and environment-labeled benchmark observations. Verify it with:
 task release-baseline-check
 ```
 
-For v0.4.0 and later, release authorization requires fresh hosted proof for
+For the v0.5.0 release candidate, release authorization requires fresh hosted proof for
 the pure, compiled, and source-derived installed-artifact matrix. A local run
 is useful development evidence but is intentionally non-authorizing. SHA-256
 binds exact bytes to the recorded evidence, not publisher authenticity.

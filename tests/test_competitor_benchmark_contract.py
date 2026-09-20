@@ -60,7 +60,7 @@ def fixture_record(
 ) -> dict[str, object]:
     if implementation_id == "fast-fsm":
         distribution = "fast-fsm"
-        version = "0.4.0"
+        version = "0.5.0"
         origin = "/tmp/fast_fsm/core.py"
     else:
         distribution = "python-statemachine"
