@@ -86,7 +86,7 @@ The four plan prohibitions (Plans 02, 03 and 04) are judgment-tier and remain `f
 
 ## Residual risks and gaps
 
-No must-have failed. `32-SECURITY.md` explicitly leaves T-32-07 open: some local build/probe subprocesses lack timeout/output caps. It is medium severity, below the configured high-severity security block threshold; it is **not closed or waived** by this verification. Hosted publication/cross-platform matrix is future, separately authorized work; the present local candidate must not be represented as a released v0.5.0 artifact.
+No must-have failed. A subsequent Phase 32 security follow-up closed T-32-07 by bounding the local build/probe paths; `32-SECURITY.md` records the re-audit and passing evidence tasks. This does not resolve the four judgment-tier human UAT items, so the report remains `human_needed`. Hosted publication/cross-platform matrix is future, separately authorized work; the present local candidate must not be represented as a released v0.5.0 artifact.
 
 ---
 

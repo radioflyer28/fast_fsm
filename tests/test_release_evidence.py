@@ -296,6 +296,43 @@ def test_installed_command_enforces_timeout_and_incremental_output_caps(
             )
 
 
+def test_evidence_collection_command_reuses_bounded_process_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence builds and probes cannot hang or flood captured output."""
+    environment = dict(os.environ)
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_EVIDENCE_COMMAND_TIMEOUT_SECONDS", 0.05)
+        with pytest.raises(EvidenceError, match="Evidence subprocess timed out"):
+            release_evidence._run_checked(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                cwd=tmp_path,
+                environment=environment,
+            )
+    with monkeypatch.context() as patched:
+        patched.setattr(release_evidence, "_MAX_CHILD_OUTPUT_BYTES", 64)
+        with pytest.raises(
+            EvidenceError, match="Evidence subprocess exceeded the output limit"
+        ):
+            release_evidence._run_checked(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'x' * 4096)",
+                ],
+                cwd=tmp_path,
+                environment=environment,
+            )
+    assert (
+        release_evidence._run_checked(
+            [sys.executable, "-c", "print('bounded')"],
+            cwd=tmp_path,
+            environment=environment,
+        )
+        == "bounded\n"
+    )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
 def test_installed_command_timeout_kills_pipe_holding_descendants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2648,11 +2685,24 @@ def _validate_phase20_release_taskfile(taskfile: dict[str, object]) -> None:
     assert "gh release" not in readiness_text
 
     local_evidence_text = _task_command_text(tasks["release-evidence-local-check"])
+    assert "release_evidence._run_installed_command(" in local_evidence_text
+    assert "_EVIDENCE_COMMAND_TIMEOUT_SECONDS" in local_evidence_text
     assert "matrix_artifact_evidence(artifact)" in local_evidence_text
     assert "matrix_runtime_evidence(runtime_record)" in local_evidence_text
     assert 'proof["performance"] if cell.requires_performance else None' in (
         local_evidence_text
     )
+    for task_name in (
+        "release-identity-check",
+        "release-installed-artifacts-check",
+        "release-sdist-check",
+        "release-evidence-local-check",
+        "release-installed-performance-check",
+    ):
+        rendered = _task_command_text(tasks[task_name])
+        assert "release_evidence._run_installed_command(" in rendered, task_name
+        assert "_EVIDENCE_COMMAND_TIMEOUT_SECONDS" in rendered, task_name
+        assert "subprocess.run(" not in rendered, task_name
 
     hosted = _task_command_text(tasks["release-hosted-prerelease-check"])
     for required in (

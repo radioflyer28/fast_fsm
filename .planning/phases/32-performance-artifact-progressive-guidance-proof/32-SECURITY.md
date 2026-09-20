@@ -30,7 +30,7 @@ created: 2026-09-19
 | T-32-04 | Spoofing | Source/native loader | high | mitigate | Exact path, suffix, containment and build-mode assertions in installed-artifact tests and release evidence tool | closed |
 | T-32-05 | Tampering | Archive/manifest | high | mitigate | Snapshot/hash checks, narrow guarded refresh and read-only baseline check | closed |
 | T-32-06 | Repudiation | Local candidate | medium | mitigate | Local aggregate records non-authorizing scope and false release authorization | closed |
-| T-32-07 | Denial of service | Build/probe subprocess | medium | mitigate | Installed neutral child commands have time/output caps, but `_run_checked()`, Taskfile `invoke()`, and fresh-native test build remain uncapped | open — below high threshold |
+| T-32-07 | Denial of service | Build/probe subprocess | medium | mitigate | The existing process-tree runner now also bounds `_run_checked()`, local Taskfile build/probe commands, the isolated slots probe, and fresh-native artifact tests; timeout/flood tests and local artifact tasks pass | closed |
 | T-32-08 | Repudiation | Timing row | medium | mitigate | Every priority and semantic row records environment label, origin/build, versions, platform, method and samples | closed |
 | T-32-09 | Tampering | Native floor | high | mitigate | Separate fixed 200,000/s installed-native validator retained and passed | closed |
 | T-32-10 | Denial of service | Benchmark fixture | low | accept | Maintainer-controlled finite fixtures; nonpositive inputs rejected | closed — accepted |
@@ -53,19 +53,20 @@ created: 2026-09-19
 | R-32-02 | T-32-17 | Public rejection example uses fixed payload-free literals. | Phase 32 approved plan | 2026-09-19 |
 | R-32-03 | T-32-20 | Documentation output uses fixed literal codes, not user data. | Phase 32 approved plan | 2026-09-19 |
 
-T-32-07 is **not accepted or closed**. Its residual uncapped local build/probe calls are a visible non-blocking finding under the current `security_block_on: high` policy; any later claim that *all* build/probe subprocesses are bounded requires remediation and re-audit.
+T-32-07 was closed by reusing the process-tree runner with per-stream output caps and explicit deadlines across the previously uncapped local build/probe paths. The release-baseline write and read-only check both passed after the change; the refresh added one test and changed only non-gating timing observations.
 
 ## Security Audit Trail
 
 | Audit Date | Threats Total | Closed (including accepted) | Open | Run By |
 |---|---:|---:|---:|---|
 | 2026-09-19 | 20 | 19 | 1 (medium, non-blocking) | GSD security auditor and orchestrator |
+| 2026-09-20 | 20 | 20 | 0 | GSD L1 mitigation re-audit |
 
 ## Sign-Off
 
 - [x] All threats have a disposition.
 - [x] Accepted low risks are recorded above.
 - [x] `threats_open: 0` at the configured high-severity block threshold.
-- [x] `status: verified` set; T-32-07 remains explicitly open below threshold.
+- [x] `status: verified` set; all 20 authored threats are closed or explicitly accepted.
 
-**Approval:** verified at ASVS L1 on 2026-09-19; one medium residual is not waived.
+**Approval:** verified at ASVS L1 on 2026-09-20; no authored threat remains open.

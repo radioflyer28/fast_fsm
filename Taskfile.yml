@@ -277,21 +277,30 @@ tasks:
       - |
           uv run python - <<'PY'
           import json
-          import subprocess
+          import os
           import tempfile
           from pathlib import Path
 
           from fast_fsm import __version__
           from tools.artifact_conformance import _suite_sha256
+          from tools import release_evidence
 
           with tempfile.TemporaryDirectory(prefix="fast-fsm-release-identity-") as temporary:
               root = Path(temporary)
-              head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+              head_sha = release_evidence._run_installed_command(
+                  ["git", "rev-parse", "HEAD"], cwd=Path.cwd(),
+                  environment=os.environ, stage="commit lookup", label="Local evidence",
+              ).strip()
               installed = root / "installed-identity.json"
               aggregate = root / "static-aggregate.json"
               installed.write_text(json.dumps({"distribution_version": "0.4.0", "package_version": __version__}), encoding="utf-8")
               aggregate.write_text(json.dumps({"package": "fast_fsm", "distribution_version": "0.4.0", "commit": head_sha, "tag": "unreleased", "suite_sha256": _suite_sha256()}), encoding="utf-8")
-              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-release-identity", "--installed-identity", str(installed), "--aggregate", str(aggregate), "--json"], check=True)
+              print(release_evidence._run_installed_command(
+                  ["uv", "run", "python", "tools/release_evidence.py", "verify-release-identity", "--installed-identity", str(installed), "--aggregate", str(aggregate), "--json"],
+                  cwd=Path.cwd(), environment=os.environ,
+                  stage="release identity probe", label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              ), end="")
           PY
 
   release-installed-artifacts-check:
@@ -302,7 +311,6 @@ tasks:
       - |
           uv run python - <<'PY'
           import os
-          import subprocess
           import tempfile
           from pathlib import Path
           from tools import artifact_conformance, release_evidence
@@ -315,7 +323,12 @@ tasks:
                   output = root / intent
                   environment = dict(os.environ, FAST_FSM_BUILD_MODE=intent)
                   environment.pop("FAST_FSM_PURE_PYTHON", None)
-                  subprocess.run(["uv", "build", "--wheel", "--out-dir", str(output)], check=True, env=environment)
+                  release_evidence._run_installed_command(
+                      ["uv", "build", "--wheel", "--out-dir", str(output)],
+                      cwd=Path.cwd(), environment=environment,
+                      stage=f"{intent} wheel build", label="Local evidence",
+                      timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+                  )
                   wheels = sorted(output.glob("*.whl"))
                   if len(wheels) != 1:
                       raise SystemExit(f"expected one {intent} wheel, got {wheels!r}")
@@ -339,17 +352,28 @@ tasks:
     cmds:
       - |
           uv run python - <<'PY'
-          import subprocess
+          import os
           import tempfile
           from pathlib import Path
+          from tools import release_evidence
 
           with tempfile.TemporaryDirectory(prefix="fast-fsm-sdist-artifacts-") as temporary:
               output = Path(temporary)
-              subprocess.run(["uv", "build", "--sdist", "--out-dir", str(output)], check=True)
+              release_evidence._run_installed_command(
+                  ["uv", "build", "--sdist", "--out-dir", str(output)],
+                  cwd=Path.cwd(), environment=os.environ,
+                  stage="sdist build", label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              )
               sdists = sorted(output.glob("*.tar.gz"))
               if len(sdists) != 1:
                   raise SystemExit(f"expected one source archive, got {sdists!r}")
-              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-sdist", "--sdist", str(sdists[0]), "--json"], check=True)
+              print(release_evidence._run_installed_command(
+                  ["uv", "run", "python", "tools/release_evidence.py", "verify-sdist", "--sdist", str(sdists[0]), "--json"],
+                  cwd=Path.cwd(), environment=os.environ,
+                  stage="sdist probe", label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              ), end="")
           PY
 
   release-evidence-local-check:
@@ -359,19 +383,28 @@ tasks:
           uv run python - <<'PY'
           import json
           import os
-          import subprocess
           import tempfile
           from pathlib import Path
-
           from tools import release_evidence
 
           root = Path.cwd()
           runtime = release_evidence._current_matrix_runtime()
           cells = {cell.identifier: cell for cell in release_evidence.expected_matrix("local", runtime).cells}
-          head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd=root).strip()
+          head_sha = release_evidence._run_installed_command(
+              ["git", "rev-parse", "HEAD"], cwd=root,
+              environment=os.environ, stage="commit lookup", label="Local evidence",
+          ).strip()
 
           def invoke(arguments, *, environment=None):
-              subprocess.run(arguments, check=True, cwd=root, env=environment)
+              print("local evidence command:", " ".join(arguments[:2]), flush=True)
+              release_evidence._run_installed_command(
+                  arguments,
+                  cwd=root,
+                  environment=environment or os.environ,
+                  stage="build",
+                  label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              )
 
           def one_wheel(directory):
               wheels = sorted(directory.glob("*.whl"))
@@ -476,19 +509,29 @@ tasks:
       - |
           uv run python - <<'PY'
           import os
-          import subprocess
           import tempfile
           from pathlib import Path
+          from tools import release_evidence
 
           with tempfile.TemporaryDirectory(prefix="fast-fsm-installed-performance-") as temporary:
               output = Path(temporary)
               environment = dict(os.environ, FAST_FSM_BUILD_MODE="compiled")
               environment.pop("FAST_FSM_PURE_PYTHON", None)
-              subprocess.run(["uv", "build", "--wheel", "--out-dir", str(output)], check=True, env=environment)
+              release_evidence._run_installed_command(
+                  ["uv", "build", "--wheel", "--out-dir", str(output)],
+                  cwd=Path.cwd(), environment=environment,
+                  stage="compiled performance wheel build", label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              )
               wheels = sorted(output.glob("*.whl"))
               if len(wheels) != 1:
                   raise SystemExit(f"expected one compiled wheel, got {wheels!r}")
-              subprocess.run(["uv", "run", "python", "tools/release_evidence.py", "verify-installed-wheel", "--wheel", str(wheels[0]), "--expected-mode", "compiled", "--build-intent", "compiled", "--json"], check=True)
+              print(release_evidence._run_installed_command(
+                  ["uv", "run", "python", "tools/release_evidence.py", "verify-installed-wheel", "--wheel", str(wheels[0]), "--expected-mode", "compiled", "--build-intent", "compiled", "--json"],
+                  cwd=Path.cwd(), environment=os.environ,
+                  stage="compiled performance wheel probe", label="Local evidence",
+                  timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
+              ), end="")
           PY
 
   release-slots-check:

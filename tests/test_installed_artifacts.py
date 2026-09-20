@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import tarfile
 
@@ -165,15 +164,14 @@ def test_sdist_child_lineage_rejects_auto_missing_and_duplicate_records() -> Non
 def _build_wheel(output: Path, mode: str) -> Path:
     """Build one intentional local wheel under the requested release intent."""
     environment = _artifact_child_environment(mode)
-    completed = subprocess.run(
+    release_evidence._run_installed_command(
         ["uv", "build", "--offline", "--wheel", "--out-dir", str(output)],
         cwd=ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
+        environment=environment,
+        stage=f"{mode} wheel build",
+        label="Test artifact",
+        timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
     )
-    assert completed.returncode == 0, completed.stderr
     wheels = sorted(output.glob("*.whl"))
     assert len(wheels) == 1
     return wheels[0].resolve()
@@ -224,7 +222,7 @@ def _collect_source_probe(
     shutil.copy2(ROOT / "tools" / "artifact_conformance.py", probe)
     environment = _native_probe_environment()
     environment["PYTHONPATH"] = str((source_project / "src").resolve())
-    completed = subprocess.run(
+    output = release_evidence._run_installed_command(
         [
             sys.executable,
             str(probe),
@@ -233,13 +231,11 @@ def _collect_source_probe(
             "0" * 64,
         ],
         cwd=neutral_directory,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
+        environment=environment,
+        stage="source probe",
+        label="Test artifact",
     )
-    assert completed.returncode == 0, completed.stderr
-    record = json.loads(completed.stdout)
+    record = json.loads(output)
     assert isinstance(record, dict)
     return record
 
@@ -270,15 +266,14 @@ def fresh_native_source_conformance(
     project = tmp_path_factory.mktemp("fresh-native-source")
     _copy_native_build_project(project)
     environment = _artifact_child_environment("compiled")
-    built = subprocess.run(
+    release_evidence._run_installed_command(
         [sys.executable, "setup.py", "build_ext", "--inplace", "-q"],
         cwd=project,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
+        environment=environment,
+        stage="fresh native build",
+        label="Test artifact",
+        timeout_seconds=release_evidence._EVIDENCE_COMMAND_TIMEOUT_SECONDS,
     )
-    assert built.returncode == 0, built.stderr
 
     package_root = (project / "src" / "fast_fsm").resolve()
     shadows = release_evidence.find_native_core_shadows(package_root)

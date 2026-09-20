@@ -1613,6 +1613,7 @@ _MAX_CHILD_NESTING = 12
 _MAX_CHILD_COLLECTION_LENGTH = 128
 _MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
 _INSTALLED_COMMAND_TIMEOUT_SECONDS = 300
+_EVIDENCE_COMMAND_TIMEOUT_SECONDS = 900
 _FORBIDDEN_CONFORMANCE_FIELDS = frozenset(
     {"args", "kwargs", "exception", "error", "repr", "path", "timing", "duration"}
 )
@@ -2695,9 +2696,22 @@ def _environment_python(environment_root: Path) -> Path:
 
 
 def _run_installed_command(
-    arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str], stage: str
+    arguments: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    stage: str,
+    label: str = "Installed artifact",
+    timeout_seconds: float | None = None,
 ) -> str:
-    """Run an isolated child with per-stream caps and a hard stage timeout."""
+    """Run a child with per-stream caps and a hard process-tree timeout."""
+    deadline_seconds = (
+        _INSTALLED_COMMAND_TIMEOUT_SECONDS
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+    if deadline_seconds <= 0:
+        raise ValueError("Child timeout must be positive.")
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     process = subprocess.Popen(
         list(arguments),
@@ -2782,7 +2796,7 @@ def _run_installed_command(
     )
     for reader in readers:
         reader.start()
-    deadline = time.monotonic() + _INSTALLED_COMMAND_TIMEOUT_SECONDS
+    deadline = time.monotonic() + deadline_seconds
     timed_out = False
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
@@ -2816,14 +2830,14 @@ def _run_installed_command(
             except subprocess.TimeoutExpired:
                 pass
     if timed_out:
-        raise EvidenceError(f"Installed artifact {stage} timed out.")
+        raise EvidenceError(f"{label} {stage} timed out.")
     if exceeded.is_set():
-        raise EvidenceError(f"Installed artifact {stage} exceeded the output limit.")
+        raise EvidenceError(f"{label} {stage} exceeded the output limit.")
     stdout = bytes(output["stdout"]).decode("utf-8", errors="replace")
     stderr = bytes(output["stderr"]).decode("utf-8", errors="replace")
     if process.returncode:
         raise EvidenceError(
-            f"Installed artifact {stage} failed.",
+            f"{label} {stage} failed.",
             diagnostics=(stdout, stderr),
         )
     return stdout
@@ -5015,25 +5029,29 @@ def collect_runtime_class_layouts(source_root: Path) -> list[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="fast-fsm-runtime-layout-") as temporary:
         staged_source_root = Path(temporary) / "source"
         _stage_runtime_audit_source(resolved_source_root, staged_source_root)
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                "-c",
-                _RUNTIME_LAYOUT_AUDIT_SCRIPT,
-                str(staged_source_root),
-                PACKAGE_NAME,
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    if completed.returncode:
-        raise EvidenceError(
-            "Isolated runtime slots audit failed:\n" + completed.stderr.strip()
-        )
+        try:
+            output = _run_installed_command(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    _RUNTIME_LAYOUT_AUDIT_SCRIPT,
+                    str(staged_source_root),
+                    PACKAGE_NAME,
+                ],
+                cwd=REPOSITORY_ROOT,
+                environment=os.environ,
+                stage="runtime slots probe",
+                label="Evidence",
+            )
+        except EvidenceError as error:
+            if error.diagnostics is None:
+                raise
+            raise EvidenceError(
+                "Isolated runtime slots audit failed:\n" + error.diagnostics[1].strip()
+            ) from error
     try:
-        payload = json.loads(completed.stdout)
+        payload = json.loads(output)
     except json.JSONDecodeError as error:
         raise EvidenceError("Runtime slots audit did not emit valid JSON.") from error
     if not isinstance(payload, list):
@@ -5477,26 +5495,24 @@ def _command_environment() -> dict[str, str]:
 def _run_checked(
     arguments: Sequence[str], *, cwd: Path, environment: Mapping[str, str]
 ) -> str:
-    """Run one controlled evidence command with argument-array safety."""
-    completed = subprocess.run(
-        list(arguments),
-        cwd=cwd,
-        env=dict(environment),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode:
-        rendered = " ".join(arguments)
-        output = "\n".join(
-            part
-            for part in (completed.stdout.strip(), completed.stderr.strip())
-            if part
+    """Run one controlled evidence command with bounded output and runtime."""
+    try:
+        return _run_installed_command(
+            arguments,
+            cwd=cwd,
+            environment=environment,
+            stage="subprocess",
+            label="Evidence",
+            timeout_seconds=_EVIDENCE_COMMAND_TIMEOUT_SECONDS,
         )
+    except EvidenceError as error:
+        if error.diagnostics is None:
+            raise
+        output = "\n".join(part.strip() for part in error.diagnostics if part.strip())
         raise EvidenceError(
-            f"Evidence subprocess failed ({completed.returncode}): {rendered}\n{output}"
-        )
-    return completed.stdout
+            f"Evidence subprocess failed: {output[:_MAX_CHILD_STRING_LENGTH]}",
+            diagnostics=error.diagnostics,
+        ) from error
 
 
 def _parse_junit_results(junit_path: Path) -> dict[str, int]:
