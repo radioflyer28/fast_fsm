@@ -4840,6 +4840,57 @@ def test_phase32_guarded_refresh_rejects_altered_slots_policy_before_writing(
     assert protected.read_bytes() == original
 
 
+def test_phase32_guarded_refresh_allows_only_core_coverage_improvement(
+    tmp_path: Path,
+) -> None:
+    """Core coverage may strengthen the floor without opening other stable fields."""
+    protected = tmp_path / "release-baseline.json"
+    protected.write_bytes((ROOT / "evidence" / "release-baseline.json").read_bytes())
+    candidate = _phase32_guarded_refresh_candidate()
+    candidate["quality_baseline"]["coverage"]["core_percent"] = 97.05
+
+    release_evidence._write_release_baseline_guarded(candidate, baseline_path=protected)
+
+    assert protected.read_text(encoding="utf-8") == serialize_manifest(candidate)
+
+
+def test_phase32_guarded_refresh_rejects_core_coverage_regression(
+    tmp_path: Path,
+) -> None:
+    """The reviewable core metric cannot lower the already-recorded floor."""
+    protected = tmp_path / "release-baseline.json"
+    original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(original)
+    candidate = _phase32_guarded_refresh_candidate()
+    candidate["quality_baseline"]["coverage"]["core_percent"] = 97.0
+
+    with pytest.raises(EvidenceError, match="quality_baseline.coverage.core_percent"):
+        release_evidence._write_release_baseline_guarded(
+            candidate, baseline_path=protected
+        )
+
+    assert protected.read_bytes() == original
+
+
+def test_phase32_guarded_refresh_keeps_unrelated_stable_paths_immutable(
+    tmp_path: Path,
+) -> None:
+    """A coverage improvement cannot authorize changes to source identity facts."""
+    protected = tmp_path / "release-baseline.json"
+    original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(original)
+    candidate = _phase32_guarded_refresh_candidate()
+    candidate["quality_baseline"]["coverage"]["core_percent"] = 97.05
+    candidate["quality_baseline"]["source"]["core_origin"] = "other/core.py"
+
+    with pytest.raises(EvidenceError, match="quality_baseline.source.core_origin"):
+        release_evidence._write_release_baseline_guarded(
+            candidate, baseline_path=protected
+        )
+
+    assert protected.read_bytes() == original
+
+
 def test_guarded_release_baseline_write_allows_only_the_refreshable_paths(
     tmp_path: Path,
 ) -> None:
