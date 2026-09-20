@@ -494,10 +494,11 @@ def test_performance_demo_cli_emits_all_rows_for_named_environment() -> None:
             "--iterations",
             "1",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 0, completed.stderr
     rows = [
         json.loads(line.removeprefix("SEMANTIC_OBSERVATION "))
         for line in completed.stdout.splitlines()

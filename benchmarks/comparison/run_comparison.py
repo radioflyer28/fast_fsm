@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import select
 from pathlib import Path
 import signal
 import subprocess
@@ -116,6 +117,7 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
     output = {"stdout": bytearray(), "stderr": bytearray()}
     exceeded = threading.Event()
     stopped = threading.Event()
+    stop_readers = threading.Event()
 
     def stop_process_tree() -> None:
         if stopped.is_set():
@@ -138,22 +140,19 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
             except OSError:
                 pass
 
-    def close_stream_descriptors() -> None:
-        """Wake readers without waiting on a BufferedReader lock they may hold."""
-        for stream in (process.stdout, process.stderr):
-            try:
-                descriptor = stream.fileno()
-            except (OSError, ValueError):
-                continue
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-
     def read_capped(stream: BinaryIO, target: bytearray) -> None:
         try:
-            read_available = getattr(stream, "read1", stream.read)
-            while chunk := read_available(64 * 1024):
+            while not stop_readers.is_set():
+                if os.name == "nt":
+                    read_available = getattr(stream, "read1", stream.read)
+                    chunk = read_available(64 * 1024)
+                else:
+                    descriptor = stream.fileno()
+                    if not select.select([descriptor], [], [], 0.05)[0]:
+                        continue
+                    chunk = os.read(descriptor, 64 * 1024)
+                if not chunk:
+                    return
                 if len(target) + len(chunk) > MAX_CHILD_OUTPUT_BYTES:
                     exceeded.set()
                     stop_process_tree()
@@ -189,13 +188,12 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
         if any(reader.is_alive() for reader in readers):
             timed_out = True
             stop_process_tree()
-            close_stream_descriptors()
+            stop_readers.set()
             for reader in readers:
-                reader.join(timeout=0.1)
+                reader.join(timeout=0.2)
         for stream, reader in zip((process.stdout, process.stderr), readers):
-            # A detached descendant can retain a pipe while its reader is
-            # blocked. The descriptor is already closed above; BufferedReader
-            # .close() would wait for that reader's lock past our deadline.
+            # Never close a stream still owned by a blocked Windows reader.
+            # POSIX readers poll and exit when stop_readers is set.
             if reader.is_alive():
                 continue
             try:
