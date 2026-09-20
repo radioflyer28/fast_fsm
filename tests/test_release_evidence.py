@@ -4772,6 +4772,73 @@ def _baseline_candidate_with_allowed_refreshes() -> dict[str, object]:
     return candidate
 
 
+def _phase32_guarded_refresh_candidate() -> dict[str, object]:
+    """Return only the reviewed Phase 32 oracle and slots-policy refresh facts."""
+    candidate = _baseline_candidate_with_allowed_refreshes()
+    candidate["artifact_evidence"]["conformance"] = (
+        artifact_conformance.collect_conformance()
+    )
+    slots = release_evidence.slots_policy(PACKAGE_SOURCE.parent)
+    candidate["slots_policy"].update(
+        {
+            "inventory": slots["inventory"],
+            "runtime_layouts": slots["runtime_layouts"],
+            "registered_exceptions": slots["registered_exceptions"],
+            "measurements": slots["representative_measurements"],
+        }
+    )
+    return candidate
+
+
+def test_phase32_guarded_refresh_accepts_only_current_oracle_and_slots_policy(
+    tmp_path: Path,
+) -> None:
+    """A deliberate Phase 32 refresh can adopt regenerated reviewed evidence."""
+    protected = tmp_path / "release-baseline.json"
+    protected.write_bytes((ROOT / "evidence" / "release-baseline.json").read_bytes())
+    candidate = _phase32_guarded_refresh_candidate()
+
+    release_evidence._write_release_baseline_guarded(candidate, baseline_path=protected)
+
+    assert protected.read_text(encoding="utf-8") == serialize_manifest(candidate)
+
+
+def test_phase32_guarded_refresh_rejects_altered_oracle_before_writing(
+    tmp_path: Path,
+) -> None:
+    """An allowlisted path still has to equal regenerated canonical evidence."""
+    protected = tmp_path / "release-baseline.json"
+    original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(original)
+    candidate = _phase32_guarded_refresh_candidate()
+    candidate["artifact_evidence"]["conformance"]["semantic_sha256"] = "0" * 64
+
+    with pytest.raises(EvidenceError, match="conformance"):
+        release_evidence._write_release_baseline_guarded(
+            candidate, baseline_path=protected
+        )
+
+    assert protected.read_bytes() == original
+
+
+def test_phase32_guarded_refresh_rejects_altered_slots_policy_before_writing(
+    tmp_path: Path,
+) -> None:
+    """Reviewed slots paths still reject a value detached from this source tree."""
+    protected = tmp_path / "release-baseline.json"
+    original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
+    protected.write_bytes(original)
+    candidate = _phase32_guarded_refresh_candidate()
+    candidate["slots_policy"]["inventory"] = []
+
+    with pytest.raises(EvidenceError, match="slots_policy.inventory"):
+        release_evidence._write_release_baseline_guarded(
+            candidate, baseline_path=protected
+        )
+
+    assert protected.read_bytes() == original
+
+
 def test_guarded_release_baseline_write_allows_only_the_refreshable_paths(
     tmp_path: Path,
 ) -> None:
@@ -4779,7 +4846,7 @@ def test_guarded_release_baseline_write_allows_only_the_refreshable_paths(
     protected = tmp_path / "release-baseline.json"
     baseline = (ROOT / "evidence" / "release-baseline.json").read_bytes()
     protected.write_bytes(baseline)
-    candidate = _baseline_candidate_with_allowed_refreshes()
+    candidate = _phase32_guarded_refresh_candidate()
 
     release_evidence._write_release_baseline_guarded(candidate, baseline_path=protected)
 
@@ -4803,7 +4870,7 @@ def test_guarded_release_baseline_rejects_durable_drift_without_byte_change(
     protected = tmp_path / "release-baseline.json"
     original = (ROOT / "evidence" / "release-baseline.json").read_bytes()
     protected.write_bytes(original)
-    candidate = _baseline_candidate_with_allowed_refreshes()
+    candidate = _phase32_guarded_refresh_candidate()
     target = candidate
     for part in path[:-1]:
         target = target[part]

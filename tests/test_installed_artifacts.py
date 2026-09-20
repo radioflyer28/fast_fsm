@@ -13,6 +13,7 @@ import sys
 import tarfile
 
 import pytest
+from fast_fsm import StateMachine, quick_fsm, simple_fsm
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -328,6 +329,27 @@ def test_phase32_native_probe_environment_does_not_replace_parent_coverage(
         key.startswith("COV_CORE_") or key.startswith("COVERAGE_")
         for key in environment
     )
+
+
+def test_phase32_compatibility_wrappers_execute_the_documented_builder_window() -> (
+    None
+):
+    """Retained v0.5.x wrappers still warn once while constructing real machines."""
+    with pytest.warns(DeprecationWarning):
+        from_states = StateMachine.from_states("idle", "active", initial="idle")
+    with pytest.warns(DeprecationWarning):
+        quick_build = StateMachine.quick_build(
+            "idle", [("advance", "idle", "active")]
+        )
+    with pytest.warns(DeprecationWarning):
+        simple = simple_fsm("idle", "active", initial="idle")
+    with pytest.warns(DeprecationWarning):
+        quick = quick_fsm("idle", [("advance", "idle", "active")])
+
+    assert from_states.trigger("missing").success is False
+    assert quick_build.trigger("advance").to_state == "active"
+    assert simple.current_state.name == "idle"
+    assert quick.trigger("advance").to_state == "active"
 
 
 @pytest.fixture(scope="module")
