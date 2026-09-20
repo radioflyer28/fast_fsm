@@ -225,9 +225,9 @@ jobs:
             runner: ubuntu-latest
             cibw_arch: x86_64
           - target: linux-aarch64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04-arm
             cibw_arch: aarch64
-            needs_qemu: true
+            needs_qemu: false
           - target: windows-amd64
             runner: windows-latest
             cibw_arch: AMD64
