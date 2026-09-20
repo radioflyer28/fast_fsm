@@ -258,6 +258,25 @@ def test_phase32_final_pure_wheel_preserves_exact_origin_finality_oracle(
     assert records["final.explicit-versus-sink"]["sink_terminated"] is False
 
 
+@pytest.mark.integration
+def test_phase32_fresh_native_copy_matches_clean_source_oracle(
+    clean_source_conformance: dict[str, object],
+    fresh_native_source_conformance: dict[str, object],
+) -> None:
+    """A fresh isolated native core matches the same strict source oracle."""
+    assert fresh_native_source_conformance["runtime"]["expected_mode"] == "compiled"
+    assert fresh_native_source_conformance["runtime"]["core_loader"] == (
+        "ExtensionFileLoader"
+    )
+    assert (
+        artifact_conformance.compare_conformance(
+            clean_source_conformance,
+            fresh_native_source_conformance["conformance"],
+        )
+        == []
+    )
+
+
 def test_direct_artifact_task_captures_one_clean_source_record_for_both_wheels() -> (
     None
 ):
