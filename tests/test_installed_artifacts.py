@@ -13,7 +13,7 @@ import sys
 import tarfile
 
 import pytest
-from fast_fsm import StateMachine, quick_fsm, simple_fsm
+from fast_fsm import State, StateMachine, quick_fsm, simple_fsm
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -346,6 +346,51 @@ def test_phase32_compatibility_wrappers_execute_the_documented_builder_window() 
     assert quick_build.trigger("advance").to_state == "active"
     assert simple.current_state.name == "idle"
     assert quick.trigger("advance").to_state == "active"
+
+
+def test_phase32_source_validation_keeps_builder_errors_explicit() -> None:
+    """The source-evidence suite executes retained public validation branches."""
+    with pytest.raises(TypeError, match="clock must be callable"):
+        StateMachine(State("idle"), clock=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="clock must return a finite"):
+        StateMachine(State("idle"), clock=lambda: float("nan"))
+    with pytest.raises(TypeError, match="'name' must be a string"):
+        StateMachine.from_dict({"initial": "idle", "name": 1})
+    with pytest.raises(TypeError, match="'transitions' must be a list"):
+        StateMachine.from_dict({"initial": "idle", "transitions": {}})
+    with pytest.raises(ValueError, match="'states' must be a list"):
+        StateMachine.from_dict({"initial": "idle", "states": ["idle", 1]})
+    with pytest.raises(TypeError, match="conditions must be a dictionary"):
+        StateMachine.from_dict({"initial": "idle"}, conditions=())
+    with pytest.raises(ValueError, match="field 'to' must be a non-empty string"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [{"trigger": "go", "from": "idle", "to": 1}],
+            }
+        )
+    with pytest.raises(ValueError, match="field 'from' must be a non-empty string"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [{"trigger": "go", "from": [], "to": "done"}],
+            }
+        )
+    with pytest.raises(ValueError, match="timing after must be less than within"):
+        StateMachine.from_dict(
+            {
+                "initial": "idle",
+                "transitions": [
+                    {
+                        "trigger": "go",
+                        "from": "idle",
+                        "to": "done",
+                        "after": 1,
+                        "within": 1,
+                    }
+                ],
+            }
+        )
 
 
 @pytest.fixture(scope="module")
