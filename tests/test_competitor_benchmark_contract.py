@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -65,11 +66,16 @@ def fixture_record(
     if implementation_id == "fast-fsm":
         distribution = "fast-fsm"
         version = "0.5.0"
-        origin = "/tmp/fast_fsm/core.py"
+        origin = str(Path(tempfile.gettempdir()) / "fast_fsm" / "core.py")
     else:
         distribution = "python-statemachine"
         version = implementation_id.rsplit("-", 1)[1]
-        origin = f"/tmp/{implementation_id}/statemachine/__init__.py"
+        origin = str(
+            Path(tempfile.gettempdir())
+            / implementation_id
+            / "statemachine"
+            / "__init__.py"
+        )
     return {
         "schema_version": common.COMPARISON_SCHEMA_VERSION,
         "implementation_id": implementation_id,

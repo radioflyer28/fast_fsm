@@ -303,7 +303,8 @@ def test_sdist_derivation_reuses_installed_wheel_verification(tmp_path: Path) ->
     )
     sdist = next(dist_dir.glob("*.tar.gz"))
 
-    record = release_evidence.verify_sdist_derivations(sdist)
+    # This test asserts archive lineage, not throughput on a shared CI runner.
+    record = release_evidence.verify_sdist_derivations(sdist, collect_performance=False)
 
     assert record["archive"]["filename"] == sdist.name
     children = record["children"]

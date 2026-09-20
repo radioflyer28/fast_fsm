@@ -192,7 +192,12 @@ def _run_bounded_process(command: list[str], cwd: str) -> tuple[int, bytes, byte
             close_stream_descriptors()
             for reader in readers:
                 reader.join(timeout=0.1)
-        for stream in (process.stdout, process.stderr):
+        for stream, reader in zip((process.stdout, process.stderr), readers):
+            # A detached descendant can retain a pipe while its reader is
+            # blocked. The descriptor is already closed above; BufferedReader
+            # .close() would wait for that reader's lock past our deadline.
+            if reader.is_alive():
+                continue
             try:
                 stream.close()
             except (OSError, ValueError):
