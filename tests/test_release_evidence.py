@@ -323,14 +323,11 @@ def test_evidence_collection_command_reuses_bounded_process_runner(
                 cwd=tmp_path,
                 environment=environment,
             )
-    assert (
-        release_evidence._run_checked(
-            [sys.executable, "-c", "print('bounded')"],
-            cwd=tmp_path,
-            environment=environment,
-        )
-        == "bounded\n"
-    )
+    assert release_evidence._run_checked(
+        [sys.executable, "-c", "print('bounded')"],
+        cwd=tmp_path,
+        environment=environment,
+    ).splitlines() == ["bounded"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
