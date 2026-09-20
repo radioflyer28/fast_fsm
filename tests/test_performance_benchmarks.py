@@ -368,7 +368,11 @@ def test_priority_group_reporter_labels_each_environmental_observation() -> None
     """Descriptive benchmark rows expose their environment and finite work shape."""
     performance_demo = _load_performance_demo()
     rows = performance_demo.collect_priority_group_observations(
-        topology_sizes=(4,), group_depths=(2,), sample_count=1, iterations=1
+        environment_label="pytest-priority-observation",
+        topology_sizes=(4,),
+        group_depths=(2,),
+        sample_count=1,
+        iterations=1,
     )
 
     assert {row["winner_position"] for row in rows} == {
@@ -384,6 +388,7 @@ def test_priority_group_reporter_labels_each_environmental_observation() -> None
             "core_mode",
             "core_origin",
             "platform",
+            "environment_label",
             "topology_size",
             "group_depth",
             "winner_position",
@@ -393,8 +398,25 @@ def test_priority_group_reporter_labels_each_environmental_observation() -> None
         } <= row.keys()
         assert row["topology_size"] == 4
         assert row["group_depth"] == 2
+        assert row["environment_label"] == "pytest-priority-observation"
         assert row["sample_count"] == 1
         assert row["operations_per_second"] > 0
+
+
+@pytest.mark.parametrize("environment_label", ("", " ", 1))
+def test_priority_group_reporter_rejects_invalid_environment_label(
+    environment_label: object,
+) -> None:
+    """Priority timing rows require the same nonempty provenance label."""
+    performance_demo = _load_performance_demo()
+    with pytest.raises(ValueError):
+        performance_demo.collect_priority_group_observations(
+            environment_label=environment_label,  # type: ignore[arg-type]
+            topology_sizes=(4,),
+            group_depths=(2,),
+            sample_count=1,
+            iterations=1,
+        )
 
 
 def test_semantic_observation_reporter_separates_feature_costs_and_provenance() -> None:
@@ -459,8 +481,8 @@ def test_semantic_observation_reporter_rejects_invalid_controls(
         )
 
 
-def test_performance_demo_cli_emits_all_semantic_rows_for_named_environment() -> None:
-    """The runnable reporter labels every semantic row without claiming a ratio."""
+def test_performance_demo_cli_emits_all_rows_for_named_environment() -> None:
+    """The runnable reporter applies its label to both row families."""
     completed = subprocess.run(
         [
             sys.executable,
@@ -481,7 +503,13 @@ def test_performance_demo_cli_emits_all_semantic_rows_for_named_environment() ->
         for line in completed.stdout.splitlines()
         if line.startswith("SEMANTIC_OBSERVATION ")
     ]
+    priority_rows = [
+        json.loads(line.removeprefix("PRIORITY_GROUP_OBSERVATION "))
+        for line in completed.stdout.splitlines()
+        if line.startswith("PRIORITY_GROUP_OBSERVATION ")
+    ]
     assert len(rows) == 4
+    assert priority_rows
     assert {row["scenario"] for row in rows} == {
         "final_entry",
         "internal_self",
@@ -489,6 +517,7 @@ def test_performance_demo_cli_emits_all_semantic_rows_for_named_environment() ->
         "expected_rejection",
     }
     assert {row["environment_label"] for row in rows} == {"pytest-cli"}
+    assert {row["environment_label"] for row in priority_rows} == {"pytest-cli"}
 
 
 def test_performance_demo_cli_rejects_mismatched_expected_core_mode() -> None:
@@ -1584,7 +1613,9 @@ def test_semantic_trace_preparation_is_dominated_by_the_trace_enabled_branch(
     } <= semantic_keywords
 
 
-def test_direct_selectors_do_not_use_reflection_or_unrelated_registry_iteration() -> None:
+def test_direct_selectors_do_not_use_reflection_or_unrelated_registry_iteration() -> (
+    None
+):
     """The no-feature selector stays direct in both synchronous execution modes."""
     tree = ast.parse((ROOT / "src" / "fast_fsm" / "core.py").read_text())
     selectors = (

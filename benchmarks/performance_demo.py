@@ -147,12 +147,15 @@ def _runtime_labels() -> dict[str, str]:
 
 def collect_priority_group_observations(
     *,
+    environment_label: str,
     topology_sizes: tuple[int, ...] = TOPOLOGY_SIZES,
     group_depths: tuple[int, ...] = GROUP_DEPTHS,
     sample_count: int = DEFAULT_SAMPLE_COUNT,
     iterations: int = DEFAULT_ITERATIONS,
 ) -> list[dict[str, object]]:
     """Return representative labelled group timings without enforcing rate policy."""
+    if not isinstance(environment_label, str) or not environment_label.strip():
+        raise ValueError("environment_label must be a nonempty string")
     if sample_count < 1 or iterations < 1:
         raise ValueError("sample_count and iterations must be positive")
 
@@ -193,6 +196,7 @@ def collect_priority_group_observations(
                 observations.append(
                     {
                         **labels,
+                        "environment_label": environment_label,
                         "topology_size": topology_size,
                         "group_depth": group_depth,
                         "winner_position": winner_position,
@@ -250,7 +254,9 @@ def _build_self_operation(
     return operation, lambda: 0
 
 
-def _build_expected_rejection_operation() -> tuple[Callable[[], None], Callable[[], int]]:
+def _build_expected_rejection_operation() -> tuple[
+    Callable[[], None], Callable[[], int]
+]:
     """Prepare a repeated pre-commit expected-rejection eligibility attempt."""
     source = State("rejection-source")
     destination = State("rejection-destination")
@@ -379,7 +385,9 @@ def main() -> None:
     print("Finite group selection and immutable group mutation are local O(k).")
     print("Rows below are environment-labelled observations, not release thresholds.")
     for observation in collect_priority_group_observations(
-        sample_count=args.sample_count, iterations=args.iterations
+        environment_label=args.environment_label,
+        sample_count=args.sample_count,
+        iterations=args.iterations,
     ):
         print("PRIORITY_GROUP_OBSERVATION " + json.dumps(observation, sort_keys=True))
     for observation in collect_semantic_observations(
