@@ -164,9 +164,7 @@ def test_sdist_child_lineage_rejects_auto_missing_and_duplicate_records() -> Non
 
 def _build_wheel(output: Path, mode: str) -> Path:
     """Build one intentional local wheel under the requested release intent."""
-    environment = dict(os.environ)
-    environment["FAST_FSM_BUILD_MODE"] = mode
-    environment.pop("FAST_FSM_PURE_PYTHON", None)
+    environment = _artifact_child_environment(mode)
     completed = subprocess.run(
         ["uv", "build", "--offline", "--wheel", "--out-dir", str(output)],
         cwd=ROOT,
@@ -206,6 +204,14 @@ def _native_probe_environment() -> dict[str, str]:
             "COVERAGE_RCFILE",
         }:
             environment.pop(key)
+    return environment
+
+
+def _artifact_child_environment(mode: str) -> dict[str, str]:
+    """Set one build intent without letting child tools replace parent coverage."""
+    environment = _native_probe_environment()
+    environment["FAST_FSM_BUILD_MODE"] = mode
+    environment.pop("FAST_FSM_PURE_PYTHON", None)
     return environment
 
 
@@ -263,9 +269,7 @@ def fresh_native_source_conformance(
     """Build a native core in a disposable source copy and restore its pure shadow."""
     project = tmp_path_factory.mktemp("fresh-native-source")
     _copy_native_build_project(project)
-    environment = _native_probe_environment()
-    environment["FAST_FSM_BUILD_MODE"] = "compiled"
-    environment.pop("FAST_FSM_PURE_PYTHON", None)
+    environment = _artifact_child_environment("compiled")
     built = subprocess.run(
         [sys.executable, "setup.py", "build_ext", "--inplace", "-q"],
         cwd=project,
@@ -313,7 +317,7 @@ def fresh_native_source_conformance(
     }
 
 
-def test_phase32_native_probe_environment_does_not_replace_parent_coverage(
+def test_phase32_artifact_child_environment_does_not_replace_parent_coverage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Child builds cannot write pytest-cov's parent coverage data file."""
@@ -322,9 +326,9 @@ def test_phase32_native_probe_environment_does_not_replace_parent_coverage(
     monkeypatch.setenv("COVERAGE_PROCESS_START", "pyproject.toml")
     monkeypatch.setenv("FAST_FSM_BUILD_MODE", "pure")
 
-    environment = _native_probe_environment()
+    environment = _artifact_child_environment("compiled")
 
-    assert environment["FAST_FSM_BUILD_MODE"] == "pure"
+    assert environment["FAST_FSM_BUILD_MODE"] == "compiled"
     assert not any(
         key.startswith("COV_CORE_") or key.startswith("COVERAGE_")
         for key in environment
