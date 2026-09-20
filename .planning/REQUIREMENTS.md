@@ -64,9 +64,9 @@
 ### Documentation and Examples
 
 - [x] **DOC-01**: Users can learn final states, prioritized telemetry guards, internal and external self-transitions, expected rejection, and owned aircraft commands through the progressive drone tutorial.
-- [ ] **DOC-02**: Users encounter the canonical builder-first interface before advanced direct construction in the README and Sphinx documentation.
-- [ ] **DOC-03**: Users can migrate from deprecated construction conveniences using documented replacements and compatibility timing.
-- [ ] **DOC-04**: Users can clearly distinguish termination from dead-end topology, rejection from guard ineligibility, and internal transition from external self-transition in the public documentation.
+- [x] **DOC-02**: Users encounter the canonical builder-first interface before advanced direct construction in the README and Sphinx documentation.
+- [x] **DOC-03**: Users can migrate from deprecated construction conveniences using documented replacements and compatibility timing.
+- [x] **DOC-04**: Users can clearly distinguish termination from dead-end topology, rejection from guard ineligibility, and internal transition from external self-transition in the public documentation.
 
 ## Future Requirements
 
@@ -139,9 +139,9 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | PERF-05 | Phase 26 | Complete |
 | PERF-06 | Phase 26 | Complete |
 | DOC-01 | Phase 32 | Complete |
-| DOC-02 | Phase 32 | Pending |
-| DOC-03 | Phase 32 | Pending |
-| DOC-04 | Phase 32 | Pending |
+| DOC-02 | Phase 32 | Complete |
+| DOC-03 | Phase 32 | Complete |
+| DOC-04 | Phase 32 | Complete |
 
 **Coverage:**
 
