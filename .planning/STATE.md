@@ -1,47 +1,46 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.5.0
-milestone_name: Explicit Flat-FSM Semantics (Planned)
+milestone_name: Explicit Flat-FSM Semantics
 current_phase: 32
-current_phase_name: Performance, Artifact & Progressive Guidance Proof
-status: executing
-stopped_at: Phase 32 context gathered
-last_updated: "2026-09-19T23:15:11.989Z"
-last_activity: 2026-09-19
-last_activity_desc: Phase 32 execution started
-state_head: b2f3eb3b2d2332d8d716bae69fc7e0feca1b2bc6
+status: completed
+stopped_at: Phase 32 complete — all phases complete
+last_updated: "2026-09-20T04:06:08.213Z"
+last_activity: 2026-09-20
+last_activity_desc: Phase 32 complete
+state_head: 275b84e14f9afa624a92580f456cd2312824e689
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 32
-  completed_plans: 26
-  percent: 81
+  completed_plans: 32
+  percent: 100
 ---
 
 # State: Fast FSM
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-15)
+See: .planning/PROJECT.md (updated 2026-09-20)
 
 **Core value:** Preserve direct O(1) singleton dispatch and its installed compiled ≥200,000 operations/sec floor while adding explicit, finite flat-FSM semantics.
-**Current focus:** Phase 32 — Performance, Artifact & Progressive Guidance Proof
+**Current focus:** v0.5.0 closeout decision after a no-blocker milestone audit
 
 ## Current Position
 
-Phase: 32 (Performance, Artifact & Progressive Guidance Proof) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 32
-Last activity: 2026-09-19 — Phase 32 execution started
+Phase: 32
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-09-20 — Phase 32 complete
 
-Progress: [███████░░░] 71%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
 
 - Prior milestone plans completed: 57
-- Current milestone plans completed: 4
+- Current milestone plans completed: 32
 - Current milestone execution time: 0.5 hours
 
 **By Phase:**
@@ -55,8 +54,9 @@ Progress: [███████░░░] 71%
 | 29 | 4 | - | - |
 | 30 | 6 | - | - |
 | 31 | 5 | - | - |
+| 32 | 6 | - | - |
 
-**Recent Trend:** Phases 26–30 are complete and independently verified; Phase 31 is ready for discussion and planning.
+**Recent Trend:** Phases 26–32 are complete and verified; the milestone audit has no critical gap.
 **Per-Plan Metrics:**
 
 | Plan | Duration | Tasks | Files |
@@ -151,7 +151,8 @@ None yet.
 ### Blockers/Concerns
 
 - v0.3.0 remains internally closed but intentionally has no Git tag, GitHub Release, or package publication.
-- Exact feature-local performance remains unmeasured until Phase 32; only the installed compiled singleton floor is durable policy.
+- Phase 32 records labelled feature-local performance observations; only the installed compiled singleton floor is durable policy.
+- v0.5.0 local proof does not authorize a tag, GitHub Release, or package publication.
 
 ## Deferred Items
 
@@ -164,12 +165,16 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-09-19T22:34:49.480Z
-Stopped at: Phase 32 context gathered
-Resume file: .planning/phases/32-performance-artifact-progressive-guidance-proof/32-CONTEXT.md
+Last session: 2026-09-20T04:06:08.213Z
+Stopped at: Phase 32 complete — all phases complete
+Resume file: None
 
-- Phase 30's full suite, verifier, review, security, and native parity gates
-  passed; the former offline-cache blocker is closed.
+- Phase 32 UAT passed: one user-approved item and three evidence-backed
+  agent reviews requested by the user. A stale unqualified performance claim
+  was corrected in project and Sphinx documentation; focused tests and Sphinx
+  HTML/doctest gates passed.
 
-- Next: discuss, plan, and execute Phase 31, then continue through Phase 32
-  and milestone audit/completion under the milestone workflow.
+- The v0.5.0 audit found 42/42 requirements satisfied and no critical gaps;
+  installed-wheel proof breadth remains non-blocking debt. Next: decide whether
+  to perform the GSD shipped-milestone closeout, which would create a v0.5.0 tag
+  and potentially trigger release automation, or retain an internal-only state.

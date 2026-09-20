@@ -210,9 +210,9 @@ them and break user subclassing.
 Before merging performance-sensitive changes:
 
 - [ ] Run `uv run python benchmarks/benchmark_fast_fsm.py`
-- [ ] Compiled `trigger()` throughput ≥ 200,000 ops/sec
-- [ ] `can_trigger()` throughput ≥ 400,000 ops/sec
-- [ ] Recursive slots-policy audit passes; only the three registered measured
-      exceptions retain an instance `__dict__`
+- [ ] Fresh installed compiled singleton `trigger()` throughput ≥ 200,000 ops/sec
+      under the release-evidence gate; record other timings as labelled observations
+- [ ] Recursive slots-policy audit passes; review its current measured exception
+      registry rather than assuming a fixed exception count
 - [ ] Source/trigger lookup, singleton dispatch, and `add_state()` remain O(1)
 - [ ] Candidate registration/selection remains local O(k), with no dispatch-time sort

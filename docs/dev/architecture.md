@@ -483,16 +483,15 @@ uv run python tools/release_evidence.py slots-policy --json
 ```
 
 They must be slot-protected unless they appear in that measured exception
-registry. The two current exceptions are `CompiledFuncCondition`, which stays
-interpreted to support user subclassing while delegating invocation to a
-compiled core helper, and `TransitionError`, which uses
-`@mypyc_attr(native_class=False)` to retain ordinary Python exception behavior.
-Both can have an instance `__dict__`; the policy command—not an absolute
-dictionary-free claim—is the authority when maintaining or auditing classes.
+registry. The current exceptions are `CompiledFuncCondition`, which stays
+interpreted for user subclassing, and the exception boundaries
+`TransitionError`, `TransitionRejected`, and `DiagnosticBudgetExceeded`.
+These can retain an instance `__dict__`; the policy command and its registered
+reasons—not an absolute dictionary-free claim—are authoritative.
 
 Slot-protected instances eliminate `__dict__` per instance, yielding:
 
-- ~1000× lower memory per FSM vs. dict-based alternatives
+- Lower per-instance overhead for eligible runtime classes
 - Better cache locality (contiguous attribute storage)
 - Faster attribute access
 
@@ -500,8 +499,7 @@ Slot-protected instances eliminate `__dict__` per instance, yielding:
 |--------|-----------|
 | Fresh installed compiled singleton `trigger()` throughput | ≥ 200,000 ops/sec |
 | Grouped dispatch and all other timings | Environment-labeled observations, not durable thresholds |
-| Base FSM memory | ≤ 0.5 KB |
-| Per-state overhead | ≤ 64 bytes |
+| Memory footprint and per-state overhead | Environment-labeled observations, not durable thresholds |
 | Lookup/singleton complexity | O(1) |
 | Immutable group insertion / ordered selection | Local O(k) |
 

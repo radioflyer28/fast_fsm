@@ -11,7 +11,7 @@ Fast FSM v0.5.0 makes completion, same-state lifecycle behavior, and expected do
 - ✅ **v0.2.3 Timing Condition Helpers** — Phases 12–14 (shipped 2026-04-05)
 - ✅ **v0.3.0 Reliability & Runtime Hardening** — Phases 15–20 (completed 2026-09-06; untagged and unreleased)
 - ✅ **v0.4.0 Priority-Aware Guarded Transitions** — Phases 21–25 (shipped 2026-09-07)
-- 📋 **v0.5.0 Explicit Flat-FSM Semantics** — Phases 26–32 (planned)
+- ✅ **v0.5.0 Explicit Flat-FSM Semantics** — Phases 26–32 (implementation complete 2026-09-20; release closeout pending)
 
 ## Phases
 
@@ -22,7 +22,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
 
 </details>
 
-### 📋 v0.5.0 Explicit Flat-FSM Semantics (Planned)
+### ✅ v0.5.0 Explicit Flat-FSM Semantics (Implementation Complete)
 
 **Milestone Goal:** Make completion, same-state behavior, and expected domain rejection explicit while preserving Fast FSM's decisive speed advantage for flat, deterministic machines.
 
@@ -32,7 +32,7 @@ Completed milestone details are archived under `.planning/milestones/` and summa
 - [x] **Phase 29: Expected Domain Rejection** — expose bounded structured rejection without priority fallthrough or lifecycle ambiguity. (completed 2026-09-17)
 - [x] **Phase 30: Builder-First Construction & Persistence Parity** — simplify the public construction story and preserve semantics through every adapter and persisted form. (completed 2026-09-19)
 - [x] **Phase 31: Semantic Diagnostics & Visualization** — project finality, transition mode, and rejection truthfully through bounded tooling. (completed 2026-09-19)
-- [ ] **Phase 32: Performance, Artifact & Progressive Guidance Proof** — prove installed parity, protect the fast path, and teach the complete workflow progressively.
+- [x] **Phase 32: Performance, Artifact & Progressive Guidance Proof** — prove installed parity, protect the fast path, and teach the complete workflow progressively. (completed 2026-09-20)
 
 ## Phase Details
 
@@ -220,18 +220,18 @@ Plans:
 **Plans**: TBD
 **Wave 1**
 
-- [ ] 32-01-PLAN.md
-- [ ] 32-03-PLAN.md
-- [ ] 32-04-PLAN.md
+- [x] 32-01-PLAN.md
+- [x] 32-03-PLAN.md
+- [x] 32-04-PLAN.md
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 32-05-PLAN.md
+- [x] 32-05-PLAN.md
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 32-02-PLAN.md
-- [ ] 32-06-PLAN.md
+- [x] 32-02-PLAN.md
+- [x] 32-06-PLAN.md
 
 ## Requirement Coverage
 
@@ -268,7 +268,7 @@ Plans:
 | 29. Expected Domain Rejection | v0.5.0 | 4/4 | Complete    | 2026-09-17 |
 | 30. Builder-First Construction & Persistence Parity | v0.5.0 | 6/6 | Complete    | 2026-09-19 |
 | 31. Semantic Diagnostics & Visualization | v0.5.0 | 5/5 | Complete    | 2026-09-19 |
-| 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 0/6 | Planned    |  |
+| 32. Performance, Artifact & Progressive Guidance Proof | v0.5.0 | 6/6 | Complete    | 2026-09-20 |
 
 ---
 *Roadmap created: 2026-09-15 for v0.5.0 Explicit Flat-FSM Semantics*

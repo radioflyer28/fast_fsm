@@ -807,16 +807,16 @@ Phase 20 owns installed-artifact parity.
 Fast FSM is optimized for speed and memory:
 
 ### Memory Optimization
-- Uses `__slots__` for 1000x better memory efficiency
+- Uses `__slots__` on eligible runtime classes to avoid per-instance dictionaries
 - Direct state references (no string lookups)
-- ~0.2KB memory footprint vs 25-40KB for alternatives
+- See the measured slots policy and local benchmarks for memory observations
 
 ### Speed Optimization  
 - Fresh installed compiled singleton dispatch: at least 200,000 transitions per second
 - O(1) source/trigger lookup and direct singleton dispatch
 - Candidate-group selection: local O(k), already ordered without dispatch-time sorting
 - Minimal function call overhead
-- Optional features don't impact performance
+- Optional feature costs are measured separately and depend on the scenario and environment
 
 ### Performance Tips
 ```python

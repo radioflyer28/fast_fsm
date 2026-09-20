@@ -54,10 +54,10 @@
 
 ### Performance and Release Evidence
 
-- [ ] **PERF-01**: Users retain direct O(1) compiled singleton dispatch at or above 200,000 transitions per second when the new semantics are unused.
-- [ ] **PERF-02**: Users who do not enable the new semantics incur no unrelated candidate scans, reflection, or per-dispatch allocation.
-- [ ] **PERF-03**: Maintainers can measure final-state, transition-mode, and rejection costs independently with environment-labelled evidence.
-- [ ] **PERF-04**: Users receive conformant behavior from pure-source, compiled-extension, installed-wheel, and release-artifact execution under the existing evidence harness.
+- [x] **PERF-01**: Users retain direct O(1) compiled singleton dispatch at or above 200,000 transitions per second when the new semantics are unused.
+- [x] **PERF-02**: Users who do not enable the new semantics incur no unrelated candidate scans, reflection, or per-dispatch allocation.
+- [x] **PERF-03**: Maintainers can measure final-state, transition-mode, and rejection costs independently with environment-labelled evidence.
+- [x] **PERF-04**: Users receive conformant behavior from pure-source, compiled-extension, installed-wheel, and release-artifact execution under the existing evidence harness.
 - [x] **PERF-05**: Maintainers can compare semantically equivalent Fast FSM scenarios with exact isolated installations of `python-statemachine` 2.5.0 and 3.2.1.
 - [x] **PERF-06**: Maintainers receive competitor results as labelled manual or scheduled observations rather than mandatory CI gates.
 
@@ -132,10 +132,10 @@ Every v0.5.0 requirement maps to exactly one roadmap phase.
 | DIAG-01 | Phase 31 | Complete |
 | DIAG-02 | Phase 31 | Complete |
 | DIAG-03 | Phase 31 | Complete |
-| PERF-01 | Phase 32 | Pending |
-| PERF-02 | Phase 32 | Pending |
-| PERF-03 | Phase 32 | Pending |
-| PERF-04 | Phase 32 | Pending |
+| PERF-01 | Phase 32 | Complete |
+| PERF-02 | Phase 32 | Complete |
+| PERF-03 | Phase 32 | Complete |
+| PERF-04 | Phase 32 | Complete |
 | PERF-05 | Phase 26 | Complete |
 | PERF-06 | Phase 26 | Complete |
 | DOC-01 | Phase 32 | Complete |

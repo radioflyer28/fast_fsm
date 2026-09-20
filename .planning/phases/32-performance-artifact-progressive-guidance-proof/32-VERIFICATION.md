@@ -1,7 +1,7 @@
 ---
 phase: 32-performance-artifact-progressive-guidance-proof
 verified: 2026-09-20T03:09:38Z
-status: human_needed
+status: passed
 score: 14/14 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -9,26 +9,26 @@ decision_coverage:
   honored: 11
   total: 11
   not_honored: []
-human_verification:
+uat_resolution:
   - test: "Review the Plan 02 local-release-claim prohibition"
     expected: "Accept that local candidates and older published artifacts are not represented as a published v0.5.0 release."
-    why_human: "Judgment-tier prohibition is still flagged-unverified in the approved plan; the automated verifier's favorable reading is non-authoritative."
+    resolution: "User approved this UAT item; recorded in 32-UAT.md."
   - test: "Review the Plan 02 competitor-performance-claim prohibition"
     expected: "Accept that environment-specific competitor observations are not marketed as universal product speed claims."
-    why_human: "Judgment-tier prohibition requires explicit human resolution."
+    resolution: "Agent reviewed public claims and benchmark contract tests at the user's request; recorded as agent-review in 32-UAT.md."
   - test: "Review the Plan 03 feature-timing-claim prohibition"
     expected: "Accept that optional-feature timings are descriptive observations, not a hardware-independent speed guarantee."
-    why_human: "Judgment-tier prohibition requires explicit human resolution."
+    resolution: "Agent reviewed labelled non-gating observations and public performance wording at the user's request; recorded as agent-review in 32-UAT.md."
   - test: "Review the Plan 04 drone-safety-claim prohibition"
     expected: "Accept that the deterministic drone example is described only as training software, never certified flight control or live hardware integration."
-    why_human: "Judgment-tier prohibition requires explicit human resolution."
+    resolution: "Agent reviewed example and public safety disclaimers at the user's request; recorded as agent-review in 32-UAT.md."
 ---
 
 # Phase 32: Performance, Artifact & Progressive Guidance Proof Verification
 
 **Phase goal:** Users can install any supported artifact, retain Fast FSM's direct-path performance, and learn the complete flat-FSM workflow progressively.
 
-**Verdict:** The implementation and automated evidence meet the phase's five roadmap success criteria and nine additional plan-specific truths. Four judgment-tier prohibitions remain explicitly flagged for human review, so the workflow status is `human_needed`, not `passed`. No implementation blocker was found.
+**Verdict:** The implementation and automated evidence meet the phase's five roadmap success criteria and nine additional plan-specific truths. All four judgment-tier prohibitions were resolved in `32-UAT.md`: the user approved the first, then requested and received evidence-backed agent review of the remaining three. No implementation blocker was found.
 
 ## Goal achievement
 
@@ -80,13 +80,13 @@ Requirement-linked tests are active and assert values or multi-step behavior, no
 
 Decision-coverage gate: 11/11 CONTEXT decisions honored; advisory, no missing decisions. REQUIREMENTS.md still marks PERF-01–04 pending and the roadmap phase/plan boxes unchecked because phase-completion bookkeeping has not yet run; these are not implementation gaps.
 
-## Human verification required
+## Judgment-tier UAT resolution
 
-The four plan prohibitions (Plans 02, 03 and 04) are judgment-tier and remain `flagged-unverified`. Source/docs inspection supports each prohibition, but this autonomous verdict is **non-authoritative**. Explicit human review should resolve: (1) local candidates are not presented as published v0.5.0; (2) competitor comparisons are not universal speed claims; (3) feature timings are not hardware-independent guarantees; (4) the drone simulation is not presented as certified or live flight control. These flags, not missing implementation, cause `human_needed`.
+The user approved the local-release-claim item, then asked for self-verification of the remaining items. The agent reviewed (2) competitor comparison language and its isolated contract tests, (3) environment-labelled non-gating feature observations and performance disclaimers, and (4) the script and public drone-safety disclaimers. This wider review found and corrected stale unqualified speed, memory, and optional-feature claims in `.planning/PROJECT.md`, `docs/QUICK_START.md`, `docs/dev/architecture.md`, `docs/dev/testing.md`, and `docs/dev/contributing.md`. The focused competitor, performance, and drone contract suites passed (121 tests). `32-UAT.md` records the reviewer source for each item. Agent review is explicitly distinguished from user approval.
 
 ## Residual risks and gaps
 
-No must-have failed. A subsequent Phase 32 security follow-up closed T-32-07 by bounding the local build/probe paths; `32-SECURITY.md` records the re-audit and passing evidence tasks. This does not resolve the four judgment-tier human UAT items, so the report remains `human_needed`. Hosted publication/cross-platform matrix is future, separately authorized work; the present local candidate must not be represented as a released v0.5.0 artifact.
+No must-have failed. A subsequent Phase 32 security follow-up closed T-32-07 by bounding the local build/probe paths; `32-SECURITY.md` records the re-audit and passing evidence tasks. Hosted publication/cross-platform matrix is future, separately authorized work; the present local candidate must not be represented as a released v0.5.0 artifact.
 
 ---
 

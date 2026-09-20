@@ -116,17 +116,16 @@ green
 
 ## Performance Benchmarks
 
-The benchmark suite verifies Fast FSM meets its performance thresholds:
+The benchmark suite provides local, hardware-dependent observations:
 
 ```bash
 uv run python benchmarks/benchmark_fast_fsm.py
 ```
 
-| Metric | Threshold |
-|--------|-----------|
-| `trigger()` throughput | ≥ 200,000 ops/sec |
-| `can_trigger()` throughput | ≥ 400,000 ops/sec |
-| Base FSM memory | ≤ 0.5 KB |
+The durable release floor is separate: fresh installed compiled singleton
+`trigger()` throughput must reach at least 200,000 operations per second under
+the release-evidence gate. Other throughput and memory measurements are
+descriptive, not universal thresholds.
 
 Benchmark results are hardware-dependent. Do not commit results as
 "official" without noting the hardware/OS context.
