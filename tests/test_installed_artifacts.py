@@ -195,6 +195,19 @@ def _copy_native_build_project(destination: Path) -> None:
         shutil.copy2(ROOT / "tools" / relative, tools / relative)
 
 
+def _native_probe_environment() -> dict[str, str]:
+    """Keep the disposable build/probe outside pytest-cov's parent data file."""
+    environment = dict(os.environ)
+    for key in tuple(environment):
+        if key.startswith("COV_CORE_") or key in {
+            "COVERAGE_FILE",
+            "COVERAGE_PROCESS_START",
+            "COVERAGE_RCFILE",
+        }:
+            environment.pop(key)
+    return environment
+
+
 def _collect_source_probe(
     source_project: Path, neutral_directory: Path
 ) -> dict[str, object]:
@@ -202,7 +215,7 @@ def _collect_source_probe(
     neutral_directory.mkdir()
     probe = neutral_directory / "artifact_conformance.py"
     shutil.copy2(ROOT / "tools" / "artifact_conformance.py", probe)
-    environment = dict(os.environ)
+    environment = _native_probe_environment()
     environment["PYTHONPATH"] = str((source_project / "src").resolve())
     completed = subprocess.run(
         [
@@ -249,7 +262,8 @@ def fresh_native_source_conformance(
     """Build a native core in a disposable source copy and restore its pure shadow."""
     project = tmp_path_factory.mktemp("fresh-native-source")
     _copy_native_build_project(project)
-    environment = dict(os.environ, FAST_FSM_BUILD_MODE="compiled")
+    environment = _native_probe_environment()
+    environment["FAST_FSM_BUILD_MODE"] = "compiled"
     environment.pop("FAST_FSM_PURE_PYTHON", None)
     built = subprocess.run(
         [sys.executable, "setup.py", "build_ext", "--inplace", "-q"],
@@ -296,6 +310,24 @@ def fresh_native_source_conformance(
         "conformance": native_probe["conformance"],
         "pure_after_shadow_relocation": pure_probe,
     }
+
+
+def test_phase32_native_probe_environment_does_not_replace_parent_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Child builds cannot write pytest-cov's parent coverage data file."""
+    monkeypatch.setenv("COV_CORE_DATAFILE", "parent-coverage-data")
+    monkeypatch.setenv("COV_CORE_SOURCE", "src/fast_fsm")
+    monkeypatch.setenv("COVERAGE_PROCESS_START", "pyproject.toml")
+    monkeypatch.setenv("FAST_FSM_BUILD_MODE", "pure")
+
+    environment = _native_probe_environment()
+
+    assert environment["FAST_FSM_BUILD_MODE"] == "pure"
+    assert not any(
+        key.startswith("COV_CORE_") or key.startswith("COVERAGE_")
+        for key in environment
+    )
 
 
 @pytest.fixture(scope="module")
