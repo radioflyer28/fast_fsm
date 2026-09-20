@@ -57,7 +57,7 @@ class _PriorityCondition(Condition):
 def performance_header(title: str) -> None:
     """Print a formatted benchmark header."""
     print(f"\n{'=' * 60}")
-    print(f"🚀 {title}")
+    print(title)
     print(f"{'=' * 60}")
 
 
