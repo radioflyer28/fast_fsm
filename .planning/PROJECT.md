@@ -14,12 +14,13 @@ environment-labeled observations.
 
 ## Current State
 
-v0.4.0 Priority-Aware Guarded Transitions is published. All seven v0.5.0
-implementation phases are complete and locally verified; milestone audit and
-any separately authorized publication remain ahead. The new semantics deepen
-the flat FSM without adopting a general-purpose statechart runtime.
+The v0.5.0 Explicit Flat-FSM Semantics milestone is archived: seven verified
+phases, 32 plans, and 42/42 requirements. The full Python 3.10–3.14 CI matrix
+passed on Linux, macOS, and Windows. Publication is a separate exact-SHA hosted
+evidence and tag-only GitHub Release process. The new semantics deepen the
+flat FSM without adopting a general-purpose statechart runtime.
 
-## Current Milestone: v0.5.0 Explicit Flat-FSM Semantics
+## Completed Milestone: v0.5.0 Explicit Flat-FSM Semantics
 
 **Goal:** Make completion, same-state behavior, and expected domain rejection
 explicit while preserving Fast FSM's decisive speed advantage for flat,
@@ -86,7 +87,7 @@ artifact proof, and the controller-owned drone example preserve that contract.
 - ✓ Per-state callbacks via `on_enter()` / `on_exit()` — existing
 - ✓ Listener/observer pattern via `add_listener()` — existing
 - ✓ `unless=` negation shorthand on `add_transition()` — existing
-- ✓ CI pipeline: lint, tests (3.10–3.13 × Linux/macOS/Windows), docs, release — existing
+- ✓ CI pipeline: lint, tests (3.10–3.14 × Linux/macOS/Windows), docs, release — existing
 - ✓ **VERSION-01**: `__version__` derived from `importlib.metadata` — v0.2.1
 - ✓ **EXCEPT-01/02/03**: All 16 `except Exception` catches annotated; `safe_trigger()` semantics documented — v0.2.1
 - ✓ **TYPES-01/02**: `py.typed` PEP 561 marker; package recognized as typed — v0.2.1
@@ -131,8 +132,8 @@ artifact proof, and the controller-owned drone example preserve that contract.
 
 ### Active
 
-No remaining implementation requirement in v0.5.0. Hosted publication is a
-separately authorized release workflow, not an implicit Phase 32 result.
+No active milestone is scoped. Hosted publication is a separate release
+workflow, not an implicit Phase 32 result.
 
 ### Out of Scope
 
@@ -145,12 +146,12 @@ separately authorized release workflow, not an implicit Phase 32 result.
 
 ## Context
 
-- **Current published version:** v0.4.0 (tagged 2026-09-07); v0.5.0 remains unreleased
+- **Publication state:** GitHub tags and Releases record published versions; milestone closure alone does not publish a package
 - **Internal milestone state:** v0.3.0 is verified and archived, but remains untagged and unreleased by design
 - **mypyc compilation boundary:** Only `core.py` compiles; `conditions.py` and `condition_templates.py` stay interpreted for user subclassing
 - **Pure-Python fallback:** `FAST_FSM_PURE_PYTHON=1` must continue to work
 - **Single runtime dependency:** `mypy-extensions` only — keep it that way
-- **Test count:** 1,503 (after Phase 19)
+- **Test count:** 2,211 passing and 6 skipped in the v0.5.0 pure-source local release baseline
 - **Clock source:** `time.monotonic()` for all timing — immune to NTP jumps across macOS/Linux/Windows
 - **v0.3.0 scope source:** `.planning/codebase/CONCERNS.md` audit dated 2026-08-29
 - **Compatibility posture:** Existing public symbols remain available, but safe default behavior takes precedence over preserving unsafe pre-production semantics
@@ -163,7 +164,7 @@ separately authorized release workflow, not an implicit Phase 32 result.
   unrelated graph scan. The ≥200,000 ops/sec floor applies only to fresh
   installed compiled singleton dispatch; all exact timings are
   environment-labeled observations.
-- **Backward compatibility:** No public API changes — all condition and callback signatures preserved
+- **Backward compatibility:** Retained construction helpers remain available with migration warnings through v0.5.x; new semantics are explicit
 - **Compilation:** `core.py` changes must pass `uv run mypy src/fast_fsm/core.py` (mypyc compat)
 - **Python version:** ≥3.10
 
@@ -211,4 +212,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-20 after Phase 32 completion and milestone audit; release closeout pending*
+*Last updated: 2026-09-20 after v0.5.0 milestone closeout*

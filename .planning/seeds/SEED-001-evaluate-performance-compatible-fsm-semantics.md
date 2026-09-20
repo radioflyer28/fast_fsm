@@ -1,6 +1,6 @@
 ---
 id: SEED-001
-status: dormant
+status: resolved
 planted: 2026-09-11
 planted_during: awaiting next milestone after v0.4.0
 trigger_when: when relevant
@@ -8,6 +8,12 @@ scope: unknown
 ---
 
 # SEED-001: Evaluate performance-compatible FSM semantics from `python-statemachine`
+
+**Resolved 2026-09-20:** The comparison and scope analysis is captured in
+`.planning/research/python-statemachine-gap-assessment.md`; the high- and
+medium-priority flat-FSM semantics were planned and delivered in v0.5.0.
+Bounded deferred events remain a separate future milestone candidate, not an
+open task for this evaluation seed.
 
 ## Why This Matters
 
@@ -47,4 +53,3 @@ separate later milestone candidate. Full hierarchical/parallel statecharts,
 eventless stabilization, automatic sync/async dispatch, scheduler ownership,
 and reflection-heavy callback injection are not recommended for the Fast FSM
 core because they compromise its flat deterministic performance identity.
-

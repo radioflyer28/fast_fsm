@@ -128,6 +128,45 @@
 
 ---
 
+## Milestone: v0.5.0 — Explicit Flat-FSM Semantics
+
+**Completed:** 2026-09-20
+**Phases:** 7 | **Plans:** 32 | **Tasks:** 56 | **Requirements:** 42/42
+
+### What Was Built
+
+- One atomic construction seam with builder-first guidance and retained migration paths.
+- Explicit final states, internal/external same-state modes, and expected domain rejection across sync, async, persistence, diagnostics, and visualization.
+- Installed-artifact semantic proof, an environment-labelled performance contract, a progressive drone example, and refreshed release documentation.
+
+### What Worked
+
+- Finite semantic contracts and a shared oracle kept pure, compiled, and installed behavior aligned.
+- The Phase 32 UAT and milestone audit exposed the installed-wheel proof-scope caveat without treating a non-blocking limitation as a product failure.
+- The exact-source release gate and 15-cell CI matrix caught platform-specific release issues before a tag existed.
+
+### What Was Inefficient
+
+- Release metadata still named v0.4.0 after implementation, requiring a coordinated identity and baseline update at closeout.
+- Mac-only local testing missed Python 3.10's missing `tomllib`, Windows path/CRLF/CP1252 behavior, and a Linux pipe-descriptor race.
+- CI logs were temporarily unreachable through the log-storage endpoint; structured failure annotations were needed to diagnose cross-platform failures.
+
+### Patterns Established
+
+- Keep optional semantics off the direct singleton path and report their costs separately.
+- Treat release identity, local installed proof, hosted exact-SHA evidence, and tag publication as distinct gates.
+- Make cross-platform tests assert semantic output rather than platform-specific exception identity, paths, line endings, or console encoding.
+
+### Key Lessons
+
+- Run the full supported Python/OS matrix before shipping even when local source and artifact gates pass.
+- Bounded subprocess readers must own their descriptors; forced closure can cause later unrelated failures through descriptor reuse.
+- Maintain a permanent, API-readable CI failure summary when raw hosted logs may be unavailable.
+
+### Cost Observations
+
+Model mix and session cost were not recorded reliably for this milestone.
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -137,6 +176,9 @@
 | v0.2.1 | 6 | 1 | First autonomous milestone run; all infrastructure/cleanup |
 | v0.2.2 | 6 | 2 | Feature phases via autonomous + retroactive audit/gap closure; learned to audit after autonomous runs |
 | v0.2.3 | 3 | 1 | Cleanest autonomous run yet; no blockers, no gaps, proactive enrichment |
+| v0.3.0 | 6 | Not recorded | Hardened lifecycle, ownership, diagnostics, and release evidence before extending semantics |
+| v0.4.0 | 5 | Not recorded | Added finite priority candidates while retaining one direct singleton dispatch path |
+| v0.5.0 | 7 | Not recorded | Explicit flat-FSM semantics and artifact proof; cross-platform release CI exposed portability assumptions |
 
 ### Technical Debt Tracking
 
@@ -148,7 +190,8 @@
 | `except Exception` catches undocumented | pre-audit | ✓ | v0.2.1 |
 | Missing `py.typed` marker | pre-audit | ✓ | v0.2.1 |
 | Low-value/redundant tests (4) | pre-audit | ✓ | v0.2.1 |
-| `core.py` shows 0% in coverage (mypyc artifact) | v0.2.1 audit | Open | — |
+| `core.py` shows 0% in coverage (mypyc artifact) | v0.2.1 audit | ✓ Pure-source core coverage 97.05% | v0.5.0 |
+| Installed-wheel proof scope narrower than a universal performance claim | v0.5.0 audit | Open, non-blocking | v0.5.0 |
 
 ---
 

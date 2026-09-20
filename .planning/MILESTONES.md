@@ -1,5 +1,51 @@
 # Milestones
 
+## v0.5.0 Explicit Flat-FSM Semantics (Shipped: 2026-09-20)
+
+**Phases completed:** 7 phases, 32 plans, 56 tasks
+
+**Requirements:** 42/42 complete. **Known verification overrides:** 0 newly
+acknowledged, 1 carried forward from an earlier close (see STATE.md Deferred
+Items). The milestone audit records one non-blocking installed-wheel proof-scope
+caveat; publication remains governed by exact-SHA hosted evidence.
+
+**Key accomplishments:**
+
+- Direct and batch registrations now enter one immutable, atomic construction transaction without touching runtime dispatch.
+- Exact isolated comparison lanes now require validated identity and matching untimed semantics before producing any descriptive timing ratio.
+- Every retained transition-producing adapter, clone, and builder now reaches one immutable request transaction without exposing partial topology.
+- The exact `python-statemachine` 2.5.0 and 3.2.1 releases were human-approved as originating from `fgmacedo/python-statemachine` before lock generation.
+- Maintainers can now deliberately collect bounded, exact-version comparison observations while every ordinary CI and release path remains competitor-free.
+- Slotted, immutable explicit final-state intent with a single O(1) termination query across direct, callback, and declarative state construction.
+- One canonical construction branch now rejects any outgoing final-state edge atomically, while all retained adapters continue to delegate to the same fast dispatch-free transaction.
+- Explicit finality now survives direct control, cloning, strict topology persistence, lifecycle failures, and compiled/pure-source execution without adding a second termination truth source.
+- Explicit per-entry internal self-transitions now perform a truthful in-state commit while preserving the original external self-transition lifecycle as the default.
+- External re-entry and internal logical commits now have deterministic synchronous evidence for callback ownership, timing, priority selection, and staged failure truth.
+- Async internal self-transitions now have the same committed lifecycle, cancellation, ownership, and pure/native truth as their synchronous counterparts.
+- Fast FSM now turns one bounded, public expected-domain signal into a terminal synchronous transition result without lower-priority fallthrough or a new observer API.
+- Expected domain rejection now has the same terminal, priority-aware meaning for asynchronous dispatch and observer-free queries, while condition composition preserves the original signal unchanged.
+- Expected domain rejection is now proven selector-only: the same signal at lifecycle, timing, observer, or control boundaries remains an ordinary failure without exposing payloads.
+- Expected domain rejection now has an exact structural contract and a pure/native oracle, including interpreted rejection subclasses, without adding work to direct singleton success dispatch.
+- FSMBuilder now converts a complete `@transition` declaration into one canonical internal edge while preserving state-owned guard and handler execution.
+- Builder declaration ownership now governs async preflight, while batch construction can express the same internal-transition topology as every other supported adapter.
+- The four retained convenience constructors now provide one actionable, caller-attributed migration warning while preserving their v0.5.x construction behavior through private canonical workers.
+- Topology dictionaries now preserve explicit final states and internal self-transition mode through exact, atomic reconstruction, while clones and state-only snapshots retain their established ownership semantics.
+- Focused public and maintainer guidance now leads new programmatic construction with `FSMBuilder`, confines retained helpers to a v0.5.x migration boundary, and records accurate persistence and adapter ownership semantics.
+- Fast FSM's builder-first construction, persistence, and compatibility contracts now have synchronized pure/native evidence, exact warning attribution, and a restored pure source tree after native verification.
+- One immutable capture now carries explicit finality and transition mode into bounded, deterministic JSON without changing legacy topology meaning.
+- Validation now identifies intentional completion without calling it a design defect, while preserving the old topological dead-state contract.
+- Mermaid and PlantUML now expose declared completion and self-transition intent through safe, deterministic, bounded diagrams.
+- One fixed TRACE record now conveys validated rejection, selected mode, and current completion for both sync and async attempts without exposing application data.
+- One semantic oracle now connects runtime outcomes to bounded diagnostic projections, and both pure and freshly compiled execution pass the focused matrix.
+- The shared artifact oracle now proves finality, self-transition lifecycle, and expected-rejection selection through fixed scalar facts rather than artifact agreement alone.
+- Fresh native and installed artifacts now prove exact provenance before matching the strict semantic oracle, with a guarded, read-only-verified local evidence baseline.
+- Direct singleton dispatch remains structurally local and above its fresh installed compiled floor, while optional semantics now produce separate, provenance-labelled observations.
+- A deterministic, builder-first drone controller now demonstrates FSM-owned telemetry priority, self-transition modes, final landing states, and committed adapter commands.
+- The README and Quick Start now lead with a small FSMBuilder recipe, give exact compatibility migrations, and execute the flat-FSM semantics that diagrams alone cannot show.
+- Sphinx now presents one executable builder-first flat-FSM learning path, from a small machine to precise finality, self-transition, and rejection contracts.
+
+---
+
 ## v0.4.0 Priority-Aware Guarded Transitions (Shipped: 2026-09-07)
 
 **Phases completed:** 5 phases, 16 plans, 31 tasks

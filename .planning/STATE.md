@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.5.0
-milestone_name: Explicit Flat-FSM Semantics
-current_phase: 32
-status: completed
-stopped_at: Phase 32 complete — all phases complete
-last_updated: "2026-09-20T04:06:08.213Z"
+status: Awaiting next milestone
+stopped_at: v0.5.0 milestone archived; next milestone not scoped
+last_updated: "2026-09-20T15:54:08.325Z"
 last_activity: 2026-09-20
-last_activity_desc: Phase 32 complete
-state_head: 275b84e14f9afa624a92580f456cd2312824e689
+last_activity_desc: Milestone v0.5.0 completed and archived
+state_head: ff6d0b205005a6f501544289edd6f7965fdc4a3e
 progress:
   total_phases: 7
   completed_phases: 7
   total_plans: 32
   completed_plans: 32
   percent: 100
+milestone_name: Explicit Flat-FSM Semantics
+current_phase: 32
 ---
 
 # State: Fast FSM
@@ -24,16 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-20)
 
 **Core value:** Preserve direct O(1) singleton dispatch and its installed compiled ≥200,000 operations/sec floor while adding explicit, finite flat-FSM semantics.
-**Current focus:** v0.5.0 closeout decision after a no-blocker milestone audit
+**Current focus:** Exact-SHA hosted release proof, then next-milestone scoping
 
 ## Current Position
 
-Phase: 32
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-20 — Phase 32 complete
-
-Progress: [██████████] 100%
+Phase: Milestone v0.5.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-20 — Milestone v0.5.0 completed and archived
 
 ## Performance Metrics
 
@@ -47,7 +45,7 @@ Progress: [██████████] 100%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 26–32 | 0 | TBD | — |
+| 26–32 | 32 | 32 | — |
 | 26 | 5 | - | - |
 | 27 | 3 | - | - |
 | 28 | 3 | - | - |
@@ -178,3 +176,7 @@ Resume file: None
   installed-wheel proof breadth remains non-blocking debt. Next: decide whether
   to perform the GSD shipped-milestone closeout, which would create a v0.5.0 tag
   and potentially trigger release automation, or retain an internal-only state.
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
