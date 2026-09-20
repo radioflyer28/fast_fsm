@@ -18,6 +18,11 @@ through v0.5.x and may be removed no earlier than v0.6.0. For new code,
 replace their programmatic construction role with `FSMBuilder`; do not replace
 them with `from_dict()` unless the input is serialized topology.
 
+The [Tutorial migration table](../TUTORIAL.md#migrate-the-four-historical-convenience-helpers)
+covers replacements for those four warned conveniences only. Direct
+constructors, `from_dict()`, and declarative state APIs remain supported
+advanced paths and are not deprecated.
+
 ## State Classes
 
 ```{eval-rst}
@@ -165,6 +170,149 @@ without changing state or history and without trace or failure-observer work.
 Condition evaluation outside a machine propagates `TransitionRejected`
 normally. Debug logging records only the validated code; it never formats the
 signal, a traceback, or caller-provided values.
+
+## Flat-FSM semantic contrasts
+
+The following executable contrasts are deliberately small. They show the
+public result fields a caller can rely on, without inferring finality from an
+absent edge or inferring mode from equal state names.
+
+### Explicit final state versus a non-final sink
+
+Finality is immutable `State` metadata. A successful arrival at a non-final
+sink still commits, but `is_terminated` remains false.
+
+```{testcode}
+from fast_fsm import FSMBuilder, State
+
+sink_start = State("sink-start")
+sink = State("sink")
+sink_machine = (
+    FSMBuilder(sink_start)
+    .add_state(sink)
+    .add_transition("go", "sink-start", "sink")
+    .build()
+)
+sink_result = sink_machine.trigger("go")
+
+final_start = State("final-start")
+done = State("done", final=True)
+final_machine = (
+    FSMBuilder(final_start)
+    .add_state(done)
+    .add_transition("finish", "final-start", "done")
+    .build()
+)
+final_result = final_machine.trigger("finish")
+
+print(sink_result.success, sink_result.committed, sink_machine.is_terminated)
+print(final_result.success, final_result.committed, final_machine.is_terminated)
+```
+
+```{testoutput}
+True True False
+True True True
+```
+
+### Internal update versus external self re-entry
+
+The default same-state transition is external, including exit and entry
+lifecycle callbacks. `internal=True` commits the selected transition while
+skipping those state lifecycle surfaces.
+
+```{testcode}
+from fast_fsm import FSMBuilder, State
+
+internal_events = []
+internal_state = State.create(
+    "internal",
+    on_exit=lambda *_args, **_kwargs: internal_events.append("exit"),
+    on_enter=lambda *_args, **_kwargs: internal_events.append("enter"),
+)
+internal_machine = (
+    FSMBuilder(internal_state)
+    .add_transition("tick", "internal", "internal", internal=True)
+    .build()
+)
+internal_result = internal_machine.trigger("tick")
+
+external_events = []
+external_state = State.create(
+    "external",
+    on_exit=lambda *_args, **_kwargs: external_events.append("exit"),
+    on_enter=lambda *_args, **_kwargs: external_events.append("enter"),
+)
+external_machine = (
+    FSMBuilder(external_state)
+    .add_transition("tick", "external", "external")
+    .build()
+)
+external_result = external_machine.trigger("tick")
+
+print(internal_result.internal, internal_result.committed, internal_events)
+print(external_result.internal, external_result.committed, external_events)
+```
+
+```{testoutput}
+True True []
+False True ['exit', 'enter']
+```
+
+### False guard, expected rejection, and unexpected failure
+
+A false guard is ordinary selection ineligibility. `TransitionRejected(code)`
+is a known terminal domain outcome with a validated public code. Any other
+exception remains an unexpected failure, retaining its `cause` and lifecycle
+`stage` for the caller.
+
+```{testcode}
+import logging
+
+from fast_fsm import FSMBuilder, FuncCondition, State, TransitionRejected
+
+logging.getLogger("fast_fsm").setLevel(logging.CRITICAL)
+
+def reject(*_args, **_kwargs):
+    raise TransitionRejected("navigation-conflict")
+
+def fail(*_args, **_kwargs):
+    raise RuntimeError("illustrative failure")
+
+false_machine = (
+    FSMBuilder(State("false-source"))
+    .add_state(State("target"))
+    .add_transition("go", "false-source", "target", FuncCondition(lambda **_: False))
+    .build()
+)
+rejection_machine = (
+    FSMBuilder(State("rejection-source"))
+    .add_state(State("target"))
+    .add_transition("go", "rejection-source", "target", FuncCondition(reject))
+    .build()
+)
+failure_machine = (
+    FSMBuilder(State("failure-source"))
+    .add_state(State("target"))
+    .add_transition("go", "failure-source", "target", FuncCondition(fail))
+    .build()
+)
+
+false_result = false_machine.trigger("go")
+rejected_result = rejection_machine.trigger("go")
+failed_result = failure_machine.trigger("go")
+print(false_result.success, false_result.committed, false_result.rejected, false_result.rejection_code)
+print(rejected_result.success, rejected_result.committed, rejected_result.rejected, rejected_result.rejection_code)
+print(failed_result.success, failed_result.committed, failed_result.rejected, type(failed_result.cause).__name__, failed_result.stage)
+```
+
+```{testoutput}
+False False False None
+False False True navigation-conflict
+False False False RuntimeError guard
+```
+
+For a controller-level integration of all three distinctions, see the
+[deterministic drone tutorial](../examples/index.md#drone_failsafespy--controller-owned-telemetry).
 
 ## Exceptions
 
