@@ -50,9 +50,18 @@ RELEASE_BASELINE_PATH = (
     REPOSITORY_ROOT / "evidence" / "release-baseline.json"
 ).resolve()
 
+_PHASE32_REVIEWED_REFRESH_PATHS = (
+    ("artifact_evidence", "conformance"),
+    ("slots_policy", "inventory"),
+    ("slots_policy", "runtime_layouts"),
+    ("slots_policy", "registered_exceptions"),
+    ("slots_policy", "measurements"),
+)
+
 _RELEASE_BASELINE_STABLE_REFRESH_PATHS = (
     ("quality_baseline", "tests", "collected"),
     ("quality_baseline", "tests", "passed"),
+    *_PHASE32_REVIEWED_REFRESH_PATHS,
 )
 _RELEASE_BASELINE_RAW_REFRESH_PATHS = (
     *_RELEASE_BASELINE_STABLE_REFRESH_PATHS,
@@ -5922,6 +5931,49 @@ def _manifest_value_at_path(manifest: Mapping[str, Any], path: tuple[str, ...]) 
     return current
 
 
+def _validate_phase32_reviewed_refresh(candidate: Mapping[str, Any]) -> None:
+    """Require reviewed Phase 32 paths to equal freshly regenerated source facts."""
+    try:
+        contract = _load_conformance_contract()
+        collector = getattr(contract, "collect_conformance", None)
+        if not callable(collector):
+            raise EvidenceError(
+                "Installed artifact conformance contract is incomplete."
+            )
+        collected_conformance = collector()
+        if not isinstance(collected_conformance, Mapping):
+            raise EvidenceError("Installed artifact conformance contract is malformed.")
+        conformance = _validate_child_conformance(
+            collected_conformance,
+            expected_suite_sha256=_expected_conformance_suite_sha256(),
+        )
+        current_slots = slots_policy(REPOSITORY_ROOT / "src")
+        expected_values = {
+            ("artifact_evidence", "conformance"): conformance,
+            ("slots_policy", "inventory"): current_slots["inventory"],
+            ("slots_policy", "runtime_layouts"): current_slots["runtime_layouts"],
+            ("slots_policy", "registered_exceptions"): current_slots[
+                "registered_exceptions"
+            ],
+            ("slots_policy", "measurements"): current_slots[
+                "representative_measurements"
+            ],
+        }
+    except EvidenceError:
+        raise
+    except Exception as error:
+        raise EvidenceError(
+            "Release baseline refresh could not regenerate Phase 32 source evidence."
+        ) from error
+
+    for path in _PHASE32_REVIEWED_REFRESH_PATHS:
+        if _manifest_value_at_path(candidate, path) != expected_values[path]:
+            raise EvidenceError(
+                "Release baseline refresh requires "
+                f"{'.'.join(path)} to equal regenerated Phase 32 source evidence."
+            )
+
+
 def _manifest_without_paths(
     manifest: Mapping[str, Any], paths: Sequence[tuple[str, ...]]
 ) -> dict[str, Any]:
@@ -5972,6 +6024,8 @@ def _validate_release_baseline_refresh(
     for manifest in (snapshot, candidate):
         for path in _RELEASE_BASELINE_RAW_REFRESH_PATHS:
             _manifest_value_at_path(manifest, path)
+
+    _validate_phase32_reviewed_refresh(candidate)
 
     stable_differences = _projection_differences(
         _manifest_without_paths(

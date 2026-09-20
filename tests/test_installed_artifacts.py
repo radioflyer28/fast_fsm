@@ -331,16 +331,12 @@ def test_phase32_native_probe_environment_does_not_replace_parent_coverage(
     )
 
 
-def test_phase32_compatibility_wrappers_execute_the_documented_builder_window() -> (
-    None
-):
+def test_phase32_compatibility_wrappers_execute_the_documented_builder_window() -> None:
     """Retained v0.5.x wrappers still warn once while constructing real machines."""
     with pytest.warns(DeprecationWarning):
         from_states = StateMachine.from_states("idle", "active", initial="idle")
     with pytest.warns(DeprecationWarning):
-        quick_build = StateMachine.quick_build(
-            "idle", [("advance", "idle", "active")]
-        )
+        quick_build = StateMachine.quick_build("idle", [("advance", "idle", "active")])
     with pytest.warns(DeprecationWarning):
         simple = simple_fsm("idle", "active", initial="idle")
     with pytest.warns(DeprecationWarning):
