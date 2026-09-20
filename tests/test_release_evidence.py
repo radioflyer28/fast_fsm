@@ -487,6 +487,68 @@ def test_verify_source_records_clean_python_origin_and_distribution_metadata(
     assert evidence["distribution_version"]
 
 
+def test_phase32_origin_rejects_compiled_loader_contradiction(
+    tmp_path: Path,
+) -> None:
+    """A native-looking core path still fails unless its exact loader agrees."""
+    environment = tmp_path / "environment"
+    package_root = environment / "site-packages" / "fast_fsm"
+    runtime = {
+        "distribution_version": "0.2.2",
+        "package_version": "0.2.2",
+        "package_origin": str(package_root / "__init__.py"),
+        "core_origin": str(package_root / "core.abi3.so"),
+        "core_loader": "SourceFileLoader",
+        "interpreter": str(environment / "bin" / "python"),
+        "python_implementation": "cpython",
+        "python_version": "3.12.10",
+        "platform": "Darwin",
+        "machine": "arm64",
+        "direct_url": None,
+        "extension_suffixes": [".so", ".pyd"],
+    }
+
+    with pytest.raises(EvidenceError, match="compiled mode lacks"):
+        release_evidence._validate_runtime_probe(
+            runtime,
+            environment_root=environment,
+            expected_mode="compiled",
+            version="0.2.2",
+        )
+
+
+def test_phase32_shadow_relocation_is_constrained_and_recoverable(
+    tmp_path: Path,
+) -> None:
+    """Only an isolated source-copy shadow moves to a bounded backup and returns."""
+    source_root = _copy_clean_source(tmp_path)
+    package_root = (source_root / "fast_fsm").resolve()
+    shadow = package_root / "core.fixture.so"
+    original = b"isolated-native-shadow"
+    shadow.write_bytes(original)
+    backup = (tmp_path / "recoverable-native-shadow-backup").resolve()
+    backup.mkdir()
+    relocated = (backup / shadow.name).resolve()
+
+    blocked = _run_evidence(
+        "verify-source", "--source-root", str(source_root), "--json"
+    )
+    assert blocked.returncode != 0
+    assert shadow.parent == package_root
+    assert relocated.parent == backup
+
+    try:
+        shutil.move(str(shadow), relocated)
+        passed = _run_evidence(
+            "verify-source", "--source-root", str(source_root), "--json"
+        )
+        assert passed.returncode == 0, passed.stderr
+    finally:
+        if relocated.is_file():
+            shutil.move(str(relocated), shadow)
+    assert shadow.read_bytes() == original
+
+
 def test_verify_wheel_classifies_universal_wheel_without_native_members(
     tmp_path: Path,
 ) -> None:
@@ -4237,6 +4299,28 @@ def test_aggregate_matrix_records_reconciles_exact_local_projection_deterministi
     assert release_evidence.render_aggregate_summary(first).endswith("\n")
     with pytest.raises(EvidenceError, match="release profile"):
         release_evidence.build_release_authorization(first)
+
+
+def test_phase32_local_scope_remains_explicitly_non_authorizing() -> None:
+    """A complete local candidate record can never be mistaken for publication proof."""
+    runtime = {
+        "implementation": "cpython",
+        "python_minor": "3.12",
+        "platform": "macos",
+        "machine": "arm64",
+    }
+    aggregate = release_evidence.aggregate_matrix_records(
+        _complete_matrix_records(), profile="local", runtime=runtime
+    )
+
+    assert aggregate["scope"] == "local-non-authorizing"
+    assert aggregate["authorizes_release"] is False
+    assert all(
+        record["provenance"]["tag"] == "unreleased"
+        for record in aggregate["artifact_records"]
+    )
+    with pytest.raises(EvidenceError, match="release profile"):
+        release_evidence.build_release_authorization(aggregate)
 
 
 def test_matrix_evidence_normalizes_fresh_environment_provenance() -> None:

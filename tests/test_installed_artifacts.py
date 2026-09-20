@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -179,6 +180,124 @@ def _build_wheel(output: Path, mode: str) -> Path:
     return wheels[0].resolve()
 
 
+def _copy_native_build_project(destination: Path) -> None:
+    """Stage the minimum locked project needed for a disposable native build."""
+    for relative in ("README.md", "pyproject.toml", "setup.py", "uv.lock"):
+        shutil.copy2(ROOT / relative, destination / relative)
+    shutil.copytree(
+        ROOT / "src",
+        destination / "src",
+        ignore=shutil.ignore_patterns("core*.so", "core*.pyd", "__pycache__"),
+    )
+    tools = destination / "tools"
+    tools.mkdir()
+    for relative in ("__init__.py", "build_modes.py"):
+        shutil.copy2(ROOT / "tools" / relative, tools / relative)
+
+
+def _collect_source_probe(
+    source_project: Path, neutral_directory: Path
+) -> dict[str, object]:
+    """Collect a strict record in a child that imports only the staged source."""
+    neutral_directory.mkdir()
+    probe = neutral_directory / "artifact_conformance.py"
+    shutil.copy2(ROOT / "tools" / "artifact_conformance.py", probe)
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str((source_project / "src").resolve())
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(probe),
+            "--installed-probe",
+            "--artifact-sha256",
+            "0" * 64,
+        ],
+        cwd=neutral_directory,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    record = json.loads(completed.stdout)
+    assert isinstance(record, dict)
+    return record
+
+
+def _assert_staged_source_origin(
+    record: dict[str, object], *, source_project: Path, expected_mode: str
+) -> None:
+    """Require the child loader and exact core location before comparing semantics."""
+    runtime = record["runtime"]
+    assert isinstance(runtime, dict)
+    package_root = (source_project / "src" / "fast_fsm").resolve()
+    core_origin = Path(str(runtime["core_origin"])).resolve()
+    assert core_origin.parent == package_root
+    if expected_mode == "compiled":
+        assert core_origin.suffix in set(runtime["extension_suffixes"])
+        assert runtime["core_loader"] == "ExtensionFileLoader"
+    else:
+        assert core_origin == package_root / "core.py"
+        assert runtime["core_loader"] == "SourceFileLoader"
+    runtime["expected_mode"] = expected_mode
+
+
+@pytest.fixture(scope="module")
+def fresh_native_source_conformance(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build a native core in a disposable source copy and restore its pure shadow."""
+    project = tmp_path_factory.mktemp("fresh-native-source")
+    _copy_native_build_project(project)
+    environment = dict(os.environ, FAST_FSM_BUILD_MODE="compiled")
+    environment.pop("FAST_FSM_PURE_PYTHON", None)
+    built = subprocess.run(
+        [sys.executable, "setup.py", "build_ext", "--inplace", "-q"],
+        cwd=project,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    package_root = (project / "src" / "fast_fsm").resolve()
+    shadows = release_evidence.find_native_core_shadows(package_root)
+    assert shadows
+    assert all(shadow.parent == package_root for shadow in shadows)
+    native_probe = _collect_source_probe(project, project / "native-probe")
+    _assert_staged_source_origin(
+        native_probe, source_project=project, expected_mode="compiled"
+    )
+
+    backup = (project / "recoverable-native-shadow-backup").resolve()
+    backup.mkdir()
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for shadow in shadows:
+            destination = (backup / shadow.name).resolve()
+            assert destination.parent == backup
+            shutil.move(str(shadow), destination)
+            moved.append((shadow, destination))
+        assert not release_evidence.find_native_core_shadows(package_root)
+        pure_probe = _collect_source_probe(project, project / "pure-probe")
+        _assert_staged_source_origin(
+            pure_probe, source_project=project, expected_mode="pure"
+        )
+    finally:
+        for original, relocated in moved:
+            assert relocated.parent == backup
+            assert original.parent == package_root
+            if relocated.is_file():
+                shutil.move(str(relocated), original)
+    assert release_evidence.find_native_core_shadows(package_root) == shadows
+    return {
+        "runtime": native_probe["runtime"],
+        "conformance": native_probe["conformance"],
+        "pure_after_shadow_relocation": pure_probe,
+    }
+
+
 @pytest.fixture(scope="module")
 def tracer_wheels(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     """Build concrete pure and compiled archives once for the tracer proof."""
@@ -272,6 +391,15 @@ def test_phase32_fresh_native_copy_matches_clean_source_oracle(
         artifact_conformance.compare_conformance(
             clean_source_conformance,
             fresh_native_source_conformance["conformance"],
+        )
+        == []
+    )
+    restored_pure = fresh_native_source_conformance["pure_after_shadow_relocation"]
+    assert isinstance(restored_pure, dict)
+    assert (
+        artifact_conformance.compare_conformance(
+            clean_source_conformance,
+            restored_pure["conformance"],
         )
         == []
     )
