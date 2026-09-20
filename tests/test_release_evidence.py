@@ -4942,3 +4942,23 @@ def test_phase32_source_validation_remains_covered_after_artifact_children() -> 
         )
     with pytest.raises(TypeError, match="Condition must be Condition or callable"):
         StateMachine(State("idle")).add_transitions([("go", "idle", "done", object())])
+
+    with pytest.raises(TypeError, match="clock must be callable"):
+        StateMachine(State("clock"), clock=object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="clock must return a finite"):
+        StateMachine(State("clock-value"), clock=lambda: "not-a-number")
+
+    priority_machine = StateMachine(State("source"))
+    priority_machine.add_state(State("first"))
+    priority_machine.add_state(State("second"))
+    priority_machine.add_transition("advance", "source", "first", priority=1)
+    priority_machine.add_transition("advance", "source", "second", priority=2)
+    with pytest.raises(RuntimeError, match="[Pp]riority candidate groups"):
+        priority_machine.validate_transition_completeness()
+
+    owner_machine = StateMachine(State("owner"))
+    owner_thread_id = owner_machine._acquire_sync_ownership("coverage")
+    try:
+        assert owner_machine._graph_snapshot().state_names == ("owner",)
+    finally:
+        owner_machine._release_sync_ownership(owner_thread_id)
